@@ -1197,6 +1197,137 @@ impl Harness {
             .map(|value| Self::own_data_property_descriptor_with_attrs(value, false, true, true))
     }
 
+    pub(crate) fn node_expando_entries(&self, node: NodeId) -> Vec<(String, Value)> {
+        let mut entries = self
+            .dom_runtime
+            .node_expando_props
+            .iter()
+            .filter(|((owner, _), _)| *owner == node)
+            .map(|((_, key), value)| (key.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+        entries
+    }
+
+    pub(crate) fn replace_node_expando_entries(
+        &mut self,
+        node: NodeId,
+        entries: Vec<(String, Value)>,
+    ) {
+        self.dom_runtime
+            .node_expando_props
+            .retain(|(owner, _), _| *owner != node);
+        for (key, value) in entries {
+            self.dom_runtime
+                .node_expando_props
+                .insert((node, key), value);
+        }
+    }
+
+    pub(crate) fn node_has_explicit_own_property(&self, node: NodeId, key: &str) -> bool {
+        let entries = self.node_expando_entries(node);
+        Self::object_get_entry(&entries, key).is_some()
+            || Self::has_object_accessor_property(&entries, key)
+    }
+
+    pub(crate) fn node_expando_enumerable_string_keys(&self, node: NodeId) -> Vec<String> {
+        let entries = ObjectValue::new(self.node_expando_entries(node));
+        Self::ordered_enumerable_string_keys(&entries)
+    }
+
+    pub(crate) fn node_expando_string_keys(&self, node: NodeId) -> Vec<String> {
+        let entries = ObjectValue::new(self.node_expando_entries(node));
+        Self::ordered_visible_string_keys(&entries)
+    }
+
+    pub(crate) fn node_expando_enumerable_symbol_values(&self, node: NodeId) -> Vec<Value> {
+        let entries = self.node_expando_entries(node);
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        for (key, _) in &entries {
+            if !Self::is_symbol_storage_key(key) || !Self::is_enumerable_object_key(&entries, key) {
+                continue;
+            }
+            if let Some(symbol_id) = Self::symbol_id_from_storage_key(key) {
+                if !seen.insert(symbol_id) {
+                    continue;
+                }
+                if let Some(symbol) = self.symbol_runtime.symbols_by_id.get(&symbol_id) {
+                    out.push(Value::Symbol(symbol.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    fn node_expando_symbol_values(&self, node: NodeId) -> Vec<Value> {
+        let entries = self.node_expando_entries(node);
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        for (key, _) in &entries {
+            if let Some(symbol_id) = Self::symbol_id_from_storage_key(key) {
+                if !seen.insert(symbol_id) {
+                    continue;
+                }
+                if let Some(symbol) = self.symbol_runtime.symbols_by_id.get(&symbol_id) {
+                    out.push(Value::Symbol(symbol.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    fn html_form_own_string_keys(&mut self, form: NodeId) -> Result<Vec<String>> {
+        let expando_keys = self.node_expando_string_keys(form);
+        let expando_set = expando_keys.iter().cloned().collect::<HashSet<_>>();
+        let mut out = expando_keys;
+
+        for key in Self::html_form_builtin_own_string_keys() {
+            if !expando_set.contains(key) {
+                out.push(key.to_string());
+            }
+        }
+
+        for key in self.html_form_named_property_keys(form)? {
+            if !expando_set.contains(&key) && !out.iter().any(|existing| existing == &key) {
+                out.push(key);
+            }
+        }
+
+        Ok(out)
+    }
+
+    fn node_own_property_descriptor_value(
+        &mut self,
+        node: NodeId,
+        key: &str,
+    ) -> Result<Option<Value>> {
+        let expando_entries = self.node_expando_entries(node);
+        if let Some(descriptor) =
+            Self::own_property_descriptor_object_from_entries(&expando_entries, key)
+        {
+            return Ok(Some(descriptor));
+        }
+
+        let is_form = self
+            .dom
+            .tag_name(node)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("form"));
+        if !is_form {
+            return Ok(None);
+        }
+
+        if let Some(value) = self.html_form_builtin_property_value(node, key)? {
+            return Ok(Some(Self::own_data_property_descriptor_with_attrs(
+                value, false, false, true,
+            )));
+        }
+
+        Ok(self
+            .form_named_property_value(node, key)?
+            .map(|value| Self::own_data_property_descriptor_with_attrs(value, false, false, true)))
+    }
+
     fn object_like_enumerable_keys(&mut self, object: &Value) -> Result<Vec<String>> {
         match object {
             Value::Object(entries) => {
@@ -1221,6 +1352,7 @@ impl Harness {
                 keys.extend(Self::ordered_enumerable_string_keys(&array_ref.properties));
                 Ok(keys)
             }
+            Value::Node(node) => Ok(self.node_expando_enumerable_string_keys(*node)),
             Value::NodeList(nodes) => Ok(self.node_list_synthesized_keys(nodes, true)),
             Value::Function(function) => Ok(self
                 .script_runtime
@@ -1273,6 +1405,17 @@ impl Harness {
                 } else {
                     Self::ordered_visible_string_keys(&entries)
                 })
+            }
+            Value::Node(node) => {
+                let is_form = self
+                    .dom
+                    .tag_name(*node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("form"));
+                if is_form {
+                    self.html_form_own_string_keys(*node)
+                } else {
+                    Ok(self.node_expando_string_keys(*node))
+                }
             }
             Value::Array(array) => {
                 let array_ref = array.borrow();
@@ -1387,6 +1530,7 @@ impl Harness {
             Value::Array(array) => {
                 Ok(self.collection_property_symbol_values(&array.borrow().properties))
             }
+            Value::Node(node) => Ok(self.node_expando_symbol_values(*node)),
             Value::NodeList(nodes) => {
                 Ok(self.collection_property_symbol_values(&nodes.borrow().properties))
             }
@@ -1455,6 +1599,9 @@ impl Harness {
             }),
             Value::Array(array) => Ok(self
                 .array_own_property_descriptor_value(array, key)
+                .unwrap_or(Value::Undefined)),
+            Value::Node(node) => Ok(self
+                .node_own_property_descriptor_value(*node, key)?
                 .unwrap_or(Value::Undefined)),
             Value::NodeList(nodes) => {
                 let own = {
@@ -1686,6 +1833,12 @@ impl Harness {
                 self.script_runtime
                     .function_public_properties
                     .insert(function.function_id, entries);
+                Ok(object.clone())
+            }
+            Value::Node(node) => {
+                let mut entries = ObjectValue::new(self.node_expando_entries(*node));
+                self.define_property_on_object_entries(&mut entries, key, descriptor)?;
+                self.replace_node_expando_entries(*node, entries.entries);
                 Ok(object.clone())
             }
             Value::NodeList(nodes) => {
@@ -2325,6 +2478,22 @@ impl Harness {
                 };
                 Ok(Value::Bool(has))
             }
+            Value::Node(node) => {
+                if self.node_has_explicit_own_property(*node, key) {
+                    return Ok(Value::Bool(true));
+                }
+                let is_form = self
+                    .dom
+                    .tag_name(*node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("form"));
+                if !is_form {
+                    return Ok(Value::Bool(false));
+                }
+                Ok(Value::Bool(
+                    self.html_form_builtin_property_value(*node, key)?.is_some()
+                        || self.form_named_property_value(*node, key)?.is_some(),
+                ))
+            }
             Value::NodeList(nodes) => {
                 let snapshot = self.node_list_snapshot(nodes);
                 let has_own_surface = {
@@ -2836,6 +3005,19 @@ impl Harness {
                                     }
                                     Value::NodeList(nodes) => {
                                         let source = Value::NodeList(nodes.clone());
+                                        let keys = self.object_like_enumerable_keys(&source)?;
+                                        for key in keys {
+                                            let value =
+                                                self.object_property_from_value(&source, &key)?;
+                                            Self::define_object_literal_data_entry(
+                                                &mut object_entries,
+                                                key,
+                                                value,
+                                            );
+                                        }
+                                    }
+                                    Value::Node(node) => {
+                                        let source = Value::Node(node);
                                         let keys = self.object_like_enumerable_keys(&source)?;
                                         for key in keys {
                                             let value =

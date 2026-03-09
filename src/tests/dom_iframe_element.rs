@@ -89,3 +89,151 @@ fn iframe_referrerpolicy_sandbox_and_role_roundtrip_work() -> Result<()> {
     )?;
     Ok(())
 }
+
+#[test]
+fn iframe_srcdoc_shadow_define_property_delete_and_fast_path_parity_work() -> Result<()> {
+    let html = r#"
+        <iframe id='frame' srcdoc='<p>Hello</p>'></iframe>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const frame = document.getElementById('frame');
+            const shadow = { srcdoc: 'shadow-srcdoc' };
+
+            Object.defineProperty(frame, 'srcdoc', {
+              get() { return shadow.srcdoc; },
+              set(value) { shadow.srcdoc = 'set:' + value; },
+              configurable: true
+            });
+
+            document.getElementById('frame').srcdoc = '<p>Next</p>';
+
+            const first = [
+              document.getElementById('frame').srcdoc,
+              frame['srcdoc'],
+              shadow.srcdoc,
+              frame.getAttribute('srcdoc')
+            ].join(':');
+
+            Reflect.set(frame, 'srcdoc', '<p>Reflect</p>');
+
+            const second = [
+              document.getElementById('frame').srcdoc,
+              frame['srcdoc'],
+              shadow.srcdoc,
+              frame.getAttribute('srcdoc')
+            ].join(':');
+
+            delete frame.srcdoc;
+
+            const third = [
+              document.getElementById('frame').srcdoc,
+              frame['srcdoc'],
+              frame.getAttribute('srcdoc')
+            ].join(':');
+
+            document.getElementById('result').textContent = [
+              first,
+              second,
+              third
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "set:<p>Next</p>:set:<p>Next</p>:set:<p>Next</p>:<p>Hello</p>|set:<p>Reflect</p>:set:<p>Reflect</p>:set:<p>Reflect</p>:<p>Hello</p>|<p>Hello</p>:<p>Hello</p>:<p>Hello</p>",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn iframe_reflective_own_property_surface_and_object_copy_work() -> Result<()> {
+    let html = r#"
+        <iframe id='frame' src='/embedded/page.html' srcdoc='<p>Hello</p>'></iframe>
+        <p id='result'></p>
+        <script>
+          const frame = document.getElementById('frame');
+          const beforeAssigned = Object.assign({}, frame);
+          const beforeSpread = { ...frame };
+
+          const before = [
+            frame.src,
+            frame.srcdoc,
+            String(Object.hasOwn(frame, 'src')),
+            String(Object.hasOwn(frame, 'srcdoc')),
+            String(Object.getOwnPropertyDescriptor(frame, 'src') === undefined),
+            String(Object.getOwnPropertyDescriptor(frame, 'srcdoc') === undefined),
+            String(Object.getOwnPropertyNames(frame).includes('src')),
+            String(Reflect.ownKeys(frame).includes('srcdoc')),
+            String('src' in beforeAssigned),
+            String('srcdoc' in beforeSpread)
+          ].join(':');
+
+          Object.defineProperty(frame, 'src', {
+            value: 'shadow-src',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(frame, 'srcdoc', {
+            value: 'shadow-srcdoc',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+          frame.extra = 'expando';
+
+          const shadowAssigned = Object.assign({}, frame);
+          const shadowSpread = { ...frame };
+
+          const shadowed = [
+            frame.src,
+            frame.srcdoc,
+            String(Object.keys(frame).join(',') === 'extra,src,srcdoc'),
+            shadowAssigned.src,
+            shadowAssigned.srcdoc,
+            shadowAssigned.extra,
+            shadowSpread.src,
+            shadowSpread.srcdoc,
+            shadowSpread.extra
+          ].join(':');
+
+          delete frame.src;
+          delete frame.srcdoc;
+
+          const restoredAssigned = Object.assign({}, frame);
+          const restoredSpread = { ...frame };
+
+          const restored = [
+            frame.src,
+            frame.srcdoc,
+            String(Object.hasOwn(frame, 'src')),
+            String(Object.hasOwn(frame, 'srcdoc')),
+            restoredAssigned.extra,
+            String('src' in restoredAssigned),
+            String('srcdoc' in restoredAssigned),
+            restoredSpread.extra,
+            String('src' in restoredSpread),
+            String('srcdoc' in restoredSpread)
+          ].join(':');
+
+          document.getElementById('result').textContent = [
+            before,
+            shadowed,
+            restored
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "https://app.local/embedded/page.html:<p>Hello</p>:false:false:true:true:false:false:false:false|shadow-src:shadow-srcdoc:true:shadow-src:shadow-srcdoc:expando:shadow-src:shadow-srcdoc:expando|https://app.local/embedded/page.html:<p>Hello</p>:false:false:expando:false:false:expando:false:false",
+    )?;
+    Ok(())
+}

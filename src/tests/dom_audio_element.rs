@@ -176,3 +176,316 @@ fn audio_has_no_implicit_role_and_supports_explicit_role_assignment() -> Result<
     h.assert_text("#result", "|application:application|:true")?;
     Ok(())
 }
+
+#[test]
+fn audio_reflective_own_property_surface_and_object_copy_work() -> Result<()> {
+    let html = r#"
+        <audio id='player' src='/media/theme.mp3' preload='metadata'></audio>
+        <p id='result'></p>
+        <script>
+          const player = document.getElementById('player');
+          const beforeAssigned = Object.assign({}, player);
+          const beforeSpread = { ...player };
+
+          const before = [
+            player.src,
+            player.preload,
+            String(Object.hasOwn(player, 'src')),
+            String(Object.hasOwn(player, 'preload')),
+            String(Object.getOwnPropertyDescriptor(player, 'src') === undefined),
+            String(Object.getOwnPropertyNames(player).includes('preload')),
+            String(Reflect.ownKeys(player).includes('src')),
+            String('src' in beforeAssigned),
+            String('preload' in beforeSpread)
+          ].join(':');
+
+          Object.defineProperty(player, 'src', {
+            value: 'shadow-src',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(player, 'preload', {
+            value: 'shadow-preload',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+          player.extra = 'expando';
+
+          const shadowAssigned = Object.assign({}, player);
+          const shadowSpread = { ...player };
+
+          const shadowed = [
+            player.src,
+            player.preload,
+            String(Object.keys(player).sort().join(',') === 'extra,preload,src'),
+            shadowAssigned.src,
+            shadowAssigned.preload,
+            shadowAssigned.extra,
+            shadowSpread.src,
+            shadowSpread.preload,
+            shadowSpread.extra
+          ].join(':');
+
+          delete player.src;
+          delete player.preload;
+
+          const restoredAssigned = Object.assign({}, player);
+          const restoredSpread = { ...player };
+
+          const restored = [
+            player.src,
+            player.preload,
+            String(Object.hasOwn(player, 'src')),
+            String(Object.hasOwn(player, 'preload')),
+            restoredAssigned.extra,
+            String('src' in restoredAssigned),
+            String('preload' in restoredAssigned),
+            restoredSpread.extra,
+            String('src' in restoredSpread),
+            String('preload' in restoredSpread)
+          ].join(':');
+
+          document.getElementById('result').textContent = [
+            before,
+            shadowed,
+            restored
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/base/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "https://app.local/media/theme.mp3:metadata:false:false:true:false:false:false:false|shadow-src:shadow-preload:true:shadow-src:shadow-preload:expando:shadow-src:shadow-preload:expando|https://app.local/media/theme.mp3:metadata:false:false:expando:false:false:expando:false:false",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn audio_cross_origin_and_current_src_shadow_define_property_delete_and_fast_path_parity_work()
+-> Result<()> {
+    let html = r#"
+        <audio id='player' crossorigin='use-credentials'>
+          <source src='/audio/primary.ogg' type='audio/ogg'>
+        </audio>
+        <p id='result'></p>
+        <script>
+          const player = document.getElementById('player');
+
+          const before = [
+            player.crossOrigin,
+            player.currentSrc,
+            player.getAttribute('crossorigin')
+          ].join(':');
+
+          Object.defineProperty(player, 'crossOrigin', {
+            value: 'shadow-cors',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(player, 'currentSrc', {
+            value: 'shadow-current',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+
+          player.crossOrigin = 'set-cors';
+          player.currentSrc = 'set-current';
+
+          const shadowed = [
+            player.crossOrigin,
+            player.currentSrc,
+            player.getAttribute('crossorigin'),
+            String(Object.keys(player).sort().join(',') === 'crossOrigin,currentSrc')
+          ].join(':');
+
+          delete player.crossOrigin;
+          delete player.currentSrc;
+
+          const restored = [
+            player.crossOrigin,
+            player.currentSrc,
+            player.getAttribute('crossorigin'),
+            String(Object.hasOwn(player, 'crossOrigin')),
+            String(Object.hasOwn(player, 'currentSrc'))
+          ].join(':');
+
+          document.getElementById('result').textContent = [
+            before,
+            shadowed,
+            restored
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/listen/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "use-credentials:https://app.local/audio/primary.ogg:use-credentials|set-cors:set-current:use-credentials:true|use-credentials:https://app.local/audio/primary.ogg:use-credentials:false:false",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn audio_controls_list_and_disable_remote_playback_shadow_define_property_delete_and_fast_path_parity_work()
+-> Result<()> {
+    let html = r#"
+        <audio id='player' controlslist='nodownload' disableremoteplayback></audio>
+        <p id='result'></p>
+        <script>
+          const player = document.getElementById('player');
+
+          const before = [
+            player.controlsList,
+            String(player.disableRemotePlayback),
+            player.getAttribute('controlslist'),
+            player.getAttribute('disableremoteplayback')
+          ].join(':');
+
+          Object.defineProperty(player, 'controlsList', {
+            value: 'shadow-controls',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(player, 'disableRemotePlayback', {
+            value: 'shadow-disable',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+
+          player.controlsList = 'set-controls';
+          player.disableRemotePlayback = 'set-disable';
+
+          const shadowed = [
+            player.controlsList,
+            String(player.disableRemotePlayback),
+            player.getAttribute('controlslist'),
+            player.getAttribute('disableremoteplayback'),
+            String(Object.keys(player).sort().join(',') === 'controlsList,disableRemotePlayback')
+          ].join(':');
+
+          delete player.controlsList;
+          delete player.disableRemotePlayback;
+
+          const restored = [
+            player.controlsList,
+            String(player.disableRemotePlayback),
+            String(Object.hasOwn(player, 'controlsList')),
+            String(Object.hasOwn(player, 'disableRemotePlayback'))
+          ].join(':');
+
+          document.getElementById('result').textContent = [
+            before,
+            shadowed,
+            restored
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "nodownload:true:nodownload:true|set-controls:set-disable:nodownload:true:true|nodownload:true:false:false",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn audio_readonly_state_shadow_define_property_delete_and_restore_work() -> Result<()> {
+    let html = r#"
+        <audio id='player'></audio>
+        <p id='result'></p>
+        <script>
+          const player = document.getElementById('player');
+
+          const before = [
+            String(player.paused),
+            String(player.ended),
+            String(player.seeking),
+            String(player.networkState),
+            String(player.readyState)
+          ].join(':');
+
+          Object.defineProperty(player, 'paused', {
+            value: 'shadow-paused',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(player, 'ended', {
+            value: 'shadow-ended',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(player, 'seeking', {
+            value: 'shadow-seeking',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(player, 'networkState', {
+            value: 7,
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(player, 'readyState', {
+            value: 9,
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+
+          player.paused = 'set-paused';
+          player.ended = 'set-ended';
+          player.seeking = 'set-seeking';
+          player.networkState = 8;
+          player.readyState = 10;
+
+          const shadowed = [
+            String(player.paused),
+            String(player.ended),
+            String(player.seeking),
+            String(player.networkState),
+            String(player.readyState),
+            String(Object.keys(player).sort().join(',') === 'ended,networkState,paused,readyState,seeking')
+          ].join(':');
+
+          delete player.paused;
+          delete player.ended;
+          delete player.seeking;
+          delete player.networkState;
+          delete player.readyState;
+
+          const restored = [
+            String(player.paused),
+            String(player.ended),
+            String(player.seeking),
+            String(player.networkState),
+            String(player.readyState),
+            String(Object.hasOwn(player, 'paused')),
+            String(Object.hasOwn(player, 'networkState'))
+          ].join(':');
+
+          document.getElementById('result').textContent = [
+            before,
+            shadowed,
+            restored
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true:false:false:0:0|set-paused:set-ended:set-seeking:8:10:true|true:false:false:0:0:false:false",
+    )?;
+    Ok(())
+}

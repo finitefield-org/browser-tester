@@ -223,9 +223,17 @@ impl Harness {
                 Ok(true)
             }
             Value::Node(node) => {
-                self.dom_runtime
-                    .node_expando_props
-                    .remove(&(*node, key.to_string()));
+                let mut entries = self.node_expando_entries(*node);
+                let has_own_surface = Self::object_get_entry(&entries, key).is_some()
+                    || Self::has_object_accessor_property(&entries, key);
+                if !has_own_surface {
+                    return Ok(true);
+                }
+                if !Self::is_configurable_object_key(&entries, key) {
+                    return Ok(false);
+                }
+                Self::delete_object_property_entries(&mut entries, key);
+                self.replace_node_expando_entries(*node, entries);
                 Ok(true)
             }
             _ => Ok(true),
@@ -299,9 +307,6 @@ impl Harness {
         let Some(value) = self.resolve_dom_query_value_runtime(target, env)? else {
             return Ok(None);
         };
-        if matches!(value, Value::Node(_) | Value::NodeList(_)) {
-            return Ok(None);
-        }
         let Some(path) = Self::dom_prop_non_node_fallback_path(prop) else {
             return Ok(None);
         };

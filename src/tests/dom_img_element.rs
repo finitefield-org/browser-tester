@@ -104,3 +104,177 @@ fn img_alt_dependent_role_and_role_attribute_roundtrip_work() -> Result<()> {
     )?;
     Ok(())
 }
+
+#[test]
+fn img_reflective_own_property_surface_and_object_copy_work() -> Result<()> {
+    let html = r#"
+        <img
+          id='photo'
+          src='/shared-assets/images/examples/grapefruit-slice.jpg'
+          srcset='/img-1x.png 1x, /img-2x.png 2x'
+          sizes='100vw'>
+        <p id='result'></p>
+        <script>
+          const photo = document.getElementById('photo');
+          const beforeAssigned = Object.assign({}, photo);
+          const beforeSpread = { ...photo };
+
+          const before = [
+            photo.src,
+            photo.srcset,
+            photo.sizes,
+            String(Object.hasOwn(photo, 'src')),
+            String(Object.hasOwn(photo, 'srcset')),
+            String(Object.hasOwn(photo, 'sizes')),
+            String(Object.getOwnPropertyDescriptor(photo, 'src') === undefined),
+            String(Object.getOwnPropertyNames(photo).includes('srcset')),
+            String(Reflect.ownKeys(photo).includes('sizes')),
+            String('src' in beforeAssigned),
+            String('srcset' in beforeSpread)
+          ].join(':');
+
+          Object.defineProperty(photo, 'src', {
+            value: 'shadow-src',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(photo, 'srcset', {
+            value: 'shadow-srcset',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(photo, 'sizes', {
+            value: 'shadow-sizes',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+          photo.extra = 'expando';
+
+          const shadowAssigned = Object.assign({}, photo);
+          const shadowSpread = { ...photo };
+
+          const shadowed = [
+            photo.src,
+            photo.srcset,
+            photo.sizes,
+            String(Object.keys(photo).sort().join(',') === 'extra,sizes,src,srcset'),
+            shadowAssigned.src,
+            shadowAssigned.srcset,
+            shadowAssigned.sizes,
+            shadowAssigned.extra,
+            shadowSpread.src,
+            shadowSpread.srcset,
+            shadowSpread.sizes,
+            shadowSpread.extra
+          ].join(':');
+
+          delete photo.src;
+          delete photo.srcset;
+          delete photo.sizes;
+
+          const restoredAssigned = Object.assign({}, photo);
+          const restoredSpread = { ...photo };
+
+          const restored = [
+            photo.src,
+            photo.srcset,
+            photo.sizes,
+            String(Object.hasOwn(photo, 'src')),
+            String(Object.hasOwn(photo, 'srcset')),
+            String(Object.hasOwn(photo, 'sizes')),
+            restoredAssigned.extra,
+            String('src' in restoredAssigned),
+            String('srcset' in restoredAssigned),
+            String('sizes' in restoredAssigned),
+            restoredSpread.extra,
+            String('src' in restoredSpread),
+            String('srcset' in restoredSpread),
+            String('sizes' in restoredSpread)
+          ].join(':');
+
+          document.getElementById('result').textContent = [
+            before,
+            shadowed,
+            restored
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "https://app.local/shared-assets/images/examples/grapefruit-slice.jpg:/img-1x.png 1x, /img-2x.png 2x:100vw:false:false:false:true:false:false:false:false|shadow-src:shadow-srcset:shadow-sizes:true:shadow-src:shadow-srcset:shadow-sizes:expando:shadow-src:shadow-srcset:shadow-sizes:expando|https://app.local/shared-assets/images/examples/grapefruit-slice.jpg:/img-1x.png 1x, /img-2x.png 2x:100vw:false:false:false:expando:false:false:false:expando:false:false:false",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn img_cross_origin_and_current_src_shadow_define_property_delete_and_fast_path_parity_work()
+-> Result<()> {
+    let html = r#"
+        <picture>
+          <source srcset='/img/hero.webp 1x' type='image/webp'>
+          <img id='photo' src='/img/fallback.jpg' crossorigin='anonymous' alt='Artwork'>
+        </picture>
+        <p id='result'></p>
+        <script>
+          const photo = document.getElementById('photo');
+
+          const before = [
+            photo.crossOrigin,
+            photo.currentSrc,
+            photo.getAttribute('crossorigin')
+          ].join(':');
+
+          Object.defineProperty(photo, 'crossOrigin', {
+            value: 'shadow-cors',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(photo, 'currentSrc', {
+            value: 'shadow-current',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+
+          photo.crossOrigin = 'set-cors';
+          photo.currentSrc = 'set-current';
+
+          const shadowed = [
+            photo.crossOrigin,
+            photo.currentSrc,
+            photo.getAttribute('crossorigin'),
+            String(Object.keys(photo).sort().join(',') === 'crossOrigin,currentSrc')
+          ].join(':');
+
+          delete photo.crossOrigin;
+          delete photo.currentSrc;
+
+          const restored = [
+            photo.crossOrigin,
+            photo.currentSrc,
+            photo.getAttribute('crossorigin'),
+            String(Object.hasOwn(photo, 'crossOrigin')),
+            String(Object.hasOwn(photo, 'currentSrc'))
+          ].join(':');
+
+          document.getElementById('result').textContent = [
+            before,
+            shadowed,
+            restored
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/gallery/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "anonymous:https://app.local/img/hero.webp:anonymous|set-cors:set-current:anonymous:true|anonymous:https://app.local/img/hero.webp:anonymous:false:false",
+    )?;
+    Ok(())
+}

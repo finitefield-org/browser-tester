@@ -929,6 +929,321 @@ fn attribute_reflection_html_2_3_2_enumerated_dir_autocapitalize_autocomplete_mi
 }
 
 #[test]
+fn attribute_reflection_html_2_3_2_generic_element_shadow_define_property_delete_and_fast_path_parity_work()
+-> Result<()> {
+    let html = r#"
+        <div id='box' class='alpha beta' lang='en' dir='rtl'>box</div>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const box = document.getElementById('box');
+
+            Object.defineProperty(box, 'id', {
+              value: 'shadow-id',
+              enumerable: true,
+              configurable: true
+            });
+            Object.defineProperty(box, 'className', {
+              value: 'shadow-class',
+              writable: false,
+              configurable: true
+            });
+            Object.defineProperty(box, 'lang', {
+              get() { return this.getAttribute('lang') + ':getter'; },
+              set(value) { this.setAttribute('lang', value + '-set'); },
+              configurable: true
+            });
+            Object.defineProperty(box, 'dir', {
+              value: 'shadow-dir',
+              configurable: true
+            });
+
+            const shadow = [
+              box.id + ':' + box['id'] + ':' + box.getAttribute('id'),
+              box.className + ':' + box['className'] + ':' + box.getAttribute('class'),
+              box.lang + ':' + box['lang'] + ':' + box.getAttribute('lang'),
+              box.dir + ':' + box['dir'] + ':' + box.getAttribute('dir'),
+              String(Reflect.set(box, 'className', 'ignored') === false),
+              String(Reflect.set(box, 'lang', 'fr')),
+              box.lang + ':' + box['lang'] + ':' + box.getAttribute('lang'),
+              String(Object.keys(box).includes('id')),
+              String(Object.getOwnPropertyDescriptor(box, 'dir').configurable === true)
+            ].join(',');
+
+            const deleted = [
+              String(delete box.id) + ':' + box.id + ':' + box['id'] + ':' + box.getAttribute('id'),
+              String(delete box.className) + ':' + box.className + ':' + box['className'] + ':' + box.getAttribute('class'),
+              String(delete box.lang) + ':' + box.lang + ':' + box['lang'] + ':' + box.getAttribute('lang'),
+              String(delete box.dir) + ':' + box.dir + ':' + box['dir'] + ':' + box.getAttribute('dir')
+            ].join(',');
+
+            document.getElementById('result').textContent = shadow + '|' + deleted;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "shadow-id:shadow-id:box,shadow-class:shadow-class:alpha beta,en:getter:en:getter:en,shadow-dir:shadow-dir:rtl,true,true,fr-set:getter:fr-set:getter:fr-set,true,true|true:box:box:box,true:alpha beta:alpha beta:alpha beta,true:fr-set:fr-set:fr-set,true:rtl:rtl:rtl",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn attribute_reflection_html_2_6_1_generic_reflected_property_shadow_define_property_delete_and_fast_path_parity_work()
+-> Result<()> {
+    let html = r#"
+        <base href='https://app.local/'>
+        <label id='lab' for='user'>User</label>
+        <blockquote id='quote' cite='/docs/spec'>Quote</blockquote>
+        <details id='panel' open><summary>Open</summary><p>Body</p></details>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const label = document.getElementById('lab');
+            const quote = document.getElementById('quote');
+            const panel = document.getElementById('panel');
+
+            Object.defineProperty(label, 'htmlFor', {
+              get() { return this.getAttribute('for') + ':getter'; },
+              set(value) { this.setAttribute('for', value + '-set'); },
+              configurable: true
+            });
+            Object.defineProperty(quote, 'cite', {
+              value: 'shadow-cite',
+              writable: false,
+              enumerable: true,
+              configurable: true
+            });
+            Object.defineProperty(panel, 'open', {
+              value: false,
+              writable: false,
+              enumerable: true,
+              configurable: true
+            });
+
+            const shadow = [
+              document.getElementById('lab').htmlFor + ':' + label['htmlFor'] + ':' + label.getAttribute('for'),
+              String(Reflect.set(label, 'htmlFor', 'alt')),
+              document.getElementById('lab').htmlFor + ':' + label.getAttribute('for'),
+              document.getElementById('quote').cite + ':' + quote['cite'] + ':' + quote.getAttribute('cite'),
+              String(Reflect.set(quote, 'cite', 'ignored') === false),
+              String(Object.keys(quote).includes('cite')),
+              String(document.getElementById('panel').open) + ':' + String(panel['open']) + ':' + String(panel.hasAttribute('open')),
+              String(Reflect.set(panel, 'open', true) === false)
+            ].join(',');
+
+            const deleted = [
+              String(delete label.htmlFor) + ':' + document.getElementById('lab').htmlFor + ':' + label.getAttribute('for'),
+              String(delete quote.cite) + ':' + document.getElementById('quote').cite + ':' + quote.getAttribute('cite'),
+              String(delete panel.open) + ':' + String(document.getElementById('panel').open) + ':' + String(panel.hasAttribute('open'))
+            ].join(',');
+
+            document.getElementById('result').textContent = shadow + '|' + deleted;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "user:getter:user:getter:user,true,alt-set:getter:alt-set,shadow-cite:shadow-cite:/docs/spec,true,true,false:false:true,true|true:alt-set:alt-set,true:https://app.local/docs/spec:/docs/spec,true:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn attribute_reflection_html_2_6_1_url_backed_property_shadow_define_property_delete_and_fast_path_parity_work()
+-> Result<()> {
+    let html = r#"
+        <a id='link' href='/docs/start'>Link</a>
+        <audio id='audio' src='/media/track.mp3'></audio>
+        <video id='video' poster='/img/poster.png'></video>
+        <form id='owner' action='/submit/fallback'></form>
+        <button id='submitter' type='submit' form='owner' formaction='/submit/override'>Save</button>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const link = document.getElementById('link');
+            const audio = document.getElementById('audio');
+            const video = document.getElementById('video');
+            const submitter = document.getElementById('submitter');
+
+            const seen = {
+              href: 'shadow-href',
+              src: 'shadow-src',
+              poster: 'shadow-poster',
+              formAction: 'shadow-form'
+            };
+
+            Object.defineProperty(link, 'href', {
+              get() { return seen.href; },
+              set(value) { seen.href = 'set:' + value; },
+              configurable: true
+            });
+            Object.defineProperty(audio, 'src', {
+              get() { return seen.src; },
+              set(value) { seen.src = 'set:' + value; },
+              configurable: true
+            });
+            Object.defineProperty(video, 'poster', {
+              get() { return seen.poster; },
+              set(value) { seen.poster = 'set:' + value; },
+              configurable: true
+            });
+            Object.defineProperty(submitter, 'formAction', {
+              get() { return seen.formAction; },
+              set(value) { seen.formAction = 'set:' + value; },
+              configurable: true
+            });
+
+            link.href = '/docs/next';
+            audio.src = '/media/next.mp3';
+            video.poster = '/img/next.png';
+            submitter.formAction = '/submit/next';
+
+            const shadow = [
+              [link.href, link['href'], seen.href, link.getAttribute('href')].join(','),
+              [audio.src, audio['src'], seen.src, audio.getAttribute('src')].join(','),
+              [video.poster, video['poster'], seen.poster, video.getAttribute('poster')].join(','),
+              [submitter.formAction, submitter['formAction'], seen.formAction, submitter.getAttribute('formaction')].join(',')
+            ].join(';');
+
+            Reflect.set(link, 'href', 'reflect-href');
+            Reflect.set(audio, 'src', 'reflect-src');
+            Reflect.set(video, 'poster', 'reflect-poster');
+            Reflect.set(submitter, 'formAction', 'reflect-form');
+
+            const reflected = [
+              [link.href, link['href'], seen.href, link.getAttribute('href')].join(','),
+              [audio.src, audio['src'], seen.src, audio.getAttribute('src')].join(','),
+              [video.poster, video['poster'], seen.poster, video.getAttribute('poster')].join(','),
+              [submitter.formAction, submitter['formAction'], seen.formAction, submitter.getAttribute('formaction')].join(',')
+            ].join(';');
+
+            delete link.href;
+            delete audio.src;
+            delete video.poster;
+            delete submitter.formAction;
+
+            const restored = [
+              [link.href, link['href']].join(','),
+              [audio.src, audio['src']].join(','),
+              [video.poster, video['poster']].join(','),
+              [submitter.formAction, submitter['formAction']].join(',')
+            ].join(';');
+
+            document.getElementById('result').textContent = [
+              shadow,
+              reflected,
+              restored
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/base/index.html", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "set:/docs/next,set:/docs/next,set:/docs/next,/docs/start;set:/media/next.mp3,set:/media/next.mp3,set:/media/next.mp3,/media/track.mp3;set:/img/next.png,set:/img/next.png,set:/img/next.png,/img/poster.png;set:/submit/next,set:/submit/next,set:/submit/next,/submit/override|set:reflect-href,set:reflect-href,set:reflect-href,/docs/start;set:reflect-src,set:reflect-src,set:reflect-src,/media/track.mp3;set:reflect-poster,set:reflect-poster,set:reflect-poster,/img/poster.png;set:reflect-form,set:reflect-form,set:reflect-form,/submit/override|https://app.local/docs/start,https://app.local/docs/start;https://app.local/media/track.mp3,https://app.local/media/track.mp3;https://app.local/img/poster.png,https://app.local/img/poster.png;https://app.local/submit/override,https://app.local/submit/override",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn attribute_reflection_html_2_6_1_resource_url_property_shadow_define_property_delete_and_fast_path_parity_work()
+-> Result<()> {
+    let html = r#"
+        <a id='link' href='/docs' attributionsrc='https://source.test/register'>Link</a>
+        <img id='photo' src='/img/hero.png' srcset='/img/hero-1x.png 1x, /img/hero-2x.png 2x'>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const link = document.getElementById('link');
+            const photo = document.getElementById('photo');
+            const shadow = {
+              attributionSrc: 'shadow-attr',
+              srcset: 'shadow-srcset'
+            };
+
+            Object.defineProperty(link, 'attributionSrc', {
+              get() { return shadow.attributionSrc; },
+              set(value) { shadow.attributionSrc = 'set:' + value; },
+              configurable: true
+            });
+            Object.defineProperty(photo, 'srcset', {
+              get() { return shadow.srcset; },
+              set(value) { shadow.srcset = 'set:' + value; },
+              configurable: true
+            });
+
+            document.getElementById('link').attributionSrc = 'next-attr';
+            photo.srcset = 'next-srcset';
+
+            const first = [
+              document.getElementById('link').attributionSrc,
+              link['attributionSrc'],
+              shadow.attributionSrc,
+              link.getAttribute('attributionsrc'),
+              photo.srcset,
+              photo['srcset'],
+              shadow.srcset,
+              photo.getAttribute('srcset')
+            ].join(':');
+
+            Reflect.set(link, 'attributionSrc', 'reflect-attr');
+            Reflect.set(photo, 'srcset', 'reflect-srcset');
+
+            const second = [
+              document.getElementById('link').attributionSrc,
+              link['attributionSrc'],
+              shadow.attributionSrc,
+              link.getAttribute('attributionsrc'),
+              photo.srcset,
+              photo['srcset'],
+              shadow.srcset,
+              photo.getAttribute('srcset')
+            ].join(':');
+
+            delete link.attributionSrc;
+            delete photo.srcset;
+
+            const third = [
+              document.getElementById('link').attributionSrc,
+              link['attributionSrc'],
+              link.getAttribute('attributionsrc'),
+              photo.srcset,
+              photo['srcset'],
+              photo.getAttribute('srcset')
+            ].join(':');
+
+            document.getElementById('result').textContent = [
+              first,
+              second,
+              third
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/base/index.html", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "set:next-attr:set:next-attr:set:next-attr:https://source.test/register:set:next-srcset:set:next-srcset:set:next-srcset:/img/hero-1x.png 1x, /img/hero-2x.png 2x|set:reflect-attr:set:reflect-attr:set:reflect-attr:https://source.test/register:set:reflect-srcset:set:reflect-srcset:set:reflect-srcset:/img/hero-1x.png 1x, /img/hero-2x.png 2x|https://source.test/register:https://source.test/register:https://source.test/register:/img/hero-1x.png 1x, /img/hero-2x.png 2x:/img/hero-1x.png 1x, /img/hero-2x.png 2x:/img/hero-1x.png 1x, /img/hero-2x.png 2x",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn attribute_reflection_html_2_6_1_url_anchor_search_hash_and_credentials_delimiter_normalization_work()
 -> Result<()> {
     let html = r#"

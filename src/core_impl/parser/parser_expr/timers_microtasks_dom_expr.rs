@@ -679,6 +679,13 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
         ("coords", None) if is_anchor_target => DomProp::AnchorCoords,
         ("rev", None) if is_anchor_target => DomProp::AnchorRev,
         ("shape", None) if is_anchor_target => DomProp::AnchorShape,
+        ("data", None) if !matches!(target, DomQuery::DocumentRoot) => DomProp::Data,
+        ("srcdoc", None) | ("srcDoc", None) if !matches!(target, DomQuery::DocumentRoot) => {
+            DomProp::SrcDoc
+        }
+        ("useMap", None) | ("usemap", None) if !matches!(target, DomQuery::DocumentRoot) => {
+            DomProp::UseMap
+        }
         ("dataset", Some(key)) => DomProp::Dataset(key.clone()),
         ("style", Some(name)) => DomProp::Style(name.clone()),
         (prop_name, None) if is_aria_element_ref_single_property(prop_name) => {

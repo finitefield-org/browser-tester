@@ -2191,6 +2191,77 @@ fn html_input_button_value_property_defaults_and_updates() -> Result<()> {
 }
 
 #[test]
+fn html_input_value_shadow_define_property_delete_and_fast_path_parity_work() -> Result<()> {
+    let html = r#"
+        <input id='field' type='text' value='base'>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const input = document.getElementById('field');
+
+            Object.defineProperty(input, 'value', {
+              value: 'shadow',
+              writable: false,
+              enumerable: true,
+              configurable: true
+            });
+
+            const dataShadow = [
+              document.getElementById('field').value,
+              input['value'],
+              input.getAttribute('value'),
+              String(Reflect.set(input, 'value', 'ignored') === false)
+            ].join(':');
+
+            delete input.value;
+
+            Object.defineProperty(input, 'value', {
+              get() { return this.getAttribute('data-shadow') || 'getter-none'; },
+              set(value) { this.setAttribute('data-shadow', value); },
+              configurable: true
+            });
+
+            const accessorBefore = [
+              document.getElementById('field').value,
+              input['value'],
+              input.getAttribute('value'),
+              String(input.getAttribute('data-shadow') === null)
+            ].join(':');
+
+            document.getElementById('field').value = 'next';
+
+            const accessorAfter = [
+              document.getElementById('field').value,
+              input.getAttribute('data-shadow'),
+              input.getAttribute('value')
+            ].join(':');
+
+            delete input.value;
+            document.getElementById('field').value = 'plain';
+
+            const restored = [
+              document.getElementById('field').value,
+              input.getAttribute('value'),
+              input.getAttribute('data-shadow')
+            ].join(':');
+
+            document.getElementById('result').textContent =
+              [dataShadow, accessorBefore, accessorAfter, restored].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "shadow:shadow:base:true|getter-none:getter-none:base:true|next:next:base|plain:base:next",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn html_input_button_click_handler_runs_custom_logic() -> Result<()> {
     let html = r#"
         <input id='btn' type='button' value='Start machine'>

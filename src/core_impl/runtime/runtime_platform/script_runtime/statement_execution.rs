@@ -3296,7 +3296,13 @@ impl Harness {
                                     self.dom.set_outer_html(node, &html)?
                                 }
                                 DomProp::Value => {
-                                    if self
+                                    if self.node_explicit_own_property_overrides_dom_property(
+                                        node, "value",
+                                    ) {
+                                        self.set_node_assignment_property(
+                                            node, "value", value, event, false,
+                                        )?;
+                                    } else if self
                                         .dom
                                         .tag_name(node)
                                         .is_some_and(|tag| tag.eq_ignore_ascii_case("li"))
@@ -3357,7 +3363,13 @@ impl Harness {
                                     self.dom.set_indeterminate(node, value.truthy())?
                                 }
                                 DomProp::Open => {
-                                    if self
+                                    if self.node_explicit_own_property_overrides_dom_property(
+                                        node, "open",
+                                    ) {
+                                        self.set_node_assignment_property(
+                                            node, "open", value, event, false,
+                                        )?;
+                                    } else if self
                                         .dom
                                         .tag_name(node)
                                         .is_some_and(|tag| tag.eq_ignore_ascii_case("details"))
@@ -3430,7 +3442,15 @@ impl Harness {
                                         .set_attr(node, "elementtiming", &value.as_string())?
                                 }
                                 DomProp::HtmlFor => {
-                                    self.dom.set_attr(node, "for", &value.as_string())?
+                                    if self.node_explicit_own_property_overrides_dom_property(
+                                        node, "htmlFor",
+                                    ) {
+                                        self.set_node_assignment_property(
+                                            node, "htmlFor", value, event, false,
+                                        )?;
+                                    } else {
+                                        self.dom.set_attr(node, "for", &value.as_string())?
+                                    }
                                 }
                                 DomProp::Name => {
                                     self.dom.set_attr(node, "name", &value.as_string())?
@@ -3449,7 +3469,18 @@ impl Harness {
                                     }
                                 }
                                 DomProp::FormAction => {
-                                    if self.dom.tag_name(node).is_some_and(|tag| {
+                                    if self.node_explicit_own_property_overrides_dom_property(
+                                        node,
+                                        "formAction",
+                                    ) {
+                                        self.set_node_assignment_property(
+                                            node,
+                                            "formAction",
+                                            value,
+                                            event,
+                                            false,
+                                        )?;
+                                    } else if self.dom.tag_name(node).is_some_and(|tag| {
                                         tag.eq_ignore_ascii_case("button")
                                             || tag.eq_ignore_ascii_case("input")
                                     }) {
@@ -3529,7 +3560,15 @@ impl Harness {
                                         "no",
                                     )?,
                                 DomProp::Cite => {
-                                    self.dom.set_attr(node, "cite", &value.as_string())?
+                                    if self.node_explicit_own_property_overrides_dom_property(
+                                        node, "cite",
+                                    ) {
+                                        self.set_node_assignment_property(
+                                            node, "cite", value, event, false,
+                                        )?;
+                                    } else {
+                                        self.dom.set_attr(node, "cite", &value.as_string())?
+                                    }
                                 }
                                 DomProp::DateTime => {
                                     self.dom.set_attr(node, "datetime", &value.as_string())?
@@ -3599,7 +3638,15 @@ impl Harness {
                                     self.set_document_adopted_style_sheets_property(value)?;
                                 }
                                 DomProp::AudioSrc => {
-                                    self.dom.set_attr(node, "src", &value.as_string())?
+                                    if self.node_explicit_own_property_overrides_dom_property(
+                                        node, "src",
+                                    ) {
+                                        self.set_node_assignment_property(
+                                            node, "src", value, event, false,
+                                        )?;
+                                    } else {
+                                        self.dom.set_attr(node, "src", &value.as_string())?
+                                    }
                                 }
                                 DomProp::AudioAutoplay => self.set_reflected_boolean_attribute(
                                     node,
@@ -3612,24 +3659,77 @@ impl Harness {
                                     value.truthy(),
                                 )?,
                                 DomProp::AudioControlsList => {
-                                    self.dom
-                                        .set_attr(node, "controlslist", &value.as_string())?
+                                    if let Some(shadow_key) = self
+                                        .node_explicit_own_dom_property_shadow_key(
+                                            node,
+                                            &["controlsList", "controlslist"],
+                                        )
+                                    {
+                                        self.set_node_assignment_property(
+                                            node, shadow_key, value, event, false,
+                                        )?;
+                                    } else {
+                                        self.dom.set_attr(
+                                            node,
+                                            "controlslist",
+                                            &value.as_string(),
+                                        )?
+                                    }
                                 }
                                 DomProp::AudioCrossOrigin => {
-                                    self.dom.set_attr(node, "crossorigin", &value.as_string())?
+                                    if let Some(shadow_key) = self
+                                        .node_explicit_own_dom_property_shadow_key(
+                                            node,
+                                            &["crossOrigin", "crossorigin"],
+                                        )
+                                    {
+                                        self.set_node_assignment_property(
+                                            node, shadow_key, value, event, false,
+                                        )?;
+                                    } else {
+                                        self.dom.set_attr(
+                                            node,
+                                            "crossorigin",
+                                            &value.as_string(),
+                                        )?
+                                    }
                                 }
-                                DomProp::AudioDisableRemotePlayback => self
-                                    .set_reflected_boolean_attribute(
-                                        node,
-                                        "disableremoteplayback",
-                                        value.truthy(),
-                                    )?,
-                                DomProp::VideoDisablePictureInPicture => self
-                                    .set_reflected_boolean_attribute(
-                                        node,
-                                        "disablepictureinpicture",
-                                        value.truthy(),
-                                    )?,
+                                DomProp::AudioDisableRemotePlayback => {
+                                    if let Some(shadow_key) = self
+                                        .node_explicit_own_dom_property_shadow_key(
+                                            node,
+                                            &["disableRemotePlayback", "disableremoteplayback"],
+                                        )
+                                    {
+                                        self.set_node_assignment_property(
+                                            node, shadow_key, value, event, false,
+                                        )?;
+                                    } else {
+                                        self.set_reflected_boolean_attribute(
+                                            node,
+                                            "disableremoteplayback",
+                                            value.truthy(),
+                                        )?
+                                    }
+                                }
+                                DomProp::VideoDisablePictureInPicture => {
+                                    if let Some(shadow_key) = self
+                                        .node_explicit_own_dom_property_shadow_key(
+                                            node,
+                                            &["disablePictureInPicture", "disablepictureinpicture"],
+                                        )
+                                    {
+                                        self.set_node_assignment_property(
+                                            node, shadow_key, value, event, false,
+                                        )?;
+                                    } else {
+                                        self.set_reflected_boolean_attribute(
+                                            node,
+                                            "disablepictureinpicture",
+                                            value.truthy(),
+                                        )?
+                                    }
+                                }
                                 DomProp::AudioLoop => self.set_reflected_boolean_attribute(
                                     node,
                                     "loop",
@@ -3641,15 +3741,77 @@ impl Harness {
                                     value.truthy(),
                                 )?,
                                 DomProp::AudioPreload => {
-                                    self.dom.set_attr(node, "preload", &value.as_string())?
+                                    if self.node_explicit_own_property_overrides_dom_property(
+                                        node, "preload",
+                                    ) {
+                                        self.set_node_assignment_property(
+                                            node, "preload", value, event, false,
+                                        )?;
+                                    } else {
+                                        self.dom.set_attr(node, "preload", &value.as_string())?
+                                    }
                                 }
-                                DomProp::VideoPlaysInline => self.set_reflected_boolean_attribute(
-                                    node,
-                                    "playsinline",
-                                    value.truthy(),
-                                )?,
+                                DomProp::VideoPlaysInline => {
+                                    if let Some(shadow_key) = self
+                                        .node_explicit_own_dom_property_shadow_key(
+                                            node,
+                                            &["playsInline", "playsinline"],
+                                        )
+                                    {
+                                        self.set_node_assignment_property(
+                                            node, shadow_key, value, event, false,
+                                        )?;
+                                    } else {
+                                        self.set_reflected_boolean_attribute(
+                                            node,
+                                            "playsinline",
+                                            value.truthy(),
+                                        )?
+                                    }
+                                }
                                 DomProp::VideoPoster => {
-                                    self.dom.set_attr(node, "poster", &value.as_string())?
+                                    if self.node_explicit_own_property_overrides_dom_property(
+                                        node, "poster",
+                                    ) {
+                                        self.set_node_assignment_property(
+                                            node, "poster", value, event, false,
+                                        )?;
+                                    } else {
+                                        self.dom.set_attr(node, "poster", &value.as_string())?
+                                    }
+                                }
+                                DomProp::Data => {
+                                    if self.node_explicit_own_property_overrides_dom_property(
+                                        node, "data",
+                                    ) {
+                                        self.set_node_assignment_property(
+                                            node, "data", value, event, false,
+                                        )?;
+                                    } else {
+                                        self.dom.set_attr(node, "data", &value.as_string())?
+                                    }
+                                }
+                                DomProp::SrcDoc => {
+                                    if self.node_explicit_own_property_overrides_dom_property(
+                                        node, "srcdoc",
+                                    ) {
+                                        self.set_node_assignment_property(
+                                            node, "srcdoc", value, event, false,
+                                        )?;
+                                    } else {
+                                        self.dom.set_attr(node, "srcdoc", &value.as_string())?
+                                    }
+                                }
+                                DomProp::UseMap => {
+                                    if self.node_explicit_own_property_overrides_dom_property(
+                                        node, "useMap",
+                                    ) {
+                                        self.set_node_assignment_property(
+                                            node, "useMap", value, event, false,
+                                        )?;
+                                    } else {
+                                        self.dom.set_attr(node, "usemap", &value.as_string())?
+                                    }
                                 }
                                 DomProp::Location | DomProp::LocationHref => self
                                     .navigate_location(
@@ -3684,8 +3846,24 @@ impl Harness {
                                     self.dom.set_attr(node, "alt", &value.as_string())?
                                 }
                                 DomProp::AnchorAttributionSrc => {
-                                    self.dom
-                                        .set_attr(node, "attributionsrc", &value.as_string())?
+                                    if self.node_explicit_own_property_overrides_dom_property(
+                                        node,
+                                        "attributionSrc",
+                                    ) {
+                                        self.set_node_assignment_property(
+                                            node,
+                                            "attributionSrc",
+                                            value,
+                                            event,
+                                            false,
+                                        )?;
+                                    } else {
+                                        self.dom.set_attr(
+                                            node,
+                                            "attributionsrc",
+                                            &value.as_string(),
+                                        )?
+                                    }
                                 }
                                 DomProp::AnchorDownload => {
                                     self.dom.set_attr(node, "download", &value.as_string())?
@@ -3700,7 +3878,15 @@ impl Harness {
                                     self.set_anchor_url_property(node, "hostname", value.clone())?
                                 }
                                 DomProp::AnchorHref => {
-                                    self.set_anchor_url_property(node, "href", value.clone())?
+                                    if self.node_explicit_own_property_overrides_dom_property(
+                                        node, "href",
+                                    ) {
+                                        self.set_node_assignment_property(
+                                            node, "href", value, event, false,
+                                        )?;
+                                    } else {
+                                        self.set_anchor_url_property(node, "href", value.clone())?
+                                    }
                                 }
                                 DomProp::AnchorHreflang => {
                                     self.dom.set_attr(node, "hreflang", &value.as_string())?
@@ -3778,7 +3964,13 @@ impl Harness {
                                     self.dom.set_text_content(node, &value.as_string())?
                                 }
                                 DomProp::AnchorType => {
-                                    if !self
+                                    if self.node_explicit_own_property_overrides_dom_property(
+                                        node, "type",
+                                    ) {
+                                        self.set_node_assignment_property(
+                                            node, "type", value, event, false,
+                                        )?;
+                                    } else if !self
                                         .dom
                                         .tag_name(node)
                                         .is_some_and(|tag| tag.eq_ignore_ascii_case("select"))

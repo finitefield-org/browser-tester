@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashSet;
 
 impl Harness {
     pub(crate) fn resolved_dir_for_node(&self, node: NodeId) -> String {
@@ -944,6 +945,191 @@ impl Harness {
         })
     }
 
+    pub(crate) fn is_html_form_hidden_named_property_name(key: &str) -> bool {
+        matches!(
+            key,
+            "elements"
+                | "length"
+                | "name"
+                | "action"
+                | "submit"
+                | "requestSubmit"
+                | "reset"
+                | "checkValidity"
+                | "reportValidity"
+                | "method"
+                | "enctype"
+                | "encoding"
+                | "target"
+                | "noValidate"
+                | "acceptCharset"
+                | "rel"
+        )
+    }
+
+    pub(crate) fn form_named_property_value(
+        &mut self,
+        form: NodeId,
+        key: &str,
+    ) -> Result<Option<Value>> {
+        if key.is_empty() || Self::is_html_form_hidden_named_property_name(key) {
+            return Ok(None);
+        }
+        self.form_controls_named_item_value(form, key)
+    }
+
+    pub(crate) fn html_form_builtin_own_string_keys() -> [&'static str; 7] {
+        [
+            "elements",
+            "length",
+            "submit",
+            "requestSubmit",
+            "reset",
+            "checkValidity",
+            "reportValidity",
+        ]
+    }
+
+    pub(crate) fn form_builtin_property_value(&self, key: &str) -> Option<Value> {
+        match key {
+            "submit" | "requestSubmit" | "reset" | "checkValidity" | "reportValidity" => {
+                Some(Self::new_receiver_builtin_callable("html_form", key))
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn html_form_builtin_property_value(
+        &mut self,
+        form: NodeId,
+        key: &str,
+    ) -> Result<Option<Value>> {
+        match key {
+            "elements" => self.form_elements_live_list_value(form).map(Some),
+            "length" => Ok(Some(Value::Number(self.form_elements(form)?.len() as i64))),
+            _ => Ok(self.form_builtin_property_value(key)),
+        }
+    }
+
+    pub(crate) fn html_form_named_property_keys(&mut self, form: NodeId) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        for control in self.form_elements(form)? {
+            let id = self.dom.attr(control, "id").unwrap_or_default();
+            if !id.is_empty()
+                && !Self::is_html_form_hidden_named_property_name(&id)
+                && seen.insert(id.clone())
+            {
+                out.push(id);
+            }
+
+            let name = self.dom.attr(control, "name").unwrap_or_default();
+            if !name.is_empty()
+                && !Self::is_html_form_hidden_named_property_name(&name)
+                && seen.insert(name.clone())
+            {
+                out.push(name);
+            }
+        }
+        Ok(out)
+    }
+
+    pub(crate) fn node_explicit_own_property_overrides_dom_property(
+        &self,
+        node: NodeId,
+        key: &str,
+    ) -> bool {
+        if !self.node_has_explicit_own_property(node, key) {
+            return false;
+        }
+        if self
+            .dom
+            .tag_name(node)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("form"))
+        {
+            return true;
+        }
+        matches!(
+            key,
+            "id" | "className"
+                | "lang"
+                | "dir"
+                | "controlsList"
+                | "controlslist"
+                | "crossOrigin"
+                | "crossorigin"
+                | "disableRemotePlayback"
+                | "disableremoteplayback"
+                | "disablePictureInPicture"
+                | "disablepictureinpicture"
+                | "playsInline"
+                | "playsinline"
+                | "paused"
+                | "ended"
+                | "seeking"
+                | "networkState"
+                | "readyState"
+                | "textTracks"
+                | "value"
+                | "open"
+                | "htmlFor"
+                | "cite"
+                | "href"
+                | "src"
+                | "currentSrc"
+                | "currentsrc"
+                | "media"
+                | "type"
+                | "kind"
+                | "label"
+                | "srclang"
+                | "srcLang"
+                | "default"
+                | "poster"
+                | "preload"
+                | "formAction"
+                | "attributionSrc"
+                | "attributionsrc"
+                | "sizes"
+                | "srcset"
+                | "srcSet"
+                | "data"
+                | "srcdoc"
+                | "srcDoc"
+                | "useMap"
+                | "usemap"
+        )
+    }
+
+    pub(crate) fn node_explicit_own_dom_property_shadow_key<'a>(
+        &self,
+        node: NodeId,
+        keys: &[&'a str],
+    ) -> Option<&'a str> {
+        keys.iter()
+            .copied()
+            .find(|key| self.node_explicit_own_property_overrides_dom_property(node, key))
+    }
+
+    pub(crate) fn node_explicit_own_dom_property_shadow_value(
+        &mut self,
+        node: NodeId,
+        keys: &[&str],
+    ) -> Result<Option<Value>> {
+        let Some(_) = self.node_explicit_own_dom_property_shadow_key(node, keys) else {
+            return Ok(None);
+        };
+        let entries = self.node_expando_entries(node);
+        for key in keys {
+            if let Some(value) =
+                self.object_property_from_entries_with_getter(&Value::Node(node), &entries, key)?
+            {
+                return Ok(Some(value));
+            }
+        }
+        Ok(None)
+    }
+
     fn radio_node_list_value_string_from_nodes(&self, nodes: &[NodeId]) -> Result<String> {
         for node in nodes {
             if is_radio_input(&self.dom, *node) && self.dom.checked(*node)? {
@@ -953,7 +1139,7 @@ impl Harness {
         Ok(String::new())
     }
 
-    fn radio_node_list_value_string(
+    pub(crate) fn radio_node_list_value_string(
         &mut self,
         nodes: &Rc<RefCell<NodeListValue>>,
     ) -> Result<String> {
@@ -4675,13 +4861,47 @@ impl Harness {
 
     pub(crate) fn cached_radio_node_list_constructor_value(&mut self) -> Value {
         let parent = self.cached_node_list_constructor_prototype_value();
-        self.cached_collection_like_constructor_value(
+        let constructor = self.cached_collection_like_constructor_value(
             "RadioNodeList",
             "radio_node_list_constructor",
             "node_list",
             &["item", "forEach", "entries", "keys", "values"],
             Some(parent),
-        )
+        );
+        if let Value::Object(entries) = &constructor {
+            let prototype = {
+                let entries = entries.borrow();
+                Self::object_get_entry(&entries, "prototype")
+            };
+            if let Some(Value::Object(prototype)) = prototype {
+                self.install_radio_node_list_prototype_accessors(&prototype);
+            }
+        }
+        constructor
+    }
+
+    fn install_radio_node_list_prototype_accessors(
+        &mut self,
+        prototype: &Rc<RefCell<ObjectValue>>,
+    ) {
+        let has_value_accessor = {
+            let prototype_ref = prototype.borrow();
+            Self::has_object_accessor_property(&*prototype_ref, "value")
+        };
+        if has_value_accessor {
+            return;
+        }
+        Self::object_set_entry(
+            &mut prototype.borrow_mut(),
+            Self::object_getter_storage_key("value"),
+            Self::new_receiver_builtin_callable("radio_node_list", "value_get"),
+        );
+        Self::object_set_entry(
+            &mut prototype.borrow_mut(),
+            Self::object_setter_storage_key("value"),
+            Self::new_receiver_builtin_callable("radio_node_list", "value_set"),
+        );
+        Self::mark_property_non_enumerable(prototype, "value");
     }
 
     fn cached_radio_node_list_constructor_prototype_value(&mut self) -> Value {
@@ -4691,6 +4911,7 @@ impl Harness {
             .get("RadioNodeList")
             .cloned()
         {
+            self.install_radio_node_list_prototype_accessors(&prototype);
             return Value::Object(prototype);
         }
         let constructor = self.cached_radio_node_list_constructor_value();
@@ -4704,6 +4925,7 @@ impl Harness {
         let Some(Value::Object(prototype)) = prototype else {
             return Self::new_object_value(Vec::new());
         };
+        self.install_radio_node_list_prototype_accessors(&prototype);
         self.script_runtime
             .builtin_constructor_prototypes
             .insert("RadioNodeList".to_string(), prototype.clone());
@@ -5514,6 +5736,13 @@ impl Harness {
             ("node_list", "entries") => ("entries", 0),
             ("node_list", "keys") => ("keys", 0),
             ("node_list", "values") => ("values", 0),
+            ("radio_node_list", "value_get") => ("get value", 0),
+            ("radio_node_list", "value_set") => ("set value", 1),
+            ("html_form", "submit") => ("submit", 0),
+            ("html_form", "requestSubmit") => ("requestSubmit", 1),
+            ("html_form", "reset") => ("reset", 0),
+            ("html_form", "checkValidity") => ("checkValidity", 0),
+            ("html_form", "reportValidity") => ("reportValidity", 0),
             ("html_collection", "item") => ("item", 1),
             ("html_collection", "namedItem") => ("namedItem", 1),
             ("html_collection", "forEach") => ("forEach", 1),
@@ -6973,9 +7202,6 @@ impl Harness {
         if key == "length" {
             return Ok(Value::Number(self.node_list_len(nodes) as i64));
         }
-        if key == "value" && Self::node_list_is_radio_node_list(nodes) {
-            return Ok(Value::String(self.radio_node_list_value_string(nodes)?));
-        }
         if let Ok(index) = key.parse::<usize>() {
             if let Some(node) = self.node_list_get(nodes, index) {
                 return Ok(Value::Node(node));
@@ -7408,15 +7634,24 @@ impl Harness {
             .tag_name(*node)
             .map(|tag| tag.eq_ignore_ascii_case("td") || tag.eq_ignore_ascii_case("th"))
             .unwrap_or(false);
-        let select_options = || self.select_option_nodes(*node);
 
         if is_select {
             if let Ok(index) = key.parse::<usize>() {
-                return Ok(select_options()
+                return Ok(self
+                    .select_option_nodes(*node)
                     .get(index)
                     .copied()
                     .map(Value::Node)
                     .unwrap_or(Value::Undefined));
+            }
+        }
+
+        if self.node_explicit_own_property_overrides_dom_property(*node, key) {
+            let entries = self.node_expando_entries(*node);
+            if let Some(value) =
+                self.object_property_from_entries_with_getter(&Value::Node(*node), &entries, key)?
+            {
+                return Ok(value);
             }
         }
 
@@ -7548,6 +7783,49 @@ impl Harness {
                     Ok(Value::Undefined)
                 }
             }
+            "method" => {
+                if is_form {
+                    Ok(Value::String(
+                        self.dom.attr(*node, "method").unwrap_or_default(),
+                    ))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "enctype" | "encoding" => {
+                if is_form {
+                    Ok(Value::String(
+                        self.dom.attr(*node, "enctype").unwrap_or_default(),
+                    ))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "target" => {
+                if is_form {
+                    Ok(Value::String(
+                        self.dom.attr(*node, "target").unwrap_or_default(),
+                    ))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "acceptCharset" => {
+                if is_form {
+                    Ok(Value::String(
+                        self.dom.attr(*node, "accept-charset").unwrap_or_default(),
+                    ))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "noValidate" => {
+                if is_form {
+                    Ok(Value::Bool(self.dom.attr(*node, "novalidate").is_some()))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
             "command" => {
                 if is_button {
                     Ok(Value::String(
@@ -7579,6 +7857,7 @@ impl Harness {
                     Ok(Value::Undefined)
                 }
             }
+            "href" => Ok(Value::String(self.resolve_anchor_href(*node))),
             "formEnctype" => {
                 if is_button {
                     Ok(Value::String(
@@ -7804,6 +8083,16 @@ impl Harness {
             "default" if self.is_track_element(*node) => {
                 Ok(Value::Bool(self.dom.attr(*node, "default").is_some()))
             }
+            "readyState" if self.is_track_element(*node) => Ok(Value::Number(0)),
+            "controlsList" | "controlslist" => Ok(Value::String(
+                self.dom.attr(*node, "controlslist").unwrap_or_default(),
+            )),
+            "crossOrigin" | "crossorigin" => Ok(Value::String(
+                self.dom.attr(*node, "crossorigin").unwrap_or_default(),
+            )),
+            "disableRemotePlayback" | "disableremoteplayback" => Ok(Value::Bool(
+                self.dom.attr(*node, "disableremoteplayback").is_some(),
+            )),
             "disablePictureInPicture" | "disablepictureinpicture" => Ok(Value::Bool(
                 self.dom.attr(*node, "disablepictureinpicture").is_some(),
             )),
@@ -7813,8 +8102,97 @@ impl Harness {
             "playsInline" | "playsinline" => {
                 Ok(Value::Bool(self.dom.attr(*node, "playsinline").is_some()))
             }
+            "paused"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                Ok(Value::Bool(true))
+            }
+            "ended"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                Ok(Value::Bool(false))
+            }
+            "seeking"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                Ok(Value::Bool(false))
+            }
+            "networkState"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                let state = if self.resolve_media_src(*node).is_empty() {
+                    0
+                } else {
+                    1
+                };
+                Ok(Value::Number(state))
+            }
+            "readyState"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                Ok(Value::Number(0))
+            }
+            "textTracks"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("audio") || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                Ok(self.media_text_tracks_live_list_value(*node))
+            }
+            "currentSrc" | "currentsrc"
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("img")
+                        || tag.eq_ignore_ascii_case("audio")
+                        || tag.eq_ignore_ascii_case("video")
+                }) =>
+            {
+                Ok(Value::String(self.resolve_media_src(*node)))
+            }
+            "src" => Ok(Value::String(self.resolve_media_src(*node))),
             "poster" => Ok(Value::String(
                 self.reflected_url_attribute_or_empty(*node, "poster"),
+            )),
+            "attributionSrc" | "attributionsrc" => Ok(Value::String(
+                self.dom.attr(*node, "attributionsrc").unwrap_or_default(),
+            )),
+            "data" => {
+                if self
+                    .dom
+                    .tag_name(*node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("object"))
+                {
+                    Ok(Value::String(
+                        self.reflected_url_attribute_or_empty(*node, "data"),
+                    ))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "srcdoc" | "srcDoc" => {
+                if self
+                    .dom
+                    .tag_name(*node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("iframe"))
+                {
+                    Ok(Value::String(
+                        self.dom.attr(*node, "srcdoc").unwrap_or_default(),
+                    ))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "preload" => Ok(Value::String(
+                self.dom.attr(*node, "preload").unwrap_or_default(),
             )),
             "sizes" => Ok(Value::String(
                 self.dom.attr(*node, "sizes").unwrap_or_default(),
@@ -7822,6 +8200,17 @@ impl Harness {
             "srcset" | "srcSet" => Ok(Value::String(
                 self.dom.attr(*node, "srcset").unwrap_or_default(),
             )),
+            "useMap" | "usemap" => {
+                if self.dom.tag_name(*node).is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("img") || tag.eq_ignore_ascii_case("object")
+                }) {
+                    Ok(Value::String(
+                        self.dom.attr(*node, "usemap").unwrap_or_default(),
+                    ))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
             "width" => Ok(Value::Number(self.canvas_dimension_value(*node, "width"))),
             "height" => Ok(Value::Number(self.canvas_dimension_value(*node, "height"))),
             "mozOpaque" | "mozopaque" => {
@@ -7886,6 +8275,10 @@ impl Harness {
             }
             "baseURI" => Ok(Value::String(self.document_base_url())),
             "dataset" => Ok(self.dom_string_map_live_value(*node)),
+            "open" => Ok(Value::Bool(self.dom.has_attr(*node, "open")?)),
+            "htmlFor" => Ok(Value::String(
+                self.dom.attr(*node, "for").unwrap_or_default(),
+            )),
             "options" => {
                 if is_select {
                     return Ok(self.select_options_live_list_value(*node));
@@ -7993,10 +8386,13 @@ impl Harness {
                 Ok(Value::Bool(will_validate))
             }
             "length" => {
+                if is_form {
+                    return Ok(Value::Number(self.form_elements(*node)?.len() as i64));
+                }
                 if !is_select {
                     return Ok(Value::Undefined);
                 }
-                Ok(Value::Number(select_options().len() as i64))
+                Ok(Value::Number(self.select_option_nodes(*node).len() as i64))
             }
             "captureStream"
             | "getContext"
@@ -8043,6 +8439,16 @@ impl Harness {
                 .node_expando_props
                 .get(&(*node, key.to_string()))
                 .cloned()
+                .or(if is_form {
+                    self.form_builtin_property_value(key)
+                } else {
+                    None
+                })
+                .or(if is_form {
+                    self.form_named_property_value(*node, key)?
+                } else {
+                    None
+                })
                 .unwrap_or(Value::Undefined)),
         }
     }

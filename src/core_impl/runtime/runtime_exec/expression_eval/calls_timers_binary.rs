@@ -455,6 +455,18 @@ impl Harness {
                 );
                 keys
             }
+            Value::Node(node) => {
+                let mut keys = self.node_expando_enumerable_string_keys(*node);
+                keys.extend(
+                    self.node_expando_enumerable_symbol_values(*node)
+                        .into_iter()
+                        .filter_map(|value| match value {
+                            Value::Symbol(symbol) => Some(Self::symbol_storage_key(symbol.id)),
+                            _ => None,
+                        }),
+                );
+                keys
+            }
             Value::NodeList(nodes) => {
                 let mut keys = self.node_list_synthesized_keys(nodes, true);
                 let nodes_ref = nodes.borrow();

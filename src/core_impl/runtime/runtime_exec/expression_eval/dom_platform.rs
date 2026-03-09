@@ -56,7 +56,25 @@ impl Harness {
                         }
                         DomProp::AssignedSlot => Ok(Value::Null),
                         DomProp::Value => {
-                            if self
+                            if self.node_explicit_own_property_overrides_dom_property(node, "value")
+                            {
+                                let entries = self.node_expando_entries(node);
+                                if let Some(value) = self.object_property_from_entries_with_getter(
+                                    &Value::Node(node),
+                                    &entries,
+                                    "value",
+                                )? {
+                                    Ok(value)
+                                } else if self
+                                    .dom
+                                    .tag_name(node)
+                                    .is_some_and(|tag| tag.eq_ignore_ascii_case("li"))
+                                {
+                                    Ok(Value::Number(self.li_value_property(node)))
+                                } else {
+                                    Ok(Value::String(self.dom.value(node)?))
+                                }
+                            } else if self
                                 .dom
                                 .tag_name(node)
                                 .is_some_and(|tag| tag.eq_ignore_ascii_case("li"))
@@ -140,7 +158,23 @@ impl Harness {
                         )),
                         DomProp::Checked => Ok(Value::Bool(self.dom.checked(node)?)),
                         DomProp::Indeterminate => Ok(Value::Bool(self.dom.indeterminate(node)?)),
-                        DomProp::Open => Ok(Value::Bool(self.dom.has_attr(node, "open")?)),
+                        DomProp::Open => {
+                            if self.node_explicit_own_property_overrides_dom_property(node, "open")
+                            {
+                                let entries = self.node_expando_entries(node);
+                                if let Some(value) = self.object_property_from_entries_with_getter(
+                                    &Value::Node(node),
+                                    &entries,
+                                    "open",
+                                )? {
+                                    Ok(value)
+                                } else {
+                                    Ok(Value::Bool(self.dom.has_attr(node, "open")?))
+                                }
+                            } else {
+                                Ok(Value::Bool(self.dom.has_attr(node, "open")?))
+                            }
+                        }
                         DomProp::ReturnValue => Ok(Value::String(self.dialog_return_value(node)?)),
                         DomProp::ClosedBy => Ok(Value::String(
                             self.dom.attr(node, "closedby").unwrap_or_default(),
@@ -153,9 +187,29 @@ impl Harness {
                         DomProp::InnerText => Ok(Value::String(self.dom.text_content(node))),
                         DomProp::InnerHtml => Ok(Value::String(self.dom.inner_html(node)?)),
                         DomProp::OuterHtml => Ok(Value::String(self.dom.outer_html(node)?)),
-                        DomProp::ClassName => Ok(Value::String(
-                            self.dom.attr(node, "class").unwrap_or_default(),
-                        )),
+                        DomProp::ClassName => {
+                            if self.node_explicit_own_property_overrides_dom_property(
+                                node,
+                                "className",
+                            ) {
+                                let entries = self.node_expando_entries(node);
+                                if let Some(value) = self.object_property_from_entries_with_getter(
+                                    &Value::Node(node),
+                                    &entries,
+                                    "className",
+                                )? {
+                                    Ok(value)
+                                } else {
+                                    Ok(Value::String(
+                                        self.dom.attr(node, "class").unwrap_or_default(),
+                                    ))
+                                }
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "class").unwrap_or_default(),
+                                ))
+                            }
+                        }
                         DomProp::ClassList => Ok(self.class_list_live_value(node)),
                         DomProp::ClassListLength => {
                             let list = self.class_list_live_value(node);
@@ -171,7 +225,20 @@ impl Harness {
                             class_tokens(self.dom.attr(node, "part").as_deref()).len() as i64,
                         )),
                         DomProp::Id => {
-                            Ok(Value::String(self.dom.attr(node, "id").unwrap_or_default()))
+                            if self.node_explicit_own_property_overrides_dom_property(node, "id") {
+                                let entries = self.node_expando_entries(node);
+                                if let Some(value) = self.object_property_from_entries_with_getter(
+                                    &Value::Node(node),
+                                    &entries,
+                                    "id",
+                                )? {
+                                    Ok(value)
+                                } else {
+                                    Ok(Value::String(self.dom.attr(node, "id").unwrap_or_default()))
+                                }
+                            } else {
+                                Ok(Value::String(self.dom.attr(node, "id").unwrap_or_default()))
+                            }
                         }
                         DomProp::TagName => Ok(Value::String(self.element_tag_name(node))),
                         DomProp::LocalName => Ok(Value::String(
@@ -214,21 +281,79 @@ impl Harness {
                         DomProp::ElementTiming => Ok(Value::String(
                             self.dom.attr(node, "elementtiming").unwrap_or_default(),
                         )),
-                        DomProp::HtmlFor => Ok(Value::String(
-                            self.dom.attr(node, "for").unwrap_or_default(),
-                        )),
-                        DomProp::Name => Ok(Value::String(
-                            self.dom.attr(node, "name").unwrap_or_default(),
-                        )),
+                        DomProp::HtmlFor => {
+                            if self
+                                .node_explicit_own_property_overrides_dom_property(node, "htmlFor")
+                            {
+                                let entries = self.node_expando_entries(node);
+                                if let Some(value) = self.object_property_from_entries_with_getter(
+                                    &Value::Node(node),
+                                    &entries,
+                                    "htmlFor",
+                                )? {
+                                    Ok(value)
+                                } else {
+                                    Ok(Value::String(
+                                        self.dom.attr(node, "for").unwrap_or_default(),
+                                    ))
+                                }
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "for").unwrap_or_default(),
+                                ))
+                            }
+                        }
+                        DomProp::Name => {
+                            if self
+                                .dom
+                                .tag_name(node)
+                                .is_some_and(|tag| tag.eq_ignore_ascii_case("form"))
+                                && self.node_has_explicit_own_property(node, "name")
+                            {
+                                let entries = self.node_expando_entries(node);
+                                if let Some(value) = self.object_property_from_entries_with_getter(
+                                    &Value::Node(node),
+                                    &entries,
+                                    "name",
+                                )? {
+                                    Ok(value)
+                                } else {
+                                    Ok(Value::String(
+                                        self.dom.attr(node, "name").unwrap_or_default(),
+                                    ))
+                                }
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "name").unwrap_or_default(),
+                                ))
+                            }
+                        }
                         DomProp::Action => {
                             if self
                                 .dom
                                 .tag_name(node)
                                 .is_some_and(|tag| tag.eq_ignore_ascii_case("form"))
                             {
-                                Ok(Value::String(
-                                    self.form_action_property_value_for_node(node),
-                                ))
+                                if self.node_has_explicit_own_property(node, "action") {
+                                    let entries = self.node_expando_entries(node);
+                                    if let Some(value) = self
+                                        .object_property_from_entries_with_getter(
+                                            &Value::Node(node),
+                                            &entries,
+                                            "action",
+                                        )?
+                                    {
+                                        Ok(value)
+                                    } else {
+                                        Ok(Value::String(
+                                            self.form_action_property_value_for_node(node),
+                                        ))
+                                    }
+                                } else {
+                                    Ok(Value::String(
+                                        self.form_action_property_value_for_node(node),
+                                    ))
+                                }
                             } else {
                                 Ok(self
                                     .dom_runtime
@@ -243,9 +368,31 @@ impl Harness {
                                 tag.eq_ignore_ascii_case("button")
                                     || tag.eq_ignore_ascii_case("input")
                             }) {
-                                Ok(Value::String(
-                                    self.submitter_form_action_property_value_for_node(node),
-                                ))
+                                if self.node_explicit_own_property_overrides_dom_property(
+                                    node,
+                                    "formAction",
+                                ) {
+                                    let entries = self.node_expando_entries(node);
+                                    if let Some(value) = self
+                                        .object_property_from_entries_with_getter(
+                                            &Value::Node(node),
+                                            &entries,
+                                            "formAction",
+                                        )?
+                                    {
+                                        Ok(value)
+                                    } else {
+                                        Ok(Value::String(
+                                            self.submitter_form_action_property_value_for_node(
+                                                node,
+                                            ),
+                                        ))
+                                    }
+                                } else {
+                                    Ok(Value::String(
+                                        self.submitter_form_action_property_value_for_node(node),
+                                    ))
+                                }
                             } else {
                                 Ok(self
                                     .dom_runtime
@@ -255,10 +402,43 @@ impl Harness {
                                     .unwrap_or(Value::Undefined))
                             }
                         }
-                        DomProp::Lang => Ok(Value::String(
-                            self.dom.attr(node, "lang").unwrap_or_default(),
-                        )),
-                        DomProp::Dir => Ok(Value::String(self.resolved_dir_for_node(node))),
+                        DomProp::Lang => {
+                            if self.node_explicit_own_property_overrides_dom_property(node, "lang")
+                            {
+                                let entries = self.node_expando_entries(node);
+                                if let Some(value) = self.object_property_from_entries_with_getter(
+                                    &Value::Node(node),
+                                    &entries,
+                                    "lang",
+                                )? {
+                                    Ok(value)
+                                } else {
+                                    Ok(Value::String(
+                                        self.dom.attr(node, "lang").unwrap_or_default(),
+                                    ))
+                                }
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "lang").unwrap_or_default(),
+                                ))
+                            }
+                        }
+                        DomProp::Dir => {
+                            if self.node_explicit_own_property_overrides_dom_property(node, "dir") {
+                                let entries = self.node_expando_entries(node);
+                                if let Some(value) = self.object_property_from_entries_with_getter(
+                                    &Value::Node(node),
+                                    &entries,
+                                    "dir",
+                                )? {
+                                    Ok(value)
+                                } else {
+                                    Ok(Value::String(self.resolved_dir_for_node(node)))
+                                }
+                            } else {
+                                Ok(Value::String(self.resolved_dir_for_node(node)))
+                            }
+                        }
                         DomProp::AccessKey => Ok(Value::String(
                             self.dom.attr(node, "accesskey").unwrap_or_default(),
                         )),
@@ -299,9 +479,27 @@ impl Harness {
                         DomProp::Translate => {
                             Ok(Value::Bool(self.translate_property_value_for_node(node)))
                         }
-                        DomProp::Cite => Ok(Value::String(
-                            self.reflected_url_attribute_or_empty(node, "cite"),
-                        )),
+                        DomProp::Cite => {
+                            if self.node_explicit_own_property_overrides_dom_property(node, "cite")
+                            {
+                                let entries = self.node_expando_entries(node);
+                                if let Some(value) = self.object_property_from_entries_with_getter(
+                                    &Value::Node(node),
+                                    &entries,
+                                    "cite",
+                                )? {
+                                    Ok(value)
+                                } else {
+                                    Ok(Value::String(
+                                        self.reflected_url_attribute_or_empty(node, "cite"),
+                                    ))
+                                }
+                            } else {
+                                Ok(Value::String(
+                                    self.reflected_url_attribute_or_empty(node, "cite"),
+                                ))
+                            }
+                        }
                         DomProp::DateTime => Ok(Value::String(
                             self.dom.attr(node, "datetime").unwrap_or_default(),
                         )),
@@ -534,36 +732,197 @@ impl Harness {
                             let list = self.child_elements_live_list_value(node);
                             self.object_property_from_value_with_receiver(&list, "length", &list)
                         }
-                        DomProp::AudioSrc => Ok(Value::String(self.resolve_media_src(node))),
+                        DomProp::AudioSrc => {
+                            if self.node_explicit_own_property_overrides_dom_property(node, "src") {
+                                let entries = self.node_expando_entries(node);
+                                if let Some(value) = self.object_property_from_entries_with_getter(
+                                    &Value::Node(node),
+                                    &entries,
+                                    "src",
+                                )? {
+                                    Ok(value)
+                                } else {
+                                    Ok(Value::String(self.resolve_media_src(node)))
+                                }
+                            } else {
+                                Ok(Value::String(self.resolve_media_src(node)))
+                            }
+                        }
                         DomProp::AudioAutoplay => {
                             Ok(Value::Bool(self.dom.has_attr(node, "autoplay")?))
                         }
                         DomProp::AudioControls => {
                             Ok(Value::Bool(self.dom.has_attr(node, "controls")?))
                         }
-                        DomProp::AudioControlsList => Ok(Value::String(
-                            self.dom.attr(node, "controlslist").unwrap_or_default(),
-                        )),
-                        DomProp::AudioCrossOrigin => Ok(Value::String(
-                            self.dom.attr(node, "crossorigin").unwrap_or_default(),
-                        )),
-                        DomProp::AudioDisableRemotePlayback => Ok(Value::Bool(
-                            self.dom.has_attr(node, "disableremoteplayback")?,
-                        )),
-                        DomProp::VideoDisablePictureInPicture => Ok(Value::Bool(
-                            self.dom.has_attr(node, "disablepictureinpicture")?,
-                        )),
+                        DomProp::AudioControlsList => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["controlsList", "controlslist"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "controlslist").unwrap_or_default(),
+                                ))
+                            }
+                        }
+                        DomProp::AudioCrossOrigin => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["crossOrigin", "crossorigin"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "crossorigin").unwrap_or_default(),
+                                ))
+                            }
+                        }
+                        DomProp::AudioDisableRemotePlayback => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["disableRemotePlayback", "disableremoteplayback"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Bool(
+                                    self.dom.has_attr(node, "disableremoteplayback")?,
+                                ))
+                            }
+                        }
+                        DomProp::VideoDisablePictureInPicture => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["disablePictureInPicture", "disablepictureinpicture"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Bool(
+                                    self.dom.has_attr(node, "disablepictureinpicture")?,
+                                ))
+                            }
+                        }
                         DomProp::AudioLoop => Ok(Value::Bool(self.dom.has_attr(node, "loop")?)),
                         DomProp::AudioMuted => Ok(Value::Bool(self.dom.has_attr(node, "muted")?)),
-                        DomProp::AudioPreload => Ok(Value::String(
-                            self.dom.attr(node, "preload").unwrap_or_default(),
-                        )),
-                        DomProp::VideoPlaysInline => {
-                            Ok(Value::Bool(self.dom.has_attr(node, "playsinline")?))
+                        DomProp::AudioPreload => {
+                            if self
+                                .node_explicit_own_property_overrides_dom_property(node, "preload")
+                            {
+                                let entries = self.node_expando_entries(node);
+                                if let Some(value) = self.object_property_from_entries_with_getter(
+                                    &Value::Node(node),
+                                    &entries,
+                                    "preload",
+                                )? {
+                                    Ok(value)
+                                } else {
+                                    Ok(Value::String(
+                                        self.dom.attr(node, "preload").unwrap_or_default(),
+                                    ))
+                                }
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "preload").unwrap_or_default(),
+                                ))
+                            }
                         }
-                        DomProp::VideoPoster => Ok(Value::String(
-                            self.reflected_url_attribute_or_empty(node, "poster"),
-                        )),
+                        DomProp::VideoPlaysInline => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["playsInline", "playsinline"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Bool(self.dom.has_attr(node, "playsinline")?))
+                            }
+                        }
+                        DomProp::VideoPoster => {
+                            if self
+                                .node_explicit_own_property_overrides_dom_property(node, "poster")
+                            {
+                                let entries = self.node_expando_entries(node);
+                                if let Some(value) = self.object_property_from_entries_with_getter(
+                                    &Value::Node(node),
+                                    &entries,
+                                    "poster",
+                                )? {
+                                    Ok(value)
+                                } else {
+                                    Ok(Value::String(
+                                        self.reflected_url_attribute_or_empty(node, "poster"),
+                                    ))
+                                }
+                            } else {
+                                Ok(Value::String(
+                                    self.reflected_url_attribute_or_empty(node, "poster"),
+                                ))
+                            }
+                        }
+                        DomProp::Data => {
+                            if self.node_explicit_own_property_overrides_dom_property(node, "data")
+                            {
+                                let entries = self.node_expando_entries(node);
+                                if let Some(value) = self.object_property_from_entries_with_getter(
+                                    &Value::Node(node),
+                                    &entries,
+                                    "data",
+                                )? {
+                                    Ok(value)
+                                } else {
+                                    Ok(Value::String(
+                                        self.reflected_url_attribute_or_empty(node, "data"),
+                                    ))
+                                }
+                            } else {
+                                Ok(Value::String(
+                                    self.reflected_url_attribute_or_empty(node, "data"),
+                                ))
+                            }
+                        }
+                        DomProp::SrcDoc => {
+                            if self
+                                .node_explicit_own_property_overrides_dom_property(node, "srcdoc")
+                            {
+                                let entries = self.node_expando_entries(node);
+                                if let Some(value) = self.object_property_from_entries_with_getter(
+                                    &Value::Node(node),
+                                    &entries,
+                                    "srcdoc",
+                                )? {
+                                    Ok(value)
+                                } else {
+                                    Ok(Value::String(
+                                        self.dom.attr(node, "srcdoc").unwrap_or_default(),
+                                    ))
+                                }
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "srcdoc").unwrap_or_default(),
+                                ))
+                            }
+                        }
+                        DomProp::UseMap => {
+                            if self
+                                .node_explicit_own_property_overrides_dom_property(node, "useMap")
+                            {
+                                let entries = self.node_expando_entries(node);
+                                if let Some(value) = self.object_property_from_entries_with_getter(
+                                    &Value::Node(node),
+                                    &entries,
+                                    "useMap",
+                                )? {
+                                    Ok(value)
+                                } else {
+                                    Ok(Value::String(
+                                        self.dom.attr(node, "usemap").unwrap_or_default(),
+                                    ))
+                                }
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "usemap").unwrap_or_default(),
+                                ))
+                            }
+                        }
                         DomProp::AriaString(prop_name) => Ok(Value::String(
                             self.dom
                                 .attr(node, &Self::aria_property_to_attr_name(prop_name))
@@ -581,9 +940,29 @@ impl Harness {
                         DomProp::AnchorAlt => Ok(Value::String(
                             self.dom.attr(node, "alt").unwrap_or_default(),
                         )),
-                        DomProp::AnchorAttributionSrc => Ok(Value::String(
-                            self.dom.attr(node, "attributionsrc").unwrap_or_default(),
-                        )),
+                        DomProp::AnchorAttributionSrc => {
+                            if self.node_explicit_own_property_overrides_dom_property(
+                                node,
+                                "attributionSrc",
+                            ) {
+                                let entries = self.node_expando_entries(node);
+                                if let Some(value) = self.object_property_from_entries_with_getter(
+                                    &Value::Node(node),
+                                    &entries,
+                                    "attributionSrc",
+                                )? {
+                                    Ok(value)
+                                } else {
+                                    Ok(Value::String(
+                                        self.dom.attr(node, "attributionsrc").unwrap_or_default(),
+                                    ))
+                                }
+                            } else {
+                                Ok(Value::String(
+                                    self.dom.attr(node, "attributionsrc").unwrap_or_default(),
+                                ))
+                            }
+                        }
                         DomProp::AnchorDownload => Ok(Value::String(
                             self.dom.attr(node, "download").unwrap_or_default(),
                         )),
@@ -600,7 +979,23 @@ impl Harness {
                                 .map(|parts| parts.hostname)
                                 .unwrap_or_default(),
                         )),
-                        DomProp::AnchorHref => Ok(Value::String(self.resolve_anchor_href(node))),
+                        DomProp::AnchorHref => {
+                            if self.node_explicit_own_property_overrides_dom_property(node, "href")
+                            {
+                                let entries = self.node_expando_entries(node);
+                                if let Some(value) = self.object_property_from_entries_with_getter(
+                                    &Value::Node(node),
+                                    &entries,
+                                    "href",
+                                )? {
+                                    Ok(value)
+                                } else {
+                                    Ok(Value::String(self.resolve_anchor_href(node)))
+                                }
+                            } else {
+                                Ok(Value::String(self.resolve_anchor_href(node)))
+                            }
+                        }
                         DomProp::AnchorHreflang => Ok(Value::String(
                             self.dom.attr(node, "hreflang").unwrap_or_default(),
                         )),
@@ -682,43 +1077,59 @@ impl Harness {
                         )),
                         DomProp::AnchorText => Ok(Value::String(self.dom.text_content(node))),
                         DomProp::AnchorType => {
-                            if self
-                                .dom
-                                .tag_name(node)
-                                .is_some_and(|tag| tag.eq_ignore_ascii_case("button"))
+                            if self.node_explicit_own_property_overrides_dom_property(node, "type")
                             {
-                                let normalized = self
-                                    .dom
-                                    .attr(node, "type")
-                                    .map(|value| value.trim().to_string())
-                                    .filter(|value| !value.is_empty())
-                                    .map(|value| {
-                                        if value.eq_ignore_ascii_case("reset") {
-                                            "reset".to_string()
-                                        } else if value.eq_ignore_ascii_case("button") {
-                                            "button".to_string()
-                                        } else {
-                                            "submit".to_string()
-                                        }
-                                    })
-                                    .unwrap_or_else(|| "submit".to_string());
-                                Ok(Value::String(normalized))
-                            } else if self
-                                .dom
-                                .tag_name(node)
-                                .is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
-                            {
-                                Ok(Value::String(self.normalized_input_type(node)))
-                            } else if self
-                                .dom
-                                .tag_name(node)
-                                .is_some_and(|tag| tag.eq_ignore_ascii_case("select"))
-                            {
-                                Ok(Value::String(self.select_type_property_value(node)))
+                                let entries = self.node_expando_entries(node);
+                                if let Some(value) = self.object_property_from_entries_with_getter(
+                                    &Value::Node(node),
+                                    &entries,
+                                    "type",
+                                )? {
+                                    Ok(value)
+                                } else {
+                                    Ok(Value::String(
+                                        self.dom.attr(node, "type").unwrap_or_default(),
+                                    ))
+                                }
                             } else {
-                                Ok(Value::String(
-                                    self.dom.attr(node, "type").unwrap_or_default(),
-                                ))
+                                if self
+                                    .dom
+                                    .tag_name(node)
+                                    .is_some_and(|tag| tag.eq_ignore_ascii_case("button"))
+                                {
+                                    let normalized = self
+                                        .dom
+                                        .attr(node, "type")
+                                        .map(|value| value.trim().to_string())
+                                        .filter(|value| !value.is_empty())
+                                        .map(|value| {
+                                            if value.eq_ignore_ascii_case("reset") {
+                                                "reset".to_string()
+                                            } else if value.eq_ignore_ascii_case("button") {
+                                                "button".to_string()
+                                            } else {
+                                                "submit".to_string()
+                                            }
+                                        })
+                                        .unwrap_or_else(|| "submit".to_string());
+                                    Ok(Value::String(normalized))
+                                } else if self
+                                    .dom
+                                    .tag_name(node)
+                                    .is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
+                                {
+                                    Ok(Value::String(self.normalized_input_type(node)))
+                                } else if self
+                                    .dom
+                                    .tag_name(node)
+                                    .is_some_and(|tag| tag.eq_ignore_ascii_case("select"))
+                                {
+                                    Ok(Value::String(self.select_type_property_value(node)))
+                                } else {
+                                    Ok(Value::String(
+                                        self.dom.attr(node, "type").unwrap_or_default(),
+                                    ))
+                                }
                             }
                         }
                         DomProp::AnchorUsername => Ok(Value::String(
@@ -1548,6 +1959,39 @@ impl Harness {
         Value::NodeList(list)
     }
 
+    fn media_text_track_nodes(&self, media: NodeId) -> Vec<NodeId> {
+        self.dom.nodes[media.0]
+            .children
+            .iter()
+            .copied()
+            .filter(|child| {
+                self.dom
+                    .tag_name(*child)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("track"))
+            })
+            .collect()
+    }
+
+    pub(crate) fn media_text_tracks_live_list_value(&mut self, media: NodeId) -> Value {
+        let existing = self
+            .dom_runtime
+            .live_media_text_tracks_lists
+            .get(&media)
+            .cloned();
+        let list = existing.unwrap_or_else(|| {
+            let list = Rc::new(RefCell::new(NodeListValue::live_media_text_tracks(
+                media,
+                self.media_text_track_nodes(media),
+            )));
+            self.dom_runtime
+                .live_media_text_tracks_lists
+                .insert(media, list.clone());
+            list
+        });
+        self.refresh_node_list(&list);
+        Value::NodeList(list)
+    }
+
     pub(crate) fn named_node_map_live_value(&mut self, owner: NodeId) -> Value {
         let existing = self.dom_runtime.live_named_node_maps.get(&owner).cloned();
         let map = existing.unwrap_or_else(|| {
@@ -1648,6 +2092,13 @@ impl Harness {
                     let mut options = Vec::new();
                     self.dom.collect_select_options(datalist, &mut options);
                     options
+                } else {
+                    Vec::new()
+                }
+            }
+            LiveNodeListSource::MediaTextTracks { media } => {
+                if self.dom.is_valid_node(media) {
+                    self.media_text_track_nodes(media)
                 } else {
                     Vec::new()
                 }

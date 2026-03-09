@@ -310,6 +310,9 @@ pub(crate) enum LiveNodeListSource {
     DataListOptions {
         datalist: NodeId,
     },
+    MediaTextTracks {
+        media: NodeId,
+    },
     DescendantsByClassNames {
         root: NodeId,
         class_names: Vec<String>,
@@ -442,6 +445,15 @@ impl NodeListValue {
             nodes,
             kind: NodeListKind::HtmlCollection,
             live_source: Some(LiveNodeListSource::DataListOptions { datalist }),
+            properties: ObjectValue::default(),
+        }
+    }
+
+    pub(crate) fn live_media_text_tracks(media: NodeId, nodes: Vec<NodeId>) -> Self {
+        Self {
+            nodes,
+            kind: NodeListKind::NodeList,
+            live_source: Some(LiveNodeListSource::MediaTextTracks { media }),
             properties: ObjectValue::default(),
         }
     }
@@ -1150,6 +1162,9 @@ pub(crate) enum DomProp {
     AnchorCoords,
     AnchorRev,
     AnchorShape,
+    Data,
+    SrcDoc,
+    UseMap,
     Size,
     Min,
     Max,

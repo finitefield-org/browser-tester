@@ -30,6 +30,7 @@ impl Harness {
         self.dom_runtime.live_select_options_lists.clear();
         self.dom_runtime.live_selected_options_lists.clear();
         self.dom_runtime.live_datalist_options_lists.clear();
+        self.dom_runtime.live_media_text_tracks_lists.clear();
         self.dom_runtime.live_named_node_maps.clear();
         self.dom_runtime.live_document_forms_list = None;
         self.dom_runtime.live_document_images_list = None;

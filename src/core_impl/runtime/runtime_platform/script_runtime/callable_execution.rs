@@ -275,6 +275,8 @@ impl Harness {
             "date" => "Date",
             "map" => "Map",
             "node_list" => "NodeList",
+            "radio_node_list" => "RadioNodeList",
+            "html_form" => "HTMLFormElement",
             "html_collection" => "HTMLCollection",
             "weak_map" => "WeakMap",
             "set" => "Set",
@@ -495,6 +497,91 @@ impl Harness {
                             }
                         ))
                     })
+            }
+            "radio_node_list" => {
+                let Value::NodeList(nodes) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !Self::node_list_is_radio_node_list(&nodes) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                match member.as_str() {
+                    "value_get" => Ok(Value::String(self.radio_node_list_value_string(&nodes)?)),
+                    "value_set" => {
+                        let next_value = args.first().cloned().unwrap_or(Value::Undefined);
+                        self.set_radio_node_list_value(&nodes, next_value.as_string().as_str())?;
+                        Ok(Value::Undefined)
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported RadioNodeList method: {member}"
+                    ))),
+                }
+            }
+            "html_form" => {
+                let Value::Node(node) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                let is_form = self
+                    .dom
+                    .tag_name(node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("form"));
+                if !is_form {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                match member.as_str() {
+                    "submit" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime("submit takes no arguments".into()));
+                        }
+                        self.with_script_env(|this, env| {
+                            this.submit_form_with_env(node, env)?;
+                            Ok(Value::Undefined)
+                        })
+                    }
+                    "requestSubmit" => {
+                        if args.len() > 1 {
+                            return Err(Error::ScriptRuntime(
+                                "requestSubmit takes at most one argument".into(),
+                            ));
+                        }
+                        let submitter = args.first().cloned();
+                        self.with_script_env(|this, env| {
+                            this.request_submit_form_with_env(node, submitter, env)?;
+                            Ok(Value::Undefined)
+                        })
+                    }
+                    "reset" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime("reset takes no arguments".into()));
+                        }
+                        self.with_script_env(|this, env| {
+                            this.reset_form_with_env(node, env)?;
+                            Ok(Value::Undefined)
+                        })
+                    }
+                    "checkValidity" | "reportValidity" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(format!(
+                                "{member} takes no arguments"
+                            )));
+                        }
+                        self.with_script_env(|this, env| {
+                            let controls = this.form_elements(node)?;
+                            let mut valid = true;
+                            for control in &controls {
+                                if !this.required_control_satisfied(*control, &controls)? {
+                                    valid = false;
+                                    let _ = this
+                                        .dispatch_event_with_env(*control, "invalid", env, true)?;
+                                }
+                            }
+                            Ok(Value::Bool(valid))
+                        })
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported HTMLFormElement method: {member}"
+                    ))),
+                }
             }
             "typed_array" => {
                 let Value::TypedArray(array) = receiver else {

@@ -90,3 +90,73 @@ fn embed_is_void_and_role_assignment_roundtrip_work() -> Result<()> {
     h.assert_text("#result", ":1:before after|img:img|:true")?;
     Ok(())
 }
+
+#[test]
+fn embed_reflective_own_property_surface_and_object_copy_work() -> Result<()> {
+    let html = r#"
+        <embed id='asset' src='/media/clip.mov' type='video/quicktime'>
+        <p id='result'></p>
+        <script>
+          const asset = document.getElementById('asset');
+          const beforeAssigned = Object.assign({}, asset);
+          const beforeSpread = { ...asset };
+
+          const before = [
+            asset.src,
+            String(Object.hasOwn(asset, 'src')),
+            String(Object.getOwnPropertyDescriptor(asset, 'src') === undefined),
+            String(Object.getOwnPropertyNames(asset).includes('src')),
+            String(Reflect.ownKeys(asset).includes('src')),
+            String('src' in beforeAssigned),
+            String('src' in beforeSpread)
+          ].join(':');
+
+          Object.defineProperty(asset, 'src', {
+            value: 'shadow-src',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+          asset.extra = 'expando';
+
+          const shadowAssigned = Object.assign({}, asset);
+          const shadowSpread = { ...asset };
+
+          const shadowed = [
+            asset.src,
+            String(Object.keys(asset).join(',') === 'extra,src'),
+            shadowAssigned.src,
+            shadowAssigned.extra,
+            shadowSpread.src,
+            shadowSpread.extra
+          ].join(':');
+
+          delete asset.src;
+
+          const restoredAssigned = Object.assign({}, asset);
+          const restoredSpread = { ...asset };
+
+          const restored = [
+            asset.src,
+            String(Object.hasOwn(asset, 'src')),
+            restoredAssigned.extra,
+            String('src' in restoredAssigned),
+            restoredSpread.extra,
+            String('src' in restoredSpread)
+          ].join(':');
+
+          document.getElementById('result').textContent = [
+            before,
+            shadowed,
+            restored
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/page/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "https://app.local/media/clip.mov:false:true:false:false:false:false|shadow-src:true:shadow-src:expando:shadow-src:expando|https://app.local/media/clip.mov:false:expando:false:expando:false",
+    )?;
+    Ok(())
+}

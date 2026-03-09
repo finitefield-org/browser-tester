@@ -856,6 +856,8 @@ impl Harness {
         node: NodeId,
         key: &str,
         value: Value,
+        event: &EventState,
+        reflect_set: bool,
     ) -> Result<()> {
         if self.set_node_event_handler_property(node, key, value.clone())? {
             return Ok(());
@@ -892,6 +894,43 @@ impl Harness {
             .dom
             .tag_name(node)
             .is_some_and(|tag| tag.eq_ignore_ascii_case("td") || tag.eq_ignore_ascii_case("th"));
+
+        if self.node_explicit_own_property_overrides_dom_property(node, key) {
+            let mut entries = self.node_expando_entries(node);
+            let own_setter = Self::object_setter_from_entries(&entries, key);
+            let own_has_accessor = Self::has_object_accessor_property(&entries, key);
+            let own_data = Self::object_get_entry(&entries, key).is_some();
+            if let Some(setter) = own_setter {
+                if !self.is_callable_value(&setter) {
+                    return Err(Error::ScriptRuntime("object setter is not callable".into()));
+                }
+                self.execute_callable_value_with_this_and_env(
+                    &setter,
+                    &[value],
+                    event,
+                    None,
+                    Some(Value::Node(node)),
+                )?;
+                return Ok(());
+            }
+            if own_has_accessor {
+                if reflect_set {
+                    return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                }
+                return Ok(());
+            }
+            if own_data && !Self::is_writable_object_key(&entries, key) {
+                if reflect_set {
+                    return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                }
+                return Ok(());
+            }
+            if own_data {
+                Self::object_set_entry(&mut entries, key.to_string(), value);
+                self.replace_node_expando_entries(node, entries);
+                return Ok(());
+            }
+        }
 
         if is_select {
             if let Ok(index) = key.parse::<usize>() {
@@ -977,6 +1016,7 @@ impl Harness {
                 self.set_dialog_return_value(node, value.as_string())?;
             }
             "closedBy" | "closedby" => self.dom.set_attr(node, "closedby", &value.as_string())?,
+            "htmlFor" | "htmlfor" => self.dom.set_attr(node, "for", &value.as_string())?,
             "readOnly" | "readonly" => {
                 self.set_reflected_boolean_attribute(node, "readonly", value.truthy())?;
             }
@@ -1006,6 +1046,18 @@ impl Harness {
                 .set_attr(node, "elementtiming", &value.as_string())?,
             "name" => self.dom.set_attr(node, "name", &value.as_string())?,
             "action" if is_form => self.dom.set_attr(node, "action", &value.as_string())?,
+            "method" if is_form => self.dom.set_attr(node, "method", &value.as_string())?,
+            "enctype" | "encoding" if is_form => {
+                self.dom.set_attr(node, "enctype", &value.as_string())?;
+            }
+            "target" if is_form => self.dom.set_attr(node, "target", &value.as_string())?,
+            "acceptCharset" if is_form => {
+                self.dom
+                    .set_attr(node, "accept-charset", &value.as_string())?;
+            }
+            "noValidate" if is_form => {
+                self.set_reflected_boolean_attribute(node, "novalidate", value.truthy())?;
+            }
             "command" => {
                 if is_button {
                     self.dom.set_attr(node, "command", &value.as_string())?;
@@ -1185,6 +1237,8 @@ impl Harness {
                 self.dom
                     .set_attr(node, "attributionsrc", &value.as_string())?
             }
+            "data" => self.dom.set_attr(node, "data", &value.as_string())?,
+            "srcdoc" | "srcDoc" => self.dom.set_attr(node, "srcdoc", &value.as_string())?,
             "download" => self.dom.set_attr(node, "download", &value.as_string())?,
             "hash" => self.set_anchor_url_property(node, "hash", value.clone())?,
             "host" => self.set_anchor_url_property(node, "host", value.clone())?,
@@ -1324,6 +1378,7 @@ impl Harness {
             "media" => self.dom.set_attr(node, "media", &value.as_string())?,
             "sizes" => self.dom.set_attr(node, "sizes", &value.as_string())?,
             "srcset" | "srcSet" => self.dom.set_attr(node, "srcset", &value.as_string())?,
+            "useMap" | "usemap" => self.dom.set_attr(node, "usemap", &value.as_string())?,
             "width" => self.set_canvas_dimension_value(node, "width", &value)?,
             "height" => self.set_canvas_dimension_value(node, "height", &value)?,
             "username" => self.set_anchor_url_property(node, "username", value.clone())?,
@@ -1792,16 +1847,41 @@ impl Harness {
             }
             Value::NodeList(nodes) => {
                 let key = self.property_key_to_storage_key(key_value);
-                let has_own_surface = {
+                let (own_setter, own_has_accessor, own_data, own_writable) = {
                     let nodes_ref = nodes.borrow();
-                    Self::object_get_entry(&nodes_ref.properties, &key).is_some()
-                        || Self::has_object_accessor_property(&nodes_ref.properties, &key)
+                    (
+                        Self::object_setter_from_entries(&nodes_ref.properties, &key),
+                        Self::has_object_accessor_property(&nodes_ref.properties, &key),
+                        Self::object_get_entry(&nodes_ref.properties, &key).is_some(),
+                        Self::is_writable_object_key(&nodes_ref.properties, &key),
+                    )
                 };
-                if key == "value" && Self::node_list_is_radio_node_list(nodes) && !has_own_surface {
-                    self.set_radio_node_list_value(nodes, value.as_string().as_str())?;
+                if let Some(setter) = own_setter {
+                    if !self.is_callable_value(&setter) {
+                        return Err(Error::ScriptRuntime("object setter is not callable".into()));
+                    }
+                    self.execute_callable_value_with_this_and_env(
+                        &setter,
+                        &[value],
+                        event,
+                        None,
+                        Some(container.clone()),
+                    )?;
                     return Ok(());
                 }
-                if key == "length" && !has_own_surface {
+                if own_has_accessor {
+                    if reflect_set {
+                        return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                    }
+                    return Ok(());
+                }
+                if own_data && !own_writable {
+                    if reflect_set {
+                        return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                    }
+                    return Ok(());
+                }
+                if key == "length" && !own_data {
                     if reflect_set {
                         return Err(Error::ScriptRuntime("Reflect.set failed".into()));
                     }
@@ -1809,18 +1889,57 @@ impl Harness {
                 }
                 if let Ok(index) = key.parse::<usize>()
                     && index < self.node_list_len(nodes)
-                    && !has_own_surface
+                    && !own_data
                 {
                     if reflect_set {
                         return Err(Error::ScriptRuntime("Reflect.set failed".into()));
                     }
                     return Ok(());
                 }
-                if !Self::is_writable_object_key(&nodes.borrow().properties, &key) {
-                    if reflect_set {
-                        return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                if !own_data {
+                    let mut prototype = self.value_internal_prototype_value(container);
+                    while let Some(current) = prototype {
+                        match current {
+                            Value::Object(proto) => {
+                                let (setter, has_accessor, next) = {
+                                    let proto_ref = proto.borrow();
+                                    (
+                                        Self::object_setter_from_entries(&proto_ref, &key),
+                                        Self::has_object_accessor_property(&proto_ref, &key),
+                                        Self::object_get_entry(
+                                            &proto_ref,
+                                            INTERNAL_OBJECT_PROTOTYPE_KEY,
+                                        ),
+                                    )
+                                };
+                                if let Some(setter) = setter {
+                                    if !self.is_callable_value(&setter) {
+                                        return Err(Error::ScriptRuntime(
+                                            "object setter is not callable".into(),
+                                        ));
+                                    }
+                                    self.execute_callable_value_with_this_and_env(
+                                        &setter,
+                                        &[value],
+                                        event,
+                                        None,
+                                        Some(container.clone()),
+                                    )?;
+                                    return Ok(());
+                                }
+                                if has_accessor {
+                                    if reflect_set {
+                                        return Err(Error::ScriptRuntime(
+                                            "Reflect.set failed".into(),
+                                        ));
+                                    }
+                                    return Ok(());
+                                }
+                                prototype = next;
+                            }
+                            _ => break,
+                        }
                     }
-                    return Ok(());
                 }
                 Self::object_set_entry(&mut nodes.borrow_mut().properties, key, value);
                 Ok(())
@@ -1927,7 +2046,7 @@ impl Harness {
             }
             Value::Node(node) => {
                 let key = self.property_key_to_storage_key(key_value);
-                self.set_node_assignment_property(*node, &key, value)
+                self.set_node_assignment_property(*node, &key, value, event, reflect_set)
             }
             _ => Err(Error::ScriptRuntime(format!(
                 "variable '{}' is not an object (assignment target)",

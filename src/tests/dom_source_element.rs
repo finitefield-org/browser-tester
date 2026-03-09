@@ -122,3 +122,184 @@ fn source_in_video_exposes_src_type_media_and_role_roundtrip() -> Result<()> {
     )?;
     Ok(())
 }
+
+#[test]
+fn source_reflective_own_property_surface_and_object_copy_work() -> Result<()> {
+    let html = r#"
+        <picture>
+          <source
+            id='hero'
+            src='/img/explicit.webp'
+            srcset='/img/hero.webp 1x, /img/hero@2x.webp 2x'
+            sizes='50vw'>
+          <img src='/img/fallback.jpg' alt='Artwork'>
+        </picture>
+        <p id='result'></p>
+        <script>
+          const hero = document.getElementById('hero');
+          const beforeAssigned = Object.assign({}, hero);
+          const beforeSpread = { ...hero };
+
+          const before = [
+            hero.src,
+            hero.srcset,
+            hero.sizes,
+            String(Object.hasOwn(hero, 'src')),
+            String(Object.hasOwn(hero, 'srcset')),
+            String(Object.hasOwn(hero, 'sizes')),
+            String(Object.getOwnPropertyDescriptor(hero, 'src') === undefined),
+            String(Object.getOwnPropertyNames(hero).includes('srcset')),
+            String(Reflect.ownKeys(hero).includes('sizes')),
+            String('src' in beforeAssigned),
+            String('srcset' in beforeSpread)
+          ].join(':');
+
+          Object.defineProperty(hero, 'src', {
+            value: 'shadow-src',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(hero, 'srcset', {
+            value: 'shadow-srcset',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(hero, 'sizes', {
+            value: 'shadow-sizes',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+          hero.extra = 'expando';
+
+          const shadowAssigned = Object.assign({}, hero);
+          const shadowSpread = { ...hero };
+
+          const shadowed = [
+            hero.src,
+            hero.srcset,
+            hero.sizes,
+            String(Object.keys(hero).sort().join(',') === 'extra,sizes,src,srcset'),
+            shadowAssigned.src,
+            shadowAssigned.srcset,
+            shadowAssigned.sizes,
+            shadowAssigned.extra,
+            shadowSpread.src,
+            shadowSpread.srcset,
+            shadowSpread.sizes,
+            shadowSpread.extra
+          ].join(':');
+
+          delete hero.src;
+          delete hero.srcset;
+          delete hero.sizes;
+
+          const restoredAssigned = Object.assign({}, hero);
+          const restoredSpread = { ...hero };
+
+          const restored = [
+            hero.src,
+            hero.srcset,
+            hero.sizes,
+            String(Object.hasOwn(hero, 'src')),
+            String(Object.hasOwn(hero, 'srcset')),
+            String(Object.hasOwn(hero, 'sizes')),
+            restoredAssigned.extra,
+            String('src' in restoredAssigned),
+            String('srcset' in restoredAssigned),
+            String('sizes' in restoredAssigned),
+            restoredSpread.extra,
+            String('src' in restoredSpread),
+            String('srcset' in restoredSpread),
+            String('sizes' in restoredSpread)
+          ].join(':');
+
+          document.getElementById('result').textContent = [
+            before,
+            shadowed,
+            restored
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/base/page.html", html)?;
+    h.assert_text(
+        "#result",
+        "https://app.local/img/explicit.webp:/img/hero.webp 1x, /img/hero@2x.webp 2x:50vw:false:false:false:true:false:false:false:false|shadow-src:shadow-srcset:shadow-sizes:true:shadow-src:shadow-srcset:shadow-sizes:expando:shadow-src:shadow-srcset:shadow-sizes:expando|https://app.local/img/explicit.webp:/img/hero.webp 1x, /img/hero@2x.webp 2x:50vw:false:false:false:expando:false:false:false:expando:false:false:false",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn source_type_and_media_shadow_define_property_delete_and_generic_parity_work() -> Result<()> {
+    let html = r#"
+        <picture>
+          <source
+            id='hero'
+            src='/img/hero.webp'
+            type='image/webp'
+            media='(width >= 700px)'>
+          <img src='/img/fallback.jpg' alt='Artwork'>
+        </picture>
+        <p id='result'></p>
+        <script>
+          const hero = document.getElementById('hero');
+
+          const before = [
+            hero.type,
+            hero.media,
+            hero.getAttribute('type'),
+            hero.getAttribute('media')
+          ].join(':');
+
+          Object.defineProperty(hero, 'type', {
+            value: 'shadow-type',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(hero, 'media', {
+            value: 'shadow-media',
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+
+          hero.type = 'set-type';
+          hero.media = 'set-media';
+
+          const shadowed = [
+            hero.type,
+            hero.media,
+            hero.getAttribute('type'),
+            hero.getAttribute('media'),
+            String(Object.keys(hero).sort().join(',') === 'media,type')
+          ].join(':');
+
+          delete hero.type;
+          delete hero.media;
+
+          const restored = [
+            hero.type,
+            hero.media,
+            String(Object.hasOwn(hero, 'type')),
+            String(Object.hasOwn(hero, 'media'))
+          ].join(':');
+
+          document.getElementById('result').textContent = [
+            before,
+            shadowed,
+            restored
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "image/webp:(width >= 700px):image/webp:(width >= 700px)|set-type:set-media:image/webp:(width >= 700px):true|image/webp:(width >= 700px):false:false",
+    )?;
+    Ok(())
+}

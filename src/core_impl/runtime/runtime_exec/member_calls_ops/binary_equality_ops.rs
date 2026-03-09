@@ -456,10 +456,7 @@ impl Harness {
                     Self::object_get_entry(&nodes_ref.properties, &key).is_some()
                         || Self::has_object_accessor_property(&nodes_ref.properties, &key)
                 };
-                if key == "length"
-                    || (key == "value" && Self::node_list_is_radio_node_list(nodes))
-                    || has_own_surface
-                {
+                if key == "length" || has_own_surface {
                     true
                 } else {
                     let has_own_index = self

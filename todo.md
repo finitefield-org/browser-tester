@@ -1246,13 +1246,296 @@
 
 ## Next Task (P1.86: RadioNodeList reflective surface and grouped form-control descriptor parity sweep)
 
-- [ ] Audit `RadioNodeList` reflective/object-copy behavior
-  - verify `Object.keys(...)`, `Object.getOwnPropertyNames(...)`, `Reflect.ownKeys(...)`, `Object.getOwnPropertyDescriptor(...)`, `Object.assign(...)`, object spread, and prototype/introspection paths match browser behavior for grouped form-control results
+- [x] Completed P1.86: RadioNodeList reflective surface and grouped form-control descriptor parity sweep
+  - moved `RadioNodeList.value` onto a real non-enumerable prototype accessor surface so grouped form-control wrappers now expose browser-like `Object.getOwnPropertyDescriptor(RadioNodeList.prototype, 'value')` metadata, raw getter/setter callability, and object-copy behavior without leaking `value` into instance own-key enumeration
+  - aligned grouped `NodeList` property lookup, `in`, and assignment with prototype-driven semantics so explicit prototype overrides can shadow/remove `value`, while default grouped radio behavior still flows through the accessor setter and keeps checked-state updates live
+  - tightened grouped wrapper shadow/delete parity for `value` and indexed entries so `Object.defineProperty(...)`, expando assignment, `delete`, `Object.assign(...)`, and object spread round-trip cleanly without regressing `selectedOptions` / shared HTMLCollection behavior
 
-- [ ] Tighten grouped form-control shadowing and indexed-property parity
-  - confirm grouped `form.elements[name]` wrappers handle expando assignment, `Object.defineProperty(...)`, `delete`, indexed access, `item(...)`, and named collisions without regressing live updates or shared collection fast paths
+- [x] Verify
+  - `cargo test --lib radio_node_list_reflective_surface_and_object_copy_work -- --nocapture`
+  - `cargo test --lib radio_node_list_shadow_delete_and_explicit_prototype_override_work -- --nocapture`
+  - `cargo test --lib dom_form_element`
+  - `cargo test --lib dom_select_element`
+  - `cargo test --lib language_core_expressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2356 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.87: grouped form-control named-collision and RadioNodeList call-surface residual sweep)
+
+- [x] Completed P1.87: grouped form-control named-collision and RadioNodeList call-surface residual sweep
+  - confirmed grouped `HTMLFormControlsCollection` lookups keep builtin collection members visible when duplicate control names collide with `item`, `namedItem`, `values`, `constructor`, and similar builtin keys, while `namedItem(...)` still returns the correct grouped `RadioNodeList` result shape behind those collisions
+  - locked `RadioNodeList` call-surface coverage for extracted `item(...)`, iterator/property-path access, mixed radio/non-radio groups, and `id` plus `name` multi-match ordering so grouped wrappers keep stable tree-order iteration and radio `value` semantics
+  - added focused regression coverage instead of runtime changes because the current implementation already matched the expected grouped collision and call-surface behavior
+
+- [x] Verify
+  - `cargo test --lib grouped_form_control_named_collisions_keep_builtin_surface_visible_work -- --nocapture`
+  - `cargo test --lib radio_node_list_item_iterator_and_mixed_match_order_work -- --nocapture`
+  - `cargo test --lib dom_form_element`
+  - `cargo test --lib dom_select_element`
+  - `cargo test --lib dom_datalist_element`
+  - `cargo fmt`
+  - `cargo test --lib` (`2358 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.88: HTMLFormElement named-property multi-match and RadioNodeList parity sweep)
+
+- [x] Completed P1.88: HTMLFormElement named-property multi-match and RadioNodeList parity sweep
+  - aligned direct `HTMLFormElement` named-property reads so `form.foo` and `form['foo']` now mirror `form.elements.namedItem(...)` for single matches and grouped matches, including stable live `RadioNodeList` wrappers, single-control identity, and live updates after controls are appended
+  - added form-level fallback ordering so expando assignment and `delete` shadow/unshadow grouped named properties cleanly while keeping builtin form surface such as `elements`, `length`, and `name` visible instead of being replaced by colliding controls
+  - exposed `HTMLFormElement.length` through the direct node property path so direct form-level collision checks use the same live control count as the underlying specialized collection behavior
+
+- [x] Verify
+  - `cargo test --lib form_direct_named_property_multi_match_and_live_updates_work -- --nocapture`
+  - `cargo test --lib form_direct_named_property_shadow_delete_and_builtin_collision_work -- --nocapture`
+  - `cargo test --lib dom_form_element`
+  - `cargo test --lib dom_select_element`
+  - `cargo test --lib dom_datalist_element`
+  - `cargo fmt`
+  - `cargo test --lib` (`2360 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.89: HTMLFormElement reflective own-property surface and method-collision sweep)
+
+- [x] Completed P1.89: HTMLFormElement reflective own-property surface and method-collision sweep
+  - added `Value::Node` reflective handling for `HTMLFormElement` so `Object.hasOwn(...)`, `Object.getOwnPropertyDescriptor(...)`, `Object.getOwnPropertyNames(...)`, and `Reflect.ownKeys(...)` now expose live form named properties, builtin `elements`/`length`, and method surface while still preferring expando shadow/delete behavior
+  - exposed `submit`, `requestSubmit`, `reset`, `checkValidity`, and `reportValidity` as receiver-aware raw getters on direct form property reads and descriptor lookups, then wired their extracted-call paths so controls named `submit`, `requestSubmit`, and `reset` no longer displace the callable form surface
+  - fixed grouped form reflective regressions so shadowing via expando assignment and subsequent `delete` cleanly round-trips back to the synthesized `RadioNodeList`/single-control named-property surface without leaking those names into enumerable own-key output
+
+- [x] Verify
+  - `cargo test --lib form_reflective_own_property_surface_tracks_named_properties_and_shadow_delete_work -- --nocapture`
+  - `cargo test --lib form_method_collisions_keep_builtin_call_surface_visible_work -- --nocapture`
+  - `cargo test --lib dom_form_element`
+  - `cargo fmt`
+  - `cargo test --lib` (`2362 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.90: HTMLFormElement attribute-backed reflective surface and object-copy residual sweep)
+
+- [x] Completed P1.90: HTMLFormElement attribute-backed reflective surface and object-copy residual sweep
+  - added direct `HTMLFormElement` property support for attribute-backed form properties such as `method`, `enctype`/`encoding`, `target`, `acceptCharset`, and `noValidate`, while keeping them intentionally off the synthesized own-property surface so named-property collision hiding continues to match the current browser-like shape
+  - aligned direct form object copy behavior so `Object.keys(...)`, `Object.assign(...)`, and object spread copy only enumerable form expandos, while `Object.getOwnPropertyNames(...)` and `Reflect.ownKeys(...)` still expose the non-enumerable builtin and named synthesized form surface
+  - wired the matching direct property setters for the added attribute-backed form properties so plain assignment stays on the reflected attribute path instead of falling back to expando-only behavior
+
+- [x] Verify
+  - `cargo test --lib form_attribute_backed_properties_stay_off_reflective_own_surface_work -- --nocapture`
+  - `cargo test --lib form_object_assign_and_spread_copy_only_expando_surface_work -- --nocapture`
+  - `cargo test --lib dom_form_element`
+  - `cargo test --lib dom_attribute_reflection_shared`
+  - `cargo fmt`
+  - `cargo test --lib` (`2364 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.91: HTMLFormElement attribute-backed shadowing and descriptor parity sweep)
+
+- [x] Completed P1.91: HTMLFormElement attribute-backed shadowing and descriptor parity sweep
+  - extended `Value::Node` define-property / descriptor / own-key handling so form node expandos preserve data-vs-accessor metadata, non-enumerability, and `Reflect.set(...)` semantics instead of collapsing into plain storage entries
+  - aligned direct `HTMLFormElement` property lookup with explicit own shadow precedence for reflected `name` / `action`, builtin callable names, and grouped named properties, while keeping those overrides reversible through `delete`
+  - restricted the new node-expando assignment precedence to forms so generic shadowing no longer steals host-managed canvas setters such as `mozPrintCallback`
+  - fixed DOM fast-path delete fallback for node targets so parser-specialized `form.name` / `form.action` paths honor expando shadow removal and restore the reflected surface afterward
+
+- [x] Verify
+  - `cargo test --lib form_attribute_backed_define_property_delete_and_reflect_set_work -- --nocapture`
+  - `cargo test --lib form_direct_property_lookup_prefers_expando_over_reflected_builtin_and_named_surface_work -- --nocapture`
+  - `cargo test --lib canvas_non_standard_properties_moz_opaque_and_moz_print_callback_work -- --nocapture`
+  - `cargo test --lib dom_form_element`
+  - `cargo test --lib dom_attribute_reflection_shared`
+  - `cargo test --lib language_core_expressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2366 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.92: generic Element attribute-backed shadowing and DOM fast-path descriptor parity sweep)
+
+- [x] Completed P1.92: generic Element attribute-backed shadowing and DOM fast-path descriptor parity sweep
+  - introduced a shared node-shadow precedence helper so non-form reflected element properties with explicit own overrides now take the same path through generic node lookup, DOM fast-path reads, and node assignment
+  - aligned direct `id`, `className`, `lang`, and `dir` reads with `Object.defineProperty(...)` / accessor shadowing, `Reflect.set(...)`, and `delete`, so dot and bracket access restore the reflected attribute value after own shadow removal
+  - kept host-managed node surfaces such as canvas `mozPrintCallback` on their specialized setters by limiting the new assignment precedence to reflected-property shadows instead of every node expando
+
+- [x] Verify
+  - `cargo test --lib attribute_reflection_html_2_3_2_generic_element_shadow_define_property_delete_and_fast_path_parity_work -- --nocapture`
+  - `cargo test --lib dom_attribute_reflection_shared`
+  - `cargo test --lib dom_canvas_element`
+  - `cargo test --lib language_core_expressions`
+  - `cargo fmt`
+  - `cargo test --lib` (`2367 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.93: non-form reflected URL/value property shadowing and remaining DOM fast-path parity sweep)
+
+- [x] Completed P1.93: non-form reflected URL/value property shadowing and remaining DOM fast-path parity sweep
+  - extended the shared node-shadow precedence helper to cover reflected `value`, `open`, `htmlFor`, and `cite`, so explicit own data/accessor overrides now win consistently across generic node lookup and parser-specialized DOM fast paths
+  - aligned direct DOM assignment for `value`, `open`, `htmlFor`, and `cite` with generic node property semantics by routing specialized statement-execution paths back through node own-property handling when an explicit shadow exists
+  - filled in missing generic node getters/setters for `open` and `htmlFor`, and added regressions showing that `delete` restores the reflected value while host attribute state remains intact underneath the temporary own shadow
+
+- [x] Verify
+  - `cargo test --lib attribute_reflection_html_2_6_1_generic_reflected_property_shadow_define_property_delete_and_fast_path_parity_work -- --nocapture`
+  - `cargo test --lib html_input_value_shadow_define_property_delete_and_fast_path_parity_work -- --nocapture`
+  - `cargo test --lib dom_attribute_reflection_shared`
+  - `cargo test --lib dom_events_input_runtime`
+  - `cargo test --lib dom_label_element`
+  - `cargo test --lib dom_details_element`
+  - `cargo test --lib dom_blockquote_element`
+  - `cargo fmt`
+  - `cargo test --lib` (`2369 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.94: reflected hyperlink/media URL shadowing and generic URL-backed node parity sweep)
+
+- [x] Completed P1.94: reflected hyperlink/media URL shadowing and generic URL-backed node parity sweep
+  - extended the shared node-shadow precedence helper to cover `href`, `src`, `poster`, and `formAction`, so explicit own data/accessor overrides win consistently across generic node lookup and parser-specialized DOM fast paths
+  - added missing generic node getters for `href` and `src`, then aligned DOM fast-path reads for `href`, `src`, `poster`, and `formAction` so dot access and bracket access return the same shadowed value and restore the canonical reflected URL after `delete`
+  - routed specialized direct assignment for anchor/media URL-backed properties back through node own-property handling whenever an explicit shadow exists, preventing direct `link.href = ...`, `audio.src = ...`, `video.poster = ...`, and `button.formAction = ...` from bypassing own setter semantics
+
+- [x] Verify
+  - `cargo test --lib attribute_reflection_html_2_6_1_url_backed_property_shadow_define_property_delete_and_fast_path_parity_work -- --nocapture`
+  - `cargo test --lib dom_attribute_reflection_shared`
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo test --lib dom_button_element`
+  - `cargo fmt`
+  - `cargo test --lib` (`2370 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.95: remaining reflected resource-URL property shadowing and specialized DOM fast-path parity sweep)
+
+- [x] Completed P1.95: remaining reflected resource-URL property shadowing and specialized DOM fast-path parity sweep
+  - extended the shared node-shadow precedence helper to cover `attributionSrc` and `srcset`, so explicit own data/accessor overrides now win for both parser-specialized and generic resource-backed reflected properties
+  - added the missing generic node getter for `attributionSrc`, then aligned the specialized DOM fast-path getter and assignment path so direct `document.getElementById(...).attributionSrc` reads and writes honor own accessor shadows before falling back to the reflected attribute
+  - fixed generic `srcset` node reads and writes to preserve accessor/data shadowing and restore the underlying reflected attribute string after `delete`, without disturbing existing media/source resolution behavior
+
+- [x] Verify
+  - `cargo test --lib attribute_reflection_html_2_6_1_resource_url_property_shadow_define_property_delete_and_fast_path_parity_work -- --nocapture`
+  - `cargo test --lib dom_attribute_reflection_shared`
+  - `cargo test --lib dom_img_element`
+  - `cargo test --lib dom_navigation_dialog`
+  - `cargo fmt`
+  - `cargo test --lib` (`2371 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.96: remaining object/embed/iframe resource-property surface and shadowing parity sweep)
+
+- [x] Completed P1.96: remaining object/embed/iframe resource-property surface and shadowing parity sweep
+  - added dedicated DOM property plumbing for `data`, `srcdoc`, and `useMap`, including parser mapping, generic node lookup, reflected setter routing, and specialized DOM fast-path getter/setter support
+  - aligned own shadow / `Object.defineProperty(...)` / `Reflect.set(...)` / `delete` precedence so `object.data`, `object.useMap`, and `iframe.srcdoc` restore the underlying reflected attribute surface after explicit own data/accessor overrides are removed
+  - preserved existing reflected URL behavior by resolving `object.data` through the shared URL-attribute path while keeping `srcdoc` and `useMap` on raw attribute semantics
+
+- [x] Verify
+  - `cargo test --lib dom_object_element`
+  - `cargo test --lib dom_iframe_element`
+  - `cargo fmt`
+  - `cargo test --lib` (`2373 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.97: embed/object/iframe reflective own-property surface and object-copy parity sweep)
+
+- [x] Completed P1.97: embed/object/iframe reflective own-property surface and object-copy parity sweep
+  - audited `HTMLObjectElement`, `HTMLEmbedElement`, and `HTMLIFrameElement` reflective own-key and descriptor behavior and confirmed resource-backed properties stay off the default own-property surface unless explicitly shadowed
+  - added regressions covering `Object.keys(...)`, `Object.getOwnPropertyNames(...)`, `Reflect.ownKeys(...)`, `Object.getOwnPropertyDescriptor(...)`, `Object.assign(...)`, object spread, explicit own shadowing, and `delete` restoration for `object.data` / `useMap`, `embed.src`, and `iframe.src` / `srcdoc`
+  - no runtime changes were required because the existing node expando-only reflective surface already matched the intended separation between explicit own properties and reflected attribute-backed DOM properties
+
+- [x] Verify
+  - `cargo test --lib dom_object_element`
+  - `cargo test --lib dom_embed_element`
+  - `cargo test --lib dom_iframe_element`
+  - `cargo fmt`
+  - `cargo test --lib` (`2376 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.98: media/source embedded element reflective surface breadth and collision sweep)
+
+- [x] Completed P1.98: media/source embedded element reflective surface breadth and collision sweep
+  - added reflective own-key, descriptor, and object-copy regressions for `HTMLImageElement`, `HTMLAudioElement`, `HTMLVideoElement`, and `HTMLSourceElement`
+  - confirmed resource-backed properties stay off the default own-property surface unless explicitly shadowed, while `Object.assign(...)` and object spread copy only true expandos
+  - fixed own-shadow precedence for media/source-specific reflected properties so explicit data/accessor overrides for `sizes` and `preload` beat generic node lookup, parser-specialized DOM fast paths, and direct assignment until `delete` restores the reflected attribute surface
+
+- [x] Verify
+  - `cargo test --lib dom_img_element`
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo test --lib dom_source_element`
+  - `cargo test --lib dom_attribute_reflection_shared`
+  - `cargo fmt`
+  - `cargo test --lib` (`2380 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.99: media/source reflected alias breadth and fast-path shadow parity sweep)
+
+- [x] Completed P1.99: media/source reflected alias breadth and fast-path shadow parity sweep
+  - added `currentSrc` as a computed media/image property and widened generic node shadow precedence to cover `crossOrigin`, `media`, `type`, and `currentSrc`
+  - fixed parser-specialized `crossOrigin` and broad `type` fast paths so explicit own data/accessor shadows beat reflected attribute setters/getters until `delete` restores the DOM-backed surface
+  - added regressions for `img`, `audio`, `video`, `source`, and `track` covering shadowing, direct assignment, and delete restoration across reflected aliases and computed resource URLs
+
+- [x] Verify
+  - `cargo test --lib dom_img_element`
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo test --lib dom_source_element`
+  - `cargo test --lib dom_track_element`
+  - `cargo test --lib dom_attribute_reflection_shared`
+  - `cargo fmt`
+  - `cargo test --lib` (`2385 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.100: media and track reflected boolean/string shadow parity sweep)
+
+- [x] Completed P1.100: media and track reflected boolean/string shadow parity sweep
+  - widened generic own-shadow precedence to cover `controlsList`, `disableRemotePlayback`, `disablePictureInPicture`, `playsInline`, `kind`, `label`, `srclang` / `srcLang`, and `default`
+  - fixed specialized media DOM fast-path getters/setters so explicit own data/accessor shadows beat reflected boolean/string surfaces until `delete` restores the DOM-backed behavior
+  - added regressions for `audio`, `video`, and `track` covering `Object.defineProperty(...)`, direct assignment, `delete`, and reflective own-key parity
+
+- [x] Verify
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo test --lib dom_track_element`
+  - `cargo test --lib dom_img_element`
+  - `cargo test --lib dom_source_element`
+  - `cargo test --lib dom_attribute_reflection_shared`
+  - `cargo fmt`
+  - `cargo test --lib` (`2388 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.101: media/track readonly state and text-track surface parity sweep)
+
+- [x] Completed P1.101: media/track readonly state and text-track surface parity sweep
+  - added generic media/track readonly state getters for `paused`, `ended`, `seeking`, `networkState`, and `readyState`, with explicit own data/accessor shadows restoring computed defaults after `delete`
+  - introduced cached live `textTracks` wrappers for media elements so repeated reads keep identity, appended `<track>` children update in place, and expando/descriptor shadowing falls back cleanly to the live collection surface
+  - added regressions for audio readonly state shadowing, video `textTracks` wrapper identity/object-surface parity, and track `readyState` shadow/delete behavior
+
+- [x] Verify
+  - `cargo test --lib dom_audio_element`
+  - `cargo test --lib dom_video_element`
+  - `cargo test --lib dom_track_element`
+  - `cargo test --lib dom_attribute_reflection_shared`
+  - `cargo fmt`
+  - `cargo test --lib` (`2391 passed, 0 failed`)
+
+- [x] Confirmed no new mock was required (no README update)
+
+## Next Task (P1.102: TextTrackList branding and remaining media playback-state parity sweep)
+
+- [ ] Separate media-owned text track collections from plain `NodeList` branding and prototype defaults
+  - add a dedicated `TextTrackList`-like surface for `textTracks`, then confirm constructor/prototype tags, iterator paths, and reflective APIs line up without regressing live wrapper caching or shadow/delete behavior
+
+- [ ] Audit remaining playback-state properties that still bypass shared own-shadow precedence
+  - cover surfaces such as `currentTime`, `defaultMuted`, `volume`, `duration`, and adjacent media state fields that may still rely on specialized getters/setters or skip generic descriptor parity
 
 - [ ] Verify
-  - targeted regressions for `RadioNodeList` reflective surface and grouped shadow/delete parity
-  - related form/select collection suites
+  - targeted media and track regressions
+  - relevant collection/prototype suites
   - `cargo test --lib`
