@@ -1116,6 +1116,68 @@ fn video_media_methods_update_cached_time_ranges_and_receiver_parity_work() -> R
 }
 
 #[test]
+fn video_media_methods_dispatch_trusted_events_and_resolve_play_promise_after_sync_events_work()
+-> Result<()> {
+    let html = r#"
+        <video id='player' src='/movie.mp4'></video>
+        <p id='result'></p>
+        <script>
+          const player = document.getElementById('player');
+          const log = [];
+
+          function record(label, event) {
+            log.push([
+              label,
+              String(event.isTrusted),
+              String(player.paused),
+              String(player.currentTime)
+            ].join(':'));
+          }
+
+          for (const type of ['play', 'playing', 'pause', 'emptied', 'loadstart', 'seeking', 'seeked', 'ratechange']) {
+            player.addEventListener(type, (event) => record(type, event));
+          }
+
+          const playPromise = player.play();
+          log.push([
+            'after-play-call',
+            Object.prototype.toString.call(playPromise),
+            String(player.paused),
+            String(player.currentTime)
+          ].join(':'));
+
+          playPromise.then(() => {
+            log.push([
+              'play-then',
+              String(player.paused),
+              String(player.currentTime)
+            ].join(':'));
+
+            player.fastSeek(2.5);
+            player.playbackRate = 1.5;
+            player.pause();
+            player.load();
+
+            log.push([
+              'after-load-call',
+              String(player.paused),
+              String(player.currentTime)
+            ].join(':'));
+
+            document.getElementById('result').textContent = log.join('|');
+          });
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/watch/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "play:true:false:0|playing:true:false:0|after-play-call:[object Promise]:false:0|play-then:false:0|seeking:true:false:2.5|seeked:true:false:2.5|ratechange:true:false:2.5|pause:true:true:2.5|emptied:true:true:0|loadstart:true:true:0|after-load-call:true:0",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn video_media_method_reflective_surface_shadow_and_restore_work() -> Result<()> {
     let html = r#"
         <video id='player' src='/movie.mp4'></video>
@@ -3149,6 +3211,79 @@ fn video_cached_media_wrapper_callables_stay_stable_across_direct_src_reset_and_
     h.assert_text(
         "#result",
         "https://app.local/video/direct.mp4:true:true:true:true:true:true:true:track-en:track-en:track-en:1:0:2|https://app.local/video/primary.webm:true:true:true:true:true:true:true:track-en:track-en:track-en:1:0:3.5|https://app.local/video/direct-2.mp4:true:true:true:true:true:true:true:track-en:track-en:track-en:1:0:4.5|https://app.local/video/rebuilt.mp4:true:true:true:true:true:true:true:track-en:track-en:track-en:1:0:5.5|https://app.local/video/direct-3.mp4:true:true:true:true:true:true:true:track-en:track-en:track-en:1:0:6.5",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn video_media_query_source_selection_and_load_state_follow_nested_candidate_changes_work()
+-> Result<()> {
+    let html = r#"
+        <video id='player'>
+          <source id='portrait' src='/video/portrait.mp4' type='video/mp4' media='(orientation: portrait)'>
+          <source id='wide' src='/video/wide.webm' type='video/webm' media='(min-width: 900px)'>
+          <source id='fallback' srcset='/video/fallback.mp4 1x' type='video/mp4'>
+        </video>
+        <p id='result'></p>
+        <script>
+          const player = document.getElementById('player');
+          const portrait = document.getElementById('portrait');
+          const wide = document.getElementById('wide');
+          const fallback = document.getElementById('fallback');
+
+          function snapshot() {
+            return [
+              player.currentSrc,
+              String(player.networkState),
+              String(player.readyState)
+            ].join(':');
+          }
+
+          window.innerWidth = 1200;
+          window.innerHeight = 700;
+          const before = snapshot();
+
+          window.innerWidth = 600;
+          window.innerHeight = 900;
+          player.load();
+          const afterPortraitFlip = snapshot();
+
+          portrait.type = 'text/plain';
+          player.load();
+          const afterUnsupportedPortrait = snapshot();
+
+          window.innerWidth = 1000;
+          window.innerHeight = 700;
+          player.load();
+          const afterWideRestore = snapshot();
+
+          wide.removeAttribute('src');
+          player.load();
+          const afterWideRemoval = snapshot();
+
+          fallback.srcset = '   ';
+          player.load();
+          const afterEmptyingAll = [
+            String(player.currentSrc === ''),
+            String(player.networkState),
+            String(player.readyState)
+          ].join(':');
+
+          document.getElementById('result').textContent = [
+            before,
+            afterPortraitFlip,
+            afterUnsupportedPortrait,
+            afterWideRestore,
+            afterWideRemoval,
+            afterEmptyingAll
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/watch/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "https://app.local/video/wide.webm:1:0|https://app.local/video/portrait.mp4:1:0|https://app.local/video/fallback.mp4:1:0|https://app.local/video/wide.webm:1:0|https://app.local/video/fallback.mp4:1:0|true:0:0",
     )?;
     Ok(())
 }

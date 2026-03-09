@@ -160,3 +160,40 @@ fn embed_reflective_own_property_surface_and_object_copy_work() -> Result<()> {
     )?;
     Ok(())
 }
+
+#[test]
+fn embed_manual_load_error_dispatch_and_resource_surface_work() -> Result<()> {
+    let html = r#"
+        <embed id='asset' src='/media/clip.mov' type='video/quicktime'>
+        <p id='result'></p>
+        <script>
+          const asset = document.getElementById('asset');
+          const log = [];
+          const render = () => {
+            document.getElementById('result').textContent = [
+              log.join(','),
+              asset.src,
+              asset.type
+            ].join('|');
+          };
+
+          asset.onload = (event) => {
+            log.push('load:' + event.type + ':' + String(event.currentTarget === asset));
+            render();
+          };
+          asset.addEventListener('error', (event) => {
+            log.push('error:' + event.type + ':' + String(event.currentTarget === asset));
+            render();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/page/index.html", html)?;
+    h.dispatch("#asset", "load")?;
+    h.dispatch("#asset", "error")?;
+    h.assert_text(
+        "#result",
+        "load:load:true,error:error:true|https://app.local/media/clip.mov|video/quicktime",
+    )?;
+    Ok(())
+}

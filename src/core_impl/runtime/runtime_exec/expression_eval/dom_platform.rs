@@ -736,29 +736,157 @@ impl Harness {
                             self.dom.attr(node, attr_name).unwrap_or_default(),
                         )),
                         DomProp::ClientWidth => {
-                            Ok(Value::Number(self.client_width_property_value(node)?))
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["clientWidth"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Number(self.client_width_property_value(node)?))
+                            }
                         }
                         DomProp::ClientHeight => {
-                            Ok(Value::Number(self.client_height_property_value(node)?))
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["clientHeight"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Number(self.client_height_property_value(node)?))
+                            }
                         }
-                        DomProp::ClientLeft => Ok(Value::Number(self.dom.client_left(node)?)),
-                        DomProp::ClientTop => Ok(Value::Number(self.dom.client_top(node)?)),
-                        DomProp::CurrentCssZoom => Ok(Value::Number(1)),
+                        DomProp::ClientLeft => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["clientLeft"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Number(self.dom.client_left(node)?))
+                            }
+                        }
+                        DomProp::ClientTop => {
+                            if let Some(value) = self
+                                .node_explicit_own_dom_property_shadow_value(node, &["clientTop"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Number(self.dom.client_top(node)?))
+                            }
+                        }
+                        DomProp::CurrentCssZoom => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["currentCSSZoom"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Number(1))
+                            }
+                        }
                         DomProp::Dataset(key) => {
                             let map = self.dom_string_map_live_value(node);
                             self.object_property_from_value_with_receiver(&map, key, &map)
                         }
                         DomProp::Style(prop) => Ok(Value::String(self.dom.style_get(node, prop)?)),
-                        DomProp::OffsetWidth => Ok(Value::Number(self.dom.offset_width(node)?)),
-                        DomProp::OffsetHeight => Ok(Value::Number(self.dom.offset_height(node)?)),
-                        DomProp::OffsetLeft => Ok(Value::Number(self.dom.offset_left(node)?)),
-                        DomProp::OffsetTop => Ok(Value::Number(self.dom.offset_top(node)?)),
-                        DomProp::ScrollWidth => Ok(Value::Number(self.dom.scroll_width(node)?)),
-                        DomProp::ScrollHeight => Ok(Value::Number(self.dom.scroll_height(node)?)),
-                        DomProp::ScrollLeft => Ok(Value::Number(self.dom.scroll_left(node)?)),
-                        DomProp::ScrollTop => Ok(Value::Number(self.dom.scroll_top(node)?)),
-                        DomProp::ScrollLeftMax => Ok(Value::Number(0)),
-                        DomProp::ScrollTopMax => Ok(Value::Number(0)),
+                        DomProp::OffsetWidth => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["offsetWidth"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Number(self.dom.offset_width(node)?))
+                            }
+                        }
+                        DomProp::OffsetHeight => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["offsetHeight"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Number(self.dom.offset_height(node)?))
+                            }
+                        }
+                        DomProp::OffsetLeft => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["offsetLeft"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Number(self.dom.offset_left(node)?))
+                            }
+                        }
+                        DomProp::OffsetTop => {
+                            if let Some(value) = self
+                                .node_explicit_own_dom_property_shadow_value(node, &["offsetTop"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Number(self.dom.offset_top(node)?))
+                            }
+                        }
+                        DomProp::ScrollWidth => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["scrollWidth"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Number(self.dom.scroll_width(node)?))
+                            }
+                        }
+                        DomProp::ScrollHeight => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["scrollHeight"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Number(self.dom.scroll_height(node)?))
+                            }
+                        }
+                        DomProp::ScrollLeft => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["scrollLeft"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Number(self.dom.scroll_left(node)?))
+                            }
+                        }
+                        DomProp::ScrollTop => {
+                            if let Some(value) = self
+                                .node_explicit_own_dom_property_shadow_value(node, &["scrollTop"])?
+                            {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Number(self.dom.scroll_top(node)?))
+                            }
+                        }
+                        DomProp::ScrollLeftMax => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["scrollLeftMax"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Number(0))
+                            }
+                        }
+                        DomProp::ScrollTopMax => {
+                            if let Some(value) = self.node_explicit_own_dom_property_shadow_value(
+                                node,
+                                &["scrollTopMax"],
+                            )? {
+                                Ok(value)
+                            } else {
+                                Ok(Value::Number(0))
+                            }
+                        }
                         DomProp::ShadowRoot => Ok(self.shadow_root_property_value(node)),
                         DomProp::ActiveElement => Ok(self.document_active_element_property_value()),
                         DomProp::ActiveViewTransition => Ok(Value::Null),

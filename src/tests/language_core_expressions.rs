@@ -5295,6 +5295,52 @@ fn text_track_list_constructor_surface_and_prototype_chain_work() -> Result<()> 
 }
 
 #[test]
+fn text_track_constructor_surface_and_prototype_accessors_work() -> Result<()> {
+    let html = r#"
+        <video id="player">
+          <track id="captions-en" kind="captions" srclang="en" label="English" src="/tracks/en.vtt">
+        </video>
+        <p id='result'></p>
+        <script>
+          const textTrack = document.getElementById('captions-en').track;
+          const proto = TextTrack.prototype;
+          const kindDesc = Object.getOwnPropertyDescriptor(proto, 'kind');
+          const modeDesc = Object.getOwnPropertyDescriptor(proto, 'mode');
+          let illegal = '';
+
+          try {
+            TextTrack();
+          } catch (error) {
+            illegal = String(error);
+          }
+
+          document.getElementById('result').textContent = [
+            typeof TextTrack,
+            String(window.TextTrack === TextTrack),
+            String(textTrack.constructor === TextTrack),
+            String(Object.getPrototypeOf(textTrack) === TextTrack.prototype),
+            String(Object.getPrototypeOf(TextTrack.prototype) === Object.prototype),
+            Object.getOwnPropertyNames(TextTrack.prototype).sort().join(','),
+            String(typeof kindDesc.get),
+            String(kindDesc.enumerable),
+            String(typeof modeDesc.get),
+            String(typeof modeDesc.set),
+            String(modeDesc.enumerable),
+            Object.prototype.toString.call(textTrack),
+            String(illegal.includes('Illegal constructor'))
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/watch/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "function|true|true|true|true|activeCues,constructor,cues,id,inBandMetadataTrackDispatchType,kind,label,language,mode|function|false|function|function|false|[object TextTrack]|true",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn time_ranges_constructor_surface_and_prototype_chain_work() -> Result<()> {
     let html = r#"
         <video id="player" src="/movie.mp4"></video>

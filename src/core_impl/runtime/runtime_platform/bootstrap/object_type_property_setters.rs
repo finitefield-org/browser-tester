@@ -170,6 +170,10 @@ impl Harness {
             | "screenY"
             | "screenLeft"
             | "screenTop"
+            | "scrollX"
+            | "scrollY"
+            | "pageXOffset"
+            | "pageYOffset"
             | "Request"
             | "Headers"
             | "URL"
@@ -1269,6 +1273,20 @@ impl Harness {
                 }) =>
             {
                 self.set_media_numeric_state_value(node, INTERNAL_MEDIA_PLAYBACK_RATE_KEY, &value);
+                self.with_script_env(|this, env| {
+                    let _ = this.dispatch_event_with_options(
+                        node,
+                        "ratechange",
+                        env,
+                        true,
+                        false,
+                        false,
+                        None,
+                        None,
+                        None,
+                    )?;
+                    Ok(())
+                })?;
             }
             "defaultPlaybackRate"
                 if self.dom.tag_name(node).is_some_and(|tag| {
@@ -1410,6 +1428,16 @@ impl Harness {
                     .is_some_and(|tag| tag.eq_ignore_ascii_case("track")) =>
             {
                 self.dom.set_attr(node, "kind", &value.as_string())?
+            }
+            "track"
+                if self
+                    .dom
+                    .tag_name(node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("track")) =>
+            {
+                if reflect_set {
+                    return Err(Error::ScriptRuntime("Reflect.set failed".into()));
+                }
             }
             "noHref" | "nohref" => {
                 self.set_reflected_boolean_attribute(node, "nohref", value.truthy())?;

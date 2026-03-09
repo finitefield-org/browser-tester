@@ -1,7 +1,33 @@
 use super::*;
 
 impl Harness {
-    fn set_document_visibility_state_with_event(&mut self, next_state: &str) -> Result<()> {
+    pub(crate) fn dispatch_window_lifecycle_event(&mut self, event_type: &str) -> Result<()> {
+        let event_type = event_type.to_string();
+        self.with_script_env_always(|this, env| {
+            let target_object = this.dom_runtime.window_object.clone();
+            let target_node = this.event_target_listener_node_id(&target_object);
+            let target_value = Value::Object(target_object);
+            let mut event = EventState::new(&event_type, target_node, this.scheduler.now_ms);
+            event.target_value = Some(target_value.clone());
+            event.current_target_value = Some(target_value);
+            event.bubbles = false;
+            event.cancelable = false;
+            event.event_phase = 2;
+            event.current_target = target_node;
+            this.invoke_listeners(target_node, &mut event, env, true)?;
+            if !event.propagation_stopped {
+                event.event_phase = 2;
+                this.invoke_listeners(target_node, &mut event, env, false)?;
+            }
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    pub(crate) fn set_document_visibility_state_with_event(
+        &mut self,
+        next_state: &str,
+    ) -> Result<()> {
         let next_state = match next_state {
             "hidden" => "hidden",
             "visible" => "visible",
@@ -227,6 +253,34 @@ impl Harness {
     ) -> Result<()> {
         let from = self.document_url.clone();
         let to = self.try_resolve_location_target_url(next_url)?;
+        let hash_only_navigation = Self::is_hash_only_navigation(&from, &to);
+        let mock_html = if !hash_only_navigation {
+            self.location_history.location_mock_pages.get(&to).cloned()
+        } else {
+            None
+        };
+
+        if let Some(html) = mock_html {
+            self.set_document_visibility_state_with_event("hidden")?;
+            self.dispatch_window_lifecycle_event("pagehide")?;
+            self.document_url = to.clone();
+            match kind {
+                LocationNavigationKind::Replace => {
+                    self.history_replace_current_entry(&to, Value::Null);
+                }
+                LocationNavigationKind::Assign | LocationNavigationKind::HrefSet => {
+                    self.history_push_entry(&to, Value::Null);
+                }
+                LocationNavigationKind::Reload => {}
+            }
+            self.location_history
+                .location_navigations
+                .push(LocationNavigation { kind, from, to });
+            self.replace_document_with_html(&html)?;
+            self.dispatch_window_lifecycle_event("pageshow")?;
+            return Ok(());
+        }
+
         self.document_url = to.clone();
         match kind {
             LocationNavigationKind::Replace => {
@@ -249,8 +303,6 @@ impl Harness {
                 from: from.clone(),
                 to: to.clone(),
             });
-
-        let hash_only_navigation = Self::is_hash_only_navigation(&from, &to);
         if !hash_only_navigation {
             let _ = self.load_location_mock_page_if_exists(&to)?;
         } else {
@@ -260,6 +312,13 @@ impl Harness {
     }
 
     pub(crate) fn reload_location(&mut self) -> Result<()> {
+        self.reload_location_with_state_override(None)
+    }
+
+    pub(crate) fn reload_location_with_state_override(
+        &mut self,
+        state_override: Option<Value>,
+    ) -> Result<()> {
         self.location_history.location_reload_count += 1;
         let current = self.document_url.clone();
         self.location_history
@@ -269,6 +328,30 @@ impl Harness {
                 from: current.clone(),
                 to: current.clone(),
             });
+        let mock_html = self
+            .location_history
+            .location_mock_pages
+            .get(&current)
+            .cloned();
+        if let Some(html) = mock_html {
+            self.set_document_visibility_state_with_event("hidden")?;
+            self.dispatch_window_lifecycle_event("pagehide")?;
+            if let Some(state) = state_override {
+                self.history_replace_current_entry(&current, state);
+            }
+            self.sync_location_object();
+            self.sync_history_object();
+            self.sync_navigation_object();
+            self.sync_document_object();
+            self.sync_window_runtime_properties();
+            self.replace_document_with_html(&html)?;
+            self.dispatch_window_lifecycle_event("pageshow")?;
+            return Ok(());
+        }
+
+        if let Some(state) = state_override {
+            self.history_replace_current_entry(&current, state);
+        }
         self.sync_location_object();
         self.sync_history_object();
         self.sync_navigation_object();
@@ -283,7 +366,9 @@ impl Harness {
             return Ok(false);
         };
         self.set_document_visibility_state_with_event("hidden")?;
+        self.dispatch_window_lifecycle_event("pagehide")?;
         self.replace_document_with_html(&html)?;
+        self.dispatch_window_lifecycle_event("pageshow")?;
         Ok(true)
     }
 
@@ -374,7 +459,6 @@ impl Harness {
         }
 
         let from = self.document_url.clone();
-        self.location_history.history_index = target;
         let entry = if let Some(entry) = self.location_history.history_entries.get(target).cloned()
         {
             entry
@@ -385,16 +469,34 @@ impl Harness {
                 state: Value::Null,
             }
         };
-        self.document_url = entry.url.clone();
-        self.sync_location_object();
-        self.sync_history_object();
-        self.sync_navigation_object();
-        self.sync_document_object();
-        self.sync_window_runtime_properties();
-
         let hash_only_navigation = Self::is_hash_only_navigation(&from, &entry.url);
-        if !hash_only_navigation {
-            let _ = self.load_location_mock_page_if_exists(&entry.url)?;
+        let mock_html = if !hash_only_navigation {
+            self.location_history
+                .location_mock_pages
+                .get(&entry.url)
+                .cloned()
+        } else {
+            None
+        };
+
+        if let Some(html) = mock_html {
+            self.set_document_visibility_state_with_event("hidden")?;
+            self.dispatch_window_lifecycle_event("pagehide")?;
+            self.location_history.history_index = target;
+            self.document_url = entry.url.clone();
+            self.replace_document_with_html(&html)?;
+            self.dispatch_window_lifecycle_event("pageshow")?;
+        } else {
+            self.location_history.history_index = target;
+            self.document_url = entry.url.clone();
+            self.sync_location_object();
+            self.sync_history_object();
+            self.sync_navigation_object();
+            self.sync_document_object();
+            self.sync_window_runtime_properties();
+            if !hash_only_navigation {
+                let _ = self.load_location_mock_page_if_exists(&entry.url)?;
+            }
         }
 
         self.with_script_env_always(|this, env| {

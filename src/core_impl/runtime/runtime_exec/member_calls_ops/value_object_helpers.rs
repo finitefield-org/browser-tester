@@ -847,6 +847,17 @@ impl Harness {
         nodes.borrow().kind.display_name()
     }
 
+    pub(crate) fn node_list_item_value(
+        &mut self,
+        nodes: &Rc<RefCell<NodeListValue>>,
+        node: NodeId,
+    ) -> Value {
+        if matches!(nodes.borrow().kind, NodeListKind::TextTrackList) {
+            return self.text_track_object_value(node);
+        }
+        Value::Node(node)
+    }
+
     pub(crate) fn html_collection_named_entries(
         &mut self,
         nodes: &Rc<RefCell<NodeListValue>>,
@@ -1150,6 +1161,21 @@ impl Harness {
                 | "disablepictureinpicture"
                 | "playsInline"
                 | "playsinline"
+                | "clientWidth"
+                | "clientHeight"
+                | "clientLeft"
+                | "clientTop"
+                | "currentCSSZoom"
+                | "offsetWidth"
+                | "offsetHeight"
+                | "offsetLeft"
+                | "offsetTop"
+                | "scrollWidth"
+                | "scrollHeight"
+                | "scrollLeft"
+                | "scrollTop"
+                | "scrollLeftMax"
+                | "scrollTopMax"
                 | "paused"
                 | "ended"
                 | "seeking"
@@ -1213,6 +1239,7 @@ impl Harness {
                 | "label"
                 | "srclang"
                 | "srcLang"
+                | "track"
                 | "default"
                 | "poster"
                 | "preload"
@@ -1318,6 +1345,18 @@ impl Harness {
             "buffered" | "seekable" => vec![(0.0, current_time)],
             "played" if current_time > 0.0 => vec![(0.0, current_time)],
             _ => Vec::new(),
+        }
+    }
+
+    fn image_has_resolved_source(&self, node: NodeId) -> bool {
+        !self.resolve_media_src(node).is_empty()
+    }
+
+    fn image_natural_dimension_value(&self, node: NodeId) -> i64 {
+        if self.image_has_resolved_source(node) {
+            1
+        } else {
+            0
         }
     }
 
@@ -1443,6 +1482,22 @@ impl Harness {
             Self::object_get_entry(entries, INTERNAL_TIME_RANGES_OBJECT_KEY),
             Some(Value::Bool(true))
         )
+    }
+
+    pub(crate) fn is_text_track_object(entries: &(impl ObjectEntryLookup + ?Sized)) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_TEXT_TRACK_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn text_track_owner_node(
+        entries: &(impl ObjectEntryLookup + ?Sized),
+    ) -> Option<NodeId> {
+        match Self::object_get_entry(entries, INTERNAL_TEXT_TRACK_NODE_KEY) {
+            Some(Value::Node(node)) => Some(node),
+            _ => None,
+        }
     }
 
     pub(crate) fn time_ranges_owner_node(
@@ -1990,6 +2045,7 @@ impl Harness {
             ("currentTime".to_string(), Value::Number(0)),
             ("startTime".to_string(), Value::Number(0)),
             ("pending".to_string(), Value::Bool(false)),
+            ("playbackRate".to_string(), Value::Number(1)),
             ("timeline".to_string(), timeline),
             ("rangeStart".to_string(), range_start),
             ("rangeEnd".to_string(), range_end),
@@ -1997,32 +2053,35 @@ impl Harness {
             ("options".to_string(), options),
             (
                 "cancel".to_string(),
-                Self::new_builtin_placeholder_function(),
+                Self::new_receiver_builtin_callable("animation", "cancel"),
             ),
             (
                 "finish".to_string(),
-                Self::new_builtin_placeholder_function(),
+                Self::new_receiver_builtin_callable("animation", "finish"),
             ),
             (
                 "pause".to_string(),
-                Self::new_builtin_placeholder_function(),
+                Self::new_receiver_builtin_callable("animation", "pause"),
             ),
-            ("play".to_string(), Self::new_builtin_placeholder_function()),
+            (
+                "play".to_string(),
+                Self::new_receiver_builtin_callable("animation", "play"),
+            ),
             (
                 "reverse".to_string(),
-                Self::new_builtin_placeholder_function(),
+                Self::new_receiver_builtin_callable("animation", "reverse"),
             ),
             (
                 "updatePlaybackRate".to_string(),
-                Self::new_builtin_placeholder_function(),
+                Self::new_receiver_builtin_callable("animation", "updatePlaybackRate"),
             ),
             (
                 "commitStyles".to_string(),
-                Self::new_builtin_placeholder_function(),
+                Self::new_receiver_builtin_callable("animation", "commitStyles"),
             ),
             (
                 "persist".to_string(),
-                Self::new_builtin_placeholder_function(),
+                Self::new_receiver_builtin_callable("animation", "persist"),
             ),
             (
                 "Symbol.toStringTag".to_string(),
@@ -2624,6 +2683,32 @@ impl Harness {
             );
         }
         object
+    }
+
+    pub(crate) fn text_track_object_value(&mut self, node: NodeId) -> Value {
+        let existing = self.dom_runtime.live_text_track_objects.get(&node).cloned();
+        let object = existing.unwrap_or_else(|| {
+            let object = Rc::new(RefCell::new(ObjectValue::new(vec![
+                (
+                    INTERNAL_TEXT_TRACK_OBJECT_KEY.to_string(),
+                    Value::Bool(true),
+                ),
+                (INTERNAL_TEXT_TRACK_NODE_KEY.to_string(), Value::Node(node)),
+                (
+                    INTERNAL_TEXT_TRACK_MODE_KEY.to_string(),
+                    Value::String("disabled".to_string()),
+                ),
+            ])));
+            Self::set_internal_prototype(
+                &object,
+                self.cached_text_track_constructor_prototype_value(),
+            );
+            self.dom_runtime
+                .live_text_track_objects
+                .insert(node, object.clone());
+            object
+        });
+        Value::Object(object)
     }
 
     pub(crate) fn input_files_value(&self, node: NodeId) -> Result<Value> {
@@ -3455,6 +3540,13 @@ impl Harness {
         )])
     }
 
+    pub(crate) fn new_computed_style_item_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("computed_style_item".to_string()),
+        )])
+    }
+
     pub(crate) fn new_text_encoder_instance_value() -> Value {
         Self::new_object_value(vec![
             (
@@ -3777,6 +3869,7 @@ impl Harness {
                 "getPropertyValue".to_string(),
                 Self::new_computed_style_get_property_value_callable(),
             ),
+            ("item".to_string(), Self::new_computed_style_item_callable()),
         ])
     }
 
@@ -3943,12 +4036,10 @@ impl Harness {
         }
 
         match key {
-            "getPropertyValue" => Ok(Some(
-                Self::object_get_entry(entries, "getPropertyValue").unwrap_or(Value::Undefined),
+            "getPropertyValue" | "item" => Ok(Some(
+                Self::object_get_entry(entries, key).unwrap_or(Value::Undefined),
             )),
-            "setProperty" | "removeProperty" | "item" => {
-                Ok(Some(Self::new_builtin_placeholder_function()))
-            }
+            "setProperty" | "removeProperty" => Ok(Some(Self::new_builtin_placeholder_function())),
             "cssText" => Ok(Some(Value::String(String::new()))),
             "length" => Ok(Some(Value::Number(0))),
             "parentRule" => Ok(Some(Value::Null)),
@@ -5098,6 +5189,129 @@ impl Harness {
         Value::Object(prototype)
     }
 
+    pub(crate) fn cached_text_track_constructor_value(&mut self) -> Value {
+        if let Some(constructor) = self
+            .script_runtime
+            .constructor_static_methods
+            .get("TextTrack")
+            .cloned()
+        {
+            if let Value::Object(entries) = &constructor {
+                let prototype = {
+                    let entries = entries.borrow();
+                    Self::object_get_entry(&entries, "prototype")
+                };
+                if let Some(Value::Object(prototype)) = prototype {
+                    self.install_text_track_prototype_accessors(&prototype);
+                    Self::set_internal_prototype(
+                        &prototype,
+                        self.object_constructor_prototype_value(),
+                    );
+                }
+            }
+            return constructor;
+        }
+        let to_string_tag_symbol =
+            self.eval_symbol_static_property(SymbolStaticProperty::ToStringTag);
+        let to_string_tag_key = self.property_key_to_storage_key(&to_string_tag_symbol);
+        let constructor = Self::new_receiver_builtin_constructor_object(
+            Some("text_track_constructor"),
+            "text_track",
+            &[],
+        );
+        let Value::Object(constructor_entries) = &constructor else {
+            return constructor;
+        };
+        let prototype = {
+            let entries = constructor_entries.borrow();
+            Self::object_get_entry(&entries, "prototype")
+        };
+        let Some(Value::Object(prototype)) = prototype else {
+            return constructor;
+        };
+        self.install_text_track_prototype_accessors(&prototype);
+        Self::object_set_entry(
+            &mut prototype.borrow_mut(),
+            to_string_tag_key.clone(),
+            Value::String("TextTrack".to_string()),
+        );
+        Self::mark_property_non_enumerable(&prototype, &to_string_tag_key);
+        Self::set_internal_prototype(&prototype, self.object_constructor_prototype_value());
+        self.script_runtime
+            .constructor_static_methods
+            .insert("TextTrack".to_string(), constructor.clone());
+        constructor
+    }
+
+    fn install_text_track_prototype_accessors(&mut self, prototype: &Rc<RefCell<ObjectValue>>) {
+        let has_mode_accessor = {
+            let prototype_ref = prototype.borrow();
+            Self::has_object_accessor_property(&*prototype_ref, "mode")
+        };
+        if has_mode_accessor {
+            return;
+        }
+        for (property, getter) in [
+            ("id", "id_get"),
+            ("kind", "kind_get"),
+            ("label", "label_get"),
+            ("language", "language_get"),
+            ("cues", "cues_get"),
+            ("activeCues", "active_cues_get"),
+            (
+                "inBandMetadataTrackDispatchType",
+                "in_band_metadata_track_dispatch_type_get",
+            ),
+        ] {
+            Self::object_set_entry(
+                &mut prototype.borrow_mut(),
+                Self::object_getter_storage_key(property),
+                Self::new_receiver_builtin_callable("text_track", getter),
+            );
+            Self::mark_property_non_enumerable(prototype, property);
+        }
+        Self::object_set_entry(
+            &mut prototype.borrow_mut(),
+            Self::object_getter_storage_key("mode"),
+            Self::new_receiver_builtin_callable("text_track", "mode_get"),
+        );
+        Self::object_set_entry(
+            &mut prototype.borrow_mut(),
+            Self::object_setter_storage_key("mode"),
+            Self::new_receiver_builtin_callable("text_track", "mode_set"),
+        );
+        Self::mark_property_non_enumerable(prototype, "mode");
+    }
+
+    fn cached_text_track_constructor_prototype_value(&mut self) -> Value {
+        if let Some(prototype) = self
+            .script_runtime
+            .builtin_constructor_prototypes
+            .get("TextTrack")
+            .cloned()
+        {
+            self.install_text_track_prototype_accessors(&prototype);
+            Self::set_internal_prototype(&prototype, self.object_constructor_prototype_value());
+            return Value::Object(prototype);
+        }
+        let constructor = self.cached_text_track_constructor_value();
+        let Value::Object(entries) = constructor else {
+            return Self::new_object_value(Vec::new());
+        };
+        let prototype = {
+            let entries = entries.borrow();
+            Self::object_get_entry(&entries, "prototype")
+        };
+        let Some(Value::Object(prototype)) = prototype else {
+            return Self::new_object_value(Vec::new());
+        };
+        self.install_text_track_prototype_accessors(&prototype);
+        self.script_runtime
+            .builtin_constructor_prototypes
+            .insert("TextTrack".to_string(), prototype.clone());
+        Value::Object(prototype)
+    }
+
     pub(crate) fn cached_time_ranges_constructor_value(&mut self) -> Value {
         if let Some(constructor) = self
             .script_runtime
@@ -5896,6 +6110,7 @@ impl Harness {
             "object_constructor" => Some(("Object", 1)),
             "function_constructor" => Some(("Function", 1)),
             "node_list_constructor" => Some(("NodeList", 0)),
+            "text_track_constructor" => Some(("TextTrack", 0)),
             "text_track_list_constructor" => Some(("TextTrackList", 0)),
             "time_ranges_constructor" => Some(("TimeRanges", 0)),
             "radio_node_list_constructor" => Some(("RadioNodeList", 0)),
@@ -5935,6 +6150,7 @@ impl Harness {
             "window_resize_to_function" => Some(("resizeTo", 2)),
             "window_post_message_function" => Some(("postMessage", 1)),
             "window_get_computed_style_function" => Some(("getComputedStyle", 1)),
+            "computed_style_item" => Some(("item", 1)),
             "window_alert_function" => Some(("alert", 0)),
             "window_confirm_function" => Some(("confirm", 0)),
             "window_print_function" => Some(("print", 0)),
@@ -6112,9 +6328,28 @@ impl Harness {
             ("node_list", "entries") => ("entries", 0),
             ("node_list", "keys") => ("keys", 0),
             ("node_list", "values") => ("values", 0),
+            ("text_track", "id_get") => ("get id", 0),
+            ("text_track", "kind_get") => ("get kind", 0),
+            ("text_track", "label_get") => ("get label", 0),
+            ("text_track", "language_get") => ("get language", 0),
+            ("text_track", "mode_get") => ("get mode", 0),
+            ("text_track", "mode_set") => ("set mode", 1),
+            ("text_track", "cues_get") => ("get cues", 0),
+            ("text_track", "active_cues_get") => ("get activeCues", 0),
+            ("text_track", "in_band_metadata_track_dispatch_type_get") => {
+                ("get inBandMetadataTrackDispatchType", 0)
+            }
             ("time_ranges", "length_get") => ("get length", 0),
             ("time_ranges", "start") => ("start", 1),
             ("time_ranges", "end") => ("end", 1),
+            ("animation", "cancel") => ("cancel", 0),
+            ("animation", "finish") => ("finish", 0),
+            ("animation", "pause") => ("pause", 0),
+            ("animation", "play") => ("play", 0),
+            ("animation", "reverse") => ("reverse", 0),
+            ("animation", "updatePlaybackRate") => ("updatePlaybackRate", 1),
+            ("animation", "commitStyles") => ("commitStyles", 0),
+            ("animation", "persist") => ("persist", 0),
             ("radio_node_list", "value_get") => ("get value", 0),
             ("radio_node_list", "value_set") => ("set value", 1),
             ("html_form", "submit") => ("submit", 0),
@@ -6394,6 +6629,8 @@ impl Harness {
                     "CanvasRenderingContext2D".to_string()
                 } else if Self::is_class_list_object(&entries) {
                     "DOMTokenList".to_string()
+                } else if Self::is_text_track_object(&entries) {
+                    "TextTrack".to_string()
                 } else if Self::is_dom_string_map_object(&entries) {
                     "DOMStringMap".to_string()
                 } else if matches!(
@@ -7115,6 +7352,7 @@ impl Harness {
                 "object_static_method" => "object_static_method",
                 "function_constructor" => "function_constructor",
                 "node_list_constructor" => "node_list_constructor",
+                "text_track_constructor" => "text_track_constructor",
                 "text_track_list_constructor" => "text_track_list_constructor",
                 "time_ranges_constructor" => "time_ranges_constructor",
                 "radio_node_list_constructor" => "radio_node_list_constructor",
@@ -7152,6 +7390,7 @@ impl Harness {
                 "window_resize_to_function" => "window_resize_to_function",
                 "window_post_message_function" => "window_post_message_function",
                 "window_get_computed_style_function" => "window_get_computed_style_function",
+                "computed_style_item" => "computed_style_item",
                 "window_alert_function" => "window_alert_function",
                 "window_confirm_function" => "window_confirm_function",
                 "window_print_function" => "window_print_function",
@@ -7590,7 +7829,7 @@ impl Harness {
         }
         if let Ok(index) = key.parse::<usize>() {
             if let Some(node) = self.node_list_get(nodes, index) {
-                return Ok(Value::Node(node));
+                return Ok(self.node_list_item_value(nodes, node));
             }
             if has_explicit_prototype {
                 return Ok(self
@@ -8637,6 +8876,7 @@ impl Harness {
             "kind" if self.is_track_element(*node) => {
                 Ok(Value::String(self.normalized_track_kind(*node)))
             }
+            "track" if self.is_track_element(*node) => Ok(self.text_track_object_value(*node)),
             "srclang" | "srcLang" if self.is_track_element(*node) => Ok(Value::String(
                 self.dom.attr(*node, "srclang").unwrap_or_default(),
             )),
@@ -8815,6 +9055,30 @@ impl Harness {
                 }) =>
             {
                 Ok(Value::String(self.resolve_media_src(*node)))
+            }
+            "complete"
+                if self
+                    .dom
+                    .tag_name(*node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("img")) =>
+            {
+                Ok(Value::Bool(true))
+            }
+            "naturalWidth"
+                if self
+                    .dom
+                    .tag_name(*node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("img")) =>
+            {
+                Ok(Value::Number(self.image_natural_dimension_value(*node)))
+            }
+            "naturalHeight"
+                if self
+                    .dom
+                    .tag_name(*node)
+                    .is_some_and(|tag| tag.eq_ignore_ascii_case("img")) =>
+            {
+                Ok(Value::Number(self.image_natural_dimension_value(*node)))
             }
             "src" => Ok(Value::String(self.resolve_media_src(*node))),
             "poster" => Ok(Value::String(

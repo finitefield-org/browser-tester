@@ -317,3 +317,98 @@ fn track_ready_state_shadow_define_property_delete_work() -> Result<()> {
     h.assert_text("#result", "0|7:true|0:false")?;
     Ok(())
 }
+
+#[test]
+fn html_track_element_track_returns_stable_text_track_wrappers_work() -> Result<()> {
+    let html = r#"
+        <video id='player' controls>
+          <track
+            id='captions'
+            kind='subtitles'
+            srclang='en'
+            label='English'
+            src='/tracks/base.vtt'>
+        </video>
+        <p id='result'></p>
+        <script>
+          const player = document.getElementById('player');
+          const element = document.getElementById('captions');
+          const first = element.track;
+          const second = element.track;
+
+          element.track = 'shadow';
+          first.mode = 'showing';
+          element.kind = 'captions';
+          element.label = 'Japanese';
+          element.srclang = 'ja';
+
+          const fromIndex = player.textTracks[0];
+          const fromItem = player.textTracks.item(0);
+          const fromValues = player.textTracks.values().next().value;
+
+          document.getElementById('result').textContent = [
+            String(element.track === first),
+            String(first === second),
+            String(first === fromIndex),
+            String(first === fromItem),
+            String(first === fromValues),
+            String(Object.getPrototypeOf(first) === TextTrack.prototype),
+            Object.prototype.toString.call(first),
+            first.id,
+            first.kind,
+            first.label,
+            first.language,
+            first.mode,
+            String(first.cues === null),
+            String(first.activeCues === null),
+            first.inBandMetadataTrackDispatchType
+          ].join(':');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "true:true:true:true:true:true:[object TextTrack]:captions:captions:Japanese:ja:showing:true:true:",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn track_manual_load_error_dispatch_and_resource_surface_work() -> Result<()> {
+    let html = r#"
+        <video>
+          <track id='captions' kind='captions' srclang='en' src='/tracks/base.vtt'>
+        </video>
+        <p id='result'></p>
+        <script>
+          const captions = document.getElementById('captions');
+          const log = [];
+          const render = () => {
+            document.getElementById('result').textContent = [
+              log.join(','),
+              captions.src,
+              String(captions.readyState)
+            ].join('|');
+          };
+
+          captions.onload = (event) => {
+            log.push('load:' + event.type + ':' + String(event.currentTarget === captions));
+            render();
+          };
+          captions.addEventListener('error', (event) => {
+            log.push('error:' + event.type + ':' + String(event.currentTarget === captions));
+            render();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/page/index.html", html)?;
+    h.dispatch("#captions", "load")?;
+    h.dispatch("#captions", "error")?;
+    h.assert_text(
+        "#result",
+        "load:load:true,error:error:true|https://app.local/tracks/base.vtt|0",
+    )?;
+    Ok(())
+}

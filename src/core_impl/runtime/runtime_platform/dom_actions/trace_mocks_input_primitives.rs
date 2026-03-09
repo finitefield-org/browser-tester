@@ -350,7 +350,11 @@ impl Harness {
         };
 
         self.browser_apis.downloads.push(DownloadArtifact {
-            filename: Some(filename),
+            filename: if filename.is_empty() {
+                None
+            } else {
+                Some(filename)
+            },
             mime_type,
             bytes: blob.bytes.clone(),
         });

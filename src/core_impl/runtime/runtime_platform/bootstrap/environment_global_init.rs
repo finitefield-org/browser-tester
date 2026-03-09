@@ -414,6 +414,7 @@ impl Harness {
         let data_transfer_constructor = Self::new_data_transfer_constructor_value();
         let option_constructor = Self::new_option_constructor_value();
         let node_list_constructor = self.cached_node_list_constructor_value();
+        let text_track_constructor = self.cached_text_track_constructor_value();
         let text_track_list_constructor = self.cached_text_track_list_constructor_value();
         let time_ranges_constructor = self.cached_time_ranges_constructor_value();
         let radio_node_list_constructor = self.cached_radio_node_list_constructor_value();
@@ -541,6 +542,7 @@ impl Harness {
             &audio_constructor,
             &data_transfer_constructor,
             &node_list_constructor,
+            &text_track_constructor,
             &text_track_list_constructor,
             &time_ranges_constructor,
             &radio_node_list_constructor,
@@ -654,6 +656,11 @@ impl Harness {
                 &mut window_entries,
                 "NodeList".to_string(),
                 node_list_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "TextTrack".to_string(),
+                text_track_constructor.clone(),
             );
             Self::object_set_entry(
                 &mut window_entries,
@@ -981,6 +988,9 @@ impl Harness {
         self.script_runtime
             .env
             .insert("NodeList".to_string(), node_list_constructor);
+        self.script_runtime
+            .env
+            .insert("TextTrack".to_string(), text_track_constructor);
         self.script_runtime
             .env
             .insert("TextTrackList".to_string(), text_track_list_constructor);

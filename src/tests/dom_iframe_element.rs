@@ -237,3 +237,40 @@ fn iframe_reflective_own_property_surface_and_object_copy_work() -> Result<()> {
     )?;
     Ok(())
 }
+
+#[test]
+fn iframe_manual_load_error_dispatch_and_resource_surface_work() -> Result<()> {
+    let html = r#"
+        <iframe id='frame' src='/embedded/page.html' srcdoc='<p>Hello</p>'></iframe>
+        <p id='result'></p>
+        <script>
+          const frame = document.getElementById('frame');
+          const log = [];
+          const render = () => {
+            document.getElementById('result').textContent = [
+              log.join(','),
+              frame.src,
+              frame.srcdoc
+            ].join('|');
+          };
+
+          frame.onload = (event) => {
+            log.push('load:' + event.type + ':' + String(event.currentTarget === frame));
+            render();
+          };
+          frame.addEventListener('error', (event) => {
+            log.push('error:' + event.type + ':' + String(event.currentTarget === frame));
+            render();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/index.html", html)?;
+    h.dispatch("#frame", "load")?;
+    h.dispatch("#frame", "error")?;
+    h.assert_text(
+        "#result",
+        "load:load:true,error:error:true|https://app.local/embedded/page.html|<p>Hello</p>",
+    )?;
+    Ok(())
+}

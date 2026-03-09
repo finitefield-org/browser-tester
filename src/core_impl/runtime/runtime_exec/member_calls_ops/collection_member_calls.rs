@@ -2194,7 +2194,7 @@ impl Harness {
                 }
                 Ok(Some(
                     self.node_list_get(nodes, index as usize)
-                        .map(Value::Node)
+                        .map(|node| self.node_list_item_value(nodes, node))
                         .unwrap_or(Value::Null),
                 ))
             }
@@ -2238,10 +2238,11 @@ impl Harness {
                 let callback = evaluated_args[0].clone();
                 let snapshot = self.node_list_snapshot(nodes);
                 for (idx, node) in snapshot.iter().copied().enumerate() {
+                    let item_value = self.node_list_item_value(nodes, node);
                     let _ = self.execute_callback_value(
                         &callback,
                         &[
-                            Value::Node(node),
+                            item_value,
                             Value::Number(idx as i64),
                             Value::NodeList(nodes.clone()),
                         ],
@@ -2257,21 +2258,14 @@ impl Harness {
                     ));
                 }
                 let snapshot = self.node_list_snapshot(nodes);
-                Ok(Some(
-                    self.new_iterator_value(
-                        snapshot
-                            .iter()
-                            .copied()
-                            .enumerate()
-                            .map(|(index, node)| {
-                                Self::new_array_value(vec![
-                                    Value::Number(index as i64),
-                                    Value::Node(node),
-                                ])
-                            })
-                            .collect(),
-                    ),
-                ))
+                let mut iterator_values = Vec::with_capacity(snapshot.len());
+                for (index, node) in snapshot.iter().copied().enumerate() {
+                    iterator_values.push(Self::new_array_value(vec![
+                        Value::Number(index as i64),
+                        self.node_list_item_value(nodes, node),
+                    ]));
+                }
+                Ok(Some(self.new_iterator_value(iterator_values)))
             }
             "keys" => {
                 if !evaluated_args.is_empty() {
@@ -2288,14 +2282,11 @@ impl Harness {
                         "values does not take arguments".into(),
                     ));
                 }
-                Ok(Some(
-                    self.new_iterator_value(
-                        self.node_list_snapshot(nodes)
-                            .into_iter()
-                            .map(Value::Node)
-                            .collect(),
-                    ),
-                ))
+                let mut iterator_values = Vec::new();
+                for node in self.node_list_snapshot(nodes) {
+                    iterator_values.push(self.node_list_item_value(nodes, node));
+                }
+                Ok(Some(self.new_iterator_value(iterator_values)))
             }
             _ => Ok(None),
         }
@@ -2913,30 +2904,61 @@ impl Harness {
                 )?;
 
                 let state = Self::structured_clone_value(&state, &mut Vec::new(), &mut Vec::new())?;
-                self.document_url = destination.clone();
-                if replace {
-                    self.history_replace_current_entry(&destination, state);
+                let hash_only_navigation = Self::is_hash_only_navigation(&from, &destination);
+                let mock_html = if !hash_only_navigation {
+                    self.location_history
+                        .location_mock_pages
+                        .get(&destination)
+                        .cloned()
                 } else {
-                    self.history_push_entry(&destination, state);
-                }
-                self.sync_location_object();
-                self.sync_history_object();
-                self.sync_navigation_object();
-                self.sync_document_object();
-                self.sync_window_runtime_properties();
-                self.location_history
-                    .location_navigations
-                    .push(LocationNavigation {
-                        kind: if replace {
-                            LocationNavigationKind::Replace
-                        } else {
-                            LocationNavigationKind::Assign
-                        },
-                        from: from.clone(),
-                        to: destination.clone(),
-                    });
-                if !Self::is_hash_only_navigation(&from, &destination) {
-                    let _ = self.load_location_mock_page_if_exists(&destination)?;
+                    None
+                };
+                let navigation_kind = if replace {
+                    LocationNavigationKind::Replace
+                } else {
+                    LocationNavigationKind::Assign
+                };
+
+                if let Some(html) = mock_html {
+                    self.set_document_visibility_state_with_event("hidden")?;
+                    self.dispatch_window_lifecycle_event("pagehide")?;
+                    self.document_url = destination.clone();
+                    if replace {
+                        self.history_replace_current_entry(&destination, state);
+                    } else {
+                        self.history_push_entry(&destination, state);
+                    }
+                    self.location_history
+                        .location_navigations
+                        .push(LocationNavigation {
+                            kind: navigation_kind,
+                            from: from.clone(),
+                            to: destination.clone(),
+                        });
+                    self.replace_document_with_html(&html)?;
+                    self.dispatch_window_lifecycle_event("pageshow")?;
+                } else {
+                    self.document_url = destination.clone();
+                    if replace {
+                        self.history_replace_current_entry(&destination, state);
+                    } else {
+                        self.history_push_entry(&destination, state);
+                    }
+                    self.sync_location_object();
+                    self.sync_history_object();
+                    self.sync_navigation_object();
+                    self.sync_document_object();
+                    self.sync_window_runtime_properties();
+                    self.location_history
+                        .location_navigations
+                        .push(LocationNavigation {
+                            kind: navigation_kind,
+                            from: from.clone(),
+                            to: destination.clone(),
+                        });
+                    if !hash_only_navigation {
+                        let _ = self.load_location_mock_page_if_exists(&destination)?;
+                    }
                 }
                 self.dispatch_navigation_simple_event("currententrychange")?;
                 self.dispatch_navigation_simple_event("navigatesuccess")?;
@@ -2969,18 +2991,19 @@ impl Harness {
                     }
                 }
 
-                if let Err(err) = self.reload_location() {
+                let state_override = if let Some(state) = state_override {
+                    Some(Self::structured_clone_value(
+                        &state,
+                        &mut Vec::new(),
+                        &mut Vec::new(),
+                    )?)
+                } else {
+                    None
+                };
+
+                if let Err(err) = self.reload_location_with_state_override(state_override) {
                     let _ = self.dispatch_navigation_simple_event("navigateerror");
                     return Err(err);
-                }
-
-                if let Some(state) = state_override {
-                    let cloned =
-                        Self::structured_clone_value(&state, &mut Vec::new(), &mut Vec::new())?;
-                    self.history_replace_current_entry(&self.document_url.clone(), cloned);
-                    self.sync_history_object();
-                    self.sync_navigation_object();
-                    self.sync_window_runtime_properties();
                 }
                 self.dispatch_navigation_simple_event("navigatesuccess")?;
                 self.new_navigation_api_result_value()?

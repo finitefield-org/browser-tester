@@ -427,6 +427,118 @@ fn navigation_navigate_reload_and_update_current_entry_state() -> Result<()> {
 }
 
 #[test]
+fn navigation_navigate_mock_page_preserves_source_state_until_pagehide_and_logs_replace_work()
+-> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <script>
+          history.replaceState({ page: 'start' }, '', 'https://app.local/start?base=1');
+          window.addEventListener('pagehide', () => {
+            localStorage.setItem('nav-hide', [
+              location.href,
+              document.URL,
+              navigation.currentEntry.url,
+              history.state && history.state.page ? history.state.page : 'null'
+            ].join('|'));
+          });
+          document.getElementById('run').addEventListener('click', () => {
+            navigation.navigate('/next', {
+              history: 'replace',
+              state: { page: 'nav' }
+            });
+          });
+        </script>
+        "#;
+
+    let next_mock = r#"
+        <p id='result'></p>
+        <script>
+          window.addEventListener('pageshow', () => {
+            document.getElementById('result').textContent = [
+              localStorage.getItem('nav-hide') || 'none',
+              location.href,
+              document.URL,
+              navigation.currentEntry.url,
+              history.state && history.state.page ? history.state.page : 'null'
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.set_location_mock_page("https://app.local/next", next_mock);
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "https://app.local/start?base=1|https://app.local/start?base=1|https://app.local/start?base=1|start|https://app.local/next|https://app.local/next|https://app.local/next|nav",
+    )?;
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![LocationNavigation {
+            kind: LocationNavigationKind::Replace,
+            from: "https://app.local/start?base=1".to_string(),
+            to: "https://app.local/next".to_string(),
+        }]
+    );
+    Ok(())
+}
+
+#[test]
+fn navigation_reload_state_override_commits_before_mock_pageshow_and_logs_reload_work() -> Result<()>
+{
+    let html = r#"
+        <button id='run'>run</button>
+        <script>
+          history.replaceState({ page: 'start' }, '', 'https://app.local/article?step=1');
+          window.addEventListener('pagehide', () => {
+            localStorage.setItem('reload-hide', [
+              location.href,
+              document.URL,
+              navigation.currentEntry.url,
+              history.state && history.state.page ? history.state.page : 'null'
+            ].join('|'));
+          });
+          document.getElementById('run').addEventListener('click', () => {
+            navigation.reload({ state: { page: 'reloaded' } });
+          });
+        </script>
+        "#;
+
+    let reload_mock = r#"
+        <p id='result'></p>
+        <script>
+          window.addEventListener('pageshow', () => {
+            document.getElementById('result').textContent = [
+              localStorage.getItem('reload-hide') || 'none',
+              location.href,
+              document.URL,
+              navigation.currentEntry.url,
+              history.state && history.state.page ? history.state.page : 'null'
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/article", html)?;
+    h.set_location_mock_page("https://app.local/article?step=1", reload_mock);
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "https://app.local/article?step=1|https://app.local/article?step=1|https://app.local/article?step=1|start|https://app.local/article?step=1|https://app.local/article?step=1|https://app.local/article?step=1|reloaded",
+    )?;
+    assert_eq!(h.location_reload_count(), 1);
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![LocationNavigation {
+            kind: LocationNavigationKind::Reload,
+            from: "https://app.local/article?step=1".to_string(),
+            to: "https://app.local/article?step=1".to_string(),
+        }]
+    );
+    Ok(())
+}
+
+#[test]
 fn navigation_events_fire_for_successful_actions() -> Result<()> {
     let html = r#"
         <button id='run'>run</button>

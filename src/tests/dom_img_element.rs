@@ -278,3 +278,57 @@ fn img_cross_origin_and_current_src_shadow_define_property_delete_and_fast_path_
     )?;
     Ok(())
 }
+
+#[test]
+fn img_load_facing_state_and_picture_current_src_matrix_work() -> Result<()> {
+    let html = r#"
+        <picture>
+          <source id='hero' srcset='/img/hero.webp 1x' media='(width >= 900px)' type='image/webp'>
+          <img id='photo' src='/img/fallback.jpg' alt='Artwork'>
+        </picture>
+        <p id='result'></p>
+        <script>
+          const hero = document.getElementById('hero');
+          const photo = document.getElementById('photo');
+
+          const snapshot = () => [
+            String(photo.complete),
+            String(photo.naturalWidth),
+            String(photo.naturalHeight),
+            photo.currentSrc
+          ].join(':');
+
+          window.innerWidth = 500;
+          const initial = snapshot();
+
+          window.innerWidth = 1200;
+          const matched = snapshot();
+
+          hero.type = 'video/mp4';
+          const unsupported = snapshot();
+
+          hero.type = 'image/webp';
+          hero.media = '(width >= 1500px)';
+          const filtered = snapshot();
+
+          photo.removeAttribute('src');
+          hero.removeAttribute('srcset');
+          const empty = snapshot();
+
+          document.getElementById('result').textContent = [
+            initial,
+            matched,
+            unsupported,
+            filtered,
+            empty
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/gallery/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "true:1:1:https://app.local/img/fallback.jpg|true:1:1:https://app.local/img/hero.webp|true:1:1:https://app.local/img/fallback.jpg|true:1:1:https://app.local/img/fallback.jpg|true:0:0:",
+    )?;
+    Ok(())
+}

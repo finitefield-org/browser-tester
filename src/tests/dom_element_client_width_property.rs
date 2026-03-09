@@ -72,3 +72,99 @@ fn document_element_client_width_uses_window_inner_width() -> Result<()> {
     h.assert_text("#result", "845")?;
     Ok(())
 }
+
+#[test]
+fn layout_derived_properties_shadow_define_property_delete_and_fast_path_parity_work() -> Result<()>
+{
+    let html = r#"
+        <div
+          id='box'
+          style='width: 100px; height: 80px; padding-left: 7px; padding-right: 15px; padding-top: 10px; padding-bottom: 5px; border-left: 4px solid black; border-top: 6px solid black;'
+        ></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const box = document.getElementById('box');
+
+            Object.defineProperty(box, 'clientWidth', { value: 'cw', configurable: true });
+            Object.defineProperty(box, 'clientHeight', { get() { return 'ch'; }, configurable: true });
+            Object.defineProperty(box, 'clientLeft', { value: 'cl', configurable: true });
+            Object.defineProperty(box, 'clientTop', { value: 'ct', configurable: true });
+            Object.defineProperty(box, 'currentCSSZoom', { value: 'zoom', configurable: true });
+            Object.defineProperty(box, 'offsetWidth', { value: 'ow', configurable: true });
+            Object.defineProperty(box, 'offsetHeight', { value: 'oh', configurable: true });
+            Object.defineProperty(box, 'offsetLeft', { value: 'ol', configurable: true });
+            Object.defineProperty(box, 'offsetTop', { value: 'ot', configurable: true });
+            Object.defineProperty(box, 'scrollWidth', { value: 'sw', configurable: true });
+            Object.defineProperty(box, 'scrollHeight', { value: 'sh', configurable: true });
+            Object.defineProperty(box, 'scrollLeft', { value: 'sl', configurable: true });
+            Object.defineProperty(box, 'scrollTop', { value: 'st', configurable: true });
+            Object.defineProperty(box, 'scrollLeftMax', { value: 'slm', configurable: true });
+            Object.defineProperty(box, 'scrollTopMax', { value: 'stm', configurable: true });
+
+            const shadow = [
+              box.clientWidth,
+              box.clientHeight,
+              box.clientLeft,
+              box.clientTop,
+              box.currentCSSZoom,
+              box.offsetWidth,
+              box.offsetHeight,
+              box.offsetLeft,
+              box.offsetTop,
+              box.scrollWidth,
+              box.scrollHeight,
+              box.scrollLeft,
+              box.scrollTop,
+              box.scrollLeftMax,
+              box.scrollTopMax
+            ].join(':');
+
+            delete box.clientWidth;
+            delete box.clientHeight;
+            delete box.clientLeft;
+            delete box.clientTop;
+            delete box.currentCSSZoom;
+            delete box.offsetWidth;
+            delete box.offsetHeight;
+            delete box.offsetLeft;
+            delete box.offsetTop;
+            delete box.scrollWidth;
+            delete box.scrollHeight;
+            delete box.scrollLeft;
+            delete box.scrollTop;
+            delete box.scrollLeftMax;
+            delete box.scrollTopMax;
+
+            const restored = [
+              box.clientWidth,
+              box.clientHeight,
+              box.clientLeft,
+              box.clientTop,
+              box.currentCSSZoom,
+              box.offsetWidth,
+              box.offsetHeight,
+              box.offsetLeft,
+              box.offsetTop,
+              box.scrollWidth,
+              box.scrollHeight,
+              box.scrollLeft,
+              box.scrollTop,
+              box.scrollLeftMax,
+              box.scrollTopMax
+            ].join(':');
+
+            document.getElementById('result').textContent = [shadow, restored].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "cw:ch:cl:ct:zoom:ow:oh:ol:ot:sw:sh:sl:st:slm:stm|122:95:4:6:1:0:0:0:0:0:0:0:0:0:0",
+    )?;
+    Ok(())
+}

@@ -83,3 +83,62 @@ fn issue_119_worker_regex_exec_assignment_in_while_condition_preserves_match_arr
     harness.assert_text("#out", r#"{"ok":true,"full":"1","len":1}"#)?;
     Ok(())
 }
+
+#[test]
+fn worker_object_url_is_snapshot_at_construction_and_survives_immediate_revoke() -> Result<()> {
+    let html = r#"
+      <button id='run'>run</button>
+      <div id='out'></div>
+      <script>
+        const out = document.getElementById('out');
+        document.getElementById('run').addEventListener('click', () => {
+          const source = `
+            self.onmessage = () => {
+              self.postMessage('ok');
+            };
+          `;
+          const blob = new Blob([source], { type: 'text/javascript' });
+          const url = URL.createObjectURL(blob);
+          const worker = new Worker(url);
+          URL.revokeObjectURL(url);
+          worker.onmessage = (ev) => {
+            out.textContent = String(ev.data);
+            worker.terminate();
+          };
+          worker.postMessage('run');
+        });
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#run")?;
+    harness.assert_text("#out", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn revoked_object_url_worker_constructor_throws_not_found() -> Result<()> {
+    let html = r#"
+      <button id='run'>run</button>
+      <div id='out'></div>
+      <script>
+        const out = document.getElementById('out');
+        document.getElementById('run').addEventListener('click', () => {
+          const blob = new Blob(['self.onmessage = () => {};'], { type: 'text/javascript' });
+          const url = URL.createObjectURL(blob);
+          URL.revokeObjectURL(url);
+          try {
+            new Worker(url);
+            out.textContent = 'missing-error';
+          } catch (error) {
+            out.textContent = String(error && error.message ? error.message : error);
+          }
+        });
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#run")?;
+    harness.assert_text("#out", "Worker script source not found: blob:bt-1")?;
+    Ok(())
+}

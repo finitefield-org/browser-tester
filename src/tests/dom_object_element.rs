@@ -283,3 +283,40 @@ fn object_reflective_own_property_surface_and_object_copy_work() -> Result<()> {
     )?;
     Ok(())
 }
+
+#[test]
+fn object_manual_load_error_dispatch_and_resource_surface_work() -> Result<()> {
+    let html = r#"
+        <object id='asset' data='/media/movie.webm' usemap='#diagram'></object>
+        <p id='result'></p>
+        <script>
+          const asset = document.getElementById('asset');
+          const log = [];
+          const render = () => {
+            document.getElementById('result').textContent = [
+              log.join(','),
+              asset.data,
+              asset.useMap
+            ].join('|');
+          };
+
+          asset.onload = (event) => {
+            log.push('load:' + event.type + ':' + String(event.currentTarget === asset));
+            render();
+          };
+          asset.addEventListener('error', (event) => {
+            log.push('error:' + event.type + ':' + String(event.currentTarget === asset));
+            render();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/base/index.html", html)?;
+    h.dispatch("#asset", "load")?;
+    h.dispatch("#asset", "error")?;
+    h.assert_text(
+        "#result",
+        "load:load:true,error:error:true|https://app.local/media/movie.webm|#diagram",
+    )?;
+    Ok(())
+}

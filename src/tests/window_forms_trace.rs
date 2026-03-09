@@ -332,6 +332,50 @@ fn window_scroll_to_property_is_read_only() {
 }
 
 #[test]
+fn window_scroll_position_aliases_are_read_only() {
+    for (source, expected) in [
+        (
+            r#"
+            <script>
+              window.scrollX = 1;
+            </script>
+            "#,
+            "window.scrollX is read-only",
+        ),
+        (
+            r#"
+            <script>
+              window.scrollY = 1;
+            </script>
+            "#,
+            "window.scrollY is read-only",
+        ),
+        (
+            r#"
+            <script>
+              window.pageXOffset = 1;
+            </script>
+            "#,
+            "window.pageXOffset is read-only",
+        ),
+        (
+            r#"
+            <script>
+              window.pageYOffset = 1;
+            </script>
+            "#,
+            "window.pageYOffset is read-only",
+        ),
+    ] {
+        let err = Harness::from_html(source).expect_err("window scroll alias should be read-only");
+        match err {
+            Error::ScriptRuntime(msg) => assert_eq!(msg, expected),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn window_print_property_is_read_only() {
     let err = Harness::from_html(
         r#"
@@ -807,6 +851,80 @@ fn window_scroll_to_updates_document_position_and_supports_options() -> Result<(
     let mut h = Harness::from_html(html)?;
     h.click("#run")?;
     h.assert_text("#result", "100:20:10|true:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn window_scroll_position_aliases_track_scroll_state_before_events() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          const log = [];
+          document.addEventListener('scroll', () => {
+            log.push(
+              's:' +
+              window.scrollX + ':' +
+              window.scrollY + ':' +
+              window.pageXOffset + ':' +
+              window.pageYOffset
+            );
+          });
+          document.addEventListener('scrollend', () => {
+            log.push(
+              'e:' +
+              window.scrollX + ':' +
+              window.scrollY + ':' +
+              window.pageXOffset + ':' +
+              window.pageYOffset
+            );
+          });
+
+          document.getElementById('run').addEventListener('click', () => {
+            window.scrollTo(12, 34);
+            window.scrollBy({ left: 5, top: 6 });
+            document.getElementById('result').textContent = log.join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "s:12:34:12:34|e:12:34:12:34|s:17:40:17:40|e:17:40:17:40",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn window_scroll_position_aliases_align_with_bounding_client_rect_shifts() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <div id='spacer' style='height: 2000px; width: 2000px;'>
+          <div id='target' style='margin-top: 300px; margin-left: 200px;'>x</div>
+        </div>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const target = document.getElementById('target');
+            const before = target.getBoundingClientRect();
+            window.scrollTo(25, 40);
+            const after = target.getBoundingClientRect();
+            document.getElementById('result').textContent =
+              String(before.left - after.left) + ':' +
+              String(before.top - after.top) + ':' +
+              String(window.scrollX) + ':' +
+              String(window.scrollY) + ':' +
+              String(window.pageXOffset) + ':' +
+              String(window.pageYOffset);
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "25:40:25:40:25:40")?;
     Ok(())
 }
 

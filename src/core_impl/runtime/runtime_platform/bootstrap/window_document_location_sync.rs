@@ -298,6 +298,10 @@ impl Harness {
             "screenY",
             "screenLeft",
             "screenTop",
+            "scrollX",
+            "scrollY",
+            "pageXOffset",
+            "pageYOffset",
             "location",
             "history",
             "navigation",
@@ -340,6 +344,7 @@ impl Harness {
             "BigUint64Array",
             "Object",
             "NodeList",
+            "TextTrack",
             "TextTrackList",
             "TimeRanges",
             "RadioNodeList",
@@ -427,6 +432,7 @@ impl Harness {
         audio_constructor: &Value,
         data_transfer_constructor: &Value,
         node_list_constructor: &Value,
+        text_track_constructor: &Value,
         text_track_list_constructor: &Value,
         time_ranges_constructor: &Value,
         radio_node_list_constructor: &Value,
@@ -593,6 +599,22 @@ impl Harness {
                 Value::Number(self.browser_apis.window_screen_y),
             ),
             (
+                "scrollX".to_string(),
+                Value::Number(self.dom_runtime.document_scroll_x),
+            ),
+            (
+                "scrollY".to_string(),
+                Value::Number(self.dom_runtime.document_scroll_y),
+            ),
+            (
+                "pageXOffset".to_string(),
+                Value::Number(self.dom_runtime.document_scroll_x),
+            ),
+            (
+                "pageYOffset".to_string(),
+                Value::Number(self.dom_runtime.document_scroll_y),
+            ),
+            (
                 "location".to_string(),
                 Value::Object(self.dom_runtime.location_object.clone()),
             ),
@@ -659,6 +681,7 @@ impl Harness {
                 data_transfer_constructor.clone(),
             ),
             ("NodeList".to_string(), node_list_constructor.clone()),
+            ("TextTrack".to_string(), text_track_constructor.clone()),
             (
                 "TextTrackList".to_string(),
                 text_track_list_constructor.clone(),
@@ -802,6 +825,26 @@ impl Harness {
             &mut entries,
             "screenTop".to_string(),
             Value::Number(self.browser_apis.window_screen_y),
+        );
+        Self::object_set_entry(
+            &mut entries,
+            "scrollX".to_string(),
+            Value::Number(self.dom_runtime.document_scroll_x),
+        );
+        Self::object_set_entry(
+            &mut entries,
+            "scrollY".to_string(),
+            Value::Number(self.dom_runtime.document_scroll_y),
+        );
+        Self::object_set_entry(
+            &mut entries,
+            "pageXOffset".to_string(),
+            Value::Number(self.dom_runtime.document_scroll_x),
+        );
+        Self::object_set_entry(
+            &mut entries,
+            "pageYOffset".to_string(),
+            Value::Number(self.dom_runtime.document_scroll_y),
         );
         Self::object_set_entry(&mut entries, "cookieStore".to_string(), cookie_store);
         Self::object_set_entry(&mut entries, "caches".to_string(), caches);

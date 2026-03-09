@@ -134,3 +134,47 @@ fn computed_style_object_is_read_only() -> Result<()> {
     h.assert_text("#result", "true:blue")?;
     Ok(())
 }
+
+#[test]
+fn computed_style_exposes_item_and_live_alias_paths() -> Result<()> {
+    let html = r#"
+      <div id='box' style='background-color: lime;'></div>
+      <button id='run'>run</button>
+      <p id='result'></p>
+      <script>
+        document.getElementById('run').addEventListener('click', () => {
+          const box = document.getElementById('box');
+          const styles = getComputedStyle(box);
+          const before = [
+            typeof styles.item,
+            String(styles.item === styles.item),
+            styles.length,
+            styles.cssText,
+            String(styles.parentRule === null),
+            styles.item(0),
+            styles.item(1),
+            styles['background-color'],
+            styles.backgroundColor
+          ].join(':');
+
+          box.style.backgroundColor = 'purple';
+
+          const after = [
+            styles.item(0),
+            styles['background-color'],
+            styles.backgroundColor
+          ].join(':');
+
+          document.getElementById('result').textContent = [before, after].join('|');
+        });
+      </script>
+    "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "function:true:0::true:::lime:lime|:purple:purple",
+    )?;
+    Ok(())
+}

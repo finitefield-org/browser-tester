@@ -4289,6 +4289,7 @@ impl Harness {
                     )));
                 }
                 let position_changed = self.apply_document_scroll_operation(member, evaluated_args);
+                self.sync_window_runtime_properties();
                 self.dispatch_document_scroll_sequence(position_changed)?;
                 Ok(Some(Value::Undefined))
             }

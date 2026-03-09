@@ -1972,3 +1972,67 @@ fn audio_load_triggered_direct_nested_precedence_matrix_stays_aligned_work() -> 
     )?;
     Ok(())
 }
+
+#[test]
+fn audio_media_query_source_selection_and_load_state_follow_direct_src_precedence_work()
+-> Result<()> {
+    let html = r#"
+        <audio id='player' src='/audio/direct.mp3'>
+          <source id='wide' src='/audio/wide.ogg' type='audio/ogg' media='(min-width: 900px)'>
+          <source id='dark' srcset='/audio/dark.mp3 1x' type='audio/mpeg' media='(prefers-color-scheme: dark)'>
+          <source id='fallback' src='/audio/fallback.wav' type='audio/wav'>
+        </audio>
+        <p id='result'></p>
+        <script>
+          const player = document.getElementById('player');
+
+          function snapshot() {
+            return [
+              player.currentSrc,
+              String(player.networkState),
+              String(player.readyState)
+            ].join(':');
+          }
+
+          window.innerWidth = 640;
+          window.prefersColorScheme = 'light';
+          const before = snapshot();
+
+          window.innerWidth = 1200;
+          window.prefersColorScheme = 'dark';
+          const whileDirect = snapshot();
+
+          player.removeAttribute('src');
+          player.load();
+          const afterRemovingDirect = snapshot();
+
+          window.innerWidth = 500;
+          player.load();
+          const afterNarrowViewport = snapshot();
+
+          window.prefersColorScheme = 'light';
+          player.load();
+          const afterLightScheme = snapshot();
+
+          player.src = '/audio/direct-2.mp3';
+          player.load();
+          const restoredDirect = snapshot();
+
+          document.getElementById('result').textContent = [
+            before,
+            whileDirect,
+            afterRemovingDirect,
+            afterNarrowViewport,
+            afterLightScheme,
+            restoredDirect
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/watch/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "https://app.local/audio/direct.mp3:1:0|https://app.local/audio/direct.mp3:1:0|https://app.local/audio/wide.ogg:1:0|https://app.local/audio/dark.mp3:1:0|https://app.local/audio/fallback.wav:1:0|https://app.local/audio/direct-2.mp3:1:0",
+    )?;
+    Ok(())
+}

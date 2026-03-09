@@ -1186,7 +1186,7 @@ impl Harness {
         if let Some(index) = Self::own_property_integer_key(key) {
             if let Some(node) = snapshot.get(index as usize).copied() {
                 return Some(Self::own_data_property_descriptor_with_attrs(
-                    Value::Node(node),
+                    self.node_list_item_value(nodes, node),
                     false,
                     true,
                     true,

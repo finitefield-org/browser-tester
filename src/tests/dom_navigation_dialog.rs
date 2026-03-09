@@ -2747,6 +2747,128 @@ fn location_mock_pages_load_on_navigation_and_reload() -> Result<()> {
 }
 
 #[test]
+fn mock_page_assign_preserves_source_document_state_until_pagehide_and_syncs_new_document_work()
+-> Result<()> {
+    let html = r#"
+        <button id='go'>go</button>
+        <script>
+          history.replaceState({ page: 'start' }, '', 'https://app.local/start?base=1');
+          window.addEventListener('pagehide', () => {
+            localStorage.setItem('start-hide', [
+              location.href,
+              document.URL,
+              document.documentURI,
+              navigation.currentEntry.url,
+              history.state && history.state.page ? history.state.page : 'null'
+            ].join('|'));
+          });
+          document.getElementById('go').addEventListener('click', () => {
+            location.assign('https://app.local/next');
+          });
+        </script>
+        "#;
+
+    let next_mock = r#"
+        <p id='result'></p>
+        <script>
+          history.replaceState({ page: 'next' }, '', 'https://app.local/next?step=1');
+          window.addEventListener('pageshow', () => {
+            document.getElementById('result').textContent = [
+              localStorage.getItem('start-hide') || 'none',
+              location.href,
+              document.URL,
+              document.documentURI,
+              navigation.currentEntry.url,
+              history.state && history.state.page ? history.state.page : 'null'
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.set_location_mock_page("https://app.local/next", next_mock);
+    h.click("#go")?;
+    h.assert_text(
+        "#result",
+        "https://app.local/start?base=1|https://app.local/start?base=1|https://app.local/start?base=1|https://app.local/start?base=1|start|https://app.local/next?step=1|https://app.local/next?step=1|https://app.local/next?step=1|https://app.local/next?step=1|next",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn cross_document_history_back_restores_mock_page_url_state_and_entry_identity_work() -> Result<()>
+{
+    let html = r#"
+        <button id='go'>go</button>
+        <script>
+          history.replaceState({ page: 'start' }, '', 'https://app.local/start?base=1');
+          document.getElementById('go').addEventListener('click', () => {
+            location.assign('https://app.local/one');
+          });
+        </script>
+        "#;
+
+    let one_mock = r#"
+        <button id='to-two'>to-two</button>
+        <p id='result'></p>
+        <script>
+          history.replaceState({ page: 'one' }, '', 'https://app.local/one?step=1');
+          const oneKey = navigation.currentEntry.key;
+          if (!localStorage.getItem('one-key')) {
+            localStorage.setItem('one-key', oneKey);
+          }
+          window.addEventListener('pageshow', () => {
+            document.getElementById('result').textContent = [
+              localStorage.getItem('two-hide') || 'none',
+              location.href,
+              document.URL,
+              document.documentURI,
+              navigation.currentEntry.url,
+              history.state.page,
+              String(navigation.currentEntry.key === localStorage.getItem('one-key'))
+            ].join('|');
+          });
+          document.getElementById('to-two').addEventListener('click', () => {
+            location.assign('https://app.local/two');
+          });
+        </script>
+        "#;
+
+    let two_mock = r#"
+        <button id='back'>back</button>
+        <p id='result'></p>
+        <script>
+          history.replaceState({ page: 'two' }, '', 'https://app.local/two?step=2');
+          window.addEventListener('pagehide', () => {
+            localStorage.setItem('two-hide', [
+              location.href,
+              document.URL,
+              document.documentURI,
+              navigation.currentEntry.url,
+              history.state.page
+            ].join('|'));
+          });
+          document.getElementById('back').addEventListener('click', () => {
+            history.back();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.set_location_mock_page("https://app.local/one", one_mock);
+    h.set_location_mock_page("https://app.local/one?step=1", one_mock);
+    h.set_location_mock_page("https://app.local/two", two_mock);
+    h.click("#go")?;
+    h.click("#to-two")?;
+    h.click("#back")?;
+    h.assert_text(
+        "#result",
+        "https://app.local/two?step=2|https://app.local/two?step=2|https://app.local/two?step=2|https://app.local/two?step=2|two|https://app.local/one?step=1|https://app.local/one?step=1|https://app.local/one?step=1|https://app.local/one?step=1|one|true",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn document_visibilitychange_fires_before_mock_page_navigation() -> Result<()> {
     let html = r#"
         <button id='go'>go</button>
@@ -2812,6 +2934,89 @@ fn document_onvisibilitychange_property_fires_before_mock_page_navigation() -> R
     h.set_location_mock_page("https://app.local/next", next_mock);
     h.click("#go")?;
     h.assert_text("#result", "visibilitychange:false")?;
+    Ok(())
+}
+
+#[test]
+fn mock_page_navigation_dispatches_pagehide_before_swap_and_pageshow_on_new_document_work()
+-> Result<()> {
+    let html = r#"
+        <button id='go'>go</button>
+        <script>
+          localStorage.setItem('page-log', '');
+          window.addEventListener('pagehide', (event) => {
+            localStorage.setItem(
+              'page-log',
+              event.type + ':' +
+              event.cancelable + ':' +
+              document.visibilityState + ':' +
+              document.readyState
+            );
+          });
+          document.getElementById('go').addEventListener('click', () => {
+            location.assign('https://app.local/next');
+          });
+        </script>
+        "#;
+
+    let next_mock = r#"
+        <p id='result'></p>
+        <script>
+          window.addEventListener('pageshow', (event) => {
+            document.getElementById('result').textContent = [
+              localStorage.getItem('page-log') || 'none',
+              event.type,
+              String(event.cancelable),
+              document.visibilityState,
+              document.readyState
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_location_mock_page("https://app.local/next", next_mock);
+    h.click("#go")?;
+    h.assert_text(
+        "#result",
+        "pagehide:false:hidden:complete|pageshow|false|visible|complete",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn body_pagehide_and_pageshow_alias_properties_fire_across_mock_page_reload_work() -> Result<()> {
+    let html = r#"
+        <button id='go'>go</button>
+        <script>
+          localStorage.setItem('page-prop', '');
+          document.body.onpagehide = (event) => {
+            localStorage.setItem('page-prop', event.type + ':' + event.cancelable);
+          };
+          document.getElementById('go').addEventListener('click', () => {
+            location.assign('https://app.local/next');
+          });
+        </script>
+        "#;
+
+    let next_mock = r#"
+        <button id='reload'>reload</button>
+        <script>
+          document.body.onpageshow = (event) => {
+            document.getElementById('result').textContent = [
+              localStorage.getItem('page-prop') || 'none',
+              event.type + ':' + event.cancelable,
+              String(window.onpageshow === document.body.onpageshow)
+            ].join('|');
+          };
+        </script>
+        <p id='result'></p>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_location_mock_page("https://app.local/next", next_mock);
+    h.click("#go")?;
+    h.assert_text("#result", "pagehide:false|pageshow:false|true")?;
     Ok(())
 }
 
@@ -3388,6 +3593,82 @@ fn history_back_forward_and_go_dispatch_popstate_with_state() -> Result<()> {
     h.assert_text(
         "#result",
         "[A@https://app.local/a][B@https://app.local/b][null@about:blank]",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn same_document_history_traversal_orders_popstate_before_hashchange_without_lifecycle_work()
+-> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const logs = [];
+          window.addEventListener('popstate', (event) => {
+            logs.push('popstate:' + event.state + ':' + location.href);
+          });
+          window.addEventListener('hashchange', (event) => {
+            logs.push('hashchange:' + event.oldURL + '->' + event.newURL);
+          });
+          window.addEventListener('pagehide', () => logs.push('pagehide'));
+          window.addEventListener('pageshow', () => logs.push('pageshow'));
+          document.addEventListener('visibilitychange', () => {
+            logs.push('visibility:' + document.visibilityState);
+          });
+          history.pushState('one', '', 'https://app.local/path#one');
+          history.pushState('two', '', 'https://app.local/path#two');
+          history.back();
+          document.getElementById('result').textContent = [
+            logs.join('|'),
+            document.readyState,
+            document.visibilityState,
+            location.href
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/path#zero", html)?;
+    h.assert_text(
+        "#result",
+        "popstate:one:https://app.local/path#one|hashchange:https://app.local/path#two->https://app.local/path#one|loading|visible|https://app.local/path#one",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn same_document_noop_navigation_paths_do_not_emit_lifecycle_events_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          const logs = [];
+          window.addEventListener('popstate', () => logs.push('popstate'));
+          window.addEventListener('hashchange', () => logs.push('hashchange'));
+          window.addEventListener('pagehide', () => logs.push('pagehide'));
+          window.addEventListener('pageshow', () => logs.push('pageshow'));
+          document.addEventListener('visibilitychange', () => {
+            logs.push('visibility:' + document.visibilityState);
+          });
+          location.hash = 'frag';
+          location.hash = '#frag';
+          location.pathname = '/path';
+          location.search = '';
+          location.protocol = 'https:';
+          history.replaceState(history.state, '', 'https://app.local/path#frag');
+          history.go(10);
+          history.forward();
+          document.getElementById('result').textContent = [
+            logs.length === 0 ? 'none' : logs.join('|'),
+            document.readyState,
+            document.visibilityState,
+            location.href
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/path#frag", html)?;
+    h.assert_text(
+        "#result",
+        "none|loading|visible|https://app.local/path#frag",
     )?;
     Ok(())
 }
@@ -4025,6 +4306,85 @@ fn element_animate_rejects_zero_arguments() -> Result<()> {
         Err(Error::ScriptRuntime(message)) => {
             assert!(
                 message.contains("animate requires one or two arguments"),
+                "unexpected runtime error message: {message}"
+            );
+        }
+        other => panic!("expected runtime error, got: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn element_animate_methods_are_receiver_aware_and_update_state() -> Result<()> {
+    let html = r#"
+        <button id='trigger'>run</button>
+        <div id='box'></div>
+        <p id='result'></p>
+        <script>
+          document.getElementById('trigger').addEventListener('click', () => {
+            const animation = document.getElementById('box').animate(
+              { opacity: [0, 1] },
+              { duration: 1000, id: 'demo' }
+            );
+            const pause = animation.pause;
+            const play = animation.play;
+            const finish = animation.finish;
+            const cancel = animation.cancel;
+            pause.call(animation);
+            const afterPause = animation.playState;
+            play.call(animation);
+            const afterPlay = animation.playState;
+            finish.call(animation);
+            const afterFinish = animation.playState;
+            animation.updatePlaybackRate(1.5);
+            cancel.call(animation);
+            document.getElementById('result').textContent = [
+              String(animation.play === animation.play),
+              pause.name,
+              pause.length,
+              afterPause,
+              afterPlay,
+              afterFinish,
+              String(animation.playbackRate),
+              animation.playState,
+              String(animation.currentTime === null),
+              String(animation.startTime === null)
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#trigger")?;
+    h.assert_text(
+        "#result",
+        "true:pause:0:paused:running:finished:1.5:idle:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn element_animate_methods_reject_incompatible_receivers() -> Result<()> {
+    let html = r#"
+        <button id='trigger'>run</button>
+        <div id='box'></div>
+        <script>
+          document.getElementById('trigger').addEventListener('click', () => {
+            const animation = document.getElementById('box').animate(
+              { opacity: [0, 1] },
+              { duration: 1000 }
+            );
+            const pause = animation.pause;
+            pause.call({});
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    match h.click("#trigger") {
+        Err(Error::ScriptRuntime(message)) => {
+            assert!(
+                message.contains("Animation method called on incompatible receiver"),
                 "unexpected runtime error message: {message}"
             );
         }

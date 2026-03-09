@@ -275,7 +275,9 @@ impl Harness {
             "date" => "Date",
             "map" => "Map",
             "node_list" => "NodeList",
+            "text_track" => "TextTrack",
             "time_ranges" => "TimeRanges",
+            "animation" => "Animation",
             "radio_node_list" => "RadioNodeList",
             "html_form" => "HTMLFormElement",
             "html_media" => "HTMLMediaElement",
@@ -500,6 +502,46 @@ impl Harness {
                         ))
                     })
             }
+            "text_track" => {
+                let (object, node) = Self::text_track_receiver_object_and_node(Some(&receiver))?;
+                match member.as_str() {
+                    "id_get" => Ok(Value::String(self.dom.attr(node, "id").unwrap_or_default())),
+                    "kind_get" => Ok(Value::String(self.normalized_track_kind(node))),
+                    "label_get" => Ok(Value::String(
+                        self.dom.attr(node, "label").unwrap_or_default(),
+                    )),
+                    "language_get" => Ok(Value::String(
+                        self.dom.attr(node, "srclang").unwrap_or_default(),
+                    )),
+                    "mode_get" => {
+                        let entries = object.borrow();
+                        Ok(
+                            Self::object_get_entry(&entries, INTERNAL_TEXT_TRACK_MODE_KEY)
+                                .unwrap_or_else(|| Value::String("disabled".to_string())),
+                        )
+                    }
+                    "mode_set" => {
+                        let next_mode = args
+                            .first()
+                            .cloned()
+                            .unwrap_or(Value::Undefined)
+                            .as_string();
+                        if matches!(next_mode.as_str(), "disabled" | "hidden" | "showing") {
+                            Self::object_set_entry(
+                                &mut object.borrow_mut(),
+                                INTERNAL_TEXT_TRACK_MODE_KEY.to_string(),
+                                Value::String(next_mode),
+                            );
+                        }
+                        Ok(Value::Undefined)
+                    }
+                    "cues_get" | "active_cues_get" => Ok(Value::Null),
+                    "in_band_metadata_track_dispatch_type_get" => Ok(Value::String(String::new())),
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported TextTrack method: {member}"
+                    ))),
+                }
+            }
             "time_ranges" => {
                 let (_object, owner, kind) =
                     Self::time_ranges_receiver_object_and_state(Some(&receiver))?;
@@ -527,6 +569,154 @@ impl Harness {
                     }
                     _ => Err(Error::ScriptRuntime(format!(
                         "unsupported TimeRanges method: {member}"
+                    ))),
+                }
+            }
+            "animation" => {
+                let object = Self::animation_receiver_object(Some(&receiver))?;
+                match member.as_str() {
+                    "cancel" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime("cancel takes no arguments".into()));
+                        }
+                        let mut entries = object.borrow_mut();
+                        Self::object_set_entry(
+                            &mut entries,
+                            "playState".to_string(),
+                            Value::String("idle".to_string()),
+                        );
+                        Self::object_set_entry(
+                            &mut entries,
+                            "currentTime".to_string(),
+                            Value::Null,
+                        );
+                        Self::object_set_entry(&mut entries, "startTime".to_string(), Value::Null);
+                        Self::object_set_entry(
+                            &mut entries,
+                            "pending".to_string(),
+                            Value::Bool(false),
+                        );
+                        Ok(Value::Undefined)
+                    }
+                    "finish" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime("finish takes no arguments".into()));
+                        }
+                        let mut entries = object.borrow_mut();
+                        Self::object_set_entry(
+                            &mut entries,
+                            "playState".to_string(),
+                            Value::String("finished".to_string()),
+                        );
+                        Self::object_set_entry(
+                            &mut entries,
+                            "pending".to_string(),
+                            Value::Bool(false),
+                        );
+                        Ok(Value::Undefined)
+                    }
+                    "pause" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime("pause takes no arguments".into()));
+                        }
+                        let mut entries = object.borrow_mut();
+                        Self::object_set_entry(
+                            &mut entries,
+                            "playState".to_string(),
+                            Value::String("paused".to_string()),
+                        );
+                        Self::object_set_entry(
+                            &mut entries,
+                            "pending".to_string(),
+                            Value::Bool(false),
+                        );
+                        Ok(Value::Undefined)
+                    }
+                    "play" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime("play takes no arguments".into()));
+                        }
+                        let mut entries = object.borrow_mut();
+                        Self::object_set_entry(
+                            &mut entries,
+                            "playState".to_string(),
+                            Value::String("running".to_string()),
+                        );
+                        if matches!(
+                            Self::object_get_entry(&entries, "currentTime"),
+                            Some(Value::Null)
+                        ) {
+                            Self::object_set_entry(
+                                &mut entries,
+                                "currentTime".to_string(),
+                                Value::Number(0),
+                            );
+                        }
+                        if matches!(
+                            Self::object_get_entry(&entries, "startTime"),
+                            Some(Value::Null)
+                        ) {
+                            Self::object_set_entry(
+                                &mut entries,
+                                "startTime".to_string(),
+                                Value::Number(0),
+                            );
+                        }
+                        Self::object_set_entry(
+                            &mut entries,
+                            "pending".to_string(),
+                            Value::Bool(false),
+                        );
+                        Ok(Value::Undefined)
+                    }
+                    "reverse" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime("reverse takes no arguments".into()));
+                        }
+                        let mut entries = object.borrow_mut();
+                        Self::object_set_entry(
+                            &mut entries,
+                            "playState".to_string(),
+                            Value::String("running".to_string()),
+                        );
+                        Self::object_set_entry(
+                            &mut entries,
+                            "pending".to_string(),
+                            Value::Bool(false),
+                        );
+                        Ok(Value::Undefined)
+                    }
+                    "updatePlaybackRate" => {
+                        if args.len() != 1 {
+                            return Err(Error::ScriptRuntime(
+                                "updatePlaybackRate requires exactly one argument".into(),
+                            ));
+                        }
+                        let mut entries = object.borrow_mut();
+                        let value = args.first().cloned().unwrap_or(Value::Undefined);
+                        let playback_rate = match value {
+                            Value::Number(_) | Value::Float(_) => value,
+                            _ => Self::number_value(Self::coerce_number_for_number_constructor(
+                                &value,
+                            )),
+                        };
+                        Self::object_set_entry(
+                            &mut entries,
+                            "playbackRate".to_string(),
+                            playback_rate,
+                        );
+                        Ok(Value::Undefined)
+                    }
+                    "commitStyles" | "persist" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(format!(
+                                "{member} takes no arguments"
+                            )));
+                        }
+                        Ok(Value::Undefined)
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported Animation method: {member}"
                     ))),
                 }
             }
@@ -617,12 +807,43 @@ impl Harness {
                 if !is_media {
                     return Err(Self::incompatible_receiver_error(&family));
                 }
+                let media_boolean_state = |this: &Self, key: &str, default: bool| match this
+                    .dom_runtime
+                    .node_expando_props
+                    .get(&(node, key.to_string()))
+                {
+                    Some(Value::Bool(value)) => *value,
+                    Some(value) => value.truthy(),
+                    None => default,
+                };
+                let media_numeric_state = |this: &Self, key: &str, default: f64| match this
+                    .dom_runtime
+                    .node_expando_props
+                    .get(&(node, key.to_string()))
+                {
+                    Some(Value::Number(value)) => *value as f64,
+                    Some(Value::Float(value)) => *value,
+                    Some(value) => Self::coerce_number_for_number_constructor(value),
+                    None => default,
+                };
                 match member.as_str() {
                     "play" => {
                         if !args.is_empty() {
                             return Err(Error::ScriptRuntime("play takes no arguments".into()));
                         }
+                        let was_paused = media_boolean_state(self, INTERNAL_MEDIA_PAUSED_KEY, true);
                         self.set_media_boolean_state_value(node, INTERNAL_MEDIA_PAUSED_KEY, false);
+                        if was_paused {
+                            self.with_script_env(|this, env| {
+                                let _ = this.dispatch_event_with_options(
+                                    node, "play", env, true, false, false, None, None, None,
+                                )?;
+                                let _ = this.dispatch_event_with_options(
+                                    node, "playing", env, true, false, false, None, None, None,
+                                )?;
+                                Ok(())
+                            })?;
+                        }
                         Ok(Value::Promise(
                             self.promise_resolve_value_as_promise(Value::Undefined)?,
                         ))
@@ -631,19 +852,50 @@ impl Harness {
                         if !args.is_empty() {
                             return Err(Error::ScriptRuntime("pause takes no arguments".into()));
                         }
+                        let was_paused = media_boolean_state(self, INTERNAL_MEDIA_PAUSED_KEY, true);
                         self.set_media_boolean_state_value(node, INTERNAL_MEDIA_PAUSED_KEY, true);
+                        if !was_paused {
+                            self.with_script_env(|this, env| {
+                                let _ = this.dispatch_event_with_options(
+                                    node, "pause", env, true, false, false, None, None, None,
+                                )?;
+                                Ok(())
+                            })?;
+                        }
                         Ok(Value::Undefined)
                     }
                     "load" => {
                         if !args.is_empty() {
                             return Err(Error::ScriptRuntime("load takes no arguments".into()));
                         }
+                        let had_current_src = !self.resolve_media_src(node).is_empty();
+                        let had_current_time =
+                            media_numeric_state(self, INTERNAL_MEDIA_CURRENT_TIME_KEY, 0.0) != 0.0;
                         self.set_media_boolean_state_value(node, INTERNAL_MEDIA_PAUSED_KEY, true);
                         self.set_media_numeric_state_value(
                             node,
                             INTERNAL_MEDIA_CURRENT_TIME_KEY,
                             &Value::Number(0),
                         );
+                        self.with_script_env(|this, env| {
+                            if had_current_src || had_current_time {
+                                let _ = this.dispatch_event_with_options(
+                                    node, "emptied", env, true, false, false, None, None, None,
+                                )?;
+                            }
+                            let _ = this.dispatch_event_with_options(
+                                node,
+                                "loadstart",
+                                env,
+                                true,
+                                false,
+                                false,
+                                None,
+                                None,
+                                None,
+                            )?;
+                            Ok(())
+                        })?;
                         Ok(Value::Undefined)
                     }
                     "canPlayType" => {
@@ -696,6 +948,15 @@ impl Harness {
                             INTERNAL_MEDIA_CURRENT_TIME_KEY,
                             target_time,
                         );
+                        self.with_script_env(|this, env| {
+                            let _ = this.dispatch_event_with_options(
+                                node, "seeking", env, true, false, false, None, None, None,
+                            )?;
+                            let _ = this.dispatch_event_with_options(
+                                node, "seeked", env, true, false, false, None, None, None,
+                            )?;
+                            Ok(())
+                        })?;
                         Ok(Value::Undefined)
                     }
                     _ => Err(Error::ScriptRuntime(format!(
@@ -2374,6 +2635,51 @@ impl Harness {
             (owner, kind)
         };
         Ok((object.clone(), owner, kind))
+    }
+
+    fn animation_receiver_object(receiver: Option<&Value>) -> Result<Rc<RefCell<ObjectValue>>> {
+        let Some(Value::Object(object)) = receiver else {
+            return Err(Error::ScriptRuntime(
+                "Animation method called on incompatible receiver".into(),
+            ));
+        };
+        {
+            let entries = object.borrow();
+            if !matches!(
+                Self::object_get_entry(&entries, INTERNAL_ANIMATION_OBJECT_KEY),
+                Some(Value::Bool(true))
+            ) {
+                return Err(Error::ScriptRuntime(
+                    "Animation method called on incompatible receiver".into(),
+                ));
+            }
+        }
+        Ok(object.clone())
+    }
+
+    fn text_track_receiver_object_and_node(
+        receiver: Option<&Value>,
+    ) -> Result<(Rc<RefCell<ObjectValue>>, NodeId)> {
+        let Some(Value::Object(object)) = receiver else {
+            return Err(Error::ScriptRuntime(
+                "TextTrack method called on incompatible receiver".into(),
+            ));
+        };
+        let owner = {
+            let entries = object.borrow();
+            if !Self::is_text_track_object(&entries) {
+                return Err(Error::ScriptRuntime(
+                    "TextTrack method called on incompatible receiver".into(),
+                ));
+            }
+            let Some(owner) = Self::text_track_owner_node(&entries) else {
+                return Err(Error::ScriptRuntime(
+                    "TextTrack method called on incompatible receiver".into(),
+                ));
+            };
+            owner
+        };
+        Ok((object.clone(), owner))
     }
 
     fn text_decoder_input_bytes(&self, input: Option<&Value>) -> Result<Vec<u8>> {
@@ -4206,6 +4512,7 @@ impl Harness {
                         }
                     }
                     "node_list_constructor"
+                    | "text_track_constructor"
                     | "text_track_list_constructor"
                     | "time_ranges_constructor"
                     | "radio_node_list_constructor"
@@ -4382,6 +4689,7 @@ impl Harness {
                             ));
                         }
                         let position_changed = self.apply_document_scroll_operation("scroll", args);
+                        self.sync_window_runtime_properties();
                         self.dispatch_document_scroll_sequence(position_changed)?;
                         Ok(Value::Undefined)
                     }
@@ -4393,6 +4701,7 @@ impl Harness {
                         }
                         let position_changed =
                             self.apply_document_scroll_operation("scrollBy", args);
+                        self.sync_window_runtime_properties();
                         self.dispatch_document_scroll_sequence(position_changed)?;
                         Ok(Value::Undefined)
                     }
@@ -4404,6 +4713,7 @@ impl Harness {
                         }
                         let position_changed =
                             self.apply_document_scroll_operation("scrollTo", args);
+                        self.sync_window_runtime_properties();
                         self.dispatch_document_scroll_sequence(position_changed)?;
                         Ok(Value::Undefined)
                     }
@@ -4957,6 +5267,15 @@ impl Harness {
                             &property_name,
                         )?;
                         Ok(Value::String(value))
+                    }
+                    "computed_style_item" => {
+                        if args.len() > 1 {
+                            return Err(Error::ScriptRuntime(
+                                "item requires zero or one argument".into(),
+                            ));
+                        }
+                        let _ = Self::computed_style_state_from_receiver(this_arg.as_ref())?;
+                        Ok(Value::String(String::new()))
                     }
                     "class_list_add" => {
                         let node = Self::class_list_node_from_receiver(this_arg.as_ref())?;
