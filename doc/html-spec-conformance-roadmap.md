@@ -54,6 +54,42 @@ The current repository is already structured in a way that supports spec-driven 
 
 The main weakness is traceability: existing tests cover a lot of surface area, but many are organized by API or element name rather than by HTML chapter and algorithm. The roadmap below fixes that by making every conformance change map back to a specific spec section.
 
+## Roadmap Status After P2
+
+The original roadmap phases are now complete:
+
+- `P0: Parsing, Tree Construction, and Serialization`
+- `P1: Attribute Reflection, Global Attributes, Element Algorithms, Forms, Default Actions, and Events`
+- `P2: Navigation, Loading, Media, and Rendering-Tied Behavior`
+
+That changes the remaining work materially.
+
+`browser_tester` now exposes a wider deterministic public API surface than the original HTML-centered roadmap assumed. In addition to core HTML parsing and DOM behavior, the repository already exposes and regression-tests:
+
+- DOM mutation, reflection, collections, and event dispatch across a broad set of HTML elements
+- forms, validation, focus, selection, clipboard/data-transfer, and default-action flows
+- harness-backed `location`, `history`, `navigation`, and document lifecycle behavior
+- media elements, `TextTrackList`, `TextTrack`, `TimeRanges`, and resource-selection state
+- scroll, geometry, and computed-style reads
+- `element.animate(...)` and related rendering-tied object surfaces already visible to scripts
+- URL/object-URL/download, worker, structured-clone, encoding, streams, canvas, and Intl APIs that are already public in the crate
+
+Because of that broadened surface, the next step should not be another HTML chapter expansion. The highest-value next phase is an interoperability audit across already exposed APIs.
+
+## Decision After P2
+
+The next roadmap step is:
+
+- create a new phase, `P3`
+- run it as a WPT-guided audit over APIs that are already exposed publicly
+- reduce every finding to deterministic in-repo regressions and the smallest possible implementation change
+
+This is the right tradeoff after `P2` because:
+
+- the main remaining risk is edge-case parity and cross-surface interaction bugs, not missing major algorithms from the original HTML backlog
+- recent regressions have clustered around receiver validation, descriptor visibility, cached-wrapper identity, event/promise ordering, and resource-selection churn
+- those gaps are easier to discover with browser/WPT comparison over the current public API surface than with continued chapter-by-chapter backlog growth
+
 ## Priority Workstreams
 
 ### P0: Parsing, Tree Construction, and Serialization
@@ -147,6 +183,36 @@ Examples:
 - Download-triggering behaviors already exposed through captured artifacts
 - Limited media-element behavior where current APIs already assert it
 
+### P3: WPT-Guided Exposed-Surface Interop Hardening
+
+Anchor sources:
+
+- Relevant WHATWG HTML, DOM, URL, Fetch, File API, Encoding, Streams, Web Animations, Clipboard, CSSOM View, and Workers specs only where the API is already public in `browser_tester`
+- Web Platform Tests as a discovery and prioritization input for existing surfaces
+
+Focus:
+
+- audit only the APIs that `browser_tester` already exposes publicly
+- use WPT and browser comparison to discover mismatches and missing edge cases
+- convert each finding into deterministic repository tests and then fix the smallest viable implementation gap
+- avoid broad new feature work unless an already exposed API cannot be made coherent without it
+
+Typical gaps to look for:
+
+- branded object, prototype, descriptor, and callable-surface mismatches
+- promise/event/lifecycle ordering mismatches
+- cached live-wrapper identity and liveness regressions
+- resource selection and current-state restoration edge cases
+- worker/message/object-URL/structured-clone integration mismatches
+- geometry/style/animation surfaces whose values or readonly behavior drift from browser expectations
+
+Primary repo surfaces:
+
+- `src/tests`
+- runtime/property-access layers under `src/core_impl/runtime`
+- harness-backed navigation/loading/media logic
+- any test-only deterministic mocks already documented in `README.md`
+
 ## Standard Workflow for Each Gap
 
 Every conformance task should follow the same sequence:
@@ -197,7 +263,7 @@ Internal tests are the primary enforcement mechanism.
 - Expand `src/tests` with targeted, spec-anchored behavior tests.
 - Keep parser/runtime property tests as a regression net for high-churn logic.
 - Use the existing CI profiles in `.github/workflows/property-fuzz.yml` to keep lightweight coverage on PRs and deeper runs on scheduled jobs.
-- Use external compatibility checks, including WPT, only as a spot-check tool for ambiguous or high-risk algorithms. They should inform decisions, not replace the repository's deterministic acceptance tests.
+- Use external compatibility checks, including WPT, as a discovery and spot-check tool for ambiguous or high-risk algorithms. They should inform decisions, not replace the repository's deterministic acceptance tests.
 
 Minimum verification categories for conformance work:
 
@@ -207,6 +273,10 @@ Minimum verification categories for conformance work:
 - form controls, submit flows, and validation
 - DOM mutation APIs
 - event ordering, cancellation, and default actions
+
+For `P3`, add one more rule:
+
+- if a gap is discovered through WPT or browser comparison, land a reduced deterministic repository regression for it before or together with the fix
 
 ## Rules for Mock APIs and Documentation
 

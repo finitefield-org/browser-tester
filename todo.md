@@ -8,9 +8,16 @@
 - `P1.1` through `P1.139` are complete.
 - `P2.1` through `P2.13` are complete.
 - The latest full verification was `cargo test --lib` with `2509 passed, 0 failed`.
-- No new test-only mock is currently required. If a future task adds one, document it in `/Users/kazuyoshitoshiya/Documents/GitHub/browser-tester/README.md`.
+- No new test-only mock is currently required. If a future task adds one, document it in `README.md`.
 
 ## Recently Completed
+
+- `Post-P2: Refresh the conformance roadmap and define the next exposed-surface backlog`
+  - reviewed the now-complete `P0` / `P1` / `P2` roadmap against the current public API surface and recent regression patterns
+  - decided that the next step is a new `P3` phase run as a WPT-guided audit over already exposed APIs, with every finding reduced to deterministic in-repo regressions before or together with a fix
+  - split the next backlog into exposed-surface audit passes covering DOM/HTML residuals, forms, navigation, geometry/style, animation, media, clipboard/download, workers, canvas, URL, and remaining non-HTML platform APIs
+  - verification:
+  - documentation-only update; no code or test changes were required
 
 - `P2.13: Animation and rendering-tied exposed API sweep`
   - replaced the exposed `Animation` object method surface returned by `element.animate(...)` with receiver-aware builtins so extracted call paths, callable metadata, and incompatible-receiver behavior are deterministic
@@ -171,78 +178,72 @@
 
 ## Next Task
 
-- [ ] `Post-P2: Refresh the conformance roadmap and define the next exposed-surface backlog`
-  - review the now-complete `P0` / `P1` / `P2` roadmap against the current public API surface and recent regressions
-  - decide whether the next step is a new roadmap phase, a WPT-guided audit pass, or targeted backlog generation for newly exposed APIs
+- [ ] `P3.1: Exposed-surface inventory and WPT mapping kickoff`
+  - inventory the currently public API surface by spec family and map it to feasible WPT directories or browser-comparison targets
+  - record which surfaces are already deterministic enough for direct audit and which still require harness reduction before importing regressions
 
-## P2 Backlog
+## P3 Backlog
 
-### Navigation and Loading
+- [ ] `P3.1: Exposed-surface inventory and WPT mapping kickoff`
+  - inventory the currently public API surface by spec family and map it to feasible WPT directories or browser-comparison targets
+  - record which surfaces are already deterministic enough for direct audit and which still require harness reduction before importing regressions
 
-- [x] `P2.1: Navigation/loading harness-surface audit kickoff`
-  - produce a traceable inventory of exposed `location`, `history`, `navigation`, document lifecycle, and loading-facing harness behaviors
-  - identified `pagehide` / `pageshow` across mock-page navigation and reload as the first decision-ready gap and locked it with deterministic regressions
+- [ ] `P3.2: DOM/HTML residual exposed-surface audit`
+  - audit the already exposed DOM parsing, mutation, collection, reflection, and element-algorithm surfaces for residual browser mismatches
+  - prioritize gaps that show up as descriptor, prototype, liveness, or default-action inconsistencies
 
-- [x] `P2.2: Same-document navigation lifecycle ordering sweep`
-  - audit `hashchange`, `popstate`, `pageshow` / `pagehide`, visibility, and ready-state ordering for same-document navigation that is already modeled by the harness
-  - verify no-op transitions, same-URL writes, and prevented-default paths where the current public APIs expose them
+- [ ] `P3.3: Forms, focus, selection, and default-action interop audit`
+  - audit the already exposed form submission, validation, reset, label activation, focus, blur, selection, and clipboard-triggered default actions
+  - import reduced regressions for remaining ordering, cancellation, and dirty-state mismatches
 
-- [x] `P2.3: Cross-document mock-page navigation and history restoration sweep`
-  - tighten history entry restoration, document replacement boundaries, and `location` / `document` / `navigation` synchronization across mock page swaps
-  - verify state persistence, URL restoration, and entry identity for the currently implemented harness navigation flows
+- [ ] `P3.4: Navigation, history, and document lifecycle interop audit`
+  - audit current `location`, `history`, `navigation`, hashchange/popstate, lifecycle, and mock-page restoration behavior against browser expectations
+  - reduce any remaining ordering or state-visibility gaps to deterministic harness regressions
 
-- [x] `P2.4: Navigation API and location/history logging parity sweep`
-  - audit the observable logging and state transitions already exposed by the harness around `assign`, `replace`, `reload`, `back`, `forward`, and `go`
-  - align remaining differences between `location`, `history`, `navigation`, and document-facing state
+- [ ] `P3.5: CSSOM View, scroll, geometry, and computed-style interop audit`
+  - audit the already exposed scroll aliases, geometry APIs, client/offset/scroll metrics, and computed-style reads
+  - focus on readonly/alias behavior, object-surface parity, and event/value ordering
 
-### Downloads and Artifact-Producing Default Actions
+- [ ] `P3.6: Web Animations and rendering-tied object-surface audit`
+  - audit `element.animate(...)`, `Animation`, `requestAnimationFrame`, and related rendering-tied surfaces that are already exposed
+  - keep scope limited to current public APIs rather than broad rendering or painting behavior
 
-- [x] `P2.5: Download-triggering default-action and captured-artifact sweep`
-  - audit anchor/button download behavior already exposed through captured artifacts, including filename resolution, target handling, and prevented-default behavior
-  - verify blob/object URL downloads and post-download DOM/script continuation stay deterministic
+- [ ] `P3.7: Media/resource element and wrapper interop audit`
+  - audit the already exposed audio/video/source/img/track/object/embed/iframe behavior, including wrapper identity and current-state restoration
+  - focus on source selection, event ordering, reflective surface, and cached-wrapper parity
 
-- [x] `P2.6: Object URL lifetime and artifact integration sweep`
-  - tighten `URL.createObjectURL(...)` / `URL.revokeObjectURL(...)` behavior where object URLs interact with downloads, media, and other already exposed resource consumers
-  - verify revocation timing and stale-object-URL behavior remain deterministic
+- [ ] `P3.8: Clipboard, DataTransfer, download, and object-URL interop audit`
+  - audit copy/paste, drag-and-drop-facing surfaces, download artifacts, blob/object URL lifetime, and default-action boundaries already modeled by the harness
+  - reduce remaining event-local versus global-state mismatches to deterministic tests
 
-- [x] `P2.7: HTMLMediaElement source selection and load-state residual sweep`
-  - continue auditing source candidate selection, `currentSrc`, `networkState`, and `readyState` only where the current audio/video APIs already expose the result
-  - focus on remaining direct-`src` versus nested-`source` precedence and source-mutation deltas not yet fixed by the current regressions
+- [ ] `P3.9: Worker, postMessage, structured-clone, and blob-URL interop audit`
+  - audit the existing worker construction, message delivery, structured clone, and blob URL integration surfaces
+  - focus on ordering, transfer behavior, error reporting, and deterministic lifetime semantics
 
-### Media and Resource Loading
+- [ ] `P3.10: Canvas, image pipeline, and deterministic artifact interop audit`
+  - audit the already exposed canvas, image bitmap, toBlob/toDataURL, and clipboard/image pipeline behavior
+  - prioritize observable output shape, callback ordering, and object-surface parity
 
-- [x] `P2.8: HTMLMediaElement playback algorithm and promise/event ordering sweep`
-  - audit `play`, `pause`, `load`, `fastSeek`, `currentTime`, `playbackRate`, and related playback-state transitions where the public API already surfaces them
-  - verify pending play-promise behavior and event ordering only for the media lifecycle already implemented in-repo
+- [ ] `P3.11: URL, URLSearchParams, fetch-adjacent, and storage/cache exposed-surface audit`
+  - audit the already exposed URL, URLSearchParams, fetch-adjacent mocks, CacheStorage/Cache, cookieStore, and storage-facing behavior
+  - focus on descriptor/callable surface, live sync, and remaining parsing/serialization residuals
 
-- [x] `P2.9: TextTrackList/TimeRanges/TextTrack surface breadth sweep`
-  - extend branding, reflective surface, liveness, iterator/callable stability, and mutation persistence across the remaining exposed media-wrapper APIs
-  - include track mode, default handling, and cue-facing behavior only if that surface is already implemented
+- [ ] `P3.12: Intl, Encoding, Streams, and remaining non-HTML platform surface audit`
+  - audit the already exposed Intl, TextEncoder/TextDecoder, streams, iterators, and other non-HTML builtins that are public in the crate
+  - prioritize receiver validation, branding, readonly surface, and argument-coercion mismatches
 
-- [x] `P2.10: Resource element load/error/currentSrc parity sweep`
-  - audit `img`, `source`, `track`, `object`, `embed`, and `iframe` loading-facing state only where the harness or mocks already expose observable behavior
-  - verify source fallback, `currentSrc`, load/error dispatch, and wrapper/document interactions for those surfaces
-
-### Rendering-Tied Deterministic APIs
-
-- [x] `P2.11: Scroll, viewport, and geometry deterministic sweep`
-  - review `scroll`, `scrollBy`, `scrollTo`, `scrollIntoView`, `scrollend`, viewport/document positions, and geometry APIs such as `getBoundingClientRect()` / `getClientRects()`
-  - lock deterministic values and event ordering without expanding into full rendering behavior
-
-- [x] `P2.12: Computed-style and layout-derived property sweep`
-  - audit `getComputedStyle(...)`, offset/client/scroll metrics, and exposed style/layout aliases that already affect test outcomes or harness behavior
-  - verify readonly surface, alias behavior, and mutation visibility under the crate's deterministic layout model
-
-- [x] `P2.13: Animation and rendering-tied exposed API sweep`
-  - audit `element.animate(...)` and any currently exposed animation/timeline state that already affects observable public APIs
-  - keep scope limited to APIs already implemented; defer broad rendering or painting behavior
+- [ ] `P3.13: Post-audit closure pass and roadmap refresh`
+  - summarize the gaps closed during `P3`, collapse completed audit tracks, and identify whether any new roadmap phase is justified
+  - convert any remaining uncovered public-surface mismatches into a smaller follow-up backlog
 
 ## Verification Rule
 
-- Every P2 task should end with:
+- Every roadmap task should end with:
   - targeted regressions for the touched behavior
   - relevant focused suites
   - `cargo fmt`
   - `cargo test --lib`
 
-- If a task introduces a new test-only mock, update `/Users/kazuyoshitoshiya/Documents/GitHub/browser-tester/README.md` in the same change.
+- If a task is documentation-only, note explicitly that no tests were run.
+
+- If a task introduces a new test-only mock, update `README.md` in the same change.

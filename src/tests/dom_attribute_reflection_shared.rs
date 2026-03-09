@@ -2247,7 +2247,7 @@ fn attribute_reflection_html_2_6_1_url_anchor_username_password_setter_is_noop_f
     let html = r#"
         <a id='mail' href='mailto:m.bluth@example.com?subject=Hi'>mail</a>
         <a id='data' href='data:text/plain,hello'>data</a>
-        <a id='file' href='file:///Users/kazuyoshitoshiya/report.txt'>file</a>
+        <a id='file' href='file:///report.txt'>file</a>
         <button id='run' type='button'>run</button>
         <p id='result'></p>
         <script>
@@ -2287,7 +2287,7 @@ fn attribute_reflection_html_2_6_1_url_anchor_username_password_setter_is_noop_f
     h.click("#run")?;
     h.assert_text(
         "#result",
-        "::mailto:m.bluth@example.com?subject=Hi;::data:text/plain,hello;::file:///Users/kazuyoshitoshiya/report.txt|::mailto:m.bluth@example.com?subject=Hi;::data:text/plain,hello;::file:///Users/kazuyoshitoshiya/report.txt",
+        "::mailto:m.bluth@example.com?subject=Hi;::data:text/plain,hello;::file:///report.txt|::mailto:m.bluth@example.com?subject=Hi;::data:text/plain,hello;::file:///report.txt",
     )?;
     Ok(())
 }
