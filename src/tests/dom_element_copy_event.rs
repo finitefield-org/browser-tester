@@ -115,3 +115,29 @@ fn element_copy_event_inherited_raw_getter_prevent_default_override_works() -> R
     assert_eq!(h.clipboard_text(), "RAW-COPY");
     Ok(())
 }
+
+#[test]
+fn element_copy_event_clipboard_data_uses_data_transfer_prototype_and_branding_work() -> Result<()>
+{
+    let html = r#"
+        <input id='target' value='Alpha Beta' />
+        <p id='event'></p>
+        <script>
+          const target = document.getElementById('target');
+          target.setSelectionRange(0, 5);
+          target.addEventListener('copy', (event) => {
+            document.getElementById('event').textContent = [
+              String(event.clipboardData.constructor === DataTransfer),
+              String(Object.getPrototypeOf(event.clipboardData) === DataTransfer.prototype),
+              String(Object.getOwnPropertyDescriptor(DataTransfer.prototype, 'getData').value.call(event.clipboardData, 'text/plain') === ''),
+              Object.prototype.toString.call(event.clipboardData)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.copy("#target")?;
+    h.assert_text("#event", "true|true|true|[object DataTransfer]")?;
+    Ok(())
+}

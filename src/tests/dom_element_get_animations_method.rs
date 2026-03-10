@@ -95,3 +95,39 @@ fn element_get_animations_rejects_more_than_one_argument() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn animation_object_methods_are_non_enumerable_and_stable_across_copy_paths() -> Result<()> {
+    let html = r#"
+        <div id='host'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const animation = document.getElementById('host').animate(
+              { opacity: [0, 1] },
+              { duration: 1000, id: 'demo' }
+            );
+            const desc = Object.getOwnPropertyDescriptor(animation, 'play');
+            const keys = Object.keys(animation);
+            const ownKeys = Reflect.ownKeys(animation);
+            const assigned = Object.assign({}, animation);
+            const spread = { ...animation };
+            document.getElementById('result').textContent = [
+              typeof animation.play,
+              animation.play === animation.play,
+              desc.enumerable,
+              keys.includes('play'),
+              ownKeys.includes('play'),
+              assigned.play === undefined,
+              spread.play === undefined
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "function:true:false:false:true:true:true")?;
+    Ok(())
+}

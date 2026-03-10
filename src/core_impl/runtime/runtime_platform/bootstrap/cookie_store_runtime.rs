@@ -59,6 +59,13 @@ impl Harness {
             &mut entries,
             Self::cookie_store_builtin_keys(),
         );
+        if let Value::Object(prototype) = self.cached_cookie_store_constructor_prototype_value() {
+            Self::object_set_entry(
+                &mut entries,
+                INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                Value::Object(prototype),
+            );
+        }
         *self.browser_apis.cookie_store_object.borrow_mut() = entries.into();
     }
 

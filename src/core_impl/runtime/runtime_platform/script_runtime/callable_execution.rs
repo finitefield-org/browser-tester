@@ -274,7 +274,9 @@ impl Harness {
             "array" => "Array",
             "date" => "Date",
             "map" => "Map",
+            "worker" => "Worker",
             "node_list" => "NodeList",
+            "image_bitmap" => "ImageBitmap",
             "text_track" => "TextTrack",
             "time_ranges" => "TimeRanges",
             "animation" => "Animation",
@@ -321,6 +323,7 @@ impl Harness {
             "cookie_store" => "CookieStore",
             "cache_storage" => "CacheStorage",
             "cache" => "Cache",
+            "node" => "Node",
             "named_node_map" => "NamedNodeMap",
             "url" => "URL",
             "url_search_params" => "URLSearchParams",
@@ -413,6 +416,53 @@ impl Harness {
                         Error::ScriptRuntime(format!("unsupported Set method: {member}"))
                     })
             }
+            "worker" => {
+                let Value::Object(worker) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                let normalized_options = match args.get(1) {
+                    Some(Value::Array(values)) => Some(Self::new_object_value(vec![(
+                        "transfer".to_string(),
+                        Value::Array(values.clone()),
+                    )])),
+                    Some(other) => Some(other.clone()),
+                    None => None,
+                };
+                match member.as_str() {
+                    "postMessage" => {
+                        if args.len() > 2 {
+                            return Err(Error::ScriptRuntime(
+                                "Worker.postMessage supports up to two arguments".into(),
+                            ));
+                        }
+                        let data = args.first().cloned().unwrap_or(Value::Undefined);
+                        if Self::worker_is_terminated_object(&worker) {
+                            return Ok(Value::Undefined);
+                        }
+                        let data = Self::structured_clone_value_with_options(
+                            &data,
+                            normalized_options.as_ref(),
+                        )?;
+                        let worker_global = Self::worker_global_from_object(&worker)?;
+                        let worker_global_value = Value::Object(worker_global.clone());
+                        self.dispatch_worker_message_to_onmessage(
+                            &worker_global,
+                            worker_global_value,
+                            data,
+                            event,
+                        )?;
+                        Ok(Value::Undefined)
+                    }
+                    "terminate" => {
+                        Self::worker_global_from_object(&worker)?;
+                        Self::worker_set_terminated_object(&worker, true);
+                        Ok(Value::Undefined)
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported Worker method: {member}"
+                    ))),
+                }
+            }
             "weak_set" => {
                 let Value::WeakSet(weak_set) = receiver else {
                     return Err(Self::incompatible_receiver_error(&family));
@@ -480,6 +530,15 @@ impl Harness {
                         }),
                 }
             }
+            "node" => {
+                let Value::Node(node) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                self.eval_node_member_call(node, &member, args, event)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported Node method: {member}"))
+                    })
+            }
             "node_list" | "html_collection" => {
                 let Value::NodeList(nodes) = receiver else {
                     return Err(Self::incompatible_receiver_error(&family));
@@ -501,6 +560,45 @@ impl Harness {
                             }
                         ))
                     })
+            }
+            "image_bitmap" => {
+                let object = Self::image_bitmap_receiver_object(Some(&receiver))?;
+                match member.as_str() {
+                    "width_get" => {
+                        let entries = object.borrow();
+                        Ok(
+                            Self::object_get_entry(&entries, INTERNAL_IMAGE_BITMAP_WIDTH_KEY)
+                                .unwrap_or(Value::Number(0)),
+                        )
+                    }
+                    "height_get" => {
+                        let entries = object.borrow();
+                        Ok(
+                            Self::object_get_entry(&entries, INTERNAL_IMAGE_BITMAP_HEIGHT_KEY)
+                                .unwrap_or(Value::Number(0)),
+                        )
+                    }
+                    "close" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime("close takes no arguments".into()));
+                        }
+                        let mut entries = object.borrow_mut();
+                        Self::object_set_entry(
+                            &mut entries,
+                            INTERNAL_IMAGE_BITMAP_WIDTH_KEY.to_string(),
+                            Value::Number(0),
+                        );
+                        Self::object_set_entry(
+                            &mut entries,
+                            INTERNAL_IMAGE_BITMAP_HEIGHT_KEY.to_string(),
+                            Value::Number(0),
+                        );
+                        Ok(Value::Undefined)
+                    }
+                    _ => Err(Error::ScriptRuntime(format!(
+                        "unsupported ImageBitmap method: {member}"
+                    ))),
+                }
             }
             "text_track" => {
                 let (object, node) = Self::text_track_receiver_object_and_node(Some(&receiver))?;
@@ -2262,6 +2360,48 @@ impl Harness {
         Ok((readable, writable))
     }
 
+    fn text_encoder_receiver_object(receiver: Option<&Value>) -> Result<Rc<RefCell<ObjectValue>>> {
+        let Some(Value::Object(entries)) = receiver else {
+            return Err(Error::ScriptRuntime(
+                "TextEncoder method called on incompatible receiver".into(),
+            ));
+        };
+        let is_text_encoder = {
+            let entries_ref = entries.borrow();
+            matches!(
+                Self::object_get_entry(&entries_ref, INTERNAL_TEXT_ENCODER_OBJECT_KEY),
+                Some(Value::Bool(true))
+            )
+        };
+        if !is_text_encoder {
+            return Err(Error::ScriptRuntime(
+                "TextEncoder method called on incompatible receiver".into(),
+            ));
+        }
+        Ok(entries.clone())
+    }
+
+    fn text_decoder_receiver_object(receiver: Option<&Value>) -> Result<Rc<RefCell<ObjectValue>>> {
+        let Some(Value::Object(entries)) = receiver else {
+            return Err(Error::ScriptRuntime(
+                "TextDecoder method called on incompatible receiver".into(),
+            ));
+        };
+        let is_text_decoder = {
+            let entries_ref = entries.borrow();
+            matches!(
+                Self::object_get_entry(&entries_ref, INTERNAL_TEXT_DECODER_OBJECT_KEY),
+                Some(Value::Bool(true))
+            )
+        };
+        if !is_text_decoder {
+            return Err(Error::ScriptRuntime(
+                "TextDecoder method called on incompatible receiver".into(),
+            ));
+        }
+        Ok(entries.clone())
+    }
+
     fn text_decoder_stream_state_from_receiver(
         receiver: Option<&Value>,
     ) -> Result<(String, bool, bool, Value, Value)> {
@@ -2346,11 +2486,7 @@ impl Harness {
     }
 
     fn text_decoder_state_from_receiver(receiver: Option<&Value>) -> Result<(String, bool, bool)> {
-        let Some(Value::Object(entries)) = receiver else {
-            return Err(Error::ScriptRuntime(
-                "TextDecoder method called on incompatible receiver".into(),
-            ));
-        };
+        let entries = Self::text_decoder_receiver_object(receiver)?;
         let entries = entries.borrow();
         let encoding = match Self::object_get_entry(&entries, INTERNAL_TEXT_DECODER_ENCODING_KEY) {
             Some(Value::String(encoding)) => encoding,
@@ -2635,6 +2771,23 @@ impl Harness {
             (owner, kind)
         };
         Ok((object.clone(), owner, kind))
+    }
+
+    fn image_bitmap_receiver_object(receiver: Option<&Value>) -> Result<Rc<RefCell<ObjectValue>>> {
+        let Some(Value::Object(object)) = receiver else {
+            return Err(Error::ScriptRuntime(
+                "ImageBitmap method called on incompatible receiver".into(),
+            ));
+        };
+        {
+            let entries = object.borrow();
+            if !Self::is_image_bitmap_object(&entries) {
+                return Err(Error::ScriptRuntime(
+                    "ImageBitmap method called on incompatible receiver".into(),
+                ));
+            }
+        }
+        Ok(object.clone())
     }
 
     fn animation_receiver_object(receiver: Option<&Value>) -> Result<Rc<RefCell<ObjectValue>>> {
@@ -2964,8 +3117,6 @@ impl Harness {
             }
         }
 
-        let worker_post_message = Self::new_worker_main_post_message_callable(worker.clone());
-        let worker_terminate = Self::new_worker_terminate_callable(worker.clone());
         if let Value::Object(worker_entries) = &worker {
             let mut entries = worker_entries.borrow_mut();
             Self::object_set_entry(
@@ -2973,8 +3124,35 @@ impl Harness {
                 INTERNAL_WORKER_GLOBAL_OBJECT_KEY.to_string(),
                 worker_global.clone(),
             );
-            Self::object_set_entry(&mut entries, "postMessage".to_string(), worker_post_message);
-            Self::object_set_entry(&mut entries, "terminate".to_string(), worker_terminate);
+            Self::object_set_entry(
+                &mut entries,
+                "postMessage".to_string(),
+                Self::new_worker_main_post_message_callable(worker.clone()),
+            );
+            Self::object_set_entry(
+                &mut entries,
+                "terminate".to_string(),
+                Self::new_worker_terminate_callable(worker.clone()),
+            );
+            let prototype = self
+                .script_runtime
+                .env
+                .get("Worker")
+                .cloned()
+                .and_then(|constructor| self.constructor_prototype_from_value(&constructor))
+                .or_else(|| {
+                    self.script_runtime
+                        .env
+                        .get("Object")
+                        .cloned()
+                        .and_then(|constructor| self.constructor_prototype_from_value(&constructor))
+                })
+                .unwrap_or_else(|| Self::new_object_value(Vec::new()));
+            Self::object_set_entry(
+                &mut entries,
+                INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                prototype,
+            );
         }
 
         self.execute_worker_script_source(source, &worker, &worker_global)?;
@@ -4512,9 +4690,14 @@ impl Harness {
                         }
                     }
                     "node_list_constructor"
+                    | "image_bitmap_constructor"
                     | "text_track_constructor"
                     | "text_track_list_constructor"
                     | "time_ranges_constructor"
+                    | "storage_constructor"
+                    | "cookie_store_constructor"
+                    | "cache_storage_constructor"
+                    | "cache_constructor"
                     | "radio_node_list_constructor"
                     | "html_collection_constructor"
                     | "html_form_controls_collection_constructor"
@@ -5105,12 +5288,17 @@ impl Harness {
                         self.attach_constructor_prototype_to_instance(callable, &mut instance)?;
                         Ok(instance)
                     }
-                    "text_encoder_get_encoding" => Ok(Value::String("utf-8".to_string())),
+                    "text_encoder_get_encoding" => {
+                        Self::text_encoder_receiver_object(this_arg.as_ref())?;
+                        Ok(Value::String("utf-8".to_string()))
+                    }
                     "text_encoder_encode" => {
+                        Self::text_encoder_receiver_object(this_arg.as_ref())?;
                         let input = args.first().map(Value::as_string).unwrap_or_default();
                         Ok(Self::new_uint8_typed_array_from_bytes(input.as_bytes()))
                     }
                     "text_encoder_encode_into" => {
+                        Self::text_encoder_receiver_object(this_arg.as_ref())?;
                         if args.len() != 2 {
                             return Err(Error::ScriptRuntime(
                                 "TextEncoder.encodeInto requires exactly two arguments".into(),
@@ -5276,6 +5464,44 @@ impl Harness {
                         }
                         let _ = Self::computed_style_state_from_receiver(this_arg.as_ref())?;
                         Ok(Value::String(String::new()))
+                    }
+                    "dom_rect_list_item" => {
+                        if args.len() > 1 {
+                            return Err(Error::ScriptRuntime(
+                                "item requires zero or one argument".into(),
+                            ));
+                        }
+                        let Value::Array(values) = this_arg
+                            .as_ref()
+                            .ok_or_else(|| {
+                                Error::ScriptRuntime(
+                                    "TypeError: incompatible receiver for DOMRectList.item".into(),
+                                )
+                            })?
+                        else {
+                            return Err(Error::ScriptRuntime(
+                                "TypeError: incompatible receiver for DOMRectList.item".into(),
+                            ));
+                        };
+                        let values = values.borrow();
+                        if !Self::is_dom_rect_list_value(&values) {
+                            return Err(Error::ScriptRuntime(
+                                "TypeError: incompatible receiver for DOMRectList.item".into(),
+                            ));
+                        }
+                        let index = args
+                            .first()
+                            .map(|value| match value {
+                                Value::Number(number) => *number,
+                                Value::Float(number) if number.is_finite() => *number as i64,
+                                Value::BigInt(number) => {
+                                    number.to_string().parse::<i64>().unwrap_or(0)
+                                }
+                                other => other.as_string().trim().parse::<i64>().unwrap_or(0),
+                            })
+                            .unwrap_or(0)
+                            .max(0) as usize;
+                        Ok(values.get(index).cloned().unwrap_or(Value::Null))
                     }
                     "class_list_add" => {
                         let node = Self::class_list_node_from_receiver(this_arg.as_ref())?;
@@ -5599,7 +5825,7 @@ impl Harness {
                                 "DataTransfer constructor does not take arguments".into(),
                             ));
                         }
-                        Ok(Self::new_data_transfer_object_value("dragstart"))
+                        Ok(self.new_data_transfer_object_value("dragstart"))
                     }
                     "option_constructor" => {
                         if args.len() > 4 {
@@ -5643,27 +5869,6 @@ impl Harness {
                         }
                         Ok(Value::Node(audio))
                     }
-                    "worker_main_post_message" => {
-                        if args.len() > 2 {
-                            return Err(Error::ScriptRuntime(
-                                "Worker.postMessage supports up to two arguments".into(),
-                            ));
-                        }
-                        let data = args.first().cloned().unwrap_or(Value::Undefined);
-                        let worker = Self::worker_target_from_callable(callable)?;
-                        if Self::worker_is_terminated_object(&worker) {
-                            return Ok(Value::Undefined);
-                        }
-                        let worker_global = Self::worker_global_from_object(&worker)?;
-                        let worker_global_value = Value::Object(worker_global.clone());
-                        self.dispatch_worker_message_to_onmessage(
-                            &worker_global,
-                            worker_global_value,
-                            data,
-                            event,
-                        )?;
-                        Ok(Value::Undefined)
-                    }
                     "worker_context_post_message" => {
                         if args.len() > 2 {
                             return Err(Error::ScriptRuntime(
@@ -5671,14 +5876,59 @@ impl Harness {
                             ));
                         }
                         let data = args.first().cloned().unwrap_or(Value::Undefined);
+                        let normalized_options = match args.get(1) {
+                            Some(Value::Array(values)) => Some(Self::new_object_value(vec![(
+                                "transfer".to_string(),
+                                Value::Array(values.clone()),
+                            )])),
+                            Some(other) => Some(other.clone()),
+                            None => None,
+                        };
                         let worker = Self::worker_target_from_callable(callable)?;
                         if Self::worker_is_terminated_object(&worker) {
                             return Ok(Value::Undefined);
                         }
+                        let data = Self::structured_clone_value_with_options(
+                            &data,
+                            normalized_options.as_ref(),
+                        )?;
                         let worker_value = Value::Object(worker.clone());
                         self.dispatch_worker_message_to_onmessage(
                             &worker,
                             worker_value,
+                            data,
+                            event,
+                        )?;
+                        Ok(Value::Undefined)
+                    }
+                    "worker_main_post_message" => {
+                        if args.len() > 2 {
+                            return Err(Error::ScriptRuntime(
+                                "Worker.postMessage supports up to two arguments".into(),
+                            ));
+                        }
+                        let data = args.first().cloned().unwrap_or(Value::Undefined);
+                        let normalized_options = match args.get(1) {
+                            Some(Value::Array(values)) => Some(Self::new_object_value(vec![(
+                                "transfer".to_string(),
+                                Value::Array(values.clone()),
+                            )])),
+                            Some(other) => Some(other.clone()),
+                            None => None,
+                        };
+                        let worker = Self::worker_target_from_callable(callable)?;
+                        if Self::worker_is_terminated_object(&worker) {
+                            return Ok(Value::Undefined);
+                        }
+                        let data = Self::structured_clone_value_with_options(
+                            &data,
+                            normalized_options.as_ref(),
+                        )?;
+                        let worker_global = Self::worker_global_from_object(&worker)?;
+                        let worker_global_value = Value::Object(worker_global.clone());
+                        self.dispatch_worker_message_to_onmessage(
+                            &worker_global,
+                            worker_global_value,
                             data,
                             event,
                         )?;
@@ -6160,17 +6410,8 @@ impl Harness {
         let promise = self.new_pending_promise();
         match self.create_image_bitmap_dimensions_from_args(args) {
             Ok((width, height)) => {
-                self.promise_resolve(
-                    &promise,
-                    Self::new_object_value(vec![
-                        ("width".to_string(), Value::Number(width)),
-                        ("height".to_string(), Value::Number(height)),
-                        (
-                            "close".to_string(),
-                            Self::new_builtin_placeholder_function(),
-                        ),
-                    ]),
-                )?;
+                let bitmap = self.new_image_bitmap_value(width, height);
+                self.promise_resolve(&promise, bitmap)?;
             }
             Err(err) => {
                 self.promise_reject(&promise, Value::String(err));
@@ -6285,6 +6526,21 @@ impl Harness {
             }
             Value::Object(entries) => {
                 let entries = entries.borrow();
+                if Self::is_image_bitmap_object(&entries) {
+                    let width =
+                        match Self::object_get_entry(&entries, INTERNAL_IMAGE_BITMAP_WIDTH_KEY) {
+                            Some(Value::Number(width)) => width,
+                            _ => 0,
+                        };
+                    let height =
+                        match Self::object_get_entry(&entries, INTERNAL_IMAGE_BITMAP_HEIGHT_KEY) {
+                            Some(Value::Number(height)) => height,
+                            _ => 0,
+                        };
+                    if width > 0 && height > 0 {
+                        return Ok((width, height));
+                    }
+                }
                 let width = Self::object_get_entry(&entries, "width")
                     .map(|value| Self::value_to_i64(&value));
                 let height = Self::object_get_entry(&entries, "height")

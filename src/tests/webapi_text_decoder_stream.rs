@@ -91,3 +91,41 @@ fn text_decoder_stream_constructor_validates_arguments() -> Result<()> {
     h.assert_text("#result", "true")?;
     Ok(())
 }
+
+#[test]
+fn text_decoder_stream_has_branded_prototype_surface_and_validates_receiver() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const stream = new TextDecoderStream('utf-8', { fatal: true, ignoreBOM: true });
+            const readableGetter = Object.getOwnPropertyDescriptor(TextDecoderStream.prototype, 'readable').get;
+            let receiverError = false;
+            try {
+              readableGetter.call({});
+            } catch (e) {
+              receiverError = String(e).includes('incompatible receiver');
+            }
+            document.getElementById('result').textContent = [
+              Object.prototype.toString.call(stream),
+              TextDecoderStream.prototype[Symbol.toStringTag],
+              String(Object.getPrototypeOf(stream) === TextDecoderStream.prototype),
+              String(stream.constructor === TextDecoderStream),
+              String(Object.getOwnPropertyDescriptor(TextDecoderStream.prototype, 'fatal').get.call(stream)),
+              String(Object.getOwnPropertyDescriptor(TextDecoderStream.prototype, 'ignoreBOM').get.call(stream)),
+              String(Object.prototype.toString.call(readableGetter.call(stream))),
+              String(receiverError)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "[object TextDecoderStream]|TextDecoderStream|true|true|true|true|[object ReadableStream]|true",
+    )?;
+    Ok(())
+}

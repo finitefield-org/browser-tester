@@ -151,3 +151,165 @@ fn create_image_bitmap_rejects_invalid_signatures_and_options() -> Result<()> {
     h.assert_text("#out", "true:true:true:true")?;
     Ok(())
 }
+
+#[test]
+fn create_image_bitmap_exposes_image_bitmap_constructor_surface_and_branding() -> Result<()> {
+    let html = r#"
+      <input id='file' type='file' accept='image/png'>
+      <p id='out'></p>
+      <script>
+        const input = document.getElementById('file');
+        input.addEventListener('change', async () => {
+          const file = input.files[0];
+          const bmp = await createImageBitmap(file);
+          const proto = ImageBitmap.prototype;
+          const widthDesc = Object.getOwnPropertyDescriptor(proto, 'width');
+          const heightDesc = Object.getOwnPropertyDescriptor(proto, 'height');
+          const closeDesc = Object.getOwnPropertyDescriptor(proto, 'close');
+          let illegal = '';
+          try {
+            ImageBitmap();
+          } catch (e) {
+            illegal = String(e);
+          }
+          document.getElementById('out').textContent = [
+            typeof ImageBitmap,
+            String(window.ImageBitmap === ImageBitmap),
+            String(bmp.constructor === ImageBitmap),
+            String(Object.getPrototypeOf(bmp) === ImageBitmap.prototype),
+            String(Object.getPrototypeOf(ImageBitmap.prototype) === Object.prototype),
+            Object.getOwnPropertyNames(ImageBitmap.prototype).sort().join(','),
+            String(typeof widthDesc.get),
+            String(widthDesc.enumerable),
+            String(typeof heightDesc.get),
+            String(typeof closeDesc.value),
+            String(closeDesc.enumerable),
+            Object.prototype.toString.call(bmp),
+            String(illegal.includes('Illegal constructor'))
+          ].join('|');
+        });
+      </script>
+    "#;
+
+    let mut h = Harness::from_html(html)?;
+    let png_with_2x3_ihdr = [
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 3, 8, 2,
+        0, 0, 0,
+    ];
+    let mut file = MockFile::new("shape.png").with_bytes(&png_with_2x3_ihdr);
+    file.mime_type = "image/png".to_string();
+    h.set_input_files("#file", &[file])?;
+    h.assert_text(
+        "#out",
+        "function|true|true|true|true|close,constructor,height,width|function|false|function|function|false|[object ImageBitmap]|true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn image_bitmap_close_and_reflective_surface_support_extracted_calls_and_shadow_restore()
+-> Result<()> {
+    let html = r#"
+      <input id='file' type='file' accept='image/png'>
+      <p id='out'></p>
+      <script>
+        const input = document.getElementById('file');
+        input.addEventListener('change', async () => {
+          const file = input.files[0];
+          const bmp = await createImageBitmap(file);
+          const proto = ImageBitmap.prototype;
+          const widthGetter = Object.getOwnPropertyDescriptor(proto, 'width').get;
+          const heightGetter = Object.getOwnPropertyDescriptor(proto, 'height').get;
+          const close = bmp.close;
+          let widthError = '';
+          let closeError = '';
+          try {
+            widthGetter.call({});
+          } catch (e) {
+            widthError = String(e);
+          }
+          try {
+            close.call({});
+          } catch (e) {
+            closeError = String(e);
+          }
+
+          const before = [
+            String(close === ImageBitmap.prototype.close),
+            String(widthGetter.call(bmp)),
+            String(heightGetter.call(bmp)),
+            String(Object.keys(bmp).length),
+            String(Object.keys(Object.assign({}, bmp)).length),
+            String(Object.keys({ ...bmp }).length)
+          ].join(':');
+
+          Object.defineProperty(ImageBitmap, 'marker', {
+            value: 'ctor',
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(ImageBitmap.prototype, 'marker', {
+            value: 'proto',
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(bmp, 'width', {
+            value: 'shadow-width',
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(bmp, 'marker', {
+            value: 'bitmap',
+            enumerable: true,
+            configurable: true
+          });
+
+          const shadowed = [
+            ImageBitmap.marker,
+            ImageBitmap.prototype.marker,
+            bmp.width,
+            bmp.marker,
+            Object.keys(ImageBitmap).join(','),
+            Object.keys(ImageBitmap.prototype).join(','),
+            Object.keys(bmp).sort().join(','),
+            Object.assign({}, bmp).width,
+            Object.assign({}, bmp).marker
+          ].join(':');
+
+          delete ImageBitmap.marker;
+          delete ImageBitmap.prototype.marker;
+          delete bmp.width;
+          delete bmp.marker;
+          close.call(bmp);
+
+          const restored = [
+            String(Object.hasOwn(ImageBitmap, 'marker')),
+            String(Object.hasOwn(ImageBitmap.prototype, 'marker')),
+            String(Object.hasOwn(bmp, 'width')),
+            String(Object.hasOwn(bmp, 'marker')),
+            String(widthGetter.call(bmp)),
+            String(heightGetter.call(bmp)),
+            String(widthError.includes('ImageBitmap method called on incompatible receiver')),
+            String(closeError.includes('ImageBitmap method called on incompatible receiver')),
+            String(Object.keys(bmp).length)
+          ].join(':');
+
+          document.getElementById('out').textContent = [before, shadowed, restored].join('|');
+        });
+      </script>
+    "#;
+
+    let mut h = Harness::from_html(html)?;
+    let png_with_2x3_ihdr = [
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 3, 8, 2,
+        0, 0, 0,
+    ];
+    let mut file = MockFile::new("shape.png").with_bytes(&png_with_2x3_ihdr);
+    file.mime_type = "image/png".to_string();
+    h.set_input_files("#file", &[file])?;
+    h.assert_text(
+        "#out",
+        "true:2:3:0:0:0|ctor:proto:shadow-width:bitmap:marker:marker:marker,width:shadow-width:bitmap|false:false:false:false:0:0:true:true:0",
+    )?;
+    Ok(())
+}

@@ -278,6 +278,7 @@ impl Harness {
                 .push(LocationNavigation { kind, from, to });
             self.replace_document_with_html(&html)?;
             self.dispatch_window_lifecycle_event("pageshow")?;
+            self.dispatch_navigation_simple_event("currententrychange")?;
             return Ok(());
         }
 
@@ -308,6 +309,7 @@ impl Harness {
         } else {
             self.dispatch_hash_change_event_with_urls(&from, &to)?;
         }
+        self.dispatch_navigation_simple_event("currententrychange")?;
         Ok(())
     }
 
@@ -439,6 +441,7 @@ impl Harness {
         self.sync_navigation_object();
         self.sync_document_object();
         self.sync_window_runtime_properties();
+        self.dispatch_navigation_simple_event("currententrychange")?;
         Ok(())
     }
 
@@ -521,6 +524,7 @@ impl Harness {
         if hash_only_navigation {
             self.dispatch_hash_change_event_with_urls(&from, &entry.url)?;
         }
+        self.dispatch_navigation_simple_event("currententrychange")?;
         Ok(())
     }
 }

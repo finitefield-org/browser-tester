@@ -161,6 +161,10 @@ impl MockWindow {
         self.with_current_harness_mut(|page| page.paste(selector))
     }
 
+    pub fn cut(&mut self, selector: &str) -> Result<()> {
+        self.with_current_harness_mut(|page| page.cut(selector))
+    }
+
     pub fn submit(&mut self, selector: &str) -> Result<()> {
         self.with_current_harness_mut(|page| page.submit(selector))
     }

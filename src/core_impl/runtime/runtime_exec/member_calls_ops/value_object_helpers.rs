@@ -1151,6 +1151,38 @@ impl Harness {
                 | "tabindex"
                 | "title"
                 | "translate"
+                | "append"
+                | "prepend"
+                | "replaceChildren"
+                | "before"
+                | "after"
+                | "replaceWith"
+                | "remove"
+                | "appendChild"
+                | "insertBefore"
+                | "removeChild"
+                | "replaceChild"
+                | "hasChildNodes"
+                | "contains"
+                | "getRootNode"
+                | "compareDocumentPosition"
+                | "isEqualNode"
+                | "isSameNode"
+                | "normalize"
+                | "isDefaultNamespace"
+                | "lookupPrefix"
+                | "lookupNamespaceURI"
+                | "cloneNode"
+                | "querySelector"
+                | "querySelectorAll"
+                | "getAttributeNames"
+                | "toggleAttribute"
+                | "matches"
+                | "closest"
+                | "insertAdjacentElement"
+                | "insertAdjacentHTML"
+                | "insertAdjacentText"
+                | "setHTMLUnsafe"
                 | "controlsList"
                 | "controlslist"
                 | "crossOrigin"
@@ -1437,6 +1469,13 @@ impl Harness {
         )
     }
 
+    pub(crate) fn is_dom_rect_list_value(array: &ArrayValue) -> bool {
+        matches!(
+            Self::object_get_entry(&array.properties, INTERNAL_DOM_RECT_LIST_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
     pub(crate) fn is_clipboard_item_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_CLIPBOARD_ITEM_OBJECT_KEY),
@@ -1480,6 +1519,13 @@ impl Harness {
     pub(crate) fn is_time_ranges_object(entries: &(impl ObjectEntryLookup + ?Sized)) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_TIME_RANGES_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn is_image_bitmap_object(entries: &(impl ObjectEntryLookup + ?Sized)) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_IMAGE_BITMAP_OBJECT_KEY),
             Some(Value::Bool(true))
         )
     }
@@ -1626,7 +1672,7 @@ impl Harness {
         ])
     }
 
-    pub(crate) fn new_clipboard_data_object_value(text: &str) -> Value {
+    pub(crate) fn new_clipboard_data_object_value(&mut self, text: &str) -> Value {
         let mut store = ObjectValue::default();
         let types = if text.is_empty() {
             Vec::new()
@@ -1668,11 +1714,18 @@ impl Harness {
             &mut entries,
             &["getData", "setData", "clearData"],
         );
-        Self::new_object_value(entries)
+        let value = Self::new_object_value(entries);
+        if let Value::Object(object) = &value {
+            let prototype = self
+                .constructor_prototype_from_env("DataTransfer")
+                .unwrap_or_else(|| self.object_constructor_prototype_value());
+            Self::set_internal_prototype(object, prototype);
+        }
+        value
     }
 
-    pub(crate) fn new_data_transfer_object_value(event_type: &str) -> Value {
-        let value = Self::new_clipboard_data_object_value("");
+    pub(crate) fn new_data_transfer_object_value(&mut self, event_type: &str) -> Value {
+        let value = self.new_clipboard_data_object_value("");
         if let Value::Object(owner) = &value {
             let mut entries = owner.borrow_mut();
             Self::object_set_entry(
@@ -2035,7 +2088,7 @@ impl Harness {
         range_start: Value,
         range_end: Value,
     ) -> Value {
-        Self::new_object_value(vec![
+        let mut entries = vec![
             (INTERNAL_ANIMATION_OBJECT_KEY.to_string(), Value::Bool(true)),
             ("id".to_string(), Value::String(id)),
             (
@@ -2087,7 +2140,22 @@ impl Harness {
                 "Symbol.toStringTag".to_string(),
                 Value::String("Animation".to_string()),
             ),
-        ])
+        ];
+        Self::mark_object_properties_non_enumerable(
+            &mut entries,
+            &[
+                "cancel",
+                "finish",
+                "pause",
+                "play",
+                "reverse",
+                "updatePlaybackRate",
+                "commitStyles",
+                "persist",
+                "Symbol.toStringTag",
+            ],
+        );
+        Self::new_object_value(entries)
     }
 
     pub(crate) fn create_element_is_option_from_arg(arg: Option<&Value>) -> Option<String> {
@@ -2659,6 +2727,30 @@ impl Harness {
             ),
             (INTERNAL_CLASS_LIST_NODE_KEY.to_string(), Value::Node(node)),
         ])
+    }
+
+    pub(crate) fn new_image_bitmap_value(&mut self, width: i64, height: i64) -> Value {
+        let object = Self::new_object_value(vec![
+            (
+                INTERNAL_IMAGE_BITMAP_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
+            (
+                INTERNAL_IMAGE_BITMAP_WIDTH_KEY.to_string(),
+                Value::Number(width.max(0)),
+            ),
+            (
+                INTERNAL_IMAGE_BITMAP_HEIGHT_KEY.to_string(),
+                Value::Number(height.max(0)),
+            ),
+        ]);
+        if let Value::Object(entries) = &object {
+            Self::set_internal_prototype(
+                entries,
+                self.cached_image_bitmap_constructor_prototype_value(),
+            );
+        }
+        object
     }
 
     pub(crate) fn new_time_ranges_value(&mut self, media: NodeId, kind: &str) -> Value {
@@ -3360,18 +3452,68 @@ impl Harness {
         )])
     }
 
-    pub(crate) fn new_worker_constructor_value() -> Value {
-        Self::new_object_value(vec![(
-            INTERNAL_CALLABLE_KIND_KEY.to_string(),
-            Value::String("worker_constructor".to_string()),
-        )])
+    pub(crate) fn new_worker_constructor_value(&mut self) -> Value {
+        let to_string_tag_symbol =
+            self.eval_symbol_static_property(SymbolStaticProperty::ToStringTag);
+        let to_string_tag_key = self.property_key_to_storage_key(&to_string_tag_symbol);
+        let constructor = Self::new_receiver_builtin_constructor_object(
+            Some("worker_constructor"),
+            "worker",
+            &["postMessage", "terminate"],
+        );
+        let Value::Object(constructor_entries) = &constructor else {
+            return constructor;
+        };
+        let prototype = {
+            let entries = constructor_entries.borrow();
+            Self::object_get_entry(&entries, "prototype")
+        };
+        let Some(Value::Object(prototype)) = prototype else {
+            return constructor;
+        };
+        Self::object_set_entry(
+            &mut prototype.borrow_mut(),
+            to_string_tag_key.clone(),
+            Value::String("Worker".to_string()),
+        );
+        Self::mark_property_non_enumerable(&prototype, &to_string_tag_key);
+        Self::set_internal_prototype(&prototype, self.object_constructor_prototype_value());
+        constructor
     }
 
-    pub(crate) fn new_data_transfer_constructor_value() -> Value {
-        Self::new_object_value(vec![(
-            INTERNAL_CALLABLE_KIND_KEY.to_string(),
-            Value::String("data_transfer_constructor".to_string()),
-        )])
+    pub(crate) fn new_data_transfer_constructor_value(&mut self) -> Value {
+        let to_string_tag_symbol =
+            self.eval_symbol_static_property(SymbolStaticProperty::ToStringTag);
+        let to_string_tag_key = self.property_key_to_storage_key(&to_string_tag_symbol);
+        let constructor = Self::new_receiver_builtin_constructor_object(
+            Some("data_transfer_constructor"),
+            "data_transfer",
+            &[
+                "getData",
+                "setData",
+                "clearData",
+                "setDragImage",
+                "addElement",
+            ],
+        );
+        let Value::Object(constructor_entries) = &constructor else {
+            return constructor;
+        };
+        let prototype = {
+            let entries = constructor_entries.borrow();
+            Self::object_get_entry(&entries, "prototype")
+        };
+        let Some(Value::Object(prototype)) = prototype else {
+            return constructor;
+        };
+        Self::object_set_entry(
+            &mut prototype.borrow_mut(),
+            to_string_tag_key.clone(),
+            Value::String("DataTransfer".to_string()),
+        );
+        Self::mark_property_non_enumerable(&prototype, &to_string_tag_key);
+        Self::set_internal_prototype(&prototype, self.object_constructor_prototype_value());
+        constructor
     }
 
     pub(crate) fn new_option_constructor_value() -> Value {
@@ -3386,28 +3528,6 @@ impl Harness {
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
             Value::String("audio_constructor".to_string()),
         )])
-    }
-
-    pub(crate) fn new_text_encoder_constructor_value() -> Value {
-        Self::new_object_backed_constructor_with_prototype("text_encoder_constructor", vec![])
-    }
-
-    pub(crate) fn new_text_decoder_constructor_value() -> Value {
-        Self::new_object_backed_constructor_with_prototype("text_decoder_constructor", vec![])
-    }
-
-    pub(crate) fn new_text_encoder_stream_constructor_value() -> Value {
-        Self::new_object_backed_constructor_with_prototype(
-            "text_encoder_stream_constructor",
-            vec![],
-        )
-    }
-
-    pub(crate) fn new_text_decoder_stream_constructor_value() -> Value {
-        Self::new_object_backed_constructor_with_prototype(
-            "text_decoder_stream_constructor",
-            vec![],
-        )
     }
 
     pub(crate) fn new_css_style_sheet_constructor_value() -> Value {
@@ -3547,21 +3667,18 @@ impl Harness {
         )])
     }
 
+    pub(crate) fn new_dom_rect_list_item_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("dom_rect_list_item".to_string()),
+        )])
+    }
+
     pub(crate) fn new_text_encoder_instance_value() -> Value {
-        Self::new_object_value(vec![
-            (
-                Self::object_getter_storage_key("encoding"),
-                Self::new_text_encoder_encoding_getter_callable(),
-            ),
-            (
-                "encode".to_string(),
-                Self::new_text_encoder_encode_callable(),
-            ),
-            (
-                "encodeInto".to_string(),
-                Self::new_text_encoder_encode_into_callable(),
-            ),
-        ])
+        Self::new_object_value(vec![(
+            INTERNAL_TEXT_ENCODER_OBJECT_KEY.to_string(),
+            Value::Bool(true),
+        )])
     }
 
     pub(crate) fn new_text_decoder_instance_value(
@@ -3570,6 +3687,10 @@ impl Harness {
         ignore_bom: bool,
     ) -> Value {
         Self::new_object_value(vec![
+            (
+                INTERNAL_TEXT_DECODER_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            ),
             (
                 INTERNAL_TEXT_DECODER_ENCODING_KEY.to_string(),
                 Value::String(encoding.to_string()),
@@ -3581,22 +3702,6 @@ impl Harness {
             (
                 INTERNAL_TEXT_DECODER_IGNORE_BOM_KEY.to_string(),
                 Value::Bool(ignore_bom),
-            ),
-            (
-                Self::object_getter_storage_key("encoding"),
-                Self::new_text_decoder_encoding_getter_callable(),
-            ),
-            (
-                Self::object_getter_storage_key("fatal"),
-                Self::new_text_decoder_fatal_getter_callable(),
-            ),
-            (
-                Self::object_getter_storage_key("ignoreBOM"),
-                Self::new_text_decoder_ignore_bom_getter_callable(),
-            ),
-            (
-                "decode".to_string(),
-                Self::new_text_decoder_decode_callable(),
             ),
         ])
     }
@@ -3617,18 +3722,6 @@ impl Harness {
             (
                 INTERNAL_TEXT_ENCODER_STREAM_WRITABLE_KEY.to_string(),
                 writable,
-            ),
-            (
-                Self::object_getter_storage_key("encoding"),
-                Self::new_text_encoder_stream_encoding_getter_callable(),
-            ),
-            (
-                Self::object_getter_storage_key("readable"),
-                Self::new_text_encoder_stream_readable_getter_callable(),
-            ),
-            (
-                Self::object_getter_storage_key("writable"),
-                Self::new_text_encoder_stream_writable_getter_callable(),
             ),
         ])
     }
@@ -3665,27 +3758,230 @@ impl Harness {
                 INTERNAL_TEXT_DECODER_STREAM_WRITABLE_KEY.to_string(),
                 writable,
             ),
-            (
+        ])
+    }
+
+    fn install_text_encoder_prototype_surface(&mut self, prototype: &Rc<RefCell<ObjectValue>>) {
+        let has_encoding_accessor = {
+            let prototype_ref = prototype.borrow();
+            Self::has_object_accessor_property(&*prototype_ref, "encoding")
+        };
+        if !has_encoding_accessor {
+            Self::object_set_entry(
+                &mut prototype.borrow_mut(),
                 Self::object_getter_storage_key("encoding"),
+                Self::new_text_encoder_encoding_getter_callable(),
+            );
+            Self::mark_property_non_enumerable(prototype, "encoding");
+        }
+        for (name, callable) in [
+            ("encode", Self::new_text_encoder_encode_callable()),
+            ("encodeInto", Self::new_text_encoder_encode_into_callable()),
+        ] {
+            Self::object_set_entry(&mut prototype.borrow_mut(), name.to_string(), callable);
+            Self::mark_property_non_enumerable(prototype, name);
+        }
+    }
+
+    fn install_text_decoder_prototype_surface(&mut self, prototype: &Rc<RefCell<ObjectValue>>) {
+        let has_encoding_accessor = {
+            let prototype_ref = prototype.borrow();
+            Self::has_object_accessor_property(&*prototype_ref, "encoding")
+        };
+        if !has_encoding_accessor {
+            for (property, getter) in [
+                (
+                    "encoding",
+                    Self::new_text_decoder_encoding_getter_callable(),
+                ),
+                ("fatal", Self::new_text_decoder_fatal_getter_callable()),
+                (
+                    "ignoreBOM",
+                    Self::new_text_decoder_ignore_bom_getter_callable(),
+                ),
+            ] {
+                Self::object_set_entry(
+                    &mut prototype.borrow_mut(),
+                    Self::object_getter_storage_key(property),
+                    getter,
+                );
+                Self::mark_property_non_enumerable(prototype, property);
+            }
+        }
+        Self::object_set_entry(
+            &mut prototype.borrow_mut(),
+            "decode".to_string(),
+            Self::new_text_decoder_decode_callable(),
+        );
+        Self::mark_property_non_enumerable(prototype, "decode");
+    }
+
+    fn install_text_encoder_stream_prototype_surface(
+        &mut self,
+        prototype: &Rc<RefCell<ObjectValue>>,
+    ) {
+        let has_encoding_accessor = {
+            let prototype_ref = prototype.borrow();
+            Self::has_object_accessor_property(&*prototype_ref, "encoding")
+        };
+        if has_encoding_accessor {
+            return;
+        }
+        for (property, getter) in [
+            (
+                "encoding",
+                Self::new_text_encoder_stream_encoding_getter_callable(),
+            ),
+            (
+                "readable",
+                Self::new_text_encoder_stream_readable_getter_callable(),
+            ),
+            (
+                "writable",
+                Self::new_text_encoder_stream_writable_getter_callable(),
+            ),
+        ] {
+            Self::object_set_entry(
+                &mut prototype.borrow_mut(),
+                Self::object_getter_storage_key(property),
+                getter,
+            );
+            Self::mark_property_non_enumerable(prototype, property);
+        }
+    }
+
+    fn install_text_decoder_stream_prototype_surface(
+        &mut self,
+        prototype: &Rc<RefCell<ObjectValue>>,
+    ) {
+        let has_encoding_accessor = {
+            let prototype_ref = prototype.borrow();
+            Self::has_object_accessor_property(&*prototype_ref, "encoding")
+        };
+        if has_encoding_accessor {
+            return;
+        }
+        for (property, getter) in [
+            (
+                "encoding",
                 Self::new_text_decoder_stream_encoding_getter_callable(),
             ),
             (
-                Self::object_getter_storage_key("fatal"),
+                "fatal",
                 Self::new_text_decoder_stream_fatal_getter_callable(),
             ),
             (
-                Self::object_getter_storage_key("ignoreBOM"),
+                "ignoreBOM",
                 Self::new_text_decoder_stream_ignore_bom_getter_callable(),
             ),
             (
-                Self::object_getter_storage_key("readable"),
+                "readable",
                 Self::new_text_decoder_stream_readable_getter_callable(),
             ),
             (
-                Self::object_getter_storage_key("writable"),
+                "writable",
                 Self::new_text_decoder_stream_writable_getter_callable(),
             ),
-        ])
+        ] {
+            Self::object_set_entry(
+                &mut prototype.borrow_mut(),
+                Self::object_getter_storage_key(property),
+                getter,
+            );
+            Self::mark_property_non_enumerable(prototype, property);
+        }
+    }
+
+    fn cached_text_codec_constructor_value(
+        &mut self,
+        name: &str,
+        callable_kind: &str,
+        tag: &str,
+        installer: fn(&mut Self, &Rc<RefCell<ObjectValue>>),
+    ) -> Value {
+        if let Some(constructor) = self
+            .script_runtime
+            .constructor_static_methods
+            .get(name)
+            .cloned()
+        {
+            if let Value::Object(entries) = &constructor {
+                let prototype = {
+                    let entries = entries.borrow();
+                    Self::object_get_entry(&entries, "prototype")
+                };
+                if let Some(Value::Object(prototype)) = prototype {
+                    installer(self, &prototype);
+                    Self::set_internal_prototype(
+                        &prototype,
+                        self.object_constructor_prototype_value(),
+                    );
+                }
+            }
+            return constructor;
+        }
+        let to_string_tag_symbol =
+            self.eval_symbol_static_property(SymbolStaticProperty::ToStringTag);
+        let to_string_tag_key = self.property_key_to_storage_key(&to_string_tag_symbol);
+        let constructor = Self::new_object_backed_constructor_with_prototype(callable_kind, vec![]);
+        let Value::Object(constructor_entries) = &constructor else {
+            return constructor;
+        };
+        let prototype = {
+            let entries = constructor_entries.borrow();
+            Self::object_get_entry(&entries, "prototype")
+        };
+        let Some(Value::Object(prototype)) = prototype else {
+            return constructor;
+        };
+        installer(self, &prototype);
+        Self::object_set_entry(
+            &mut prototype.borrow_mut(),
+            to_string_tag_key.clone(),
+            Value::String(tag.to_string()),
+        );
+        Self::mark_property_non_enumerable(&prototype, &to_string_tag_key);
+        Self::set_internal_prototype(&prototype, self.object_constructor_prototype_value());
+        self.script_runtime
+            .constructor_static_methods
+            .insert(name.to_string(), constructor.clone());
+        constructor
+    }
+
+    pub(crate) fn cached_text_encoder_constructor_value(&mut self) -> Value {
+        self.cached_text_codec_constructor_value(
+            "TextEncoder",
+            "text_encoder_constructor",
+            "TextEncoder",
+            Self::install_text_encoder_prototype_surface,
+        )
+    }
+
+    pub(crate) fn cached_text_decoder_constructor_value(&mut self) -> Value {
+        self.cached_text_codec_constructor_value(
+            "TextDecoder",
+            "text_decoder_constructor",
+            "TextDecoder",
+            Self::install_text_decoder_prototype_surface,
+        )
+    }
+
+    pub(crate) fn cached_text_encoder_stream_constructor_value(&mut self) -> Value {
+        self.cached_text_codec_constructor_value(
+            "TextEncoderStream",
+            "text_encoder_stream_constructor",
+            "TextEncoderStream",
+            Self::install_text_encoder_stream_prototype_surface,
+        )
+    }
+
+    pub(crate) fn cached_text_decoder_stream_constructor_value(&mut self) -> Value {
+        self.cached_text_codec_constructor_value(
+            "TextDecoderStream",
+            "text_decoder_stream_constructor",
+            "TextDecoderStream",
+            Self::install_text_decoder_stream_prototype_surface,
+        )
     }
 
     pub(crate) fn new_css_style_sheet_instance_value(owner_document: Value) -> Value {
@@ -3873,9 +4169,82 @@ impl Harness {
         ])
     }
 
+    pub(crate) fn new_dom_rect_value(
+        left: i64,
+        top: i64,
+        right: i64,
+        bottom: i64,
+        width: i64,
+        height: i64,
+    ) -> Value {
+        let value = Self::new_object_value(vec![
+            (INTERNAL_DOM_RECT_OBJECT_KEY.to_string(), Value::Bool(true)),
+            ("x".to_string(), Value::Number(left)),
+            ("y".to_string(), Value::Number(top)),
+            ("left".to_string(), Value::Number(left)),
+            ("top".to_string(), Value::Number(top)),
+            ("right".to_string(), Value::Number(right)),
+            ("bottom".to_string(), Value::Number(bottom)),
+            ("width".to_string(), Value::Number(width)),
+            ("height".to_string(), Value::Number(height)),
+        ]);
+        let Value::Object(entries) = &value else {
+            return value;
+        };
+        let mut entries = entries.borrow_mut();
+        for key in [
+            "x", "y", "left", "top", "right", "bottom", "width", "height",
+        ] {
+            Self::object_set_entry(
+                &mut *entries,
+                Self::object_non_writable_storage_key(key),
+                Value::Bool(true),
+            );
+            Self::object_set_entry(
+                &mut *entries,
+                Self::object_non_configurable_storage_key(key),
+                Value::Bool(true),
+            );
+        }
+        drop(entries);
+        value
+    }
+
+    pub(crate) fn new_dom_rect_list_value(values: Vec<Value>) -> Value {
+        let value = Self::new_array_value(values);
+        let Value::Array(values) = &value else {
+            return value;
+        };
+        let mut values = values.borrow_mut();
+        Self::object_set_entry(
+            &mut values.properties,
+            INTERNAL_DOM_RECT_LIST_OBJECT_KEY.to_string(),
+            Value::Bool(true),
+        );
+        Self::object_set_entry(
+            &mut values.properties,
+            "item".to_string(),
+            Self::new_dom_rect_list_item_callable(),
+        );
+        Self::object_set_entry(
+            &mut values.properties,
+            Self::object_non_enumerable_storage_key("item"),
+            Value::Bool(true),
+        );
+        drop(values);
+        value
+    }
+
     pub(crate) fn is_computed_style_object(entries: &[(String, Value)]) -> bool {
         matches!(
             Self::object_get_entry(entries, INTERNAL_COMPUTED_STYLE_OBJECT_KEY),
+            Some(Value::Bool(true))
+        )
+    }
+
+    pub(crate) fn is_dom_rect_object(entries: &[(String, Value)]) -> bool {
+        matches!(
+            Self::object_get_entry(entries, INTERNAL_DOM_RECT_OBJECT_KEY),
             Some(Value::Bool(true))
         )
     }
@@ -4067,21 +4436,21 @@ impl Harness {
         }
     }
 
-    pub(crate) fn new_worker_main_post_message_callable(worker: Value) -> Value {
-        Self::new_object_value(vec![
-            (
-                INTERNAL_CALLABLE_KIND_KEY.to_string(),
-                Value::String("worker_main_post_message".to_string()),
-            ),
-            (INTERNAL_WORKER_TARGET_KEY.to_string(), worker),
-        ])
-    }
-
     pub(crate) fn new_worker_context_post_message_callable(worker: Value) -> Value {
         Self::new_object_value(vec![
             (
                 INTERNAL_CALLABLE_KIND_KEY.to_string(),
                 Value::String("worker_context_post_message".to_string()),
+            ),
+            (INTERNAL_WORKER_TARGET_KEY.to_string(), worker),
+        ])
+    }
+
+    pub(crate) fn new_worker_main_post_message_callable(worker: Value) -> Value {
+        Self::new_object_value(vec![
+            (
+                INTERNAL_CALLABLE_KIND_KEY.to_string(),
+                Value::String("worker_main_post_message".to_string()),
             ),
             (INTERNAL_WORKER_TARGET_KEY.to_string(), worker),
         ])
@@ -4454,6 +4823,65 @@ impl Harness {
         }
     }
 
+    fn node_receiver_builtin_method(&self, node: NodeId, key: &str) -> Option<Value> {
+        let node_type = self.node_type_number(node);
+        let is_parent_node = matches!(node_type, 1 | 9 | 11);
+        let is_child_node = matches!(node_type, 1 | 3 | 8 | 10);
+        let is_element = node_type == 1;
+
+        if matches!(
+            key,
+            "appendChild"
+                | "insertBefore"
+                | "removeChild"
+                | "replaceChild"
+                | "hasChildNodes"
+                | "contains"
+                | "getRootNode"
+                | "compareDocumentPosition"
+                | "isEqualNode"
+                | "isSameNode"
+                | "normalize"
+                | "isDefaultNamespace"
+                | "lookupPrefix"
+                | "lookupNamespaceURI"
+                | "cloneNode"
+        ) {
+            return Some(Self::new_receiver_builtin_callable("node", key));
+        }
+
+        if is_parent_node
+            && matches!(
+                key,
+                "append" | "prepend" | "replaceChildren" | "querySelector" | "querySelectorAll"
+            )
+        {
+            return Some(Self::new_receiver_builtin_callable("node", key));
+        }
+
+        if is_child_node && matches!(key, "before" | "after" | "replaceWith" | "remove") {
+            return Some(Self::new_receiver_builtin_callable("node", key));
+        }
+
+        if is_element
+            && matches!(
+                key,
+                "getAttributeNames"
+                    | "toggleAttribute"
+                    | "matches"
+                    | "closest"
+                    | "insertAdjacentElement"
+                    | "insertAdjacentHTML"
+                    | "insertAdjacentText"
+                    | "setHTMLUnsafe"
+            )
+        {
+            return Some(Self::new_receiver_builtin_callable("node", key));
+        }
+
+        None
+    }
+
     pub(crate) fn parsed_document_receiver_builtin_method(key: &str) -> Option<Value> {
         if matches!(
             key,
@@ -4741,6 +5169,9 @@ impl Harness {
         if Self::is_data_transfer_item_list_value(values) {
             return Self::data_transfer_item_list_receiver_builtin_method(key);
         }
+        if Self::is_dom_rect_list_value(values) {
+            return Self::dom_rect_list_receiver_builtin_method(key);
+        }
         None
     }
 
@@ -4748,8 +5179,18 @@ impl Harness {
         values: &ArrayValue,
         key: &str,
     ) -> bool {
-        Self::data_transfer_item_list_receiver_builtin_method(key).is_some()
-            && Self::is_data_transfer_item_list_value(values)
+        (Self::data_transfer_item_list_receiver_builtin_method(key).is_some()
+            && Self::is_data_transfer_item_list_value(values))
+            || (Self::dom_rect_list_receiver_builtin_method(key).is_some()
+                && Self::is_dom_rect_list_value(values))
+    }
+
+    fn dom_rect_list_receiver_builtin_method(key: &str) -> Option<Value> {
+        if key == "item" {
+            Some(Self::new_dom_rect_list_item_callable())
+        } else {
+            None
+        }
     }
 
     fn match_media_receiver_builtin_method(key: &str) -> Option<Value> {
@@ -4883,7 +5324,10 @@ impl Harness {
         );
     }
 
-    fn constructor_prototype_from_value(&mut self, constructor: &Value) -> Option<Value> {
+    pub(crate) fn constructor_prototype_from_value(
+        &mut self,
+        constructor: &Value,
+    ) -> Option<Value> {
         match self.object_property_from_value(constructor, "prototype") {
             Ok(Value::Object(prototype)) => Some(Value::Object(prototype)),
             _ => None,
@@ -5312,6 +5756,114 @@ impl Harness {
         Value::Object(prototype)
     }
 
+    pub(crate) fn cached_image_bitmap_constructor_value(&mut self) -> Value {
+        if let Some(constructor) = self
+            .script_runtime
+            .constructor_static_methods
+            .get("ImageBitmap")
+            .cloned()
+        {
+            if let Value::Object(entries) = &constructor {
+                let prototype = {
+                    let entries = entries.borrow();
+                    Self::object_get_entry(&entries, "prototype")
+                };
+                if let Some(Value::Object(prototype)) = prototype {
+                    self.install_image_bitmap_prototype_accessors(&prototype);
+                    Self::set_internal_prototype(
+                        &prototype,
+                        self.object_constructor_prototype_value(),
+                    );
+                }
+            }
+            return constructor;
+        }
+        let to_string_tag_symbol =
+            self.eval_symbol_static_property(SymbolStaticProperty::ToStringTag);
+        let to_string_tag_key = self.property_key_to_storage_key(&to_string_tag_symbol);
+        let constructor = Self::new_receiver_builtin_constructor_object(
+            Some("image_bitmap_constructor"),
+            "image_bitmap",
+            &["close"],
+        );
+        let Value::Object(constructor_entries) = &constructor else {
+            return constructor;
+        };
+        let prototype = {
+            let entries = constructor_entries.borrow();
+            Self::object_get_entry(&entries, "prototype")
+        };
+        let Some(Value::Object(prototype)) = prototype else {
+            return constructor;
+        };
+        self.install_image_bitmap_prototype_accessors(&prototype);
+        Self::object_set_entry(
+            &mut prototype.borrow_mut(),
+            to_string_tag_key.clone(),
+            Value::String("ImageBitmap".to_string()),
+        );
+        Self::mark_property_non_enumerable(&prototype, &to_string_tag_key);
+        Self::set_internal_prototype(&prototype, self.object_constructor_prototype_value());
+        self.script_runtime
+            .constructor_static_methods
+            .insert("ImageBitmap".to_string(), constructor.clone());
+        constructor
+    }
+
+    fn install_image_bitmap_prototype_accessors(&mut self, prototype: &Rc<RefCell<ObjectValue>>) {
+        let has_width_accessor = {
+            let prototype_ref = prototype.borrow();
+            Self::has_object_accessor_property(&*prototype_ref, "width")
+        };
+        if has_width_accessor {
+            return;
+        }
+        for property in ["width", "height"] {
+            Self::object_set_entry(
+                &mut prototype.borrow_mut(),
+                Self::object_getter_storage_key(property),
+                Self::new_receiver_builtin_callable(
+                    "image_bitmap",
+                    if property == "width" {
+                        "width_get"
+                    } else {
+                        "height_get"
+                    },
+                ),
+            );
+            Self::mark_property_non_enumerable(prototype, property);
+        }
+    }
+
+    fn cached_image_bitmap_constructor_prototype_value(&mut self) -> Value {
+        if let Some(prototype) = self
+            .script_runtime
+            .builtin_constructor_prototypes
+            .get("ImageBitmap")
+            .cloned()
+        {
+            self.install_image_bitmap_prototype_accessors(&prototype);
+            Self::set_internal_prototype(&prototype, self.object_constructor_prototype_value());
+            return Value::Object(prototype);
+        }
+        let constructor = self.cached_image_bitmap_constructor_value();
+        let Value::Object(entries) = constructor else {
+            return Self::new_object_value(Vec::new());
+        };
+        let prototype = {
+            let entries = entries.borrow();
+            Self::object_get_entry(&entries, "prototype")
+        };
+        let Some(Value::Object(prototype)) = prototype else {
+            return Self::new_object_value(Vec::new());
+        };
+        self.install_image_bitmap_prototype_accessors(&prototype);
+        self.script_runtime
+            .builtin_constructor_prototypes
+            .insert("ImageBitmap".to_string(), prototype.clone());
+        Value::Object(prototype)
+    }
+
     pub(crate) fn cached_time_ranges_constructor_value(&mut self) -> Value {
         if let Some(constructor) = self
             .script_runtime
@@ -5409,6 +5961,161 @@ impl Harness {
             .builtin_constructor_prototypes
             .insert("TimeRanges".to_string(), prototype.clone());
         Value::Object(prototype)
+    }
+
+    fn cached_placeholder_backed_interface_constructor_value(
+        &mut self,
+        interface_name: &str,
+        callable_kind: &str,
+        to_string_tag: &str,
+    ) -> Value {
+        if let Some(constructor) = self
+            .script_runtime
+            .constructor_static_methods
+            .get(interface_name)
+            .cloned()
+        {
+            if let Value::Object(entries) = &constructor {
+                let prototype = {
+                    let entries = entries.borrow();
+                    Self::object_get_entry(&entries, "prototype")
+                };
+                if let Some(Value::Object(prototype)) = prototype {
+                    Self::set_internal_prototype(
+                        &prototype,
+                        self.object_constructor_prototype_value(),
+                    );
+                }
+            }
+            return constructor;
+        }
+
+        let to_string_tag_symbol =
+            self.eval_symbol_static_property(SymbolStaticProperty::ToStringTag);
+        let to_string_tag_key = self.property_key_to_storage_key(&to_string_tag_symbol);
+        let constructor =
+            Self::new_receiver_builtin_constructor_object(Some(callable_kind), callable_kind, &[]);
+        let Value::Object(constructor_entries) = &constructor else {
+            return constructor;
+        };
+        let prototype = {
+            let entries = constructor_entries.borrow();
+            Self::object_get_entry(&entries, "prototype")
+        };
+        let Some(Value::Object(prototype)) = prototype else {
+            return constructor;
+        };
+        Self::object_set_entry(
+            &mut prototype.borrow_mut(),
+            to_string_tag_key.clone(),
+            Value::String(to_string_tag.to_string()),
+        );
+        Self::mark_property_non_enumerable(&prototype, &to_string_tag_key);
+        Self::set_internal_prototype(&prototype, self.object_constructor_prototype_value());
+        self.script_runtime
+            .constructor_static_methods
+            .insert(interface_name.to_string(), constructor.clone());
+        constructor
+    }
+
+    fn cached_placeholder_backed_interface_constructor_prototype_value(
+        &mut self,
+        interface_name: &str,
+        callable_kind: &str,
+        to_string_tag: &str,
+    ) -> Value {
+        if let Some(prototype) = self
+            .script_runtime
+            .builtin_constructor_prototypes
+            .get(interface_name)
+            .cloned()
+        {
+            Self::set_internal_prototype(&prototype, self.object_constructor_prototype_value());
+            return Value::Object(prototype);
+        }
+        let constructor = self.cached_placeholder_backed_interface_constructor_value(
+            interface_name,
+            callable_kind,
+            to_string_tag,
+        );
+        let Value::Object(entries) = constructor else {
+            return Self::new_object_value(Vec::new());
+        };
+        let prototype = {
+            let entries = entries.borrow();
+            Self::object_get_entry(&entries, "prototype")
+        };
+        let Some(Value::Object(prototype)) = prototype else {
+            return Self::new_object_value(Vec::new());
+        };
+        self.script_runtime
+            .builtin_constructor_prototypes
+            .insert(interface_name.to_string(), prototype.clone());
+        Value::Object(prototype)
+    }
+
+    pub(crate) fn cached_storage_constructor_value(&mut self) -> Value {
+        self.cached_placeholder_backed_interface_constructor_value(
+            "Storage",
+            "storage_constructor",
+            "Storage",
+        )
+    }
+
+    pub(crate) fn cached_cookie_store_constructor_value(&mut self) -> Value {
+        self.cached_placeholder_backed_interface_constructor_value(
+            "CookieStore",
+            "cookie_store_constructor",
+            "CookieStore",
+        )
+    }
+
+    pub(crate) fn cached_cache_storage_constructor_value(&mut self) -> Value {
+        self.cached_placeholder_backed_interface_constructor_value(
+            "CacheStorage",
+            "cache_storage_constructor",
+            "CacheStorage",
+        )
+    }
+
+    pub(crate) fn cached_cache_constructor_value(&mut self) -> Value {
+        self.cached_placeholder_backed_interface_constructor_value(
+            "Cache",
+            "cache_constructor",
+            "Cache",
+        )
+    }
+
+    pub(crate) fn cached_storage_constructor_prototype_value(&mut self) -> Value {
+        self.cached_placeholder_backed_interface_constructor_prototype_value(
+            "Storage",
+            "storage_constructor",
+            "Storage",
+        )
+    }
+
+    pub(crate) fn cached_cookie_store_constructor_prototype_value(&mut self) -> Value {
+        self.cached_placeholder_backed_interface_constructor_prototype_value(
+            "CookieStore",
+            "cookie_store_constructor",
+            "CookieStore",
+        )
+    }
+
+    pub(crate) fn cached_cache_storage_constructor_prototype_value(&mut self) -> Value {
+        self.cached_placeholder_backed_interface_constructor_prototype_value(
+            "CacheStorage",
+            "cache_storage_constructor",
+            "CacheStorage",
+        )
+    }
+
+    pub(crate) fn cached_cache_constructor_prototype_value(&mut self) -> Value {
+        self.cached_placeholder_backed_interface_constructor_prototype_value(
+            "Cache",
+            "cache_constructor",
+            "Cache",
+        )
     }
 
     pub(crate) fn cached_html_collection_constructor_value(&mut self) -> Value {
@@ -6110,9 +6817,14 @@ impl Harness {
             "object_constructor" => Some(("Object", 1)),
             "function_constructor" => Some(("Function", 1)),
             "node_list_constructor" => Some(("NodeList", 0)),
+            "image_bitmap_constructor" => Some(("ImageBitmap", 0)),
             "text_track_constructor" => Some(("TextTrack", 0)),
             "text_track_list_constructor" => Some(("TextTrackList", 0)),
             "time_ranges_constructor" => Some(("TimeRanges", 0)),
+            "storage_constructor" => Some(("Storage", 0)),
+            "cookie_store_constructor" => Some(("CookieStore", 0)),
+            "cache_storage_constructor" => Some(("CacheStorage", 0)),
+            "cache_constructor" => Some(("Cache", 0)),
             "radio_node_list_constructor" => Some(("RadioNodeList", 0)),
             "html_collection_constructor" => Some(("HTMLCollection", 0)),
             "html_form_controls_collection_constructor" => Some(("HTMLFormControlsCollection", 0)),
@@ -6151,6 +6863,7 @@ impl Harness {
             "window_post_message_function" => Some(("postMessage", 1)),
             "window_get_computed_style_function" => Some(("getComputedStyle", 1)),
             "computed_style_item" => Some(("item", 1)),
+            "dom_rect_list_item" => Some(("item", 1)),
             "window_alert_function" => Some(("alert", 0)),
             "window_confirm_function" => Some(("confirm", 0)),
             "window_print_function" => Some(("print", 0)),
@@ -6275,6 +6988,8 @@ impl Harness {
             _ => return None,
         };
         let (name, length) = match (family.as_str(), member.as_str()) {
+            ("worker", "postMessage") => ("postMessage", 1),
+            ("worker", "terminate") => ("terminate", 0),
             ("boolean", "toString") => ("toString", 0),
             ("boolean", "valueOf") => ("valueOf", 0),
             ("number", "toExponential") => ("toExponential", 1),
@@ -6322,12 +7037,47 @@ impl Harness {
             ("string", "trimEnd") => ("trimEnd", 0),
             ("string", "trimStart") => ("trimStart", 0),
             ("string", "valueOf") => ("valueOf", 0),
+            ("node", "append") => ("append", 0),
+            ("node", "prepend") => ("prepend", 0),
+            ("node", "replaceChildren") => ("replaceChildren", 0),
+            ("node", "before") => ("before", 0),
+            ("node", "after") => ("after", 0),
+            ("node", "replaceWith") => ("replaceWith", 0),
+            ("node", "remove") => ("remove", 0),
+            ("node", "appendChild") => ("appendChild", 1),
+            ("node", "insertBefore") => ("insertBefore", 2),
+            ("node", "removeChild") => ("removeChild", 1),
+            ("node", "replaceChild") => ("replaceChild", 2),
+            ("node", "hasChildNodes") => ("hasChildNodes", 0),
+            ("node", "contains") => ("contains", 1),
+            ("node", "getRootNode") => ("getRootNode", 0),
+            ("node", "compareDocumentPosition") => ("compareDocumentPosition", 1),
+            ("node", "isEqualNode") => ("isEqualNode", 1),
+            ("node", "isSameNode") => ("isSameNode", 1),
+            ("node", "normalize") => ("normalize", 0),
+            ("node", "isDefaultNamespace") => ("isDefaultNamespace", 1),
+            ("node", "lookupPrefix") => ("lookupPrefix", 1),
+            ("node", "lookupNamespaceURI") => ("lookupNamespaceURI", 1),
+            ("node", "cloneNode") => ("cloneNode", 0),
+            ("node", "querySelector") => ("querySelector", 1),
+            ("node", "querySelectorAll") => ("querySelectorAll", 1),
+            ("node", "getAttributeNames") => ("getAttributeNames", 0),
+            ("node", "toggleAttribute") => ("toggleAttribute", 1),
+            ("node", "matches") => ("matches", 1),
+            ("node", "closest") => ("closest", 1),
+            ("node", "insertAdjacentElement") => ("insertAdjacentElement", 2),
+            ("node", "insertAdjacentHTML") => ("insertAdjacentHTML", 2),
+            ("node", "insertAdjacentText") => ("insertAdjacentText", 2),
+            ("node", "setHTMLUnsafe") => ("setHTMLUnsafe", 1),
             ("node_list", "item") => ("item", 1),
             ("node_list", "namedItem") => ("namedItem", 1),
             ("node_list", "forEach") => ("forEach", 1),
             ("node_list", "entries") => ("entries", 0),
             ("node_list", "keys") => ("keys", 0),
             ("node_list", "values") => ("values", 0),
+            ("image_bitmap", "width_get") => ("get width", 0),
+            ("image_bitmap", "height_get") => ("get height", 0),
+            ("image_bitmap", "close") => ("close", 0),
             ("text_track", "id_get") => ("get id", 0),
             ("text_track", "kind_get") => ("get kind", 0),
             ("text_track", "label_get") => ("get label", 0),
@@ -6629,6 +7379,10 @@ impl Harness {
                     "CanvasRenderingContext2D".to_string()
                 } else if Self::is_class_list_object(&entries) {
                     "DOMTokenList".to_string()
+                } else if Self::is_dom_rect_object(&entries) {
+                    "DOMRect".to_string()
+                } else if Self::is_image_bitmap_object(&entries) {
+                    "ImageBitmap".to_string()
                 } else if Self::is_text_track_object(&entries) {
                     "TextTrack".to_string()
                 } else if Self::is_dom_string_map_object(&entries) {
@@ -7352,9 +8106,14 @@ impl Harness {
                 "object_static_method" => "object_static_method",
                 "function_constructor" => "function_constructor",
                 "node_list_constructor" => "node_list_constructor",
+                "image_bitmap_constructor" => "image_bitmap_constructor",
                 "text_track_constructor" => "text_track_constructor",
                 "text_track_list_constructor" => "text_track_list_constructor",
                 "time_ranges_constructor" => "time_ranges_constructor",
+                "storage_constructor" => "storage_constructor",
+                "cookie_store_constructor" => "cookie_store_constructor",
+                "cache_storage_constructor" => "cache_storage_constructor",
+                "cache_constructor" => "cache_constructor",
                 "radio_node_list_constructor" => "radio_node_list_constructor",
                 "html_collection_constructor" => "html_collection_constructor",
                 "html_form_controls_collection_constructor" => {
@@ -7391,6 +8150,7 @@ impl Harness {
                 "window_post_message_function" => "window_post_message_function",
                 "window_get_computed_style_function" => "window_get_computed_style_function",
                 "computed_style_item" => "computed_style_item",
+                "dom_rect_list_item" => "dom_rect_list_item",
                 "window_alert_function" => "window_alert_function",
                 "window_confirm_function" => "window_confirm_function",
                 "window_print_function" => "window_print_function",
@@ -7763,9 +8523,9 @@ impl Harness {
         if key == "length" {
             return Ok(Value::Number(values.len() as i64));
         }
-        let is_data_transfer_item_list_method = Self::is_data_transfer_item_list_value(&values)
-            && Self::data_transfer_item_list_receiver_builtin_method(key).is_some();
-        if is_data_transfer_item_list_method {
+        let has_placeholder_builtin =
+            Self::placeholder_backed_array_builtin_surface_exists(&values, key);
+        if has_placeholder_builtin {
             if let Some(value) = Self::placeholder_backed_array_builtin_property_value(&values, key)
             {
                 return Ok(value);
@@ -8293,6 +9053,10 @@ impl Harness {
             {
                 return Ok(value);
             }
+        }
+
+        if let Some(value) = self.node_receiver_builtin_method(*node, key) {
+            return Ok(value);
         }
 
         match key {
@@ -9870,7 +10634,7 @@ impl Harness {
         {
             return Some(Value::String(value));
         }
-        Some(Value::Undefined)
+        None
     }
 
     fn object_property_from_document_entries(

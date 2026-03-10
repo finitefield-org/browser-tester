@@ -2811,6 +2811,41 @@ fn trusted_submit_and_reset_click_ordering_and_click_prevent_default_work() -> R
 }
 
 #[test]
+fn script_submit_click_is_untrusted_but_still_submits_with_submitter_work() -> Result<()> {
+    let html = r#"
+        <form id='f'>
+          <input id='name' value='seed'>
+          <input id='submitter' type='submit' value='Send'>
+        </form>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          const form = document.getElementById('f');
+          const submitter = document.getElementById('submitter');
+          const log = [];
+
+          submitter.addEventListener('click', (event) => {
+            log.push(['click', event.isTrusted, event.defaultPrevented].join(':'));
+          });
+          form.addEventListener('submit', (event) => {
+            event.preventDefault();
+            log.push(['submit', event.submitter === submitter].join(':'));
+          });
+
+          document.getElementById('run').addEventListener('click', () => {
+            submitter.click();
+            document.getElementById('result').textContent = log.join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "click:false:false|submit:true")?;
+    Ok(())
+}
+
+#[test]
 fn html_input_reset_click_dispatches_reset_and_restores_defaults() -> Result<()> {
     let html = r#"
         <form id='f'>
@@ -3493,6 +3528,40 @@ fn trusted_checkbox_click_orders_click_before_input_change_and_canceled_click_re
         "#result",
         "true:false:click:true:false:false,input:true:false,inputAfter:false,change:true:false,changeAfter:false|true:false:click:false:false:false,clickAfter:false:false:true",
     )?;
+    Ok(())
+}
+
+#[test]
+fn script_checkbox_click_is_untrusted_but_still_runs_activation_behavior_work() -> Result<()> {
+    let html = r#"
+        <input id='box' type='checkbox'>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          const box = document.getElementById('box');
+          const log = [];
+
+          box.addEventListener('click', (event) => {
+            log.push(['click', event.isTrusted, box.checked].join(':'));
+          });
+          box.addEventListener('input', () => {
+            log.push('input:' + box.checked);
+          });
+          box.addEventListener('change', () => {
+            log.push('change:' + box.checked);
+          });
+
+          document.getElementById('run').addEventListener('click', () => {
+            box.click();
+            document.getElementById('result').textContent =
+              [box.checked, log.join(',')].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true|click:false:true,input:true,change:true")?;
     Ok(())
 }
 

@@ -126,3 +126,40 @@ fn text_decoder_fatal_and_ignore_bom_options_work() -> Result<()> {
     h.assert_text("#result", "true:2:65279:65:1:65")?;
     Ok(())
 }
+
+#[test]
+fn text_decoder_has_branded_prototype_surface_and_validates_receiver() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+            const encodingGetter = Object.getOwnPropertyDescriptor(TextDecoder.prototype, 'encoding').get;
+            let receiverError = false;
+            try {
+              TextDecoder.prototype.decode.call({}, new Uint8Array([65]));
+            } catch (e) {
+              receiverError = String(e).includes('incompatible receiver');
+            }
+            document.getElementById('result').textContent = [
+              Object.prototype.toString.call(decoder),
+              TextDecoder.prototype[Symbol.toStringTag],
+              String(Object.getPrototypeOf(decoder) === TextDecoder.prototype),
+              String(decoder.constructor === TextDecoder),
+              String(encodingGetter.call(decoder)),
+              String(TextDecoder.prototype.decode.call(decoder, new Uint8Array([65]))),
+              String(receiverError)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "[object TextDecoder]|TextDecoder|true|true|utf-8|A|true",
+    )?;
+    Ok(())
+}

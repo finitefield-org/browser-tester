@@ -142,3 +142,112 @@ fn revoked_object_url_worker_constructor_throws_not_found() -> Result<()> {
     harness.assert_text("#out", "Worker script source not found: blob:bt-1")?;
     Ok(())
 }
+
+#[test]
+fn worker_constructor_surface_and_prototype_branding_work() -> Result<()> {
+    let html = r#"
+      <button id='run'>run</button>
+      <div id='out'></div>
+      <script>
+        const out = document.getElementById('out');
+        document.getElementById('run').addEventListener('click', () => {
+          const blob = new Blob(['self.onmessage = () => {};'], { type: 'text/javascript' });
+          const url = URL.createObjectURL(blob);
+          const worker = new Worker(url);
+          URL.revokeObjectURL(url);
+
+          const proto = Object.getPrototypeOf(worker);
+          const postDesc = Object.getOwnPropertyDescriptor(Worker.prototype, 'postMessage');
+          const termDesc = Object.getOwnPropertyDescriptor(Worker.prototype, 'terminate');
+
+          out.textContent = [
+            typeof Worker,
+            String(window.Worker === Worker),
+            String(worker.constructor === Worker),
+            String(proto === Worker.prototype),
+            String(Object.getPrototypeOf(Worker.prototype) === Object.prototype),
+            Object.getOwnPropertyNames(Worker.prototype).sort().join(','),
+            String(Object.keys(Worker.prototype).length === 0),
+            String(postDesc.enumerable),
+            String(postDesc.configurable),
+            String(postDesc.writable),
+            String(worker.postMessage === Worker.prototype.postMessage),
+            String(termDesc.enumerable),
+            String(termDesc.configurable),
+            String(termDesc.writable),
+            String(worker.terminate === Worker.prototype.terminate),
+            Object.prototype.toString.call(worker),
+          ].join('|');
+
+          worker.terminate();
+        });
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#run")?;
+    harness.assert_text(
+        "#out",
+        "function|true|true|true|true|constructor,postMessage,terminate|true|false|true|true|false|false|true|true|false|[object Worker]",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn worker_post_message_structured_clones_payloads_work() -> Result<()> {
+    let html = r#"
+      <button id='run'>run</button>
+      <div id='out'></div>
+      <script>
+        const out = document.getElementById('out');
+        document.getElementById('run').addEventListener('click', () => {
+          const source = `
+            self.onmessage = (event) => {
+              try {
+                event.data.nested.value = 9;
+                event.data.items.push(3);
+                self.postMessage({
+                  fromInput: event.data.nested.value,
+                  fromInputLen: event.data.items.length,
+                });
+              } catch (error) {
+                self.postMessage({ error: String(error) });
+              }
+            };
+          `;
+
+          const blob = new Blob([source], { type: 'text/javascript' });
+          const url = URL.createObjectURL(blob);
+          const worker = new Worker(url);
+          URL.revokeObjectURL(url);
+
+          const payload = {
+            nested: { value: 1 },
+            items: [1, 2],
+          };
+
+          worker.onmessage = (event) => {
+            if (event.data && event.data.error) {
+              out.textContent = 'ERR:' + event.data.error;
+              worker.terminate();
+              return;
+            }
+            out.textContent = [
+              payload.nested.value,
+              payload.items.length,
+              event.data.fromInput,
+              event.data.fromInputLen,
+            ].join(':');
+            worker.terminate();
+          };
+
+          worker.postMessage(payload);
+        });
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#run")?;
+    harness.assert_text("#out", "1:2:9:3")?;
+    Ok(())
+}

@@ -2875,6 +2875,89 @@ fn cache_storage_and_cache_raw_getter_and_inherited_receiver_parity_work() -> Re
 }
 
 #[test]
+fn storage_cache_and_cookie_store_constructor_surface_and_branding_work() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', async () => {
+            const cache = await caches.open('v1');
+            const constructors = [Storage, CookieStore, CacheStorage, Cache];
+            const illegal = constructors.map((Ctor) => {
+              try {
+                new Ctor();
+                return false;
+              } catch (e) {
+                return String(e).includes('Illegal constructor');
+              }
+            }).join(',');
+
+            document.getElementById('result').textContent = [
+              typeof Storage,
+              typeof CookieStore,
+              typeof CacheStorage,
+              typeof Cache,
+              String(window.Storage === Storage),
+              String(window.CookieStore === CookieStore),
+              String(window.CacheStorage === CacheStorage),
+              String(window.Cache === Cache),
+              String(localStorage.constructor === Storage),
+              String(Object.getPrototypeOf(localStorage) === Storage.prototype),
+              String(caches.constructor === CacheStorage),
+              String(Object.getPrototypeOf(caches) === CacheStorage.prototype),
+              String(cache.constructor === Cache),
+              String(Object.getPrototypeOf(cache) === Cache.prototype),
+              String(cookieStore.constructor === CookieStore),
+              String(Object.getPrototypeOf(cookieStore) === CookieStore.prototype),
+              Object.prototype.toString.call(localStorage),
+              Object.prototype.toString.call(caches),
+              Object.prototype.toString.call(cache),
+              Object.prototype.toString.call(cookieStore),
+              String(Storage.prototype.constructor === Storage),
+              String(CookieStore.prototype.constructor === CookieStore),
+              String(CacheStorage.prototype.constructor === CacheStorage),
+              String(Cache.prototype.constructor === Cache),
+              illegal
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/", html)?;
+    h.click("#btn")?;
+    h.assert_text(
+        "#result",
+        "function|function|function|function|true|true|true|true|true|true|true|true|true|true|true|true|[object Storage]|[object CacheStorage]|[object Cache]|[object CookieStore]|true|true|true|true|true,true,true,true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn secure_storage_like_constructors_are_hidden_in_insecure_contexts_work() -> Result<()> {
+    let html = r#"
+        <p id='result'></p>
+        <script>
+          document.getElementById('result').textContent = [
+            typeof Storage,
+            typeof CookieStore,
+            typeof CacheStorage,
+            typeof Cache,
+            typeof localStorage,
+            typeof cookieStore,
+            typeof caches
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#result",
+        "function|undefined|undefined|undefined|object|undefined|undefined",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn cache_add_and_add_all_work_with_fetch_mocks() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
@@ -5597,7 +5680,7 @@ fn regexp_prototype_accessor_and_own_surface_parity_work() -> Result<()> {
 }
 
 #[test]
-fn accessor_only_own_key_synthesis_work() -> Result<()> {
+fn text_codec_instances_expose_prototype_backed_surface_work() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>
         <p id='result'></p>
@@ -5606,28 +5689,35 @@ fn accessor_only_own_key_synthesis_work() -> Result<()> {
             const encoder = new TextEncoder();
             const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
-            const encoderDesc = Object.getOwnPropertyDescriptor(encoder, 'encoding');
-            const decoderDesc = Object.getOwnPropertyDescriptor(decoder, 'encoding');
+            const encoderProto = TextEncoder.prototype;
+            const decoderProto = TextDecoder.prototype;
+            const encoderDesc = Object.getOwnPropertyDescriptor(encoderProto, 'encoding');
+            const decoderDesc = Object.getOwnPropertyDescriptor(decoderProto, 'encoding');
 
             document.getElementById('result').textContent = [
-              Object.getOwnPropertyNames(encoder).join(','),
-              Object.keys(encoder).join(','),
-              Reflect.ownKeys(encoder).join(','),
+              String(Object.getOwnPropertyNames(encoder).length),
+              String(Object.keys(encoder).length),
+              String(Reflect.ownKeys(encoder).length),
               String(
                 typeof encoderDesc.get === 'function' &&
                 encoderDesc.set === undefined &&
-                encoderDesc.enumerable === true &&
+                encoderDesc.enumerable === false &&
                 encoderDesc.configurable === true
               ),
-              Object.getOwnPropertyNames(decoder).join(','),
-              Object.keys(decoder).join(','),
-              Reflect.ownKeys(decoder).join(','),
+              String(typeof Object.getOwnPropertyDescriptor(encoderProto, 'encode').value === 'function'),
+              String(typeof Object.getOwnPropertyDescriptor(encoderProto, 'encodeInto').value === 'function'),
+              String(Object.getOwnPropertyNames(decoder).length),
+              String(Object.keys(decoder).length),
+              String(Reflect.ownKeys(decoder).length),
               String(
                 typeof decoderDesc.get === 'function' &&
                 decoderDesc.set === undefined &&
-                decoderDesc.enumerable === true &&
+                decoderDesc.enumerable === false &&
                 decoderDesc.configurable === true
               ),
+              String(typeof Object.getOwnPropertyDescriptor(decoderProto, 'fatal').get === 'function'),
+              String(typeof Object.getOwnPropertyDescriptor(decoderProto, 'ignoreBOM').get === 'function'),
+              String(typeof Object.getOwnPropertyDescriptor(decoderProto, 'decode').value === 'function'),
               String(decoder.encoding === 'utf-8' && decoder.fatal === true && decoder.ignoreBOM === true)
             ].join('|');
           });
@@ -5638,7 +5728,7 @@ fn accessor_only_own_key_synthesis_work() -> Result<()> {
     h.click("#btn")?;
     h.assert_text(
         "#result",
-        "encoding,encode,encodeInto|encoding,encode,encodeInto|encoding,encode,encodeInto|true|encoding,fatal,ignoreBOM,decode|encoding,fatal,ignoreBOM,decode|encoding,fatal,ignoreBOM,decode|true|true",
+        "0|0|0|true|true|true|0|0|0|true|true|true|true|true",
     )?;
     Ok(())
 }

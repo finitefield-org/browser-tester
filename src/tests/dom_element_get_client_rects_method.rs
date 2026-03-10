@@ -88,3 +88,37 @@ fn element_get_client_rects_rejects_arguments() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn element_get_client_rects_exposes_item_and_dom_rect_entries() -> Result<()> {
+    let html = r#"
+        <div id='box' style='width: 120px; height: 90px;'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const rects = document.getElementById('box').getClientRects();
+            const item = rects.item;
+            const first = rects.item(0);
+            const second = rects.item(1);
+            const viaCall = item.call(rects, 0);
+            document.getElementById('result').textContent = [
+              typeof rects.item,
+              first.left,
+              first.top,
+              first.width,
+              first.height,
+              second === null,
+              Object.prototype.toString.call(first),
+              viaCall.left,
+              viaCall.width
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "function:0:0:0:0:true:[object DOMRect]:0:0")?;
+    Ok(())
+}

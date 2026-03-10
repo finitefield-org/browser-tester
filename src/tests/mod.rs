@@ -64,6 +64,7 @@ mod dom_element_client_top_property;
 mod dom_element_client_width_property;
 mod dom_element_closest_method;
 mod dom_element_copy_event;
+mod dom_element_cut_event;
 mod dom_element_first_element_child_property;
 mod dom_element_get_animations_method;
 mod dom_element_get_attribute_names_method;

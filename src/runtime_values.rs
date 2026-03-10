@@ -890,6 +890,14 @@ impl Value {
                         entries.get_entry(INTERNAL_WRITABLE_STREAM_OBJECT_KEY),
                         Some(Value::Bool(true))
                     );
+                    let is_text_encoder = matches!(
+                        entries.get_entry(INTERNAL_TEXT_ENCODER_OBJECT_KEY),
+                        Some(Value::Bool(true))
+                    );
+                    let is_text_decoder = matches!(
+                        entries.get_entry(INTERNAL_TEXT_DECODER_OBJECT_KEY),
+                        Some(Value::Bool(true))
+                    );
                     let is_text_encoder_stream = matches!(
                         entries.get_entry(INTERNAL_TEXT_ENCODER_STREAM_OBJECT_KEY),
                         Some(Value::Bool(true))
@@ -906,6 +914,10 @@ impl Value {
                         "[object ReadableStream]".into()
                     } else if is_writable_stream {
                         "[object WritableStream]".into()
+                    } else if is_text_encoder {
+                        "[object TextEncoder]".into()
+                    } else if is_text_decoder {
+                        "[object TextDecoder]".into()
                     } else if is_text_encoder_stream {
                         "[object TextEncoderStream]".into()
                     } else if is_text_decoder_stream {

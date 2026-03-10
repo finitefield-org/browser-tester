@@ -450,10 +450,11 @@ impl Harness {
         Ok(true)
     }
 
-    pub(crate) fn click_node_with_env(
+    fn activate_click_node_with_env(
         &mut self,
         target: NodeId,
         env: &mut HashMap<String, Value>,
+        trusted: bool,
     ) -> Result<()> {
         if self.is_effectively_disabled(target) {
             return Ok(());
@@ -462,7 +463,9 @@ impl Harness {
         self.dom.set_active_pseudo_element(Some(target));
         let result: Result<()> = (|| {
             let legacy_activation = self.legacy_pre_activate_input_control(target)?;
-            let click_outcome = self.dispatch_event_with_env(target, "click", env, true)?;
+            let click_outcome = self.dispatch_event_with_options(
+                target, "click", env, trusted, true, true, None, None, None,
+            )?;
             if click_outcome.default_prevented {
                 if let Some(state) = legacy_activation {
                     match state {
@@ -493,7 +496,7 @@ impl Harness {
             if let Some(control) = self.resolve_label_activation_control(target) {
                 if control != target {
                     self.focus_node_with_env(control, env)?;
-                    self.click_node_with_env(control, env)?;
+                    self.activate_click_node_with_env(control, env, trusted)?;
                     return Ok(());
                 }
             }
@@ -547,6 +550,14 @@ impl Harness {
         })();
         self.dom.set_active_pseudo_element(None);
         result
+    }
+
+    pub(crate) fn click_node_with_env(
+        &mut self,
+        target: NodeId,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        self.activate_click_node_with_env(target, env, true)
     }
 
     fn apply_option_click_selection_with_env(
@@ -681,7 +692,9 @@ impl Harness {
             return Ok(());
         }
         self.dom_runtime.click_in_progress.insert(target);
-        let result = stacker::grow(32 * 1024 * 1024, || self.click_node_with_env(target, env));
+        let result = stacker::grow(32 * 1024 * 1024, || {
+            self.activate_click_node_with_env(target, env, false)
+        });
         self.dom_runtime.click_in_progress.remove(&target);
         result
     }
@@ -718,6 +731,13 @@ impl Harness {
         let target = self.select_one(selector)?;
         stacker::grow(32 * 1024 * 1024, || {
             self.with_script_env_always(|this, env| this.paste_node_with_env(target, env))
+        })
+    }
+
+    pub fn cut(&mut self, selector: &str) -> Result<()> {
+        let target = self.select_one(selector)?;
+        stacker::grow(32 * 1024 * 1024, || {
+            self.with_script_env_always(|this, env| this.cut_node_with_env(target, env))
         })
     }
 
@@ -839,6 +859,44 @@ impl Harness {
 
         if let Some(selected) = self.selected_text_for_copy(target)? {
             self.platform_mocks.clipboard_text = selected;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn cut_node_with_env(
+        &mut self,
+        target: NodeId,
+        env: &mut HashMap<String, Value>,
+    ) -> Result<()> {
+        if self.is_effectively_disabled(target) {
+            return Ok(());
+        }
+
+        self.focus_node_with_env(target, env)?;
+        let selected = self.selected_text_for_copy(target)?;
+        let outcome = self.dispatch_event_with_env(target, "cut", env, true)?;
+        if outcome.default_prevented {
+            if let Some(text) = Self::clipboard_plain_text_from_event(&outcome) {
+                self.platform_mocks.clipboard_text = text;
+            }
+            return Ok(());
+        }
+
+        let Some(selected) = selected else {
+            return Ok(());
+        };
+        self.platform_mocks.clipboard_text = selected;
+
+        if !self.node_supports_text_selection(target) || self.dom.readonly(target) {
+            return Ok(());
+        }
+
+        let before = self.dom.value(target)?;
+        self.set_node_range_text(target, &[Value::String(String::new())])?;
+        let after = self.dom.value(target)?;
+        if after != before {
+            self.dispatch_form_control_input_with_env(target, env)?;
+            self.note_user_committed_change_candidate(target)?;
         }
         Ok(())
     }

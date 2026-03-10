@@ -49,6 +49,13 @@ impl Harness {
             &mut entries,
             Self::cache_storage_builtin_keys(),
         );
+        if let Value::Object(prototype) = self.cached_cache_storage_constructor_prototype_value() {
+            Self::object_set_entry(
+                &mut entries,
+                INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                Value::Object(prototype),
+            );
+        }
         *self.browser_apis.cache_storage_object.borrow_mut() = entries.into();
     }
 
@@ -101,6 +108,13 @@ impl Harness {
             ));
         }
         Self::mark_object_properties_non_enumerable(&mut cache_entries, Self::cache_builtin_keys());
+        if let Value::Object(prototype) = self.cached_cache_constructor_prototype_value() {
+            Self::object_set_entry(
+                &mut cache_entries,
+                INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                Value::Object(prototype),
+            );
+        }
         let cache_object = Rc::new(RefCell::new(ObjectValue::new(cache_entries)));
 
         self.browser_apis

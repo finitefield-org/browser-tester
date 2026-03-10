@@ -2060,3 +2060,139 @@ fn node_compare_normalize_and_namespace_methods_work() -> Result<()> {
     )?;
     Ok(())
 }
+
+#[test]
+fn node_method_raw_getters_support_extracted_calls_across_dom_mixins_work() -> Result<()> {
+    let html = r#"
+        <div id='host'><span id='a'>A</span><span id='b'>B</span></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const host = document.getElementById('host');
+            const b = document.getElementById('b');
+
+            const fragment = document.createDocumentFragment();
+            const appended = document.createElement('i');
+            appended.id = 'frag';
+            appended.textContent = 'I';
+            const append = fragment.append;
+            append.call(fragment, appended);
+            host.appendChild(fragment);
+
+            const before = b.before;
+            before.call(b, 'X');
+
+            const remove = appended.remove;
+            remove.call(appended);
+
+            const appendChild = host.appendChild;
+            const em = document.createElement('em');
+            em.id = 'e';
+            em.textContent = 'E';
+            appendChild.call(host, em);
+
+            const matches = b.matches;
+            const toggle = b.toggleAttribute;
+            const querySelectorAll = host.querySelectorAll;
+            const contains = host.contains;
+
+            const matchesOk = matches.call(b, '#b');
+            const hiddenAdded = toggle.call(b, 'hidden');
+            const hiddenCount = querySelectorAll.call(host, '[hidden]').length;
+            const containsEm = contains.call(host, em);
+
+            let receiverError = false;
+            try {
+              appendChild.call({});
+            } catch (e) {
+              receiverError = String(e).includes('Node method called on incompatible receiver');
+            }
+
+            document.getElementById('result').textContent = [
+              append.name,
+              append.length,
+              before.name,
+              remove.name,
+              appendChild.length,
+              matchesOk,
+              hiddenAdded,
+              hiddenCount,
+              containsEm,
+              receiverError,
+              host.textContent
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "append|0|before|remove|1|true|true|1|true|true|AXBE",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn node_method_raw_getters_respect_shadow_delete_and_restore_work() -> Result<()> {
+    let html = r#"
+        <div id='host'><span id='a'>A</span></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const host = document.getElementById('host');
+            const child = document.getElementById('a');
+
+            const appendDesc = Object.getOwnPropertyDescriptor(host, 'append');
+            const removeDesc = Object.getOwnPropertyDescriptor(child, 'remove');
+
+            Object.defineProperty(host, 'append', {
+              value() { return 'shadow-append'; },
+              configurable: true
+            });
+            Object.defineProperty(child, 'remove', {
+              value() { return 'shadow-remove'; },
+              configurable: true
+            });
+
+            const shadowAppend = host.append.call(host);
+            const shadowRemove = child.remove.call(child);
+            const deletedAppend = delete host.append;
+            const deletedRemove = delete child.remove;
+
+            const restoredAppend = host.append;
+            const restoredRemove = child.remove;
+
+            const extra = document.createElement('span');
+            extra.textContent = 'B';
+            restoredAppend.call(host, extra);
+            restoredRemove.call(extra);
+
+            document.getElementById('result').textContent = [
+              String(appendDesc === undefined),
+              String(removeDesc === undefined),
+              shadowAppend,
+              shadowRemove,
+              deletedAppend,
+              deletedRemove,
+              restoredAppend.name,
+              restoredAppend.length,
+              restoredRemove.name,
+              restoredRemove.length,
+              host.textContent
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true|true|shadow-append|shadow-remove|true|true|append|0|remove|0|A",
+    )?;
+    Ok(())
+}

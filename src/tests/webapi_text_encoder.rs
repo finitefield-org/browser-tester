@@ -104,3 +104,40 @@ fn text_encoder_encode_into_stops_before_incomplete_code_point_and_validates_des
     h.assert_text("#result", "2:4:240,159,153,130:true")?;
     Ok(())
 }
+
+#[test]
+fn text_encoder_has_branded_prototype_surface_and_validates_receiver() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const encoder = new TextEncoder();
+            const encodingGetter = Object.getOwnPropertyDescriptor(TextEncoder.prototype, 'encoding').get;
+            let receiverError = false;
+            try {
+              TextEncoder.prototype.encode.call({}, 'x');
+            } catch (e) {
+              receiverError = String(e).includes('incompatible receiver');
+            }
+            document.getElementById('result').textContent = [
+              Object.prototype.toString.call(encoder),
+              TextEncoder.prototype[Symbol.toStringTag],
+              String(Object.getPrototypeOf(encoder) === TextEncoder.prototype),
+              String(encoder.constructor === TextEncoder),
+              String(encodingGetter.call(encoder)),
+              String(TextEncoder.prototype.encode.call(encoder, '€').length),
+              String(receiverError)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "[object TextEncoder]|TextEncoder|true|true|utf-8|3|true",
+    )?;
+    Ok(())
+}

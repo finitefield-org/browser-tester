@@ -172,3 +172,40 @@ fn data_transfer_constructor_rejects_arguments() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
+
+#[test]
+fn data_transfer_constructor_surface_and_prototype_branding_work() -> Result<()> {
+    let html = r#"
+      <p id='out'></p>
+      <script>
+        const dt = new DataTransfer();
+        const proto = DataTransfer.prototype;
+        const getDataDesc = Object.getOwnPropertyDescriptor(proto, 'getData');
+        const setDataDesc = Object.getOwnPropertyDescriptor(proto, 'setData');
+        const clearDataDesc = Object.getOwnPropertyDescriptor(proto, 'clearData');
+
+        document.getElementById('out').textContent = [
+          typeof DataTransfer,
+          String(window.DataTransfer === DataTransfer),
+          String(dt.constructor === DataTransfer),
+          String(Object.getPrototypeOf(dt) === DataTransfer.prototype),
+          String(Object.getPrototypeOf(DataTransfer.prototype) === Object.prototype),
+          Object.getOwnPropertyNames(DataTransfer.prototype).sort().join(','),
+          String(typeof getDataDesc.value),
+          String(getDataDesc.value.name),
+          String(getDataDesc.value.length),
+          String(getDataDesc.enumerable),
+          String(setDataDesc.value.length),
+          String(clearDataDesc.value.length),
+          Object.prototype.toString.call(dt)
+        ].join('|');
+      </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text(
+        "#out",
+        "function|true|true|true|true|addElement,clearData,constructor,getData,setData,setDragImage|function|getData|1|false|2|0|[object DataTransfer]",
+    )?;
+    Ok(())
+}

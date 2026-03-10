@@ -278,7 +278,7 @@ fn data_transfer_placeholder_method_descriptor_and_delete_shadowing_work() -> Re
     let h = Harness::from_html(html)?;
     h.assert_text(
         "#out",
-        "setData|2|false|add|1|false|getAsString|1|false|false:false:false|alpha|true|true|true|true|shadow:beta:text/plain|true|true",
+        "setData|2|false|add|1|false|getAsString|1|false|false:false:false|alpha|true|false|true|true|shadow:beta:text/plain|true|true",
     )?;
     Ok(())
 }

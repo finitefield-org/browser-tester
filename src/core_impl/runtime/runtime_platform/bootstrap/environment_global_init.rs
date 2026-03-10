@@ -145,6 +145,13 @@ impl Harness {
         let mut local_storage_entries =
             vec![(INTERNAL_STORAGE_OBJECT_KEY.to_string(), Value::Bool(true))];
         Self::set_storage_pairs(&mut local_storage_entries, &local_storage_items);
+        if let Value::Object(prototype) = self.cached_storage_constructor_prototype_value() {
+            Self::object_set_entry(
+                &mut local_storage_entries,
+                INTERNAL_OBJECT_PROTOTYPE_KEY.to_string(),
+                Value::Object(prototype),
+            );
+        }
         *self.browser_apis.local_storage_object.borrow_mut() = local_storage_entries.into();
         let read_text = Self::new_builtin_placeholder_function();
         let write_text = Self::new_builtin_placeholder_function();
@@ -379,7 +386,24 @@ impl Harness {
         let error_event_constructor = Self::new_error_event_constructor_value();
         let before_unload_event_constructor = Self::new_before_unload_event_constructor_value();
         let image_data_constructor = Self::new_image_data_constructor_value();
+        let image_bitmap_constructor = self.cached_image_bitmap_constructor_value();
         let iterator_constructor = self.new_iterator_constructor_value();
+        let storage_constructor = self.cached_storage_constructor_value();
+        let cookie_store_constructor = if self.window_is_secure_context() {
+            self.cached_cookie_store_constructor_value()
+        } else {
+            Value::Undefined
+        };
+        let cache_storage_constructor = if self.window_is_secure_context() {
+            self.cached_cache_storage_constructor_value()
+        } else {
+            Value::Undefined
+        };
+        let cache_constructor = if self.window_is_secure_context() {
+            self.cached_cache_constructor_value()
+        } else {
+            Value::Undefined
+        };
         let cookie_store = self.cookie_store_global_value();
         let caches = self.cache_storage_global_value();
         let fetch_callable = Self::new_fetch_callable_value();
@@ -410,8 +434,23 @@ impl Harness {
         let clear_interval_callable = Self::new_global_clear_interval_callable();
         let clear_timeout_callable = Self::new_global_clear_timeout_callable();
         let queue_microtask_callable = Self::new_global_queue_microtask_callable();
-        let worker_constructor = Self::new_worker_constructor_value();
-        let data_transfer_constructor = Self::new_data_transfer_constructor_value();
+        let worker_constructor = self.new_worker_constructor_value();
+        if let Some(worker_prototype) = self.constructor_prototype_from_value(&worker_constructor)
+            && let Some(object_prototype) =
+                self.constructor_prototype_from_value(&object_constructor)
+            && let Value::Object(prototype) = worker_prototype
+        {
+            Self::set_internal_prototype(&prototype, object_prototype);
+        }
+        let data_transfer_constructor = self.new_data_transfer_constructor_value();
+        if let Some(data_transfer_prototype) =
+            self.constructor_prototype_from_value(&data_transfer_constructor)
+            && let Some(object_prototype) =
+                self.constructor_prototype_from_value(&object_constructor)
+            && let Value::Object(prototype) = data_transfer_prototype
+        {
+            Self::set_internal_prototype(&prototype, object_prototype);
+        }
         let option_constructor = Self::new_option_constructor_value();
         let node_list_constructor = self.cached_node_list_constructor_value();
         let text_track_constructor = self.cached_text_track_constructor_value();
@@ -423,10 +462,10 @@ impl Harness {
             self.cached_html_form_controls_collection_constructor_value();
         let html_options_collection_constructor =
             self.cached_html_options_collection_constructor_value();
-        let text_encoder_constructor = Self::new_text_encoder_constructor_value();
-        let text_decoder_constructor = Self::new_text_decoder_constructor_value();
-        let text_encoder_stream_constructor = Self::new_text_encoder_stream_constructor_value();
-        let text_decoder_stream_constructor = Self::new_text_decoder_stream_constructor_value();
+        let text_encoder_constructor = self.cached_text_encoder_constructor_value();
+        let text_decoder_constructor = self.cached_text_decoder_constructor_value();
+        let text_encoder_stream_constructor = self.cached_text_encoder_stream_constructor_value();
+        let text_decoder_stream_constructor = self.cached_text_decoder_stream_constructor_value();
         let css_style_sheet_constructor = Self::new_css_style_sheet_constructor_value();
         let decode_uri_callable = Self::new_global_decode_uri_callable(false);
         let decode_uri_component_callable = Self::new_global_decode_uri_callable(true);
@@ -532,7 +571,12 @@ impl Harness {
             &error_event_constructor,
             &before_unload_event_constructor,
             &image_data_constructor,
+            &image_bitmap_constructor,
             &iterator_constructor,
+            &storage_constructor,
+            &cookie_store_constructor,
+            &cache_storage_constructor,
+            &cache_constructor,
             &cookie_store,
             &caches,
             &fetch_callable,
@@ -636,6 +680,31 @@ impl Harness {
                 &mut window_entries,
                 "File".to_string(),
                 file_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "ImageBitmap".to_string(),
+                image_bitmap_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "Storage".to_string(),
+                storage_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "CookieStore".to_string(),
+                cookie_store_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "CacheStorage".to_string(),
+                cache_storage_constructor.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "Cache".to_string(),
+                cache_constructor.clone(),
             );
             Self::object_set_entry(
                 &mut window_entries,
@@ -985,6 +1054,21 @@ impl Harness {
         self.script_runtime
             .env
             .insert("Option".to_string(), option_constructor);
+        self.script_runtime
+            .env
+            .insert("ImageBitmap".to_string(), image_bitmap_constructor);
+        self.script_runtime
+            .env
+            .insert("Storage".to_string(), storage_constructor);
+        self.script_runtime
+            .env
+            .insert("CookieStore".to_string(), cookie_store_constructor);
+        self.script_runtime
+            .env
+            .insert("CacheStorage".to_string(), cache_storage_constructor);
+        self.script_runtime
+            .env
+            .insert("Cache".to_string(), cache_constructor);
         self.script_runtime
             .env
             .insert("NodeList".to_string(), node_list_constructor);

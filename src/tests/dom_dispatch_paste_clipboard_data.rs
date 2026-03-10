@@ -139,7 +139,7 @@ fn dispatch_paste_clipboard_data_descriptor_and_delete_shadowing_work() -> Resul
     h.dispatch("#i", "paste")?;
     h.assert_text(
         "#out",
-        "getData:1:false:false:hello|true|true|override:text/plain|override:text/html|true|true",
+        "getData:1:false:false:hello|true|false|override:text/plain|override:text/html|true|false",
     )?;
     Ok(())
 }

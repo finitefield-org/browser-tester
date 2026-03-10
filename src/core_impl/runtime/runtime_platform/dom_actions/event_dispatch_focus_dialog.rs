@@ -107,19 +107,19 @@ impl Harness {
     }
 
     fn prepare_clipboard_event_payload(
-        &self,
+        &mut self,
         event_type: &str,
     ) -> Option<(String, Rc<RefCell<ObjectValue>>)> {
         if event_type.eq_ignore_ascii_case("paste") {
             let text = self.platform_mocks.clipboard_text.clone();
-            let value = Self::new_clipboard_data_object_value(&text);
+            let value = self.new_clipboard_data_object_value(&text);
             if let Value::Object(object) = value {
                 return Some((text, object));
             }
             return None;
         }
         if event_type.eq_ignore_ascii_case("copy") || event_type.eq_ignore_ascii_case("cut") {
-            let value = Self::new_clipboard_data_object_value("");
+            let value = self.new_clipboard_data_object_value("");
             if let Value::Object(object) = value {
                 return Some((String::new(), object));
             }

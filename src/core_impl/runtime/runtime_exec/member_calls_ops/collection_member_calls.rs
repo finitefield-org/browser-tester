@@ -1009,6 +1009,19 @@ impl Harness {
         }
 
         let value = match member {
+            "item" if Self::is_dom_rect_list_value(&values.borrow()) => {
+                if evaluated_args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "item requires zero or one argument".into(),
+                    ));
+                }
+                let index = evaluated_args
+                    .first()
+                    .map(Self::value_to_i64)
+                    .unwrap_or(0)
+                    .max(0) as usize;
+                values.borrow().get(index).cloned().unwrap_or(Value::Null)
+            }
             "forEach" => {
                 if evaluated_args.len() != 1 {
                     return Err(Error::ScriptRuntime(
@@ -2689,7 +2702,7 @@ impl Harness {
         ]))
     }
 
-    fn dispatch_navigation_simple_event(&mut self, event_type: &str) -> Result<()> {
+    pub(crate) fn dispatch_navigation_simple_event(&mut self, event_type: &str) -> Result<()> {
         let _ = self.dispatch_event_target(
             self.location_history.navigation_object.clone(),
             Value::String(event_type.to_string()),

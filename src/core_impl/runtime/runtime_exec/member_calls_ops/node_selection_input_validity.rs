@@ -212,16 +212,9 @@ impl Harness {
         let right = left.saturating_add(width);
         let bottom = top.saturating_add(height);
 
-        Ok(Self::new_object_value(vec![
-            ("x".to_string(), Value::Number(left)),
-            ("y".to_string(), Value::Number(top)),
-            ("left".to_string(), Value::Number(left)),
-            ("top".to_string(), Value::Number(top)),
-            ("right".to_string(), Value::Number(right)),
-            ("bottom".to_string(), Value::Number(bottom)),
-            ("width".to_string(), Value::Number(width)),
-            ("height".to_string(), Value::Number(height)),
-        ]))
+        Ok(Self::new_dom_rect_value(
+            left, top, right, bottom, width, height,
+        ))
     }
 
     fn node_has_client_rects(&self, node: NodeId) -> bool {
@@ -247,10 +240,10 @@ impl Harness {
 
     fn get_client_rects_value(&self, node: NodeId) -> Result<Value> {
         if !self.node_has_client_rects(node) {
-            return Ok(Self::new_array_value(Vec::new()));
+            return Ok(Self::new_dom_rect_list_value(Vec::new()));
         }
         let rect = self.get_bounding_client_rect_value(node)?;
-        Ok(Self::new_array_value(vec![rect]))
+        Ok(Self::new_dom_rect_list_value(vec![rect]))
     }
 
     pub(crate) fn is_select_element(&self, node: NodeId) -> bool {

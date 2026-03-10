@@ -90,6 +90,49 @@ This is the right tradeoff after `P2` because:
 - recent regressions have clustered around receiver validation, descriptor visibility, cached-wrapper identity, event/promise ordering, and resource-selection churn
 - those gaps are easier to discover with browser/WPT comparison over the current public API surface than with continued chapter-by-chapter backlog growth
 
+The starting inventory and WPT mapping for this phase should be maintained in a separate working document so the backlog can evolve without rewriting the roadmap itself. The current inventory lives in `doc/p3-wpt-audit-inventory.md`.
+
+## Roadmap Status After P3
+
+`P3: WPT-Guided Exposed-Surface Interop Hardening` is now complete.
+
+The repository has now completed a full horizontal audit over the currently exposed public surface, including:
+
+- DOM/HTML mutation, collection, reflection, and descriptor surfaces
+- forms, focus, selection, validation, and default actions
+- navigation, history, and document lifecycle
+- CSSOM View, geometry, scroll, and computed style
+- Web Animations and rendering-tied object surfaces
+- media/resource elements and wrapper objects
+- clipboard/data-transfer/download/object-URL behavior
+- workers, structured clone, blob URLs, encoding, streams, Intl, and other non-HTML builtins
+
+That changes the remaining risk profile again.
+
+The main risk is no longer broad exposed-surface incoherence on already public APIs. The remaining gaps are concentrated in areas where browser parity still depends on harness reduction, selective browser comparison, or narrower follow-up intake rather than another wide audit sweep.
+
+## Decision After P3
+
+The next roadmap step is:
+
+- create a new phase, `P4`
+- focus it on harness reduction and selective reduced-WPT intake for partially modeled behavior
+- keep newly exposed APIs on a rolling targeted backlog instead of opening another broad exposed-surface audit immediately
+
+This is the right tradeoff after `P3` because:
+
+- another horizontal audit phase would mostly revisit areas whose branding, descriptor, and receiver-validation surfaces are now already covered
+- the highest-value remaining mismatches sit in surfaces that were still `Harness reduction first` or `Browser-comparison first` in `doc/p3-wpt-audit-inventory.md`
+- newly exposed APIs should be absorbed incrementally through inventory refreshes and focused backlog entries, not by restarting a full audit phase
+
+The next work should therefore prioritize:
+
+- editing-adjacent focus/selection/default-action behavior that still depends on simplified harness editing semantics
+- navigation/loading lifecycle paths whose current deterministic model is narrower than browser state machines
+- media/resource loading and candidate-selection behavior that remains intentionally partial
+- download/object-URL/captured-artifact behavior that is harness-shaped by design
+- canvas/image-pipeline artifact behavior that still needs browser-comparison-first reduction
+
 ## Priority Workstreams
 
 ### P0: Parsing, Tree Construction, and Serialization
@@ -212,6 +255,34 @@ Primary repo surfaces:
 - runtime/property-access layers under `src/core_impl/runtime`
 - harness-backed navigation/loading/media logic
 - any test-only deterministic mocks already documented in `README.md`
+
+### P4: Harness Reduction and Selective WPT Intake
+
+Anchor sources:
+
+- relevant WHATWG HTML, DOM, URL, Fetch, File API, Clipboard, CSSOM View, Web Animations, Encoding, Streams, and Workers specs
+- Web Platform Tests, but only after the affected behavior is reduced into the deterministic harness model used by `browser_tester`
+
+Focus:
+
+- make a small set of partially modeled high-value surfaces deterministic enough for reduced-WPT intake
+- prioritize harness shaping and browser-comparison reduction over broad new API exposure
+- keep scope narrow and test-first, preferring a few high-confidence reductions over speculative feature breadth
+
+Typical gaps to look for:
+
+- editing, selection, focus, and clipboard behavior that depends on browser-native text editing semantics
+- navigation/loading transitions whose lifecycle ordering is only partially modeled today
+- media source selection and load-state transitions that still rely on simplified heuristics
+- download and artifact-capture behavior that needs explicit browser-comparison reduction
+- canvas/image-pipeline output contracts that are deterministic today but still mock-shaped
+
+Primary repo surfaces:
+
+- `src/tests`
+- harness-backed action/navigation logic under `src/core_impl/runtime/runtime_platform`
+- media/resource selection helpers
+- deterministic mock/documentation surfaces described in `README.md`
 
 ## Standard Workflow for Each Gap
 

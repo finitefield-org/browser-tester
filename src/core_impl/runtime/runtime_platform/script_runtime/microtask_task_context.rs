@@ -94,7 +94,7 @@ impl Harness {
             .first_event_param()
             .map(|event_param| event_param.to_string());
         let event_args = if event_param.is_some() {
-            vec![Self::listener_event_argument(event)]
+            vec![self.listener_event_argument(event)]
         } else {
             Vec::new()
         };
@@ -118,7 +118,7 @@ impl Harness {
         })
     }
 
-    fn listener_event_argument(event: &mut EventState) -> Value {
+    fn listener_event_argument(&mut self, event: &mut EventState) -> Value {
         let target = event
             .target_value
             .as_ref()
@@ -136,9 +136,8 @@ impl Harness {
             if let Some(object) = &event.clipboard_data_object {
                 Value::Object(object.clone())
             } else {
-                let value = Self::new_clipboard_data_object_value(
-                    event.clipboard_data.as_deref().unwrap_or(""),
-                );
+                let value = self
+                    .new_clipboard_data_object_value(event.clipboard_data.as_deref().unwrap_or(""));
                 if let Value::Object(object) = &value {
                     event.clipboard_data_object = Some(object.clone());
                 }
@@ -151,7 +150,7 @@ impl Harness {
             if let Some(object) = &event.data_transfer_object {
                 Value::Object(object.clone())
             } else {
-                let value = Self::new_data_transfer_object_value(&event.event_type);
+                let value = self.new_data_transfer_object_value(&event.event_type);
                 if let Value::Object(object) = &value {
                     event.data_transfer_object = Some(object.clone());
                 }

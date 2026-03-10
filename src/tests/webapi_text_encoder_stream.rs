@@ -80,3 +80,40 @@ fn text_encoder_stream_constructor_rejects_arguments() -> Result<()> {
     h.assert_text("#result", "true")?;
     Ok(())
 }
+
+#[test]
+fn text_encoder_stream_has_branded_prototype_surface_and_validates_receiver() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const stream = new TextEncoderStream();
+            const readableGetter = Object.getOwnPropertyDescriptor(TextEncoderStream.prototype, 'readable').get;
+            let receiverError = false;
+            try {
+              readableGetter.call({});
+            } catch (e) {
+              receiverError = String(e).includes('incompatible receiver');
+            }
+            document.getElementById('result').textContent = [
+              Object.prototype.toString.call(stream),
+              TextEncoderStream.prototype[Symbol.toStringTag],
+              String(Object.getPrototypeOf(stream) === TextEncoderStream.prototype),
+              String(stream.constructor === TextEncoderStream),
+              String(Object.getOwnPropertyDescriptor(TextEncoderStream.prototype, 'encoding').get.call(stream)),
+              String(Object.prototype.toString.call(readableGetter.call(stream))),
+              String(receiverError)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "[object TextEncoderStream]|TextEncoderStream|true|true|utf-8|[object ReadableStream]|true",
+    )?;
+    Ok(())
+}

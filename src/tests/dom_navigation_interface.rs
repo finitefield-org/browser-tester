@@ -576,3 +576,76 @@ fn navigation_events_fire_for_successful_actions() -> Result<()> {
     )?;
     Ok(())
 }
+
+#[test]
+fn navigation_currententrychange_fires_for_history_push_replace_and_traverse_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const log = [];
+
+            navigation.addEventListener('currententrychange', () => {
+              const state = history.state && history.state.step !== undefined
+                ? String(history.state.step)
+                : 'null';
+              log.push(`currententrychange:${navigation.currentEntry.url}:${state}`);
+            });
+            window.addEventListener('popstate', (event) => {
+              const state = event.state && event.state.step !== undefined
+                ? String(event.state.step)
+                : 'null';
+              log.push(`popstate:${state}`);
+            });
+
+            history.pushState({ step: 1 }, '', 'https://app.local/one');
+            history.replaceState({ step: 2 }, '', 'https://app.local/two');
+            history.back();
+            history.forward();
+
+            document.getElementById('result').textContent = log.join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "currententrychange:https://app.local/one:1|currententrychange:https://app.local/two:2|popstate:null|currententrychange:https://app.local/start:null|popstate:2|currententrychange:https://app.local/two:2",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn navigation_currententrychange_fires_for_hash_only_location_navigation_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const log = [];
+
+            window.addEventListener('hashchange', () => {
+              log.push(`hashchange:${location.href}`);
+            });
+            navigation.addEventListener('currententrychange', () => {
+              log.push(`currententrychange:${navigation.currentEntry.url}`);
+            });
+
+            location.hash = 'frag';
+
+            document.getElementById('result').textContent = log.join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/path", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "hashchange:https://app.local/path#frag|currententrychange:https://app.local/path#frag",
+    )?;
+    Ok(())
+}

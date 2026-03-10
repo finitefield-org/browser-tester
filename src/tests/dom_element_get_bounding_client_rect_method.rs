@@ -86,3 +86,33 @@ fn element_get_bounding_client_rect_rejects_arguments() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn element_get_bounding_client_rect_exposes_branded_readonly_dom_rect_surface() -> Result<()> {
+    let html = r#"
+        <div id='box' style='width: 120px; height: 90px;'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const rect = document.getElementById('box').getBoundingClientRect();
+            const desc = Object.getOwnPropertyDescriptor(rect, 'x');
+            rect.x = 9;
+            const deleted = delete rect.x;
+            document.getElementById('result').textContent = [
+              Object.prototype.toString.call(rect),
+              desc.writable,
+              desc.configurable,
+              rect.x,
+              deleted,
+              rect.x
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "[object DOMRect]:false:false:0:false:0")?;
+    Ok(())
+}

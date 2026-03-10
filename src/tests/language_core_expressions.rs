@@ -5341,6 +5341,114 @@ fn text_track_constructor_surface_and_prototype_accessors_work() -> Result<()> {
 }
 
 #[test]
+fn text_track_reflective_surface_and_shadow_restore_work() -> Result<()> {
+    let html = r#"
+        <video id="player">
+          <track id="captions-en" kind="captions" srclang="en" label="English" src="/tracks/en.vtt">
+        </video>
+        <p id='result'></p>
+        <script>
+          const textTrack = document.getElementById('captions-en').track;
+          textTrack.mode = 'hidden';
+
+          const ctorBefore = [
+            String(Object.keys(TextTrack).length),
+            String(Object.getOwnPropertyNames(TextTrack).includes('prototype')),
+            String(Object.getOwnPropertyNames(TextTrack).includes('length')),
+            String(Reflect.ownKeys(TextTrack).includes('name')),
+            String(Object.getOwnPropertyDescriptor(TextTrack, 'prototype').enumerable),
+            String(Object.keys(Object.assign({}, TextTrack)).length),
+            String(Object.keys({ ...TextTrack }).length)
+          ].join(':');
+
+          const protoBefore = [
+            Object.getOwnPropertyNames(TextTrack.prototype).sort().join(','),
+            String(Reflect.ownKeys(TextTrack.prototype).includes('mode')),
+            String(Object.getOwnPropertyDescriptor(TextTrack.prototype, 'constructor').enumerable),
+            String(Object.getOwnPropertyDescriptor(TextTrack.prototype, 'kind').enumerable),
+            String(Object.getOwnPropertyDescriptor(TextTrack.prototype, 'mode').enumerable),
+            String(Object.keys(Object.assign({}, TextTrack.prototype)).length),
+            String(Object.keys({ ...TextTrack.prototype }).length)
+          ].join(':');
+
+          const before = [
+            textTrack.kind,
+            textTrack.mode,
+            String(Object.keys(textTrack).length),
+            String(Object.getOwnPropertyDescriptor(textTrack, 'mode') === undefined)
+          ].join(':');
+
+          Object.defineProperty(TextTrack, 'marker', {
+            value: 'ctor',
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(TextTrack.prototype, 'marker', {
+            value: 'proto',
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(textTrack, 'mode', {
+            value: 'shadow-mode',
+            enumerable: true,
+            configurable: true
+          });
+          Object.defineProperty(textTrack, 'marker', {
+            value: 'track',
+            enumerable: true,
+            configurable: true
+          });
+
+          const shadowed = [
+            TextTrack.marker,
+            TextTrack.prototype.marker,
+            textTrack.mode,
+            textTrack.marker,
+            Object.keys(TextTrack).join(','),
+            Object.keys(TextTrack.prototype).join(','),
+            Object.keys(textTrack).sort().join(','),
+            Object.assign({}, TextTrack).marker,
+            Object.assign({}, TextTrack.prototype).marker,
+            Object.assign({}, textTrack).mode,
+            Object.assign({}, textTrack).marker
+          ].join(':');
+
+          delete TextTrack.marker;
+          delete TextTrack.prototype.marker;
+          delete textTrack.mode;
+          delete textTrack.marker;
+
+          const restored = [
+            String(Object.hasOwn(TextTrack, 'marker')),
+            String(Object.hasOwn(TextTrack.prototype, 'marker')),
+            String(Object.hasOwn(textTrack, 'mode')),
+            String(Object.hasOwn(textTrack, 'marker')),
+            textTrack.kind,
+            textTrack.mode,
+            String(Object.keys(TextTrack).length),
+            String(Object.keys(TextTrack.prototype).length),
+            String(Object.keys(textTrack).length)
+          ].join(':');
+
+          document.getElementById('result').textContent = [
+            ctorBefore,
+            protoBefore,
+            before,
+            shadowed,
+            restored
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/watch/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "0:true:true:true:false:0:0|activeCues,constructor,cues,id,inBandMetadataTrackDispatchType,kind,label,language,mode:true:false:false:false:0:0|captions:hidden:0:true|ctor:proto:shadow-mode:track:marker:marker:marker,mode:ctor:proto:shadow-mode:track|false:false:false:false:captions:hidden:0:0:0",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn time_ranges_constructor_surface_and_prototype_chain_work() -> Result<()> {
     let html = r#"
         <video id="player" src="/movie.mp4"></video>
