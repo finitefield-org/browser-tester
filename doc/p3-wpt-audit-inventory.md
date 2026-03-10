@@ -272,3 +272,12 @@ The current watch pass did not surface a trigger strong enough to reopen selecti
 1. no new intake family is opened
 2. the backlog stays dormant/on-demand
 3. the next action is trigger-driven reopening only when justified by a concrete surface or regression cluster
+
+## Trigger-driven reopening outcome
+
+The current trigger check is a no-op.
+
+### Result
+
+1. no selective intake slice is reopened
+2. there is no active implementation task until a new trigger appears

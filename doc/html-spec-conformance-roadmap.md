@@ -347,6 +347,11 @@ Dormant backlog watch outcome:
 - keep the roadmap in dormant/on-demand maintenance mode
 - the next implementation task should only be created when a trigger justifies reopening the smallest selective intake slice
 
+Trigger-driven reopening outcome:
+
+- the current check does not justify reopening any selective intake slice
+- there is no active roadmap implementation task until a new trigger appears
+
 ## Standard Workflow for Each Gap
 
 Every conformance task should follow the same sequence:
