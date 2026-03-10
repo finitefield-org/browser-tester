@@ -1,7 +1,11 @@
 use super::*;
 
 impl Harness {
-    pub(crate) fn dispatch_window_lifecycle_event(&mut self, event_type: &str) -> Result<()> {
+    pub(crate) fn dispatch_window_lifecycle_event_state(
+        &mut self,
+        event_type: &str,
+        cancelable: bool,
+    ) -> Result<EventState> {
         let event_type = event_type.to_string();
         self.with_script_env_always(|this, env| {
             let target_object = this.dom_runtime.window_object.clone();
@@ -11,7 +15,8 @@ impl Harness {
             event.target_value = Some(target_value.clone());
             event.current_target_value = Some(target_value);
             event.bubbles = false;
-            event.cancelable = false;
+            event.cancelable = cancelable;
+            event.before_unload_interface = event_type.eq_ignore_ascii_case("beforeunload");
             event.event_phase = 2;
             event.current_target = target_node;
             this.invoke_listeners(target_node, &mut event, env, true)?;
@@ -19,9 +24,24 @@ impl Harness {
                 event.event_phase = 2;
                 this.invoke_listeners(target_node, &mut event, env, false)?;
             }
-            Ok(())
-        })?;
+            Ok(event)
+        })
+    }
+
+    pub(crate) fn dispatch_window_lifecycle_event(&mut self, event_type: &str) -> Result<()> {
+        let _ = self.dispatch_window_lifecycle_event_state(event_type, false)?;
         Ok(())
+    }
+
+    pub(crate) fn prepare_for_cross_document_lifecycle_swap(&mut self) -> Result<bool> {
+        let beforeunload = self.dispatch_window_lifecycle_event_state("beforeunload", true)?;
+        if beforeunload.default_prevented {
+            return Ok(false);
+        }
+        self.set_document_visibility_state_with_event("hidden")?;
+        self.dispatch_window_lifecycle_event("pagehide")?;
+        self.dispatch_window_lifecycle_event("unload")?;
+        Ok(true)
     }
 
     pub(crate) fn set_document_visibility_state_with_event(
@@ -261,8 +281,9 @@ impl Harness {
         };
 
         if let Some(html) = mock_html {
-            self.set_document_visibility_state_with_event("hidden")?;
-            self.dispatch_window_lifecycle_event("pagehide")?;
+            if !self.prepare_for_cross_document_lifecycle_swap()? {
+                return Ok(());
+            }
             self.document_url = to.clone();
             match kind {
                 LocationNavigationKind::Replace => {
@@ -336,8 +357,9 @@ impl Harness {
             .get(&current)
             .cloned();
         if let Some(html) = mock_html {
-            self.set_document_visibility_state_with_event("hidden")?;
-            self.dispatch_window_lifecycle_event("pagehide")?;
+            if !self.prepare_for_cross_document_lifecycle_swap()? {
+                return Ok(());
+            }
             if let Some(state) = state_override {
                 self.history_replace_current_entry(&current, state);
             }
@@ -483,8 +505,9 @@ impl Harness {
         };
 
         if let Some(html) = mock_html {
-            self.set_document_visibility_state_with_event("hidden")?;
-            self.dispatch_window_lifecycle_event("pagehide")?;
+            if !self.prepare_for_cross_document_lifecycle_swap()? {
+                return Ok(());
+            }
             self.location_history.history_index = target;
             self.document_url = entry.url.clone();
             self.replace_document_with_html(&html)?;

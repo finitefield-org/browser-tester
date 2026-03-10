@@ -2933,8 +2933,9 @@ impl Harness {
                 };
 
                 if let Some(html) = mock_html {
-                    self.set_document_visibility_state_with_event("hidden")?;
-                    self.dispatch_window_lifecycle_event("pagehide")?;
+                    if !self.prepare_for_cross_document_lifecycle_swap()? {
+                        return self.new_navigation_api_result_value().map(Some);
+                    }
                     self.document_url = destination.clone();
                     if replace {
                         self.history_replace_current_entry(&destination, state);

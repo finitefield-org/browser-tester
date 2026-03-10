@@ -3021,6 +3021,150 @@ fn body_pagehide_and_pageshow_alias_properties_fire_across_mock_page_reload_work
 }
 
 #[test]
+fn mock_page_navigation_dispatches_beforeunload_then_unload_lifecycle_work() -> Result<()> {
+    let html = r#"
+        <button id='go'>go</button>
+        <script>
+          localStorage.setItem('lifecycle-log', '');
+          const append = (entry) => {
+            const current = localStorage.getItem('lifecycle-log') || '';
+            localStorage.setItem('lifecycle-log', current ? current + '|' + entry : entry);
+          };
+          window.addEventListener('beforeunload', (event) => {
+            append([
+              event.type,
+              String(event.cancelable),
+              document.visibilityState,
+              String(document.hidden),
+              location.href
+            ].join(':'));
+          });
+          document.addEventListener('visibilitychange', (event) => {
+            append([
+              event.type,
+              String(event.cancelable),
+              document.visibilityState,
+              String(document.hidden)
+            ].join(':'));
+          });
+          window.addEventListener('pagehide', (event) => {
+            append([
+              event.type,
+              String(event.cancelable),
+              document.visibilityState,
+              String(document.hidden)
+            ].join(':'));
+          });
+          window.addEventListener('unload', (event) => {
+            append([
+              event.type,
+              String(event.cancelable),
+              document.visibilityState,
+              String(document.hidden)
+            ].join(':'));
+          });
+          document.getElementById('go').addEventListener('click', () => {
+            location.assign('https://app.local/next');
+          });
+        </script>
+        "#;
+
+    let next_mock = r#"
+        <p id='result'></p>
+        <script>
+          window.addEventListener('pageshow', (event) => {
+            document.getElementById('result').textContent = [
+              localStorage.getItem('lifecycle-log') || 'none',
+              event.type,
+              String(event.cancelable),
+              document.visibilityState,
+              String(document.hidden),
+              location.href
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.set_location_mock_page("https://app.local/next", next_mock);
+    h.click("#go")?;
+    h.assert_text(
+        "#result",
+        "beforeunload:true:visible:false:https://app.local/start|visibilitychange:false:hidden:true|pagehide:false:hidden:true|unload:false:hidden:true|pageshow|false|visible|false|https://app.local/next",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn cross_document_history_back_beforeunload_can_cancel_traversal_work() -> Result<()> {
+    let html = r#"
+        <button id='go'>go</button>
+        <script>
+          history.replaceState({ page: 'start' }, '', 'https://app.local/start?base=1');
+          document.getElementById('go').addEventListener('click', () => {
+            location.assign('https://app.local/one');
+          });
+        </script>
+        "#;
+
+    let one_mock = r#"
+        <button id='to-two'>to-two</button>
+        <script>
+          history.replaceState({ page: 'one' }, '', 'https://app.local/one?step=1');
+          document.getElementById('to-two').addEventListener('click', () => {
+            location.assign('https://app.local/two');
+          });
+        </script>
+        "#;
+
+    let two_mock = r#"
+        <button id='back'>back</button>
+        <p id='result'></p>
+        <script>
+          history.replaceState({ page: 'two' }, '', 'https://app.local/two?step=2');
+          localStorage.removeItem('two-beforeunload');
+          localStorage.removeItem('two-pagehide');
+          window.addEventListener('beforeunload', (event) => {
+            localStorage.setItem('two-beforeunload', [
+              event.type,
+              String(event.cancelable),
+              document.visibilityState,
+              location.href,
+              history.state.page
+            ].join('|'));
+            event.returnValue = 'stay';
+          });
+          window.addEventListener('pagehide', () => {
+            localStorage.setItem('two-pagehide', 'fired');
+          });
+          document.getElementById('back').addEventListener('click', () => {
+            history.back();
+            document.getElementById('result').textContent = [
+              localStorage.getItem('two-beforeunload') || 'none',
+              localStorage.getItem('two-pagehide') || 'none',
+              location.href,
+              history.state.page,
+              navigation.currentEntry.url
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.set_location_mock_page("https://app.local/one", one_mock);
+    h.set_location_mock_page("https://app.local/one?step=1", one_mock);
+    h.set_location_mock_page("https://app.local/two", two_mock);
+    h.click("#go")?;
+    h.click("#to-two")?;
+    h.click("#back")?;
+    h.assert_text(
+        "#result",
+        "beforeunload|true|visible|https://app.local/two?step=2|two|none|https://app.local/two?step=2|two|https://app.local/two?step=2",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn document_dom_content_loaded_fires_after_initial_scripts() -> Result<()> {
     let html = r#"
         <p id='result'></p>

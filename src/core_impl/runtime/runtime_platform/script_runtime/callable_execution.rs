@@ -967,6 +967,7 @@ impl Harness {
                             return Err(Error::ScriptRuntime("load takes no arguments".into()));
                         }
                         let had_current_src = !self.resolve_media_src(node).is_empty();
+                        let has_next_src = !self.resolve_media_src(node).is_empty();
                         let had_current_time =
                             media_numeric_state(self, INTERNAL_MEDIA_CURRENT_TIME_KEY, 0.0) != 0.0;
                         self.set_media_boolean_state_value(node, INTERNAL_MEDIA_PAUSED_KEY, true);
@@ -992,6 +993,19 @@ impl Harness {
                                 None,
                                 None,
                             )?;
+                            if has_next_src {
+                                for event_type in [
+                                    "durationchange",
+                                    "loadedmetadata",
+                                    "loadeddata",
+                                    "canplay",
+                                    "canplaythrough",
+                                ] {
+                                    let _ = this.dispatch_event_with_options(
+                                        node, event_type, env, true, false, false, None, None, None,
+                                    )?;
+                                }
+                            }
                             Ok(())
                         })?;
                         Ok(Value::Undefined)

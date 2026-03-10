@@ -1974,6 +1974,54 @@ fn audio_load_triggered_direct_nested_precedence_matrix_stays_aligned_work() -> 
 }
 
 #[test]
+fn audio_load_dispatches_deterministic_load_facing_events_for_resolved_and_empty_sources_work()
+-> Result<()> {
+    let html = r#"
+        <audio id='player'>
+          <source id='primary' src='/audio/primary.ogg' type='audio/ogg'>
+        </audio>
+        <p id='result'></p>
+        <script>
+          const player = document.getElementById('player');
+          const primary = document.getElementById('primary');
+
+          function collectSequence() {
+            const log = [];
+            for (const type of ['emptied', 'loadstart', 'durationchange', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough']) {
+              player.addEventListener(type, (event) => {
+                log.push([
+                  type,
+                  String(event.isTrusted),
+                  String(event.cancelable),
+                  player.currentSrc || '(empty)'
+                ].join(':'));
+              }, { once: true });
+            }
+            return log;
+          }
+
+          const firstLog = collectSequence();
+          player.load();
+          const first = firstLog.join('|');
+
+          primary.removeAttribute('src');
+          const secondLog = collectSequence();
+          player.load();
+          const second = secondLog.join('|');
+
+          document.getElementById('result').textContent = [first, second].join('||');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/watch/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "emptied:true:false:https://app.local/audio/primary.ogg|loadstart:true:false:https://app.local/audio/primary.ogg|durationchange:true:false:https://app.local/audio/primary.ogg|loadedmetadata:true:false:https://app.local/audio/primary.ogg|loadeddata:true:false:https://app.local/audio/primary.ogg|canplay:true:false:https://app.local/audio/primary.ogg|canplaythrough:true:false:https://app.local/audio/primary.ogg||loadstart:true:false:(empty)",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn audio_media_query_source_selection_and_load_state_follow_direct_src_precedence_work()
 -> Result<()> {
     let html = r#"

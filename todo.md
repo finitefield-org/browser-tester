@@ -8,13 +8,37 @@
 - `P3: WPT-Guided Exposed-Surface Interop Hardening` is complete.
 - `P4.1: Harness-reduction inventory refresh and candidate ranking` is complete.
 - `P4.2: Editing, selection, focus, and clipboard harness-reduction pass` is complete.
+- `P4.3: Navigation/loading lifecycle harness-reduction pass` is complete.
 - `P1.1` through `P1.139` are complete.
 - `P2.1` through `P2.13` are complete.
 - `P3.1` through `P3.13` are complete.
-- The latest full verification was `cargo test --lib` with `2534 passed, 0 failed`.
+- The latest full verification was `cargo test --lib` with `2538 passed, 0 failed`.
 - No new test-only mock is currently required. If a future task adds one, document it in `README.md`.
 
 ## Recently Completed
+
+- `P4.4: Media/resource loading and candidate-selection harness-reduction pass`
+  - reduced the media/resource harness to a smaller deterministic `load()` contract by dispatching stable load-facing events for resolved candidates and a narrower `loadstart`-only path for empty candidate sets
+  - locked reduced regressions for audio/video source resolution, readiness/network state visibility, and sync event ordering so broader reduced-WPT intake can assume a simpler media-loading surface
+  - verification:
+  - `cargo test --lib audio_load_dispatches_deterministic_load_facing_events_for_resolved_and_empty_sources_work -- --nocapture`
+  - `cargo test --lib video_media_methods_dispatch_trusted_events_and_resolve_play_promise_after_sync_events_work -- --nocapture`
+  - `cargo test --lib dom_audio_element -- --nocapture`
+  - `cargo test --lib dom_video_element -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib`
+
+- `P4.3: Navigation/loading lifecycle harness-reduction pass`
+  - added `beforeunload` and `unload` into the mock-page cross-document lifecycle so harness-backed assign/reload/traverse paths now dispatch `beforeunload -> visibilitychange(hidden) -> pagehide -> unload -> pageshow` in a browser-like order, while letting `beforeunload` cancellation stop the commit entirely
+  - locked reduced regressions for assign ordering, cross-document history traversal cancellation, and `navigation.navigate(...)` cancellation so the deterministic lifecycle model is narrower and more suitable for reduced-WPT intake
+  - verification:
+  - `cargo test --lib mock_page_navigation_dispatches_beforeunload_then_unload_lifecycle_work -- --nocapture`
+  - `cargo test --lib cross_document_history_back_beforeunload_can_cancel_traversal_work -- --nocapture`
+  - `cargo test --lib navigation_navigate_mock_page_beforeunload_can_cancel_cross_document_commit_work -- --nocapture`
+  - `cargo test --lib dom_navigation_dialog -- --nocapture`
+  - `cargo test --lib dom_navigation_interface -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib`
 
 - `P4.2: Editing, selection, focus, and clipboard harness-reduction pass`
   - added trusted `cut` default-action support for text controls so the harness now copies the selected text into the clipboard, removes the selected range from editable controls, and preserves focus/selection visibility through the same event path
@@ -332,9 +356,9 @@
 
 ## Next Task
 
-- [ ] `P4.3: Navigation/loading lifecycle harness-reduction pass`
-  - narrow the remaining gap between harness-backed lifecycle transitions and browser navigation state machines
-  - focus on replacement, reload, traversal, and lifecycle visibility paths that still require reduction before wider WPT intake
+- [ ] `P4.5: Download, object-URL, and artifact-capture browser-comparison reduction`
+  - use browser comparison to define the stable contract for harness-captured downloads and blob/object URL interactions
+  - convert the chosen contract into deterministic reduced regressions without broadening the harness unnecessarily
 
 ## P3 Backlog
 
@@ -401,11 +425,11 @@
   - tighten the deterministic editing model around text controls, selection mutation, focus transfer, and clipboard default actions where browser-native editing semantics still leak through
   - reduce the next high-value WPT/browser-comparison cases into stable in-repo regressions
 
-- [ ] `P4.3: Navigation/loading lifecycle harness-reduction pass`
+- [x] `P4.3: Navigation/loading lifecycle harness-reduction pass`
   - narrow the remaining gap between harness-backed lifecycle transitions and browser navigation state machines
   - focus on replacement, reload, traversal, and lifecycle visibility paths that still require reduction before wider WPT intake
 
-- [ ] `P4.4: Media/resource loading and candidate-selection harness-reduction pass`
+- [x] `P4.4: Media/resource loading and candidate-selection harness-reduction pass`
   - reduce the partial media/resource model into a smaller deterministic contract suitable for broader reduced-WPT coverage
   - focus on source selection, readiness/network state, wrapper persistence, and related event ordering
 

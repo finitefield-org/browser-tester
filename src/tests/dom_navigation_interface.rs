@@ -578,6 +578,54 @@ fn navigation_events_fire_for_successful_actions() -> Result<()> {
 }
 
 #[test]
+fn navigation_navigate_mock_page_beforeunload_can_cancel_cross_document_commit_work() -> Result<()>
+{
+    let html = r#"
+        <button id='go'>go</button>
+        <p id='result'></p>
+        <script>
+          history.replaceState({ page: 'start' }, '', 'https://app.local/start?base=1');
+          localStorage.removeItem('nav-beforeunload');
+          localStorage.removeItem('nav-pagehide');
+          window.addEventListener('beforeunload', (event) => {
+            localStorage.setItem('nav-beforeunload', [
+              event.type,
+              String(event.cancelable),
+              document.visibilityState,
+              location.href
+            ].join('|'));
+            event.returnValue = 'stay';
+          });
+          window.addEventListener('pagehide', () => {
+            localStorage.setItem('nav-pagehide', 'fired');
+          });
+          document.getElementById('go').addEventListener('click', () => {
+            navigation.navigate('https://app.local/next');
+            document.getElementById('result').textContent = [
+              localStorage.getItem('nav-beforeunload') || 'none',
+              localStorage.getItem('nav-pagehide') || 'none',
+              location.href,
+              navigation.currentEntry.url,
+              history.state.page
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.set_location_mock_page(
+        "https://app.local/next",
+        "<p id='never'>next</p><script>document.getElementById('never').textContent = 'loaded';</script>",
+    );
+    h.click("#go")?;
+    h.assert_text(
+        "#result",
+        "beforeunload|true|visible|https://app.local/start?base=1|none|https://app.local/start?base=1|https://app.local/start?base=1|start",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn navigation_currententrychange_fires_for_history_push_replace_and_traverse_work() -> Result<()> {
     let html = r#"
         <button id='run'>run</button>

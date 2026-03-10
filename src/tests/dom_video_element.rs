@@ -1134,7 +1134,7 @@ fn video_media_methods_dispatch_trusted_events_and_resolve_play_promise_after_sy
             ].join(':'));
           }
 
-          for (const type of ['play', 'playing', 'pause', 'emptied', 'loadstart', 'seeking', 'seeked', 'ratechange']) {
+          for (const type of ['play', 'playing', 'pause', 'emptied', 'loadstart', 'durationchange', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough', 'seeking', 'seeked', 'ratechange']) {
             player.addEventListener(type, (event) => record(type, event));
           }
 
@@ -1172,7 +1172,7 @@ fn video_media_methods_dispatch_trusted_events_and_resolve_play_promise_after_sy
     let h = Harness::from_html_with_url("https://app.local/watch/index.html", html)?;
     h.assert_text(
         "#result",
-        "play:true:false:0|playing:true:false:0|after-play-call:[object Promise]:false:0|play-then:false:0|seeking:true:false:2.5|seeked:true:false:2.5|ratechange:true:false:2.5|pause:true:true:2.5|emptied:true:true:0|loadstart:true:true:0|after-load-call:true:0",
+        "play:true:false:0|playing:true:false:0|after-play-call:[object Promise]:false:0|play-then:false:0|seeking:true:false:2.5|seeked:true:false:2.5|ratechange:true:false:2.5|pause:true:true:2.5|emptied:true:true:0|loadstart:true:true:0|durationchange:true:true:0|loadedmetadata:true:true:0|loadeddata:true:true:0|canplay:true:true:0|canplaythrough:true:true:0|after-load-call:true:0",
     )?;
     Ok(())
 }
