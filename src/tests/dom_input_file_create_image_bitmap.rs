@@ -102,6 +102,57 @@ fn create_image_bitmap_supports_crop_resize_and_image_bitmap_source() -> Result<
 }
 
 #[test]
+fn create_image_bitmap_from_canvas_snapshots_dimensions_before_later_resize_work() -> Result<()> {
+    let html = r#"
+      <canvas id='canvas' width='20' height='15'></canvas>
+      <button id='run'>run</button>
+      <p id='out'></p>
+      <script>
+        document.getElementById('run').addEventListener('click', async () => {
+          const canvas = document.getElementById('canvas');
+          const pending = createImageBitmap(canvas);
+          canvas.width = 40;
+          canvas.height = 30;
+          const bmp = await pending;
+          document.getElementById('out').textContent =
+            `${bmp.width}x${bmp.height}|${canvas.width}x${canvas.height}`;
+        });
+      </script>
+    "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#out", "20x15|40x30")?;
+    Ok(())
+}
+
+#[test]
+fn reduced_create_image_bitmap_canvas_contract_snapshots_dimensions_before_resize_work()
+-> Result<()> {
+    let html = r#"
+      <canvas id='canvas' width='12' height='9'></canvas>
+      <button id='run'>run</button>
+      <p id='out'></p>
+      <script>
+        document.getElementById('run').addEventListener('click', async () => {
+          const canvas = document.getElementById('canvas');
+          const promise = createImageBitmap(canvas);
+          canvas.width = 24;
+          canvas.height = 18;
+          const bitmap = await promise;
+          document.getElementById('out').textContent =
+            `${bitmap.width}x${bitmap.height}|${canvas.width}x${canvas.height}`;
+        });
+      </script>
+    "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#out", "12x9|24x18")?;
+    Ok(())
+}
+
+#[test]
 fn create_image_bitmap_rejects_invalid_signatures_and_options() -> Result<()> {
     let html = r#"
       <input id='file' type='file' accept='image/png'>

@@ -445,12 +445,12 @@ impl Harness {
                         )?;
                         let worker_global = Self::worker_global_from_object(&worker)?;
                         let worker_global_value = Value::Object(worker_global.clone());
-                        self.dispatch_worker_message_to_onmessage(
+                        self.queue_worker_message_microtask(
+                            &worker,
                             &worker_global,
                             worker_global_value,
                             data,
-                            event,
-                        )?;
+                        );
                         Ok(Value::Undefined)
                     }
                     "terminate" => {
@@ -2288,7 +2288,7 @@ impl Harness {
         Ok(Value::Promise(promise))
     }
 
-    fn worker_is_terminated_object(worker: &Rc<RefCell<ObjectValue>>) -> bool {
+    pub(crate) fn worker_is_terminated_object(worker: &Rc<RefCell<ObjectValue>>) -> bool {
         let entries = worker.borrow();
         matches!(
             Self::object_get_entry(&entries, INTERNAL_WORKER_TERMINATED_KEY),
@@ -3173,7 +3173,7 @@ impl Harness {
         Ok(worker)
     }
 
-    fn dispatch_worker_message_to_onmessage(
+    pub(crate) fn dispatch_worker_message_to_onmessage(
         &mut self,
         target: &Rc<RefCell<ObjectValue>>,
         target_this: Value,
@@ -5907,12 +5907,12 @@ impl Harness {
                             normalized_options.as_ref(),
                         )?;
                         let worker_value = Value::Object(worker.clone());
-                        self.dispatch_worker_message_to_onmessage(
+                        self.queue_worker_message_microtask(
+                            &worker,
                             &worker,
                             worker_value,
                             data,
-                            event,
-                        )?;
+                        );
                         Ok(Value::Undefined)
                     }
                     "worker_main_post_message" => {
@@ -5940,12 +5940,12 @@ impl Harness {
                         )?;
                         let worker_global = Self::worker_global_from_object(&worker)?;
                         let worker_global_value = Value::Object(worker_global.clone());
-                        self.dispatch_worker_message_to_onmessage(
+                        self.queue_worker_message_microtask(
+                            &worker,
                             &worker_global,
                             worker_global_value,
                             data,
-                            event,
-                        )?;
+                        );
                         Ok(Value::Undefined)
                     }
                     "worker_terminate" => {

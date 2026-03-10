@@ -251,3 +251,205 @@ fn worker_post_message_structured_clones_payloads_work() -> Result<()> {
     harness.assert_text("#out", "1:2:9:3")?;
     Ok(())
 }
+
+#[test]
+fn worker_messages_are_delivered_after_same_task_handler_registration_work() -> Result<()> {
+    let html = r#"
+      <button id='run'>run</button>
+      <div id='out'></div>
+      <script>
+        const out = document.getElementById('out');
+        document.getElementById('run').addEventListener('click', () => {
+          const source = `
+            self.onmessage = (event) => {
+              self.postMessage('ack:' + String(event.data));
+            };
+          `;
+          const blob = new Blob([source], { type: 'text/javascript' });
+          const worker = new Worker(URL.createObjectURL(blob));
+          worker.postMessage('ping');
+          worker.onmessage = (event) => {
+            out.textContent = String(event.data);
+            worker.terminate();
+          };
+        });
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#run")?;
+    harness.assert_text("#out", "ack:ping")?;
+    Ok(())
+}
+
+#[test]
+fn worker_boot_messages_wait_until_end_of_task_for_handler_registration_work() -> Result<()> {
+    let html = r#"
+      <button id='run'>run</button>
+      <div id='out'></div>
+      <script>
+        const out = document.getElementById('out');
+        document.getElementById('run').addEventListener('click', () => {
+          const source = `self.postMessage('boot');`;
+          const blob = new Blob([source], { type: 'text/javascript' });
+          const worker = new Worker(URL.createObjectURL(blob));
+          worker.onmessage = (event) => {
+            out.textContent = String(event.data);
+            worker.terminate();
+          };
+        });
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#run")?;
+    harness.assert_text("#out", "boot")?;
+    Ok(())
+}
+
+#[test]
+fn worker_terminate_suppresses_queued_message_delivery_work() -> Result<()> {
+    let html = r#"
+      <button id='run'>run</button>
+      <div id='out'></div>
+      <script>
+        const out = document.getElementById('out');
+        document.getElementById('run').addEventListener('click', () => {
+          const source = `
+            self.onmessage = (event) => {
+              self.postMessage('ack:' + String(event.data));
+            };
+          `;
+          const blob = new Blob([source], { type: 'text/javascript' });
+          const worker = new Worker(URL.createObjectURL(blob));
+          worker.onmessage = (event) => {
+            out.textContent = String(event.data);
+          };
+          worker.postMessage('ping');
+          worker.terminate();
+        });
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#run")?;
+    harness.assert_text("#out", "")?;
+    Ok(())
+}
+
+#[test]
+fn worker_multiple_queued_messages_preserve_fifo_after_same_task_handler_registration_work()
+-> Result<()> {
+    let html = r#"
+      <button id='run'>run</button>
+      <div id='out'></div>
+      <script>
+        const out = document.getElementById('out');
+        document.getElementById('run').addEventListener('click', () => {
+          const source = `
+            self.onmessage = (event) => {
+              self.postMessage('first:' + String(event.data));
+              self.postMessage('second:' + String(event.data));
+            };
+          `;
+          const blob = new Blob([source], { type: 'text/javascript' });
+          const worker = new Worker(URL.createObjectURL(blob));
+          const seen = [];
+          worker.postMessage('ping');
+          worker.onmessage = (event) => {
+            seen.push(String(event.data));
+            if (seen.length >= 2) {
+              out.textContent = seen.join('|');
+              worker.terminate();
+            }
+          };
+        });
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#run")?;
+    harness.assert_text("#out", "first:ping|second:ping")?;
+    Ok(())
+}
+
+#[test]
+fn worker_boot_messages_preserve_fifo_after_end_of_task_handler_registration_work() -> Result<()> {
+    let html = r#"
+      <button id='run'>run</button>
+      <div id='out'></div>
+      <script>
+        const out = document.getElementById('out');
+        document.getElementById('run').addEventListener('click', () => {
+          const source = `
+            self.postMessage('boot:1');
+            self.postMessage('boot:2');
+          `;
+          const blob = new Blob([source], { type: 'text/javascript' });
+          const worker = new Worker(URL.createObjectURL(blob));
+          const seen = [];
+          worker.onmessage = (event) => {
+            seen.push(String(event.data));
+            if (seen.length >= 2) {
+              out.textContent = seen.join('|');
+              worker.terminate();
+            }
+          };
+        });
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#run")?;
+    harness.assert_text("#out", "boot:1|boot:2")?;
+    Ok(())
+}
+
+#[test]
+fn worker_post_message_structured_clone_isolated_per_queued_send_work() -> Result<()> {
+    let html = r#"
+      <button id='run'>run</button>
+      <div id='out'></div>
+      <script>
+        const out = document.getElementById('out');
+        document.getElementById('run').addEventListener('click', () => {
+          const source = `
+            self.onmessage = (event) => {
+              self.postMessage({
+                value: event.data.nested.value,
+                len: event.data.items.length,
+              });
+            };
+          `;
+
+          const blob = new Blob([source], { type: 'text/javascript' });
+          const worker = new Worker(URL.createObjectURL(blob));
+          const payload = {
+            nested: { value: 1 },
+            items: [1],
+          };
+          const seen = [];
+
+          worker.onmessage = (event) => {
+            seen.push(String(event.data.value) + ':' + String(event.data.len));
+            if (seen.length >= 2) {
+              out.textContent = seen.join('|') + '|main:' + payload.nested.value + ':' + payload.items.length;
+              worker.terminate();
+            }
+          };
+
+          worker.postMessage(payload);
+          payload.nested.value = 7;
+          payload.items.push(2);
+          worker.postMessage(payload);
+          payload.nested.value = 9;
+          payload.items.push(3);
+        });
+      </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#run")?;
+    harness.assert_text("#out", "1:1|7:2|main:9:3")?;
+    Ok(())
+}

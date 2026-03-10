@@ -178,3 +178,78 @@ fn computed_style_exposes_item_and_live_alias_paths() -> Result<()> {
     )?;
     Ok(())
 }
+
+#[test]
+fn reduced_computed_style_surface_is_live_readonly_and_non_copying_work() -> Result<()> {
+    let html = r#"
+      <div id='box' style='color: blue; background-color: lime;'></div>
+      <button id='run'>run</button>
+      <p id='result'></p>
+      <script>
+        document.getElementById('run').addEventListener('click', () => {
+          const box = document.getElementById('box');
+          const styles = getComputedStyle(box);
+          let readOnly = false;
+          try {
+            styles.color = 'black';
+          } catch (e) {
+            readOnly = String(e).includes('read-only');
+          }
+
+          const before = styles.color;
+          box.style.color = 'red';
+          const after = styles.color;
+          const own = Object.keys(styles).join(',');
+          const copied = Object.keys(Object.assign({}, styles)).join(',');
+          const spread = Object.keys({ ...styles }).join(',');
+
+          document.getElementById('result').textContent = [
+            String(readOnly),
+            before,
+            after,
+            String(styles.item === styles.item),
+            own,
+            copied,
+            spread
+          ].join('|');
+        });
+      </script>
+    "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "true|blue|red|true|||")?;
+    Ok(())
+}
+
+#[test]
+fn reduced_computed_style_surface_has_branded_non_enumerable_method_contract_work() -> Result<()> {
+    let html = r#"
+      <div id='box' style='color: blue;'></div>
+      <button id='run'>run</button>
+      <p id='result'></p>
+      <script>
+        document.getElementById('run').addEventListener('click', () => {
+          const styles = getComputedStyle(document.getElementById('box'));
+          const itemDesc = Object.getOwnPropertyDescriptor(styles, 'item');
+          const getDesc = Object.getOwnPropertyDescriptor(styles, 'getPropertyValue');
+          document.getElementById('result').textContent = [
+            Object.prototype.toString.call(styles),
+            styles[Symbol.toStringTag],
+            String(itemDesc.enumerable),
+            String(getDesc.enumerable),
+            typeof styles.item,
+            typeof styles.getPropertyValue
+          ].join('|');
+        });
+      </script>
+    "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "[object CSSStyleDeclaration]|CSSStyleDeclaration|false|false|function|function",
+    )?;
+    Ok(())
+}

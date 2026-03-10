@@ -284,6 +284,69 @@ Primary repo surfaces:
 - media/resource selection helpers
 - deterministic mock/documentation surfaces described in `README.md`
 
+### Post-P4 Direction
+
+`P4` is now complete.
+
+Decision:
+
+- do not open a broad `P5` roadmap phase yet
+- move to a smaller rolling maintenance backlog instead
+
+Rationale:
+
+- the highest-payoff partially modeled surfaces targeted by `P4` are now reduced enough for selective reduced-WPT intake
+- the remaining work is narrower and less phase-shaped: deferred worker/message-loop reduction, CSSOM View/layout reduction, and steady reduced-WPT/browser-comparison intake over the contracts stabilized in `P4`
+- a new named phase should be justified only if these maintenance items grow into another cross-cutting implementation campaign rather than a steady audit-and-intake loop
+
+Rolling maintenance priorities after `P4`:
+
+1. deferred worker/message-loop and structured-clone harness reduction
+2. CSSOM View/layout reduction target selection
+3. selective reduced-WPT intake for the navigation/loading contracts stabilized in `P4`
+4. selective reduced-WPT intake for the media/download/canvas contracts stabilized in `P4`
+5. periodic public-API delta audit for newly exposed surfaces or regression clusters
+
+`M2` outcome:
+
+- do not open a broad CSS/layout phase
+- keep CSSOM View follow-up work limited to scroll aliases, geometry object surface, computed-style object surface, and layout-derived properties whose values are already deterministic in the harness
+- keep full layout, painting, visual viewport, transforms, and reflow-dependent geometry on the rolling backlog until a future public API need justifies a larger effort
+
+`M5` outcome:
+
+- the first rolling public-API delta audit did not reveal any newly exposed surface family that falls outside the existing roadmap and inventory buckets
+- recent regressions still fit the current rolling backlog: deferred worker/message-loop work, deferred CSSOM View/layout reduction, and selective reduced-WPT/browser-comparison intake over already stabilized contracts
+- do not open a new named roadmap phase yet; keep proceeding through the rolling maintenance backlog until a future public API expansion or regression cluster becomes meaningfully cross-cutting again
+
+Post-`M5` triage refresh:
+
+- the narrowed CSSOM View subset is now stabilized enough that it no longer needs to be the first deferred maintenance target
+- the next smallest high-confidence intake target is selective worker/message-loop/browser-comparison coverage over the existing end-of-task delivery and structured-clone contract
+- keep CSSOM View/layout follow-up limited to reopening cases only if a future public API need expands beyond the already stabilized scroll/geometry/computed-style subset
+
+Post-worker/browser-comparison triage refresh:
+
+- the selective intake slices over navigation/loading, media/download/canvas, CSSOM View, and worker/message-loop are now complete enough that there is no obvious next reduced browser-comparison family with similar payoff
+- do not open another named phase and do not force a new selective intake slice immediately
+- move the roadmap into a dormant/on-demand maintenance posture gated by either:
+  - newly exposed public APIs
+  - a fresh browser-comparison-backed regression cluster
+  - a future harness change that broadens one of the currently stabilized contracts
+- keep the default next step as a periodic public-API delta audit rather than another standing implementation campaign
+
+Periodic public-API delta audit outcome:
+
+- the current public constructor/prototype surface still fits the existing roadmap and inventory buckets
+- recent regressions since the worker/message-loop intake do not form a new browser-comparison-backed cluster that would justify reopening selective intake immediately
+- keep maintenance in a dormant/on-demand state until one of the existing reactivation triggers is hit
+
+Dormant backlog watch outcome:
+
+- no concrete reactivation trigger is currently present
+- keep the roadmap in dormant/on-demand maintenance mode
+- the next implementation task should only be created when a trigger justifies reopening the smallest selective intake slice
+
 ## Standard Workflow for Each Gap
 
 Every conformance task should follow the same sequence:

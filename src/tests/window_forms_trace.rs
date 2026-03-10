@@ -929,6 +929,44 @@ fn window_scroll_position_aliases_align_with_bounding_client_rect_shifts() -> Re
 }
 
 #[test]
+fn reduced_window_scroll_alias_contract_is_readonly_and_rect_aligned_work() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <div id='spacer' style='height: 2000px; width: 2000px;'>
+          <div id='target' style='margin-top: 180px; margin-left: 90px;'>x</div>
+        </div>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const target = document.getElementById('target');
+            const before = target.getBoundingClientRect();
+            let readOnly = 0;
+            try { window.scrollX = 1; } catch (e) { readOnly += String(e).includes('read-only') ? 1 : 0; }
+            try { window.pageYOffset = 1; } catch (e) { readOnly += String(e).includes('read-only') ? 1 : 0; }
+
+            window.scrollTo(14, 22);
+            const after = target.getBoundingClientRect();
+
+            document.getElementById('result').textContent = [
+              String(readOnly),
+              String(before.left - after.left),
+              String(before.top - after.top),
+              String(window.scrollX),
+              String(window.scrollY),
+              String(window.pageXOffset),
+              String(window.pageYOffset)
+            ].join(':');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "2:14:22:14:22:14:22")?;
+    Ok(())
+}
+
+#[test]
 fn window_print_global_alias_and_method_reference_work() -> Result<()> {
     let html = r#"
         <button id='run'>run</button>

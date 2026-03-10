@@ -260,6 +260,31 @@ fn canvas_to_blob_supports_type_quality_and_fallback() -> Result<()> {
 }
 
 #[test]
+fn canvas_to_blob_uses_same_task_callback_and_png_fallback_for_artifact_contract() -> Result<()> {
+    let html = r#"
+        <canvas id='canvas'></canvas>
+        <button id='run' type='button'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const canvas = document.getElementById('canvas');
+            let phase = 'start';
+            canvas.toBlob((blob) => {
+              phase += '->callback:' + blob.type + ':' + String(blob.size > 0);
+            }, 'text/plain');
+            phase += '->after';
+            document.getElementById('result').textContent = phase;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text("#result", "start->callback:image/png:true->after")?;
+    Ok(())
+}
+
+#[test]
 fn canvas_to_blob_requires_callable_callback() -> Result<()> {
     let html = r#"
         <canvas id='canvas'></canvas>

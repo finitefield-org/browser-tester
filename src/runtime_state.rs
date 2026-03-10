@@ -1069,6 +1069,12 @@ pub(crate) enum ScheduledMicrotask {
     Callable {
         callback: Value,
     },
+    WorkerMessage {
+        worker: Rc<RefCell<ObjectValue>>,
+        target: Rc<RefCell<ObjectValue>>,
+        target_this: Value,
+        data: Value,
+    },
     Promise {
         reaction: PromiseReactionKind,
         settled: PromiseSettledValue,

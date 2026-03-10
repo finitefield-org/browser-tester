@@ -116,3 +116,36 @@ fn element_get_bounding_client_rect_exposes_branded_readonly_dom_rect_surface() 
     h.assert_text("#result", "[object DOMRect]:false:false:0:false:0")?;
     Ok(())
 }
+
+#[test]
+fn reduced_dom_rect_surface_has_branded_readonly_non_copying_contract_work() -> Result<()> {
+    let html = r#"
+        <div id='box' style='width: 120px; height: 90px;'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const rect = document.getElementById('box').getBoundingClientRect();
+            const own = Object.getOwnPropertyNames(rect).sort().join(',');
+            const copied = Object.keys(Object.assign({}, rect)).join(',');
+            const spread = Object.keys({ ...rect }).join(',');
+            document.getElementById('result').textContent = [
+              Object.prototype.toString.call(rect),
+              own,
+              copied,
+              spread,
+              String(Object.getOwnPropertyDescriptor(rect, 'x').enumerable),
+              String(Object.getOwnPropertyDescriptor(rect, 'width').writable)
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "[object DOMRect]|bottom,height,left,right,top,width,x,y|||false|false",
+    )?;
+    Ok(())
+}

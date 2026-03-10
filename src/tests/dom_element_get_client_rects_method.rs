@@ -122,3 +122,34 @@ fn element_get_client_rects_exposes_item_and_dom_rect_entries() -> Result<()> {
     h.assert_text("#result", "function:0:0:0:0:true:[object DOMRect]:0:0")?;
     Ok(())
 }
+
+#[test]
+fn reduced_dom_rect_list_surface_has_branded_stable_item_contract_work() -> Result<()> {
+    let html = r#"
+        <div id='box' style='width: 120px; height: 90px;'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const rects = document.getElementById('box').getClientRects();
+            const desc = Object.getOwnPropertyDescriptor(rects, 'item');
+            document.getElementById('result').textContent = [
+              Object.prototype.toString.call(rects),
+              rects[Symbol.toStringTag],
+              String(desc.enumerable),
+              typeof rects.item,
+              String(rects.item === rects.item),
+              String(rects.item.call(rects, 0) === rects[0])
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "[object DOMRectList]|DOMRectList|false|function|true|true",
+    )?;
+    Ok(())
+}

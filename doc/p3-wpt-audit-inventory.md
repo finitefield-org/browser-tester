@@ -116,3 +116,159 @@ Two audit families stay out of the core `P4` queue for now:
 
 - worker/message-loop reduction remains useful, but the current deterministic worker surface is already strong enough that it does not outrank the editing/navigation/media gaps above
 - CSSOM View/computed-style reduction still depends on a narrower deterministic layout contract, so it should stay on a deferred rolling backlog until a smaller reduction target is chosen
+
+## M2 CSSOM View/Layout Reduction Target
+
+`M2` resolves the deferred CSSOM View/layout question by choosing a narrow surface-first contract instead of a broad layout campaign.
+
+### Intake-ready CSSOM subset
+
+These areas are deterministic enough to target with reduced-WPT intake or browser-comparison-backed regressions without introducing real layout or painting:
+
+1. window scroll aliases and readonly linkage
+   - `scrollX`, `scrollY`, `pageXOffset`, `pageYOffset`
+   - ordering between scroll entrypoints and observable alias values
+2. geometry object surface and branding
+   - `getBoundingClientRect()`
+   - `getClientRects()`
+   - readonly descriptors, `item(...)`, branding, extracted-call behavior
+3. computed-style object surface
+   - `getComputedStyle(...)` property access, `item(...)`, readonly aliases, live value visibility
+4. layout-derived property surface where values are already harness-defined
+   - `clientWidth`, `clientHeight`, `clientLeft`, `clientTop`
+   - exposed `offset*` / `scroll*` properties only where the crate already returns deterministic values
+   - own-shadow / delete / restore precedence on those properties
+
+### Still deferred
+
+These areas remain outside reduced-WPT intake for now because they would require real layout, painting, or a much wider geometry model:
+
+1. full block/inline layout and line box behavior
+2. overflow, scrollbars, and visual viewport semantics beyond the current deterministic aliases
+3. transforms, zoom, writing modes, and subpixel geometry fidelity
+4. percentage/intrinsic sizing, font metrics, and reflow-dependent measurement
+5. smooth scrolling, scroll snapping, and rendering-tied timing behavior
+
+### M2 decision
+
+- do not open a broad CSS/layout implementation phase
+- keep CSSOM View intake limited to the intake-ready subset above
+- treat the deferred cases as `M5`-style rolling backlog items unless a future public API expansion makes them higher value
+
+## M5 Public API Delta Review
+
+`M5` is the first rolling maintenance audit after `P4`.
+
+The review checked the currently exposed constructor/prototype surface and the recent regression stream against the planning assumptions in this inventory.
+
+### Reviewed public-surface deltas
+
+The audit specifically re-checked the families that broadened materially during `P3` and `P4`:
+
+- worker/message-loop and structured-clone-facing `Worker`
+- clipboard/data-transfer-facing `DataTransfer`
+- canvas/image-pipeline-facing `ImageBitmap`
+- storage/cache-facing `Storage`, `CookieStore`, `CacheStorage`, and `Cache`
+- media wrapper families such as `TextTrack`, `TextTrackList`, and `TimeRanges`
+- geometry object surfaces such as `DOMRect`-like and `DOMRectList`-like wrappers
+- encoding/stream surfaces such as `TextEncoderStream` and `TextDecoderStream`
+
+### M5 outcome
+
+- no newly exposed API family falls outside the existing inventory rows
+- recent regressions still cluster inside already-known buckets: worker/message-loop timing, CSSOM View/layout reduction, and selective reduced-WPT/browser-comparison intake over stabilized navigation/media/download/canvas contracts
+- no new cross-cutting phase is justified from the current public API delta
+
+### Next maintenance posture
+
+- the deferred CSSOM View/layout item is now narrowed and intake-ready for the stabilized subset, so it no longer needs to be the first maintenance target
+- move the next implementation-facing task to a selective worker/message-loop/browser-comparison intake over the already-stabilized end-of-task delivery contract
+- continue handling new exposed APIs through targeted rolling backlog entries unless they create another broad cross-family campaign
+
+## Maintenance Triage Refresh
+
+The first post-`M5` triage refresh re-checked the remaining rolling backlog after the CSSOM subset was stabilized.
+
+### Newly stabilized maintenance slice
+
+The following CSSOM View subset is now considered intake-complete enough to leave the deferred bucket:
+
+- readonly window scroll alias linkage
+- branded `DOMRect` / `DOMRectList` surface
+- branded `getComputedStyle(...)` method surface
+- layout-derived metric copy/instance-surface boundaries for already deterministic properties
+
+This does not justify a broader layout phase; it only removes the previous "deferred until narrowed" blocker.
+
+### Next smallest high-confidence intake target
+
+The next reduced-WPT/browser-comparison target should be:
+
+1. worker/message-loop timing and structured-clone delivery
+
+Why this moves to the front:
+
+- the worker surface already has a deterministic end-of-task delivery contract
+- browser-comparison intake can focus on a narrow observable contract: same-task registration, queue flushing, terminate-before-delivery suppression, and structured-clone isolation
+- it has a smaller blast radius than reopening broader layout, rendering, or media work
+
+### Remaining rolling order after the refresh
+
+1. selective worker/message-loop/browser-comparison intake over the stabilized delivery contract
+2. periodic public-API delta audit
+3. reopen CSSOM View/layout only if a new public surface expands beyond the stabilized subset
+
+## Post-worker/browser-comparison triage refresh
+
+The worker/message-loop intake is now complete enough that the remaining maintenance work is no longer another clear selective browser-comparison slice.
+
+### What is now considered intake-complete
+
+The following reduced/browser-comparison-backed maintenance families are now in the "stabilized unless new regressions appear" bucket:
+
+1. navigation/loading lifecycle ordering
+2. media/download/canvas reduced contracts
+3. CSSOM View reduced geometry/style subset
+4. worker/message-loop end-of-task delivery and structured-clone isolation
+
+### New maintenance posture
+
+- do not queue another selective intake family by default
+- keep the roadmap in a dormant/on-demand maintenance state
+- only reopen selective browser-comparison intake when one of the following happens:
+  1. a newly exposed public API lands outside the current inventory buckets
+  2. a fresh regression cluster shows that one of the stabilized contracts is still too broad or internally inconsistent
+  3. a harness/modeling change expands a previously reduced family enough that new intake becomes worthwhile
+
+### Default next step
+
+The default next maintenance step is now:
+
+1. periodic public-API delta audit
+2. issue-driven reopening of selective browser-comparison intake only when warranted
+
+## Periodic public-API delta audit outcome
+
+The latest periodic delta audit did not uncover a new immediate intake family.
+
+### Findings
+
+- no newly exposed constructor/prototype family falls outside the current inventory rows
+- no recent reduced/browser-comparison-backed regression cluster currently warrants reopening a selective intake slice
+- the stabilized buckets from the previous refresh remain the right maintenance boundary
+
+### Current default posture
+
+1. keep the backlog dormant by default
+2. reopen selective intake only when a concrete trigger appears
+3. otherwise continue with issue-driven maintenance and periodic inventory refreshes
+
+## Dormant backlog watch outcome
+
+The current watch pass did not surface a trigger strong enough to reopen selective browser-comparison intake.
+
+### Result
+
+1. no new intake family is opened
+2. the backlog stays dormant/on-demand
+3. the next action is trigger-driven reopening only when justified by a concrete surface or regression cluster

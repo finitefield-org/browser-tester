@@ -174,3 +174,97 @@ fn revoking_one_object_url_does_not_break_other_object_url_downloads() -> Result
     );
     Ok(())
 }
+
+#[test]
+fn anchor_download_default_action_uses_post_click_attribute_state_and_keeps_network_downloads_uncaptured()
+-> Result<()> {
+    let html = r#"
+        <a id='link' href='/initial' download='initial.txt'>link</a>
+        <script>
+          let step = 0;
+          const live = URL.createObjectURL(new Blob(['live'], { type: 'text/plain' }));
+          const link = document.getElementById('link');
+          link.addEventListener('click', () => {
+            if (step === 0) {
+              link.href = live;
+              link.download = 'live.txt';
+            } else if (step === 1) {
+              link.href = '/report.csv';
+              link.download = 'network.txt';
+            } else {
+              link.href = '/done';
+              link.removeAttribute('download');
+            }
+            step += 1;
+          });
+        </script>
+    "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.click("#link")?;
+    h.click("#link")?;
+    h.click("#link")?;
+
+    assert_eq!(
+        h.take_downloads(),
+        vec![DownloadArtifact {
+            filename: Some("live.txt".to_string()),
+            mime_type: Some("text/plain".to_string()),
+            bytes: b"live".to_vec(),
+        }]
+    );
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![LocationNavigation {
+            kind: LocationNavigationKind::Assign,
+            from: "https://app.local/start".to_string(),
+            to: "https://app.local/done".to_string(),
+        }]
+    );
+    Ok(())
+}
+
+#[test]
+fn reduced_object_url_download_contract_uses_final_click_state_for_capture_and_navigation_work()
+-> Result<()> {
+    let html = r#"
+        <a id='link' href='/initial'>link</a>
+        <script>
+          let step = 0;
+          const blobUrl = URL.createObjectURL(new Blob(['blob-body'], { type: 'text/plain' }));
+          const link = document.getElementById('link');
+          link.addEventListener('click', () => {
+            if (step === 0) {
+              link.href = blobUrl;
+              link.download = 'blob.txt';
+            } else {
+              link.href = '/final';
+              link.removeAttribute('download');
+            }
+            step += 1;
+          });
+        </script>
+    "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.click("#link")?;
+    h.click("#link")?;
+
+    assert_eq!(
+        h.take_downloads(),
+        vec![DownloadArtifact {
+            filename: Some("blob.txt".to_string()),
+            mime_type: Some("text/plain".to_string()),
+            bytes: b"blob-body".to_vec(),
+        }]
+    );
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![LocationNavigation {
+            kind: LocationNavigationKind::Assign,
+            from: "https://app.local/start".to_string(),
+            to: "https://app.local/final".to_string(),
+        }]
+    );
+    Ok(())
+}

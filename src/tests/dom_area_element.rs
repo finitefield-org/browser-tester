@@ -217,6 +217,57 @@ fn area_download_blob_click_captures_download_without_navigation() -> Result<()>
 }
 
 #[test]
+fn area_download_default_action_uses_post_click_attribute_state_and_keeps_network_downloads_uncaptured()
+-> Result<()> {
+    let html = r#"
+        <map name='save'>
+          <area id='save-area' href='/initial' download='initial.txt' alt='save'>
+        </map>
+        <script>
+          let step = 0;
+          const live = URL.createObjectURL(new Blob(['area'], { type: 'text/plain' }));
+          const area = document.getElementById('save-area');
+          area.addEventListener('click', () => {
+            if (step === 0) {
+              area.href = live;
+              area.download = 'area.txt';
+            } else if (step === 1) {
+              area.href = '/report.csv';
+              area.download = 'network.txt';
+            } else {
+              area.href = '/done';
+              area.removeAttribute('download');
+            }
+            step += 1;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.click("#save-area")?;
+    h.click("#save-area")?;
+    h.click("#save-area")?;
+
+    assert_eq!(
+        h.take_downloads(),
+        vec![DownloadArtifact {
+            filename: Some("area.txt".to_string()),
+            mime_type: Some("text/plain".to_string()),
+            bytes: b"area".to_vec(),
+        }]
+    );
+    assert_eq!(
+        h.take_location_navigations(),
+        vec![LocationNavigation {
+            kind: LocationNavigationKind::Assign,
+            from: "https://app.local/start".to_string(),
+            to: "https://app.local/done".to_string(),
+        }]
+    );
+    Ok(())
+}
+
+#[test]
 fn area_role_is_link_with_href_and_empty_without_href() -> Result<()> {
     let html = r#"
         <map name='roles'>

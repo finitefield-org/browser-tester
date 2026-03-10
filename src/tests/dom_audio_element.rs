@@ -2022,6 +2022,47 @@ fn audio_load_dispatches_deterministic_load_facing_events_for_resolved_and_empty
 }
 
 #[test]
+fn audio_reduced_load_contract_preserves_resolved_then_empty_sequence_work() -> Result<()> {
+    let html = r#"
+        <audio id='player' src='/audio/direct.mp3'></audio>
+        <p id='result'></p>
+        <script>
+          const player = document.getElementById('player');
+
+          function collectOnce() {
+            const log = [];
+            for (const type of ['emptied', 'loadstart', 'durationchange', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough']) {
+              player.addEventListener(type, () => log.push(type), { once: true });
+            }
+            return log;
+          }
+
+          const resolvedLog = collectOnce();
+          player.load();
+          const resolved = resolvedLog.join('>');
+
+          player.removeAttribute('src');
+          const emptyLog = collectOnce();
+          player.load();
+          const empty = emptyLog.join('>');
+
+          document.getElementById('result').textContent = [
+            resolved,
+            empty,
+            player.currentSrc || '(empty)'
+          ].join('|');
+        </script>
+        "#;
+
+    let h = Harness::from_html_with_url("https://app.local/watch/index.html", html)?;
+    h.assert_text(
+        "#result",
+        "emptied>loadstart>durationchange>loadedmetadata>loadeddata>canplay>canplaythrough|loadstart|(empty)",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn audio_media_query_source_selection_and_load_state_follow_direct_src_precedence_work()
 -> Result<()> {
     let html = r#"

@@ -697,3 +697,166 @@ fn navigation_currententrychange_fires_for_hash_only_location_navigation_work() 
     )?;
     Ok(())
 }
+
+#[test]
+fn navigation_currententrychange_is_suppressed_when_beforeunload_cancels_cross_document_traversal_work()
+-> Result<()> {
+    let html = r#"
+        <button id='go'>go</button>
+        <script>
+          document.getElementById('go').addEventListener('click', () => {
+            location.assign('https://app.local/two');
+          });
+        </script>
+        "#;
+
+    let start_mock = r#"
+        <p id='start'>start</p>
+    "#;
+
+    let two_mock = r#"
+        <button id='back'>back</button>
+        <p id='result'></p>
+        <script>
+          const logs = [];
+          window.addEventListener('beforeunload', (event) => {
+            logs.push('beforeunload:' + String(event.cancelable));
+            event.returnValue = 'stay';
+          });
+          window.addEventListener('pagehide', () => logs.push('pagehide'));
+          window.addEventListener('popstate', () => logs.push('popstate'));
+          navigation.addEventListener('currententrychange', () => {
+            logs.push('currententrychange');
+          });
+          document.getElementById('back').addEventListener('click', () => {
+            logs.length = 0;
+            history.back();
+            document.getElementById('result').textContent = [
+              logs.join('|'),
+              location.href,
+              navigation.currentEntry.url
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.set_location_mock_page("https://app.local/start", start_mock);
+    h.set_location_mock_page("https://app.local/two", two_mock);
+    h.click("#go")?;
+    h.click("#back")?;
+    h.assert_text(
+        "#result",
+        "beforeunload:true|https://app.local/two|https://app.local/two",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn navigation_cross_document_traversal_orders_pageshow_before_popstate_and_currententrychange_work()
+-> Result<()> {
+    let html = r#"
+        <button id='go'>go</button>
+        <script>
+          localStorage.removeItem('nav-order');
+          document.getElementById('go').addEventListener('click', () => {
+            location.assign('https://app.local/one?step=1');
+          });
+        </script>
+        "#;
+
+    let one_mock = r#"
+        <button id='to-two'>to-two</button>
+        <p id='result'></p>
+        <script>
+          const append = (entry) => {
+            const current = localStorage.getItem('nav-order') || '';
+            localStorage.setItem('nav-order', current ? current + '|' + entry : entry);
+          };
+          window.addEventListener('pageshow', () => {
+            append('pageshow:' + location.href);
+          });
+          window.addEventListener('popstate', () => {
+            append('popstate:' + location.href);
+          });
+          navigation.addEventListener('currententrychange', () => {
+            append('currententrychange:' + navigation.currentEntry.url);
+            document.getElementById('result').textContent =
+              localStorage.getItem('nav-order') || '';
+          });
+          document.getElementById('to-two').addEventListener('click', () => {
+            location.assign('https://app.local/two?step=2');
+          });
+        </script>
+        "#;
+
+    let two_mock = r#"
+        <button id='back'>back</button>
+        <script>
+          document.getElementById('back').addEventListener('click', () => {
+            localStorage.setItem('nav-order', '');
+            history.back();
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/start", html)?;
+    h.set_location_mock_page("https://app.local/one?step=1", one_mock);
+    h.set_location_mock_page("https://app.local/two?step=2", two_mock);
+    h.click("#go")?;
+    h.click("#to-two")?;
+    h.click("#back")?;
+    h.assert_text(
+        "#result",
+        "pageshow:https://app.local/one?step=1|popstate:https://app.local/one?step=1|currententrychange:https://app.local/one?step=1",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn navigation_currententrychange_orders_after_popstate_and_hashchange_for_same_document_traversal_work()
+-> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const log = [];
+            history.pushState('one', '', 'https://app.local/path#one');
+            history.pushState('two', '', 'https://app.local/path#two');
+
+            window.addEventListener('popstate', () => {
+              log.push(`popstate:${location.href}`);
+            });
+            window.addEventListener('hashchange', (event) => {
+              log.push(`hashchange:${event.oldURL}->${event.newURL}`);
+            });
+            navigation.addEventListener('currententrychange', () => {
+              log.push(`currententrychange:${navigation.currentEntry.url}`);
+            });
+            window.addEventListener('pagehide', () => log.push('pagehide'));
+            window.addEventListener('pageshow', () => log.push('pageshow'));
+            document.addEventListener('visibilitychange', () => {
+              log.push(`visibility:${document.visibilityState}`);
+            });
+
+            history.back();
+
+            document.getElementById('result').textContent = [
+              log.join('|'),
+              document.readyState,
+              document.visibilityState,
+              location.href
+            ].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html_with_url("https://app.local/path#zero", html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "popstate:https://app.local/path#one|hashchange:https://app.local/path#two->https://app.local/path#one|currententrychange:https://app.local/path#one|complete|visible|https://app.local/path#one",
+    )?;
+    Ok(())
+}

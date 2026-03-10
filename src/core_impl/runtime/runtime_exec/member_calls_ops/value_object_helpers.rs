@@ -4148,7 +4148,7 @@ impl Harness {
     }
 
     pub(crate) fn new_computed_style_object_value(node: NodeId, pseudo: Option<String>) -> Value {
-        Self::new_object_value(vec![
+        let value = Self::new_object_value(vec![
             (
                 INTERNAL_COMPUTED_STYLE_OBJECT_KEY.to_string(),
                 Value::Bool(true),
@@ -4166,7 +4166,14 @@ impl Harness {
                 Self::new_computed_style_get_property_value_callable(),
             ),
             ("item".to_string(), Self::new_computed_style_item_callable()),
-        ])
+        ]);
+        let Value::Object(entries) = &value else {
+            return value;
+        };
+        let mut entries = entries.borrow_mut();
+        Self::mark_object_properties_non_enumerable(&mut *entries, &["getPropertyValue", "item"]);
+        drop(entries);
+        value
     }
 
     pub(crate) fn new_dom_rect_value(
@@ -4195,6 +4202,11 @@ impl Harness {
         for key in [
             "x", "y", "left", "top", "right", "bottom", "width", "height",
         ] {
+            Self::object_set_entry(
+                &mut *entries,
+                Self::object_non_enumerable_storage_key(key),
+                Value::Bool(true),
+            );
             Self::object_set_entry(
                 &mut *entries,
                 Self::object_non_writable_storage_key(key),
@@ -4402,6 +4414,10 @@ impl Harness {
     ) -> Result<Option<Value>> {
         if !Self::is_computed_style_object(entries) {
             return Ok(None);
+        }
+
+        if self.is_to_string_tag_property_key(key) {
+            return Ok(Some(Value::String("CSSStyleDeclaration".to_string())));
         }
 
         match key {
@@ -7312,7 +7328,13 @@ impl Harness {
             Value::BigInt(_) => "BigInt".to_string(),
             Value::String(_) => "String".to_string(),
             Value::Symbol(_) => "Symbol".to_string(),
-            Value::Array(_) => "Array".to_string(),
+            Value::Array(values) => {
+                if Self::is_dom_rect_list_value(&values.borrow()) {
+                    "DOMRectList".to_string()
+                } else {
+                    "Array".to_string()
+                }
+            }
             Value::Promise(_) => "Promise".to_string(),
             Value::Map(_) => "Map".to_string(),
             Value::WeakMap(_) => "WeakMap".to_string(),
@@ -8520,6 +8542,9 @@ impl Harness {
         key: &str,
     ) -> Result<Value> {
         let values = values.borrow();
+        if Self::is_dom_rect_list_value(&values) && self.is_to_string_tag_property_key(key) {
+            return Ok(Value::String("DOMRectList".to_string()));
+        }
         if key == "length" {
             return Ok(Value::Number(values.len() as i64));
         }

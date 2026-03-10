@@ -168,3 +168,57 @@ fn layout_derived_properties_shadow_define_property_delete_and_fast_path_parity_
     )?;
     Ok(())
 }
+
+#[test]
+fn reduced_layout_derived_metrics_stay_off_instance_copy_surface_until_shadowed_work() -> Result<()>
+{
+    let html = r#"
+        <div id='box' style='width: 100px; height: 80px; padding-left: 7px; padding-right: 15px; border-left: 4px solid black;'></div>
+        <button id='run'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const box = document.getElementById('box');
+
+            const before = [
+              String(Object.getOwnPropertyDescriptor(box, 'clientWidth') === undefined),
+              String(Object.getOwnPropertyDescriptor(box, 'offsetWidth') === undefined),
+              String(Object.keys(Object.assign({}, box)).includes('clientWidth')),
+              String(Object.keys({ ...box }).includes('offsetWidth'))
+            ].join(':');
+
+            Object.defineProperty(box, 'clientWidth', {
+              value: 'cw',
+              enumerable: true,
+              configurable: true
+            });
+
+            const shadowed = [
+              box.clientWidth,
+              String(Object.keys(Object.assign({}, box)).includes('clientWidth')),
+              String(Object.keys({ ...box }).includes('clientWidth'))
+            ].join(':');
+
+            delete box.clientWidth;
+
+            const restored = [
+              String(Object.getOwnPropertyDescriptor(box, 'clientWidth') === undefined),
+              String(Object.keys(Object.assign({}, box)).includes('clientWidth')),
+              String(Object.keys({ ...box }).includes('clientWidth')),
+              String(box.clientWidth)
+            ].join(':');
+
+            document.getElementById('result').textContent =
+              [before, shadowed, restored].join('|');
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+    h.assert_text(
+        "#result",
+        "true:true:false:false|cw:true:true|true:false:false:122",
+    )?;
+    Ok(())
+}

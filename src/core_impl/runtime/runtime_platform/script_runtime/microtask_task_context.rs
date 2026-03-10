@@ -26,6 +26,23 @@ impl Harness {
             .push_back(ScheduledMicrotask::Callable { callback });
     }
 
+    pub(crate) fn queue_worker_message_microtask(
+        &mut self,
+        worker: &Rc<RefCell<ObjectValue>>,
+        target: &Rc<RefCell<ObjectValue>>,
+        target_this: Value,
+        data: Value,
+    ) {
+        self.scheduler
+            .microtask_queue
+            .push_back(ScheduledMicrotask::WorkerMessage {
+                worker: worker.clone(),
+                target: target.clone(),
+                target_this,
+                data,
+            });
+    }
+
     pub(crate) fn run_microtask_queue(&mut self) -> Result<usize> {
         self.with_task_depth(|this| {
             let mut steps = 0usize;
@@ -48,6 +65,14 @@ impl Harness {
                     }
                     ScheduledMicrotask::Callable { callback } => {
                         this.run_callable_microtask(&callback)?;
+                    }
+                    ScheduledMicrotask::WorkerMessage {
+                        worker,
+                        target,
+                        target_this,
+                        data,
+                    } => {
+                        this.run_worker_message_microtask(&worker, &target, target_this, data)?;
                     }
                     ScheduledMicrotask::Promise { reaction, settled } => {
                         this.run_promise_reaction_task(reaction, settled)?;
@@ -660,6 +685,20 @@ impl Harness {
         let event = EventState::new("microtask", self.dom.root, self.scheduler.now_ms);
         let _ = self.execute_callable_value_with_env(callback, &[], &event, None)?;
         Ok(())
+    }
+
+    fn run_worker_message_microtask(
+        &mut self,
+        worker: &Rc<RefCell<ObjectValue>>,
+        target: &Rc<RefCell<ObjectValue>>,
+        target_this: Value,
+        data: Value,
+    ) -> Result<()> {
+        if Self::worker_is_terminated_object(worker) {
+            return Ok(());
+        }
+        let event = EventState::new("microtask", self.dom.root, self.scheduler.now_ms);
+        self.dispatch_worker_message_to_onmessage(target, target_this, data, &event)
     }
 
     pub(crate) fn with_callback_scope_depth<T>(

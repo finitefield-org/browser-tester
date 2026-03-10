@@ -6,16 +6,154 @@
 - `P1: Attribute Reflection, Global Attributes, Element Algorithms, Forms, Default Actions, and Events` is complete.
 - `P2: Navigation, Loading, Media, and Rendering-Tied Behavior` is complete.
 - `P3: WPT-Guided Exposed-Surface Interop Hardening` is complete.
+- `P4: Harness Reduction and Selective WPT Intake` is complete.
 - `P4.1: Harness-reduction inventory refresh and candidate ranking` is complete.
 - `P4.2: Editing, selection, focus, and clipboard harness-reduction pass` is complete.
 - `P4.3: Navigation/loading lifecycle harness-reduction pass` is complete.
 - `P1.1` through `P1.139` are complete.
 - `P2.1` through `P2.13` are complete.
 - `P3.1` through `P3.13` are complete.
-- The latest full verification was `cargo test --lib` with `2538 passed, 0 failed`.
+- `P4.1` through `P4.7` are complete.
+- `M1: Deferred worker/message-loop and structured-clone harness reduction revisit` is complete.
+- `M2: CSSOM View/layout reduction target selection` is complete.
+- `M3: Selective reduced-WPT intake for stabilized navigation/loading contracts` is complete.
+- `M4: Selective reduced-WPT intake for stabilized media/download/canvas contracts` is complete.
+- `M5: Public API delta audit and regression intake loop` is complete for the current maintenance pass.
+- `Deferred: CSSOM View/layout and computed-style harness reduction` is complete.
+- `Maintenance: Selective CSSOM View/browser-comparison intake over stabilized geometry/style contracts` is complete.
+- `Maintenance: Rolling reduced-WPT/browser-comparison intake triage refresh` is complete.
+- `Maintenance: Selective worker/message-loop/browser-comparison intake over stabilized delivery contracts` is complete.
+- `Maintenance: Post-worker/browser-comparison triage refresh` is complete.
+- `Maintenance: Periodic public-API delta audit and issue-driven intake reopening` is complete for the current maintenance pass.
+- `Maintenance: Dormant backlog watch until the next intake trigger` is complete for the current watch pass.
+- The latest full verification was `cargo test --lib` with `2561 passed, 0 failed`.
 - No new test-only mock is currently required. If a future task adds one, document it in `README.md`.
 
 ## Recently Completed
+
+- `Maintenance: Dormant backlog watch until the next intake trigger`
+  - confirmed that there is still no concrete trigger to reopen selective browser-comparison intake and kept the maintenance backlog dormant/on-demand
+  - set the next work to trigger-driven reopening only when a new public-API family, a browser-comparison-backed regression cluster, or a harness/modeling broadening appears
+  - verification:
+  - documentation-only update; no code or test changes were required
+
+- `Maintenance: Periodic public-API delta audit and issue-driven intake reopening`
+  - reviewed the current public constructor/prototype surface and recent regressions after the worker/message-loop intake and confirmed that no new selective browser-comparison slice needs to be reopened immediately
+  - kept the maintenance backlog in a dormant/on-demand posture, with reactivation gated by a new public-API family, a fresh browser-comparison-backed regression cluster, or a future harness/modeling broadening
+  - verification:
+  - documentation-only update; no code or test changes were required
+
+- `Maintenance: Post-worker/browser-comparison triage refresh`
+  - reviewed the now-complete selective browser-comparison intake set across navigation/loading, media/download/canvas, CSSOM View, and worker/message-loop contracts
+  - decided not to open another selective intake family immediately and moved the roadmap to a dormant/on-demand maintenance posture gated by new public-API exposure or a fresh regression cluster
+  - verification:
+  - documentation-only update; no code or test changes were required
+
+- `Maintenance: Selective worker/message-loop/browser-comparison intake over stabilized delivery contracts`
+  - ported a narrow reduced browser-comparison set over the already-stabilized worker/message-loop contract instead of broadening worker lifecycle or cross-origin modeling
+  - locked reduced regressions for multiple queued `postMessage(...)` deliveries after same-task handler registration, FIFO boot-message delivery at end-of-task, and structured-clone isolation across queued sends
+  - verification:
+  - `cargo test --lib issue_102_worker_regex_exec -- --nocapture`
+  - `cargo test --lib dom_error_event -- --nocapture`
+  - `cargo test --lib issue_121_127_finitefield_site_regressions -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib`
+
+- `Maintenance: Rolling reduced-WPT/browser-comparison intake triage refresh`
+  - reviewed the post-`M5` rolling backlog after the CSSOM subset was stabilized and confirmed that no new roadmap phase is justified
+  - closed the old "CSSOM first" maintenance posture and selected worker/message-loop timing plus structured-clone delivery as the next smallest high-confidence reduced intake target
+  - verification:
+  - documentation-only update; no code or test changes were required
+
+- `Maintenance: Selective CSSOM View/browser-comparison intake over stabilized geometry/style contracts`
+  - ported a reduced CSSOM subset over stabilized geometry/style contracts instead of broadening the layout model, covering `DOMRectList` branding, computed-style `Symbol.toStringTag` / method-surface visibility, and layout-derived metric copy/instance-surface boundaries
+  - aligned `DOMRectList` and `CSSStyleDeclaration` reduced branding paths with the existing deterministic object model and locked new reduced regressions for geometry/style/browser-comparison intake
+  - verification:
+  - `cargo test --lib dom_element_get_client_rects_method -- --nocapture`
+  - `cargo test --lib window_get_computed_style -- --nocapture`
+  - `cargo test --lib dom_element_client_width_property -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib`
+
+- `Deferred: CSSOM View/layout and computed-style harness reduction`
+  - reduced the remaining CSSOM View/layout harness gap to a smaller deterministic contract over readonly scroll aliases, branded geometry objects, and non-copying computed-style method surface instead of widening the layout model
+  - made `DOMRect` numeric fields non-enumerable/readonly, made `getComputedStyle(...)` method properties non-enumerable, and locked reduced regressions for scroll alias linkage, geometry object copy behavior, and computed-style copy behavior
+  - verification:
+  - `cargo test --lib window_forms_trace -- --nocapture`
+  - `cargo test --lib dom_element_get_bounding_client_rect_method -- --nocapture`
+  - `cargo test --lib dom_element_get_client_rects_method -- --nocapture`
+  - `cargo test --lib window_get_computed_style -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib`
+
+- `M5: Public API delta audit and regression intake loop`
+  - reviewed the current exposed constructor/prototype surface and recent regression clusters against the roadmap assumptions after `P4`
+  - confirmed that recently exposed families still fit the existing inventory buckets and do not justify opening a new named roadmap phase
+  - kept the next actionable work on the deferred CSSOM View/layout reduction backlog rather than creating a broader maintenance phase
+  - verification:
+  - documentation-only update; no code or test changes were required
+
+- `M4: Selective reduced-WPT intake for stabilized media/download/canvas contracts`
+  - added a small reduced regression set over the already-stabilized media/download/canvas contracts instead of reopening broader harness work
+  - locked reduced cases for resolved-vs-empty `load()` event ordering, final-click-state object-URL download capture, same-task PNG fallback in `canvas.toBlob(...)`, and call-time canvas dimension snapshots in `createImageBitmap(...)`
+  - verification:
+  - `cargo test --lib dom_audio_element -- --nocapture`
+  - `cargo test --lib issue_74_download_artifacts -- --nocapture`
+  - `cargo test --lib issue_96_canvas_to_blob_clipboard_flow -- --nocapture`
+  - `cargo test --lib dom_input_file_create_image_bitmap -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib`
+
+- `M3: Selective reduced-WPT intake for stabilized navigation/loading contracts`
+  - added reduced navigation/history/lifecycle regressions over the stabilized mock-page contract instead of broadening the harness again
+  - locked three reduced cases: cross-document traversal cancellation suppresses `currententrychange`, cross-document traversal orders `pageshow` before `popstate` and `currententrychange`, and same-document traversal keeps `popstate -> hashchange -> currententrychange`
+  - verification:
+  - `cargo test --lib dom_navigation_interface -- --nocapture`
+  - `cargo test --lib dom_navigation_dialog -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib`
+
+- `M2: CSSOM View/layout reduction target selection`
+  - chose a narrow surface-first CSSOM View contract instead of opening a broad new layout phase
+  - marked scroll aliases, geometry object surface, computed-style object surface, and already-deterministic layout-derived properties as the only intake-ready subset for future reduced-WPT/browser-comparison work
+  - kept full layout, painting, visual viewport, transforms, and reflow-dependent geometry on the rolling backlog
+  - verification:
+  - documentation-only update; no code or test changes were required
+
+- `M1: Deferred worker/message-loop and structured-clone harness reduction revisit`
+  - reduced the deferred worker/message-loop gap to an end-of-task delivery contract so `worker.postMessage(...)` and worker-global `postMessage(...)` no longer dispatch inline, which lets same-task `onmessage` registration observe pending messages while keeping terminated workers silent
+  - locked reduced regressions for late handler registration, constructor-time boot messages, terminate-before-delivery suppression, and the existing structured-clone / blob-URL worker surface
+  - verification:
+  - `cargo test --lib issue_102_worker_regex_exec -- --nocapture`
+  - `cargo test --lib dom_error_event -- --nocapture`
+  - `cargo test --lib issue_121_127_finitefield_site_regressions -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib`
+
+- `P4.7: Post-P4 closure pass and roadmap refresh`
+  - closed `P4` and refreshed the roadmap so the next step is a rolling maintenance backlog rather than a broad new `P5` phase
+  - kept the remaining work focused on deferred worker/message-loop reduction, CSSOM View/layout reduction, and selective reduced-WPT intake over the contracts stabilized during `P4`
+  - verification:
+  - documentation-only update; no code or test changes were required
+
+- `P4.6: Canvas/image-pipeline artifact reduction pass`
+  - reduced the mock-shaped canvas/image pipeline to a narrower deterministic contract by fixing `toBlob(...)` as a same-task callback with stable PNG fallback behavior and `createImageBitmap(canvas)` as a call-time dimension snapshot even if the source canvas is resized later
+  - locked reduced regressions for canvas-produced blob artifacts and canvas-backed image bitmap creation without broadening the harness into full rendering or asynchronous codec behavior
+  - verification:
+  - `cargo test --lib dom_canvas_element -- --nocapture`
+  - `cargo test --lib dom_input_file_create_image_bitmap -- --nocapture`
+  - `cargo test --lib issue_96_canvas_to_blob_clipboard_flow -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib`
+
+- `P4.5: Download, object-URL, and artifact-capture browser-comparison reduction`
+  - reduced the harness-specific download contract to a narrower browser-comparison-backed rule: captured artifacts are object-URL-only, the final post-click `href` / `download` state drives default action, network downloads remain uncaptured, and dropping `download` before default action restores navigation
+  - locked reduced regressions for both `<a>` and `<area>` so click-handler mutations now define a stable artifact-capture boundary without broadening the harness to emulate full browser download plumbing
+  - verification:
+  - `cargo test --lib issue_74_download_artifacts -- --nocapture`
+  - `cargo test --lib dom_area_element -- --nocapture`
+  - `cargo fmt`
+  - `cargo test --lib`
 
 - `P4.4: Media/resource loading and candidate-selection harness-reduction pass`
   - reduced the media/resource harness to a smaller deterministic `load()` contract by dispatching stable load-facing events for resolved candidates and a narrower `loadstart`-only path for empty candidate sets
@@ -356,9 +494,25 @@
 
 ## Next Task
 
-- [ ] `P4.5: Download, object-URL, and artifact-capture browser-comparison reduction`
-  - use browser comparison to define the stable contract for harness-captured downloads and blob/object URL interactions
-  - convert the chosen contract into deterministic reduced regressions without broadening the harness unnecessarily
+- [x] `Maintenance: Selective worker/message-loop/browser-comparison intake over stabilized delivery contracts`
+  - port a small reduced browser-comparison set for end-of-task `postMessage(...)` delivery, same-task handler registration, terminate-before-delivery suppression, and structured-clone isolation
+  - keep the scope limited to the stabilized worker/message-loop contract and avoid reopening broader worker lifecycle or cross-origin modeling
+
+- [x] `Maintenance: Post-worker/browser-comparison triage refresh`
+  - review the now-complete reduced browser-comparison intake set across navigation/loading, media/download/canvas, CSSOM View, and worker/message-loop contracts
+  - decide whether the next maintenance step is another selective intake slice or a dormant/on-demand backlog state gated by new exposed-surface regressions
+
+- [x] `Maintenance: Periodic public-API delta audit and issue-driven intake reopening`
+  - periodically re-check newly exposed constructors, prototype surfaces, and recent regressions against the current inventory buckets
+  - reopen selective browser-comparison intake only when a new API family or regression cluster justifies it
+
+- [x] `Maintenance: Dormant backlog watch until the next intake trigger`
+  - keep the roadmap dormant by default and wait for a concrete reactivation trigger such as a new public-API family, a browser-comparison-backed regression cluster, or a harness/modeling broadening
+  - when a trigger appears, reopen the smallest justified selective intake slice instead of starting a new broad phase
+
+- [ ] `Maintenance: Trigger-driven selective intake reopening`
+  - reopen the smallest justified selective intake slice only when a concrete trigger appears
+  - keep scope narrow and avoid creating a new broad phase unless the trigger proves cross-cutting
 
 ## P3 Backlog
 
@@ -433,27 +587,72 @@
   - reduce the partial media/resource model into a smaller deterministic contract suitable for broader reduced-WPT coverage
   - focus on source selection, readiness/network state, wrapper persistence, and related event ordering
 
-- [ ] `P4.5: Download, object-URL, and artifact-capture browser-comparison reduction`
+- [x] `P4.5: Download, object-URL, and artifact-capture browser-comparison reduction`
   - use browser comparison to define the stable contract for harness-captured downloads and blob/object URL interactions
   - convert the chosen contract into deterministic reduced regressions without broadening the harness unnecessarily
 
-- [ ] `P4.6: Canvas/image-pipeline artifact reduction pass`
+- [x] `P4.6: Canvas/image-pipeline artifact reduction pass`
   - reduce mock-shaped canvas/image output behavior into a clearer deterministic contract for image bitmap, toBlob/toDataURL, and clipboard/image artifact flows
   - prefer a small number of high-confidence browser-comparison-backed regressions
 
-- [ ] `P4.7: Post-P4 closure pass and roadmap refresh`
+- [x] `P4.7: Post-P4 closure pass and roadmap refresh`
   - summarize which partially modeled surfaces were made intake-ready during `P4`
   - decide whether the next step is a small rolling maintenance backlog or a justified new roadmap phase
 
-## Deferred After Core P4 Queue
+## Rolling Maintenance Backlog
 
-- [ ] `Deferred: Worker/message-loop and structured-clone harness reduction`
-  - revisit reduced-WPT intake for worker lifecycle, message delivery, and structured-clone semantics after the higher-payoff `P4` queue is complete
+- [x] `M1: Deferred worker/message-loop and structured-clone harness reduction revisit`
+  - revisit reduced-WPT intake for worker lifecycle, message delivery, and structured-clone semantics now that the core `P4` queue is complete
+  - keep the work narrow and deterministic, focusing on message-loop ordering and object-URL integration rather than broad worker expansion
+
+- [x] `M2: CSSOM View/layout reduction target selection`
+  - define a smaller deterministic layout contract for the remaining CSSOM View/computed-style gaps before any broader browser-comparison pass
+  - choose only the geometry/scroll/style cases that can be reduced without introducing real layout or painting
+
+- [x] `M3: Selective reduced-WPT intake for stabilized navigation/loading contracts`
+  - port a small set of reduced navigation/history/lifecycle cases now that the `beforeunload`/`pagehide`/`pageshow` harness contract is stable
+  - prefer reduced cases that validate ordering and state visibility rather than broad browser-loading behavior
+
+- [x] `M4: Selective reduced-WPT intake for stabilized media/download/canvas contracts`
+  - port a small set of reduced browser-comparison-backed cases over `load()` event ordering, object-URL download capture, and canvas/image artifact contracts
+  - avoid reopening broad media/network/rendering work while validating the narrower contracts chosen in `P4`
+
+- [x] `M5: Public API delta audit and regression intake loop`
+  - periodically review newly exposed APIs, release-time deltas, and fresh regressions against the current roadmap assumptions
+  - only open a new named roadmap phase if these maintenance items turn into another cross-cutting implementation campaign
   - treat this as a rolling backlog item unless a new exposed-surface regression makes it urgent earlier
 
-- [ ] `Deferred: CSSOM View/layout and computed-style harness reduction`
+- [x] `Deferred: CSSOM View/layout and computed-style harness reduction`
   - revisit reduced-WPT intake for layout-derived metrics and computed-style behavior after defining a narrower deterministic layout contract
   - keep this out of the core `P4` queue until a smaller high-confidence reduction target is chosen
+
+- [x] `Maintenance: Selective CSSOM View/browser-comparison intake over stabilized geometry/style contracts`
+  - port a small reduced browser-comparison set for readonly scroll aliases, `DOMRect` / `DOMRectList`, `getComputedStyle(...)`, and already-deterministic layout-derived metrics
+  - keep the scope limited to the stabilized reduced contract and avoid expanding into full layout, visual viewport, transforms, or painting
+
+- [x] `Maintenance: Rolling reduced-WPT/browser-comparison intake triage refresh`
+  - review the newly stabilized CSSOM subset together with the existing navigation/media/download/canvas intake backlog and choose the next smallest high-confidence reduced intake target
+  - keep the work on deterministic public-surface contracts and avoid reopening broad layout, rendering, or network modeling
+
+- [x] `Maintenance: Selective worker/message-loop/browser-comparison intake over stabilized delivery contracts`
+  - port a small reduced browser-comparison set for end-of-task `postMessage(...)` delivery, same-task handler registration, terminate-before-delivery suppression, and structured-clone isolation
+  - keep the scope limited to the stabilized worker/message-loop contract and avoid reopening broader worker lifecycle or cross-origin modeling
+
+- [x] `Maintenance: Post-worker/browser-comparison triage refresh`
+  - review the now-complete reduced browser-comparison intake set across navigation/loading, media/download/canvas, CSSOM View, and worker/message-loop contracts
+  - decide whether the next maintenance step is another selective intake slice or a dormant/on-demand backlog state gated by new exposed-surface regressions
+
+- [x] `Maintenance: Periodic public-API delta audit and issue-driven intake reopening`
+  - periodically re-check newly exposed constructors, prototype surfaces, and recent regressions against the current inventory buckets
+  - reopen selective browser-comparison intake only when a new API family or regression cluster justifies it
+
+- [x] `Maintenance: Dormant backlog watch until the next intake trigger`
+  - keep the roadmap dormant by default and wait for a concrete reactivation trigger such as a new public-API family, a browser-comparison-backed regression cluster, or a harness/modeling broadening
+  - when a trigger appears, reopen the smallest justified selective intake slice instead of starting a new broad phase
+
+- [ ] `Maintenance: Trigger-driven selective intake reopening`
+  - reopen the smallest justified selective intake slice only when a concrete trigger appears
+  - keep scope narrow and avoid creating a new broad phase unless the trigger proves cross-cutting
 
 ## Verification Rule
 
