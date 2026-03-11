@@ -282,7 +282,14 @@ impl Harness {
         &self,
         name: &str,
     ) -> Option<Option<Value>> {
-        for frame in self.script_runtime.listener_capture_env_stack.iter().rev() {
+        let len = self.script_runtime.listener_capture_env_stack.len();
+        let start = (0..len)
+            .rev()
+            .find(|&index| {
+                !self.script_runtime.listener_capture_env_stack[index].inherit_outer_pending
+            })
+            .unwrap_or(0);
+        for frame in self.script_runtime.listener_capture_env_stack[start..].iter().rev() {
             if let Some(value) = frame.pending_env_updates.get(name) {
                 return Some(value.clone());
             }

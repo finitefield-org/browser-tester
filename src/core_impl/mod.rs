@@ -24,6 +24,10 @@ pub(crate) mod test_support {
     pub(crate) fn parse_expr(src: &str) -> Result<Expr> {
         super::parser::api::parse_expr(src)
     }
+
+    pub(crate) fn parse_block_statements(src: &str) -> Result<Vec<Stmt>> {
+        super::parser::api::parse_block_statements(src)
+    }
 }
 
 pub(super) fn unescape_string(src: &str) -> String {

@@ -54,6 +54,10 @@ mod test_support {
     pub(crate) fn parse_expr(src: &str) -> Result<Expr> {
         core_impl::test_support::parse_expr(src)
     }
+
+    pub(crate) fn parse_block_statements(src: &str) -> Result<Vec<Stmt>> {
+        core_impl::test_support::parse_block_statements(src)
+    }
 }
 
 fn unescape_string(src: &str) -> String {

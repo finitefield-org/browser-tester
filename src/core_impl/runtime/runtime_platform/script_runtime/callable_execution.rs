@@ -7236,6 +7236,7 @@ impl Harness {
                             ..ListenerCaptureFrame::default()
                         });
                     let bind_result = (|| -> Result<()> {
+                        this.apply_pending_listener_capture_env_updates(&mut call_env);
                         this.bind_handler_params(
                             &function.handler,
                             args,
@@ -7243,7 +7244,6 @@ impl Harness {
                             &event_param,
                             &call_event,
                         )?;
-                        this.apply_pending_listener_capture_env_updates(&mut call_env);
                         Ok(())
                     })();
                     this.script_runtime.listener_capture_env_stack.pop();

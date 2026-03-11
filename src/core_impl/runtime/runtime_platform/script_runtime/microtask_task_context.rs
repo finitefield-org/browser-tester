@@ -125,6 +125,7 @@ impl Harness {
         };
         self.with_callback_scope_depth(env, |this, callback_env| {
             this.with_isolated_loop_control_scope(|this| {
+                this.apply_pending_listener_capture_env_updates(callback_env);
                 this.bind_handler_params(handler, &event_args, callback_env, &event_param, event)?;
                 let flow = this.execute_stmts(&handler.stmts, &event_param, event, callback_env)?;
                 Self::sync_event_argument_back_to_state(
@@ -640,6 +641,7 @@ impl Harness {
                     .map(|event_param| event_param.to_string());
                 self.with_callback_scope_depth(env, |this, callback_env| {
                     this.with_isolated_loop_control_scope(|this| {
+                        this.apply_pending_listener_capture_env_updates(callback_env);
                         this.bind_handler_params(
                             &handler,
                             callback_args,
@@ -673,6 +675,7 @@ impl Harness {
             .map(|event_param| event_param.to_string());
         self.with_callback_scope_depth(env, |this, callback_env| {
             this.with_isolated_loop_control_scope(|this| {
+                this.apply_pending_listener_capture_env_updates(callback_env);
                 this.bind_handler_params(handler, &[], callback_env, &event_param, &event)?;
                 let run =
                     this.execute_stmts(&handler.stmts, &event_param, &mut event, callback_env);
