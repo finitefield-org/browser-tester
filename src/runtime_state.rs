@@ -29,6 +29,20 @@ impl ScriptHandler {
                 Expr::Var(arg_name) if arg_name == event_param => Some(target.as_str()),
                 _ => None,
             },
+            Stmt::Expr(Expr::MemberCall {
+                target,
+                member,
+                args,
+                optional: false,
+                optional_call: false,
+            }) if member == "call" && args.len() == 2 => match (&**target, &args[0], &args[1]) {
+                (Expr::Var(callback_name), Expr::Var(this_name), Expr::Var(arg_name))
+                    if this_name == "this" && arg_name == event_param =>
+                {
+                    Some(callback_name.as_str())
+                }
+                _ => None,
+            },
             _ => None,
         }
     }
