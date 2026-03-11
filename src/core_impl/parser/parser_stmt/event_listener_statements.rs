@@ -59,6 +59,7 @@ enum ListenerCallbackParseResult {
     Inline {
         params: Vec<FunctionParam>,
         body: String,
+        is_arrow: bool,
     },
     Reference(String),
 }
@@ -74,13 +75,21 @@ fn parse_listener_callback_arg(cursor: &mut Cursor<'_>) -> Result<ListenerCallba
     }
 
     if try_consume_async_function_prefix(cursor) || try_consume_async_arrow_prefix(cursor) {
-        let (params, body, _) = parse_callback(cursor, 1, "callback parameters")?;
-        return Ok(ListenerCallbackParseResult::Inline { params, body });
+        let (params, body, is_arrow) = parse_callback(cursor, 1, "callback parameters")?;
+        return Ok(ListenerCallbackParseResult::Inline {
+            params,
+            body,
+            is_arrow,
+        });
     }
     cursor.set_pos(start);
 
-    let (params, body, _) = parse_callback(cursor, 1, "callback parameters")?;
-    Ok(ListenerCallbackParseResult::Inline { params, body })
+    let (params, body, is_arrow) = parse_callback(cursor, 1, "callback parameters")?;
+    Ok(ListenerCallbackParseResult::Inline {
+        params,
+        body,
+        is_arrow,
+    })
 }
 
 fn parse_listener_callback_src(src: &str) -> Result<ListenerCallbackParseResult> {
@@ -100,7 +109,8 @@ pub(crate) fn build_listener_reference_handler(callback_name: &str) -> Result<Sc
     while event_param == callback_name {
         event_param.push('_');
     }
-    let stmts = parse_block_statements(&format!("{callback_name}({event_param});"))?;
+    let stmts =
+        parse_block_statements(&format!("{callback_name}.call(this, {event_param});"))?;
     Ok(ScriptHandler {
         params: vec![FunctionParam {
             name: event_param,
@@ -228,18 +238,28 @@ pub(crate) fn parse_listener_mutation_stmt(stmt: &str) -> Result<Option<Stmt>> {
         )));
     }
 
-    let handler = match callback {
-        ListenerCallbackParseResult::Inline { params, body } => ScriptHandler {
+    let (handler, is_arrow) = match callback {
+        ListenerCallbackParseResult::Inline {
             params,
-            stmts: parse_block_statements(&body)?,
-        },
-        ListenerCallbackParseResult::Reference(name) => build_listener_reference_handler(&name)?,
+            body,
+            is_arrow,
+        } => (
+            ScriptHandler {
+                params,
+                stmts: parse_block_statements(&body)?,
+            },
+            is_arrow,
+        ),
+        ListenerCallbackParseResult::Reference(name) => {
+            (build_listener_reference_handler(&name)?, false)
+        }
     };
     Ok(Some(Stmt::ListenerMutation {
         target,
         op,
         event_type,
         capture,
+        is_arrow,
         handler,
     }))
 }

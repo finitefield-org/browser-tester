@@ -1333,6 +1333,7 @@ pub(crate) enum Stmt {
         op: ListenerRegistrationOp,
         event_type: Expr,
         capture: bool,
+        is_arrow: bool,
         handler: ScriptHandler,
     },
     DispatchEvent {

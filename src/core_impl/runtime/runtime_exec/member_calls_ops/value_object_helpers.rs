@@ -6540,6 +6540,7 @@ impl Harness {
                     "getTime",
                     "setTime",
                     "toISOString",
+                    "toLocaleDateString",
                     "toString",
                     "valueOf",
                     "getUTCFullYear",
@@ -7137,6 +7138,7 @@ impl Harness {
             ("date", "getTime") => ("getTime", 0),
             ("date", "setTime") => ("setTime", 1),
             ("date", "toISOString") => ("toISOString", 0),
+            ("date", "toLocaleDateString") => ("toLocaleDateString", 0),
             ("date", "toString") => ("toString", 0),
             ("date", "valueOf") => ("valueOf", 0),
             ("date", "getUTCFullYear") => ("getUTCFullYear", 0),
@@ -8353,6 +8355,7 @@ impl Harness {
             name,
             "forEach"
                 | "map"
+                | "flatMap"
                 | "filter"
                 | "reduce"
                 | "find"

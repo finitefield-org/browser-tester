@@ -310,6 +310,98 @@ pub(crate) fn parse_object_assignment_target(lhs: &str) -> Result<Option<(String
     Ok(Some((target, path)))
 }
 
+fn next_assignment_temp_name(stmt: &str, kind: &str) -> String {
+    let mut index = 0usize;
+    loop {
+        let candidate = format!("__bt_assign_{kind}_{index}");
+        if !stmt.contains(&candidate) {
+            return candidate;
+        }
+        index += 1;
+    }
+}
+
+fn split_general_assignment_target(lhs: &str) -> Option<(String, String)> {
+    let lhs = lhs.trim();
+    if lhs.is_empty() {
+        return None;
+    }
+
+    if lhs.ends_with(']') {
+        let open = *collect_top_level_char_positions(lhs, b'[').last()?;
+        let target_src = lhs[..open].trim();
+        if target_src.is_empty() || target_src == "super" {
+            return None;
+        }
+        let mut cursor = Cursor::new(&lhs[open..]);
+        let key_src = cursor.read_balanced_block(b'[', b']').ok()?;
+        cursor.skip_ws();
+        if !cursor.eof() {
+            return None;
+        }
+        let key_src = key_src.trim();
+        if key_src.is_empty() {
+            return None;
+        }
+        return Some((target_src.to_string(), key_src.to_string()));
+    }
+
+    let dot = *collect_top_level_char_positions(lhs, b'.').last()?;
+    let target_src = lhs[..dot].trim();
+    if target_src.is_empty() || target_src == "super" || target_src.ends_with('?') {
+        return None;
+    }
+
+    let member = lhs[dot + 1..].trim();
+    if !is_ident(member) {
+        return None;
+    }
+
+    Some((target_src.to_string(), format!("{member:?}")))
+}
+
+fn lower_general_assignment_stmt(
+    stmt: &str,
+    target_src: &str,
+    key_src: &str,
+    op: &str,
+    rhs: &str,
+) -> Result<Option<Stmt>> {
+    let target_temp = next_assignment_temp_name(stmt, "target");
+    let key_temp = next_assignment_temp_name(stmt, "key");
+    let access_src = format!("{target_temp}[{key_temp}]");
+    let mut lowered = format!("const {target_temp} = {target_src};\nconst {key_temp} = {key_src};\n");
+
+    match op {
+        "=" => {
+            lowered.push_str(&format!("{access_src} = {rhs};"));
+        }
+        "&&=" | "||=" | "??=" => {
+            let prev_temp = next_assignment_temp_name(stmt, "prev");
+            lowered.push_str(&format!("const {prev_temp} = {access_src};\n"));
+            let condition = match op {
+                "&&=" => prev_temp.clone(),
+                "||=" => format!("!{prev_temp}"),
+                "??=" => format!("{prev_temp} === null || {prev_temp} === undefined"),
+                _ => unreachable!(),
+            };
+            lowered.push_str(&format!("if ({condition}) {{ {access_src} = {rhs}; }}"));
+        }
+        "+=" | "-=" | "|=" | "^=" | "&=" | "<<=" | ">>=" | ">>>=" | "*=" | "/=" | "%="
+        | "**=" => {
+            let prev_temp = next_assignment_temp_name(stmt, "prev");
+            let binary_op = &op[..op.len() - 1];
+            lowered.push_str(&format!("const {prev_temp} = {access_src};\n"));
+            lowered.push_str(&format!("{access_src} = {prev_temp} {binary_op} ({rhs});"));
+        }
+        _ => return Ok(None),
+    }
+
+    Ok(Some(Stmt::Block {
+        stmts: parse_block_statements(&lowered)?,
+    }))
+}
+
 pub(crate) fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
     let Some((eq_pos, op_len)) = find_top_level_assignment(stmt) else {
         return Ok(None);
@@ -321,12 +413,26 @@ pub(crate) fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
         return Ok(None);
     }
 
-    let Some((target, path)) = parse_object_assignment_target(lhs)? else {
+    let op = &stmt[eq_pos..eq_pos + op_len];
+    let parsed_target = parse_object_assignment_target(lhs)?;
+    let needs_lowering = parsed_target.as_ref().is_some_and(|(_, path)| {
+        op_len > 1
+            && !matches!(op, "&&=" | "||=" | "??=")
+            && path.iter().any(|segment| !matches!(segment, Expr::String(_)))
+    });
+
+    if needs_lowering || parsed_target.is_none() {
+        let Some((target_src, key_src)) = split_general_assignment_target(lhs) else {
+            return Ok(None);
+        };
+        return lower_general_assignment_stmt(stmt, &target_src, &key_src, op, rhs);
+    }
+
+    let Some((target, path)) = parsed_target else {
         return Ok(None);
     };
 
     let rhs_expr = parse_expr(rhs)?;
-    let op = &stmt[eq_pos..eq_pos + op_len];
     let (assign_op, expr) = if op_len == 1 {
         (VarAssignOp::Assign, rhs_expr)
     } else if op == "&&=" {

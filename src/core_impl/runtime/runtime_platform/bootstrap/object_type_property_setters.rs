@@ -706,6 +706,7 @@ impl Harness {
             let listener = Listener {
                 capture: false,
                 is_event_handler_property: true,
+                is_arrow: function.is_arrow,
                 handler: handler.clone(),
                 captured_env: function.captured_env.clone(),
                 captured_pending_function_decls: function.captured_pending_function_decls.clone(),
@@ -815,6 +816,7 @@ impl Harness {
             let listener = Listener {
                 capture: false,
                 is_event_handler_property: true,
+                is_arrow: function.is_arrow,
                 handler: function.handler.clone(),
                 captured_env: function.captured_env.clone(),
                 captured_pending_function_decls: function.captured_pending_function_decls.clone(),

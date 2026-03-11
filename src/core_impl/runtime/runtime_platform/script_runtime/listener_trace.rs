@@ -11,6 +11,15 @@ impl Harness {
         let listeners = self.listeners.get(node_id, &event.event_type, capture);
         for listener in listeners {
             let mut listener_env = env.clone();
+            if !listener.is_arrow {
+                let this_value = event
+                    .current_target_value
+                    .as_ref()
+                    .cloned()
+                    .unwrap_or(Value::Node(event.current_target));
+                listener_env.insert("this".to_string(), this_value);
+                self.set_const_binding(&mut listener_env, "this", false);
+            }
             let captured_env_snapshot = listener.captured_env.borrow().to_map();
             let captured_keys = captured_env_snapshot
                 .keys()

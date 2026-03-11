@@ -5998,9 +5998,9 @@ impl Harness {
                         Self::structured_clone_value_with_options(&args[0], args.get(1))
                     }
                     "global_request_animation_frame" => {
-                        if args.len() != 1 {
+                        if args.is_empty() {
                             return Err(Error::ScriptRuntime(
-                                "requestAnimationFrame requires exactly one argument".into(),
+                                "requestAnimationFrame requires at least one argument".into(),
                             ));
                         }
                         let callback = args[0].clone();

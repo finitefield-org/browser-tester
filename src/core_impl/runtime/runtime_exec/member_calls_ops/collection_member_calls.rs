@@ -35,6 +35,27 @@ impl Harness {
                 }
                 Value::String(Self::format_iso_8601_utc(*value.borrow()))
             }
+            "toLocaleDateString" => {
+                if evaluated_args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "toLocaleDateString supports at most two arguments".into(),
+                    ));
+                }
+                let requested_locales = evaluated_args
+                    .first()
+                    .map(|value| self.intl_collect_locales(value))
+                    .transpose()?
+                    .unwrap_or_default();
+                let locale = Self::intl_select_locale_for_formatter(
+                    IntlFormatterKind::DateTimeFormat,
+                    &requested_locales,
+                );
+                let options = self.intl_date_time_options_from_value(
+                    &locale,
+                    evaluated_args.get(1),
+                )?;
+                Value::String(self.intl_format_date_time(*value.borrow(), &locale, &options))
+            }
             "toString" => {
                 if !evaluated_args.is_empty() {
                     return Err(Error::ScriptRuntime(
@@ -1062,6 +1083,40 @@ impl Harness {
                         ],
                         event,
                     )?);
+                }
+                Self::new_array_value(out)
+            }
+            "flatMap" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "flatMap requires exactly one callback argument".into(),
+                    ));
+                }
+                let callback = evaluated_args[0].clone();
+                let snapshot = values.borrow().clone();
+                let mut out = Vec::new();
+                for (idx, item) in snapshot.into_iter().enumerate() {
+                    let mapped = self.execute_callback_value(
+                        &callback,
+                        &[
+                            item,
+                            Value::Number(idx as i64),
+                            Value::Array(values.clone()),
+                        ],
+                        event,
+                    )?;
+                    match mapped {
+                        Value::Array(mapped_values) => {
+                            let mapped_values = mapped_values.borrow();
+                            for index in 0..mapped_values.len() {
+                                if Self::array_index_is_hole(&mapped_values, index) {
+                                    continue;
+                                }
+                                out.push(mapped_values[index].clone());
+                            }
+                        }
+                        other => out.push(other),
+                    }
                 }
                 Self::new_array_value(out)
             }

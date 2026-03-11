@@ -58,9 +58,9 @@ pub(crate) fn parse_request_animation_frame_call(
 
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let args = split_top_level_by_char(&args_src, b',');
-    if args.len() != 1 || args[0].trim().is_empty() {
+    if args.is_empty() || args[0].trim().is_empty() {
         return Err(Error::ScriptParse(
-            "requestAnimationFrame requires exactly one argument".into(),
+            "requestAnimationFrame requires at least one argument".into(),
         ));
     }
 
@@ -902,7 +902,10 @@ pub(crate) fn parse_dom_closest_expr(src: &str) -> Result<Option<(DomQuery, Stri
         return Ok(None);
     }
     cursor.skip_ws();
-    let selector = cursor.parse_string_literal()?;
+    let selector = match cursor.parse_string_literal() {
+        Ok(selector) => selector,
+        Err(_) => return Ok(None),
+    };
     cursor.skip_ws();
     cursor.expect_byte(b')')?;
     cursor.skip_ws();

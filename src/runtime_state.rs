@@ -723,6 +723,7 @@ pub(crate) fn ensure_hash_prefix(value: &str) -> String {
 pub(crate) struct Listener {
     pub(crate) capture: bool,
     pub(crate) is_event_handler_property: bool,
+    pub(crate) is_arrow: bool,
     pub(crate) handler: ScriptHandler,
     pub(crate) captured_env: Rc<RefCell<ScriptEnv>>,
     pub(crate) captured_pending_function_decls:

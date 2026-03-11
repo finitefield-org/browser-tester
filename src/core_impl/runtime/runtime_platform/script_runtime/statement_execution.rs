@@ -192,6 +192,7 @@ impl Harness {
         op: &ListenerRegistrationOp,
         event_type: &str,
         capture: bool,
+        is_arrow: bool,
         handler: &ScriptHandler,
         env: &HashMap<String, Value>,
     ) {
@@ -205,6 +206,7 @@ impl Harness {
                     Listener {
                         capture,
                         is_event_handler_property: false,
+                        is_arrow,
                         handler: handler.clone(),
                         captured_env,
                         captured_pending_function_decls: self
@@ -226,6 +228,7 @@ impl Harness {
         op: &ListenerRegistrationOp,
         event_type_expr: &Expr,
         capture: bool,
+        is_arrow: bool,
         handler: &ScriptHandler,
         env: &mut HashMap<String, Value>,
         event_param: &Option<String>,
@@ -241,6 +244,7 @@ impl Harness {
                 op,
                 &event_type,
                 capture,
+                is_arrow,
                 handler,
                 env,
             );
@@ -248,7 +252,15 @@ impl Harness {
         }
 
         let node = self.resolve_dom_query_required_runtime(target, env)?;
-        self.apply_listener_mutation_on_node_with_env(node, op, &event_type, capture, handler, env);
+        self.apply_listener_mutation_on_node_with_env(
+            node,
+            op,
+            &event_type,
+            capture,
+            is_arrow,
+            handler,
+            env,
+        );
         Ok(())
     }
 
@@ -6007,6 +6019,7 @@ impl Harness {
                             op,
                             event_type,
                             capture,
+                            is_arrow,
                             handler,
                         } => {
                             self.execute_listener_mutation_stmt_with_env(
@@ -6014,6 +6027,7 @@ impl Harness {
                                 op,
                                 event_type,
                                 *capture,
+                                *is_arrow,
                                 handler,
                                 env,
                                 event_param,

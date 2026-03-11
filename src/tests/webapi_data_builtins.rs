@@ -4451,7 +4451,7 @@ fn global_function_arity_errors_have_stable_messages() {
         ),
         (
             "<script>requestAnimationFrame();</script>",
-            "requestAnimationFrame requires exactly one argument",
+            "requestAnimationFrame requires at least one argument",
         ),
         (
             "<script>setTimeout();</script>",
