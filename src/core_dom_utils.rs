@@ -167,6 +167,8 @@ pub(crate) const INTERNAL_DOM_PARSER_OBJECT_KEY: &str = "\u{0}\u{0}bt_dom_parser
 pub(crate) const INTERNAL_PARSED_DOCUMENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_parsed_document";
 pub(crate) const INTERNAL_PARSED_DOCUMENT_ROOT_NODE_KEY: &str =
     "\u{0}\u{0}bt_parsed_document:root_node";
+pub(crate) const INTERNAL_PARSED_DOCUMENT_CONTENT_TYPE_KEY: &str =
+    "\u{0}\u{0}bt_parsed_document:content_type";
 pub(crate) const INTERNAL_EVENT_TARGET_OBJECT_KEY: &str = "\u{0}\u{0}bt_event_target:object";
 pub(crate) const INTERNAL_MATCH_MEDIA_OBJECT_KEY: &str = "\u{0}\u{0}bt_match_media:object";
 pub(crate) const INTERNAL_MATCH_MEDIA_QUERY_KEY: &str = "\u{0}\u{0}bt_match_media:query";

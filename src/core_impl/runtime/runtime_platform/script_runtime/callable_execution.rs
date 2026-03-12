@@ -4861,7 +4861,11 @@ impl Harness {
                                 "Document.parseHTML requires exactly one argument".into(),
                             ));
                         }
-                        self.new_parsed_document_value_from_markup(&args[0].as_string(), true)
+                        self.new_parsed_document_value_from_markup(
+                            &args[0].as_string(),
+                            true,
+                            "text/html",
+                        )
                     }
                     "document_parse_html_unsafe" => {
                         if args.len() != 1 {
@@ -4869,7 +4873,11 @@ impl Harness {
                                 "Document.parseHTMLUnsafe requires exactly one argument".into(),
                             ));
                         }
-                        self.new_parsed_document_value_from_markup(&args[0].as_string(), false)
+                        self.new_parsed_document_value_from_markup(
+                            &args[0].as_string(),
+                            false,
+                            "text/html",
+                        )
                     }
                     "fetch_function" => self.eval_fetch_call_from_values(args),
                     "window_close_function" => {

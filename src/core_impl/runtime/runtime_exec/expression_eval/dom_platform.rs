@@ -2914,6 +2914,14 @@ impl Harness {
     }
 
     pub(crate) fn parsed_document_value_from_root(&mut self, root: NodeId) -> Value {
+        self.parsed_document_value_from_root_with_content_type(root, "text/html")
+    }
+
+    pub(crate) fn parsed_document_value_from_root_with_content_type(
+        &mut self,
+        root: NodeId,
+        content_type: &str,
+    ) -> Value {
         Self::new_object_value(vec![
             (
                 INTERNAL_PARSED_DOCUMENT_OBJECT_KEY.to_string(),
@@ -2923,6 +2931,10 @@ impl Harness {
                 INTERNAL_PARSED_DOCUMENT_ROOT_NODE_KEY.to_string(),
                 Value::Node(root),
             ),
+            (
+                INTERNAL_PARSED_DOCUMENT_CONTENT_TYPE_KEY.to_string(),
+                Value::String(content_type.to_string()),
+            ),
         ])
     }
 
@@ -2931,12 +2943,43 @@ impl Harness {
         self.parsed_document_value_from_root(root)
     }
 
+    fn set_parsed_document_subtree_namespace(
+        dom: &mut Dom,
+        root: NodeId,
+        namespace_uri: Option<String>,
+    ) {
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            let children = dom.nodes[node.0].children.clone();
+            if let NodeType::Element(element) = &mut dom.nodes[node.0].node_type
+                && !element.tag_name.eq_ignore_ascii_case("#document-fragment")
+            {
+                element.namespace_uri = namespace_uri.clone();
+            }
+            stack.extend(children.into_iter().rev());
+        }
+    }
+
     pub(crate) fn new_parsed_document_value_from_markup(
         &mut self,
         markup: &str,
         sanitize: bool,
+        content_type: &str,
     ) -> Result<Value> {
-        let ParseOutput { dom: parsed, .. } = parse_html(markup)?;
+        let ParseOutput {
+            dom: mut parsed, ..
+        } = parse_html(markup)?;
+        if content_type.eq_ignore_ascii_case("image/svg+xml") {
+            let svg_namespace = Some("http://www.w3.org/2000/svg".to_string());
+            let children = parsed.nodes[parsed.root.0].children.clone();
+            for child in children {
+                Self::set_parsed_document_subtree_namespace(
+                    &mut parsed,
+                    child,
+                    svg_namespace.clone(),
+                );
+            }
+        }
         let parsed_root = self.dom.create_node(None, NodeType::Document);
         let children = parsed.nodes[parsed.root.0].children.clone();
         for child in children {
@@ -2944,7 +2987,7 @@ impl Harness {
                 .dom
                 .clone_subtree_from_dom(&parsed, child, Some(parsed_root), sanitize)?;
         }
-        Ok(self.parsed_document_value_from_root(parsed_root))
+        Ok(self.parsed_document_value_from_root_with_content_type(parsed_root, content_type))
     }
 
     fn parsed_document_document_element(&self, root: NodeId) -> Option<NodeId> {
@@ -3035,7 +3078,10 @@ impl Harness {
                     .map(Value::Node)
                     .unwrap_or(Value::Null),
             ),
-            "contentType" => Some(Value::String("text/html".to_string())),
+            "contentType" => Some(
+                Self::object_get_entry(entries, INTERNAL_PARSED_DOCUMENT_CONTENT_TYPE_KEY)
+                    .unwrap_or_else(|| Value::String("text/html".to_string())),
+            ),
             "URL" | "documentURI" => Some(Value::String("about:blank".to_string())),
             "createTreeWalker"
             | "querySelector"
@@ -3172,15 +3218,17 @@ impl Harness {
                 }
                 let markup = evaluated_args[0].as_string();
                 let mime_type = evaluated_args[1].as_string().to_ascii_lowercase();
-                if mime_type.trim() != "text/html" {
+                let mime_type = mime_type.trim();
+                if !matches!(mime_type, "text/html" | "image/svg+xml") {
                     return Err(Error::ScriptRuntime(
-                        "DOMParser.parseFromString supports only 'text/html'".into(),
+                        "DOMParser.parseFromString supports only 'text/html' and 'image/svg+xml'"
+                            .into(),
                     ));
                 }
 
-                Ok(Some(
-                    self.new_parsed_document_value_from_markup(&markup, false)?,
-                ))
+                Ok(Some(self.new_parsed_document_value_from_markup(
+                    &markup, false, mime_type,
+                )?))
             }
             _ => Ok(None),
         }
