@@ -1,4 +1,6 @@
 use super::*;
+use chrono::{Datelike, Offset, TimeZone, Timelike, Utc};
+use chrono_tz::Tz;
 
 impl Harness {
     pub(crate) fn intl_canonicalize_locale(raw: &str) -> Result<String> {
@@ -605,10 +607,29 @@ impl Harness {
         }
     }
 
-    pub(crate) fn intl_time_zone_registry() -> &'static [(&'static str, i64)] {
+    pub(crate) fn intl_time_zone_registry() -> &'static [&'static str] {
+        &[
+            "UTC",
+            "Africa/Cairo",
+            "America/Los_Angeles",
+            "America/New_York",
+            "Asia/Jerusalem",
+            "Asia/Kolkata",
+            "Asia/Seoul",
+            "Asia/Shanghai",
+            "Asia/Tokyo",
+            "Australia/Sydney",
+            "Europe/Berlin",
+            "Europe/London",
+            "Europe/Paris",
+        ]
+    }
+
+    fn intl_known_time_zone_offsets() -> &'static [(&'static str, i64)] {
         &[
             ("UTC", 0),
             ("Africa/Cairo", 2 * 60),
+            ("America/Chicago", -6 * 60),
             ("America/Los_Angeles", -8 * 60),
             ("America/New_York", -5 * 60),
             ("Asia/Jerusalem", 2 * 60),
@@ -623,10 +644,44 @@ impl Harness {
         ]
     }
 
+    fn intl_time_zone_from_name(name: &str) -> Option<Tz> {
+        if name == "UTC" {
+            return Some(chrono_tz::UTC);
+        }
+        name.parse::<Tz>().ok()
+    }
+
+    pub(crate) fn intl_date_time_components_in_zone(
+        timestamp_ms: i64,
+        time_zone: &str,
+    ) -> Option<IntlDateTimeComponents> {
+        let tz = Self::intl_time_zone_from_name(time_zone)?;
+        let utc = Utc.timestamp_millis_opt(timestamp_ms).single()?;
+        let local = utc.with_timezone(&tz);
+        Some(IntlDateTimeComponents {
+            year: i64::from(local.year()),
+            month: local.month(),
+            day: local.day(),
+            hour: local.hour(),
+            minute: local.minute(),
+            second: local.second(),
+            millisecond: local.timestamp_subsec_millis(),
+            weekday: local.weekday().num_days_from_sunday(),
+            offset_minutes: i64::from(local.offset().fix().local_minus_utc()) / 60,
+        })
+    }
+
+    pub(crate) fn intl_legacy_time_zone_offset_minutes(time_zone: &str) -> i64 {
+        Self::intl_known_time_zone_offsets()
+            .iter()
+            .find_map(|(name, offset)| (*name == time_zone).then_some(*offset))
+            .unwrap_or(0)
+    }
+
     pub(crate) fn intl_supported_time_zone_values() -> Vec<String> {
         let mut values = Self::intl_time_zone_registry()
             .iter()
-            .map(|(name, _)| (*name).to_string())
+            .map(|name| (*name).to_string())
             .collect::<Vec<_>>();
         values.sort();
         values.dedup();
@@ -641,19 +696,25 @@ impl Harness {
         ) {
             return Some("UTC".to_string());
         }
-        Self::intl_time_zone_registry()
+        if let Some(canonical) = Self::intl_known_time_zone_offsets()
             .iter()
             .find_map(|(canonical, _)| {
                 canonical
                     .eq_ignore_ascii_case(trimmed)
                     .then(|| (*canonical).to_string())
             })
+        {
+            return Some(canonical);
+        }
+        chrono_tz::TZ_VARIANTS.iter().find_map(|tz| {
+            let canonical = tz.to_string();
+            canonical.eq_ignore_ascii_case(trimmed).then_some(canonical)
+        })
     }
 
-    pub(crate) fn intl_time_zone_offset_minutes(time_zone: &str, _timestamp_ms: i64) -> i64 {
-        Self::intl_time_zone_registry()
-            .iter()
-            .find_map(|(name, offset)| (*name == time_zone).then_some(*offset))
-            .unwrap_or(0)
+    pub(crate) fn intl_time_zone_offset_minutes(time_zone: &str, timestamp_ms: i64) -> i64 {
+        Self::intl_date_time_components_in_zone(timestamp_ms, time_zone)
+            .map(|components| components.offset_minutes)
+            .unwrap_or_else(|| Self::intl_legacy_time_zone_offset_minutes(time_zone))
     }
 }

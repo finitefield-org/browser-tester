@@ -5,6 +5,9 @@ impl Harness {
         timestamp_ms: i64,
         time_zone: &str,
     ) -> IntlDateTimeComponents {
+        if let Some(components) = Self::intl_date_time_components_in_zone(timestamp_ms, time_zone) {
+            return components;
+        }
         let offset_minutes = Self::intl_time_zone_offset_minutes(time_zone, timestamp_ms);
         let adjusted = timestamp_ms.saturating_add(offset_minutes.saturating_mul(60_000));
         let (year, month, day, hour, minute, second, millisecond) =
