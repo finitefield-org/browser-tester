@@ -289,7 +289,10 @@ impl Harness {
                 !self.script_runtime.listener_capture_env_stack[index].inherit_outer_pending
             })
             .unwrap_or(0);
-        for frame in self.script_runtime.listener_capture_env_stack[start..].iter().rev() {
+        for frame in self.script_runtime.listener_capture_env_stack[start..]
+            .iter()
+            .rev()
+        {
             if let Some(value) = frame.pending_env_updates.get(name) {
                 return Some(value.clone());
             }

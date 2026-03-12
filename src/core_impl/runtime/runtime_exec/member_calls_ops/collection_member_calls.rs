@@ -50,10 +50,8 @@ impl Harness {
                     IntlFormatterKind::DateTimeFormat,
                     &requested_locales,
                 );
-                let options = self.intl_date_time_options_from_value(
-                    &locale,
-                    evaluated_args.get(1),
-                )?;
+                let options =
+                    self.intl_date_time_options_from_value(&locale, evaluated_args.get(1))?;
                 Value::String(self.intl_format_date_time(*value.borrow(), &locale, &options))
             }
             "toString" => {

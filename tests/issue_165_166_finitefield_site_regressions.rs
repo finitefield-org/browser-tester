@@ -1,8 +1,7 @@
 use browser_tester::Harness;
 
 #[test]
-fn issue_165_double_quoted_newline_separator_in_join_is_supported()
--> browser_tester::Result<()> {
+fn issue_165_double_quoted_newline_separator_in_join_is_supported() -> browser_tester::Result<()> {
     let html = r#"
       <div id="out"></div>
       <script>
@@ -64,7 +63,8 @@ fn issue_165_chained_map_join_keeps_explicit_separator() -> browser_tester::Resu
 }
 
 #[test]
-fn issue_165_join_after_storing_map_result_keeps_explicit_separator() -> browser_tester::Result<()> {
+fn issue_165_join_after_storing_map_result_keeps_explicit_separator() -> browser_tester::Result<()>
+{
     let html = r#"
       <div id="out"></div>
       <script>
@@ -102,8 +102,8 @@ fn issue_165_named_map_callback_followed_by_join_keeps_explicit_separator()
 }
 
 #[test]
-fn issue_165_nested_array_rows_map_to_strings_then_join_with_newlines()
--> browser_tester::Result<()> {
+fn issue_165_nested_array_rows_map_to_strings_then_join_with_newlines() -> browser_tester::Result<()>
+{
     let html = r#"
       <div id="out"></div>
       <script>
@@ -541,8 +541,7 @@ fn issue_166_format_number_formats_valid_numbers() -> browser_tester::Result<()>
 }
 
 #[test]
-fn issue_166_inner_formatter_accepts_outer_local_numeric_variables()
--> browser_tester::Result<()> {
+fn issue_166_inner_formatter_accepts_outer_local_numeric_variables() -> browser_tester::Result<()> {
     let html = r#"
       <div id="out"></div>
       <script>
@@ -580,8 +579,7 @@ fn issue_166_inner_formatter_accepts_outer_local_numeric_variables()
 }
 
 #[test]
-fn issue_166_sibling_formatter_functions_receive_numeric_arguments()
--> browser_tester::Result<()> {
+fn issue_166_sibling_formatter_functions_receive_numeric_arguments() -> browser_tester::Result<()> {
     let html = r#"
       <div id="out"></div>
       <script>
@@ -1025,8 +1023,7 @@ fn issue_166_page_like_compute_and_format_path_survives_invalid_query_fallback()
 }
 
 #[test]
-fn issue_166_page_like_context_formats_direct_numeric_literals()
--> browser_tester::Result<()> {
+fn issue_166_page_like_context_formats_direct_numeric_literals() -> browser_tester::Result<()> {
     let html = r#"
       <div id="out"></div>
       <script>
@@ -1510,8 +1507,7 @@ fn issue_166_compute_can_return_object_after_formatting_numeric_locals()
 }
 
 #[test]
-fn issue_166_compute_control_flow_does_not_poison_formatter_args()
--> browser_tester::Result<()> {
+fn issue_166_compute_control_flow_does_not_poison_formatter_args() -> browser_tester::Result<()> {
     let html = r#"
       <div id="out"></div>
       <script>
@@ -1629,8 +1625,7 @@ fn issue_166_compute_control_flow_does_not_poison_formatter_args()
 }
 
 #[test]
-fn issue_166_real_helper_calls_do_not_poison_formatter_args()
--> browser_tester::Result<()> {
+fn issue_166_real_helper_calls_do_not_poison_formatter_args() -> browser_tester::Result<()> {
     let html = r#"
       <div id="out"></div>
       <script>
@@ -1761,8 +1756,7 @@ fn issue_166_real_helper_calls_do_not_poison_formatter_args()
 }
 
 #[test]
-fn issue_166_unrelated_nan_local_does_not_poison_formatter_args()
--> browser_tester::Result<()> {
+fn issue_166_unrelated_nan_local_does_not_poison_formatter_args() -> browser_tester::Result<()> {
     let html = r#"
       <div id="out"></div>
       <script>

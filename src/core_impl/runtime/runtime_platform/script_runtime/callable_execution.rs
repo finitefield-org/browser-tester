@@ -6242,6 +6242,14 @@ impl Harness {
                             }
                             self.object_entries_value(&args[0])
                         }
+                        "fromEntries" => {
+                            if args.len() != 1 {
+                                return Err(Error::ScriptRuntime(
+                                    "Object.fromEntries requires exactly one argument".into(),
+                                ));
+                            }
+                            self.object_from_entries_value(&args[0])
+                        }
                         "hasOwn" => {
                             if args.len() != 2 {
                                 return Err(Error::ScriptRuntime(

@@ -370,7 +370,8 @@ fn lower_general_assignment_stmt(
     let target_temp = next_assignment_temp_name(stmt, "target");
     let key_temp = next_assignment_temp_name(stmt, "key");
     let access_src = format!("{target_temp}[{key_temp}]");
-    let mut lowered = format!("const {target_temp} = {target_src};\nconst {key_temp} = {key_src};\n");
+    let mut lowered =
+        format!("const {target_temp} = {target_src};\nconst {key_temp} = {key_src};\n");
 
     match op {
         "=" => {
@@ -387,8 +388,7 @@ fn lower_general_assignment_stmt(
             };
             lowered.push_str(&format!("if ({condition}) {{ {access_src} = {rhs}; }}"));
         }
-        "+=" | "-=" | "|=" | "^=" | "&=" | "<<=" | ">>=" | ">>>=" | "*=" | "/=" | "%="
-        | "**=" => {
+        "+=" | "-=" | "|=" | "^=" | "&=" | "<<=" | ">>=" | ">>>=" | "*=" | "/=" | "%=" | "**=" => {
             let prev_temp = next_assignment_temp_name(stmt, "prev");
             let binary_op = &op[..op.len() - 1];
             lowered.push_str(&format!("const {prev_temp} = {access_src};\n"));
@@ -418,7 +418,9 @@ pub(crate) fn parse_object_assign(stmt: &str) -> Result<Option<Stmt>> {
     let needs_lowering = parsed_target.as_ref().is_some_and(|(_, path)| {
         op_len > 1
             && !matches!(op, "&&=" | "||=" | "??=")
-            && path.iter().any(|segment| !matches!(segment, Expr::String(_)))
+            && path
+                .iter()
+                .any(|segment| !matches!(segment, Expr::String(_)))
     });
 
     if needs_lowering || parsed_target.is_none() {

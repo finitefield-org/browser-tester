@@ -3107,6 +3107,10 @@ impl Harness {
                 Self::new_object_static_method_callable("entries"),
             ),
             (
+                "fromEntries".to_string(),
+                Self::new_object_static_method_callable("fromEntries"),
+            ),
+            (
                 "hasOwn".to_string(),
                 Self::new_object_static_method_callable("hasOwn"),
             ),

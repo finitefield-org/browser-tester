@@ -22,8 +22,8 @@ fn issue_155_closest_accepts_selector_variable_in_if_condition() -> browser_test
 }
 
 #[test]
-fn issue_158_closest_accepts_selector_variable_in_expression_position()
--> browser_tester::Result<()> {
+fn issue_158_closest_accepts_selector_variable_in_expression_position() -> browser_tester::Result<()>
+{
     let html = r#"
       <section class="card">
         <button id="child">open</button>

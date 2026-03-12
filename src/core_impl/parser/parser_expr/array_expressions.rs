@@ -256,8 +256,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "filter requires exactly one callback argument".into(),
                 ));
             }
-            if let Ok(callback) =
-                parse_array_callback_arg(args[0], 3, "array callback parameters")
+            if let Ok(callback) = parse_array_callback_arg(args[0], 3, "array callback parameters")
             {
                 Expr::ArrayFilter { target, callback }
             } else {
@@ -270,8 +269,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "reduce requires callback and optional initial value".into(),
                 ));
             }
-            if let Ok(callback) =
-                parse_array_callback_arg(args[0], 4, "array callback parameters")
+            if let Ok(callback) = parse_array_callback_arg(args[0], 4, "array callback parameters")
             {
                 let initial = if args.len() == 2 {
                     if args[1].trim().is_empty() {
@@ -298,8 +296,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "forEach requires exactly one callback argument".into(),
                 ));
             }
-            if let Ok(callback) =
-                parse_array_callback_arg(args[0], 3, "array callback parameters")
+            if let Ok(callback) = parse_array_callback_arg(args[0], 3, "array callback parameters")
             {
                 Expr::ArrayForEach { target, callback }
             } else {
@@ -312,8 +309,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "find requires exactly one callback argument".into(),
                 ));
             }
-            if let Ok(callback) =
-                parse_array_callback_arg(args[0], 3, "array callback parameters")
+            if let Ok(callback) = parse_array_callback_arg(args[0], 3, "array callback parameters")
             {
                 Expr::ArrayFind { target, callback }
             } else {
@@ -326,8 +322,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "findIndex requires exactly one callback argument".into(),
                 ));
             }
-            if let Ok(callback) =
-                parse_array_callback_arg(args[0], 3, "array callback parameters")
+            if let Ok(callback) = parse_array_callback_arg(args[0], 3, "array callback parameters")
             {
                 Expr::ArrayFindIndex { target, callback }
             } else {
@@ -340,8 +335,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "some requires exactly one callback argument".into(),
                 ));
             }
-            if let Ok(callback) =
-                parse_array_callback_arg(args[0], 3, "array callback parameters")
+            if let Ok(callback) = parse_array_callback_arg(args[0], 3, "array callback parameters")
             {
                 Expr::ArraySome { target, callback }
             } else {
@@ -354,8 +348,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "every requires exactly one callback argument".into(),
                 ));
             }
-            if let Ok(callback) =
-                parse_array_callback_arg(args[0], 3, "array callback parameters")
+            if let Ok(callback) = parse_array_callback_arg(args[0], 3, "array callback parameters")
             {
                 Expr::ArrayEvery { target, callback }
             } else {

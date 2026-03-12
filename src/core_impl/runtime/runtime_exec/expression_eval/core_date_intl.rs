@@ -1,6 +1,214 @@
 use super::*;
 
 impl Harness {
+    fn current_intl_constructor_value(
+        &mut self,
+        constructor_name: &str,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<(Value, Value)> {
+        let intl_value = self.eval_expr(&Expr::Var("Intl".to_string()), env, event_param, event)?;
+        let constructor = self.object_property_from_value(&intl_value, constructor_name)?;
+        Ok((intl_value, constructor))
+    }
+
+    fn eval_overridden_intl_constructor_call(
+        &mut self,
+        intl_value: &Value,
+        constructor: &Value,
+        args: &[Value],
+        called_with_new: bool,
+        env: &HashMap<String, Value>,
+        event: &EventState,
+    ) -> Result<Value> {
+        if called_with_new {
+            self.execute_constructor_value_with_env(constructor, args, event, Some(env))
+        } else {
+            self.execute_callable_value_with_this_and_env(
+                constructor,
+                args,
+                event,
+                Some(env),
+                Some(intl_value.clone()),
+            )
+        }
+    }
+
+    fn eval_builtin_intl_formatter_construct(
+        &mut self,
+        kind: IntlFormatterKind,
+        locales: Option<&Expr>,
+        options: Option<&Expr>,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        let requested_locales = if let Some(locales) = locales {
+            let value = self.eval_expr(locales, env, event_param, event)?;
+            self.intl_collect_locales(&value)?
+        } else {
+            Vec::new()
+        };
+        let locale = Self::intl_select_locale_for_formatter(kind, &requested_locales);
+        match kind {
+            IntlFormatterKind::Collator => {
+                let options = options
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?;
+                let (case_first, sensitivity) =
+                    self.intl_collator_options_from_value(options.as_ref())?;
+                Ok(self.new_intl_collator_value(locale, case_first, sensitivity))
+            }
+            IntlFormatterKind::DateTimeFormat => {
+                let options = options
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?;
+                let options = self.intl_date_time_options_from_value(&locale, options.as_ref())?;
+                Ok(self.new_intl_date_time_formatter_value(locale, options))
+            }
+            IntlFormatterKind::NumberFormat => {
+                let options = options
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?;
+                let options =
+                    self.intl_number_format_options_from_value(&locale, options.as_ref())?;
+                Ok(self.new_intl_number_formatter_value(locale, options))
+            }
+            IntlFormatterKind::DisplayNames => {
+                let options = options
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?;
+                let options = self.intl_display_names_options_from_value(options.as_ref())?;
+                Ok(self.new_intl_display_names_value(locale, options))
+            }
+            IntlFormatterKind::DurationFormat => {
+                let options = options
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?;
+                let options = self.intl_duration_options_from_value(options.as_ref())?;
+                Ok(self.new_intl_duration_formatter_value(locale, options))
+            }
+            IntlFormatterKind::ListFormat => {
+                let options = options
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?;
+                let options = self.intl_list_options_from_value(options.as_ref())?;
+                Ok(self.new_intl_list_formatter_value(locale, options))
+            }
+            IntlFormatterKind::PluralRules => {
+                let options = options
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?;
+                let options = self.intl_plural_rules_options_from_value(options.as_ref())?;
+                Ok(self.new_intl_plural_rules_value(locale, options))
+            }
+            IntlFormatterKind::RelativeTimeFormat => {
+                let options = options
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?;
+                let options =
+                    self.intl_relative_time_options_from_value(&locale, options.as_ref())?;
+                Ok(self.new_intl_relative_time_formatter_value(locale, options))
+            }
+            IntlFormatterKind::Segmenter => {
+                let options = options
+                    .map(|value| self.eval_expr(value, env, event_param, event))
+                    .transpose()?;
+                let options = self.intl_segmenter_options_from_value(options.as_ref())?;
+                Ok(self.new_intl_segmenter_value(locale, options))
+            }
+        }
+    }
+
+    fn eval_intl_formatter_construct(
+        &mut self,
+        kind: IntlFormatterKind,
+        locales: Option<&Expr>,
+        options: Option<&Expr>,
+        called_with_new: bool,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        let (intl_value, constructor) =
+            self.current_intl_constructor_value(kind.storage_name(), env, event_param, event)?;
+        if Self::is_builtin_placeholder_value(&constructor) {
+            return self.eval_builtin_intl_formatter_construct(
+                kind,
+                locales,
+                options,
+                env,
+                event_param,
+                event,
+            );
+        }
+
+        let mut args = Vec::with_capacity(2);
+        if let Some(locales) = locales {
+            args.push(self.eval_expr(locales, env, event_param, event)?);
+        }
+        if let Some(options) = options {
+            args.push(self.eval_expr(options, env, event_param, event)?);
+        }
+
+        self.eval_overridden_intl_constructor_call(
+            &intl_value,
+            &constructor,
+            &args,
+            called_with_new,
+            env,
+            event,
+        )
+    }
+
+    fn eval_builtin_intl_locale_construct(
+        &mut self,
+        tag: &Expr,
+        options: Option<&Expr>,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        let tag = self.eval_expr(tag, env, event_param, event)?;
+        let options = options
+            .map(|value| self.eval_expr(value, env, event_param, event))
+            .transpose()?;
+        let data = self.intl_locale_data_from_input_value(&tag, options.as_ref())?;
+        Ok(self.new_intl_locale_value(data))
+    }
+
+    fn eval_intl_locale_construct(
+        &mut self,
+        tag: &Expr,
+        options: Option<&Expr>,
+        called_with_new: bool,
+        env: &HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<Value> {
+        let (intl_value, constructor) =
+            self.current_intl_constructor_value("Locale", env, event_param, event)?;
+        if Self::is_builtin_placeholder_value(&constructor) {
+            return self.eval_builtin_intl_locale_construct(tag, options, env, event_param, event);
+        }
+
+        let mut args = Vec::with_capacity(2);
+        args.push(self.eval_expr(tag, env, event_param, event)?);
+        if let Some(options) = options {
+            args.push(self.eval_expr(options, env, event_param, event)?);
+        }
+
+        self.eval_overridden_intl_constructor_call(
+            &intl_value,
+            &constructor,
+            &args,
+            called_with_new,
+            env,
+            event,
+        )
+    }
+
     pub(crate) fn eval_expr_core_date_intl(
         &mut self,
         expr: &Expr,
@@ -145,98 +353,16 @@ impl Harness {
                     kind,
                     locales,
                     options,
-                    called_with_new: _called_with_new,
-                } => {
-                    let requested_locales = if let Some(locales) = locales {
-                        let value = self.eval_expr(locales, env, event_param, event)?;
-                        self.intl_collect_locales(&value)?
-                    } else {
-                        Vec::new()
-                    };
-                    let locale = Self::intl_select_locale_for_formatter(*kind, &requested_locales);
-                    match kind {
-                        IntlFormatterKind::Collator => {
-                            let options = options
-                                .as_ref()
-                                .map(|value| self.eval_expr(value, env, event_param, event))
-                                .transpose()?;
-                            let (case_first, sensitivity) =
-                                self.intl_collator_options_from_value(options.as_ref())?;
-                            Ok(self.new_intl_collator_value(locale, case_first, sensitivity))
-                        }
-                        IntlFormatterKind::DateTimeFormat => {
-                            let options = options
-                                .as_ref()
-                                .map(|value| self.eval_expr(value, env, event_param, event))
-                                .transpose()?;
-                            let options =
-                                self.intl_date_time_options_from_value(&locale, options.as_ref())?;
-                            Ok(self.new_intl_date_time_formatter_value(locale, options))
-                        }
-                        IntlFormatterKind::NumberFormat => {
-                            let options = options
-                                .as_ref()
-                                .map(|value| self.eval_expr(value, env, event_param, event))
-                                .transpose()?;
-                            let options = self
-                                .intl_number_format_options_from_value(&locale, options.as_ref())?;
-                            Ok(self.new_intl_number_formatter_value(locale, options))
-                        }
-                        IntlFormatterKind::DisplayNames => {
-                            let options = options
-                                .as_ref()
-                                .map(|value| self.eval_expr(value, env, event_param, event))
-                                .transpose()?;
-                            let options =
-                                self.intl_display_names_options_from_value(options.as_ref())?;
-                            Ok(self.new_intl_display_names_value(locale, options))
-                        }
-                        IntlFormatterKind::DurationFormat => {
-                            let options = options
-                                .as_ref()
-                                .map(|value| self.eval_expr(value, env, event_param, event))
-                                .transpose()?;
-                            let options =
-                                self.intl_duration_options_from_value(options.as_ref())?;
-                            Ok(self.new_intl_duration_formatter_value(locale, options))
-                        }
-                        IntlFormatterKind::ListFormat => {
-                            let options = options
-                                .as_ref()
-                                .map(|value| self.eval_expr(value, env, event_param, event))
-                                .transpose()?;
-                            let options = self.intl_list_options_from_value(options.as_ref())?;
-                            Ok(self.new_intl_list_formatter_value(locale, options))
-                        }
-                        IntlFormatterKind::PluralRules => {
-                            let options = options
-                                .as_ref()
-                                .map(|value| self.eval_expr(value, env, event_param, event))
-                                .transpose()?;
-                            let options =
-                                self.intl_plural_rules_options_from_value(options.as_ref())?;
-                            Ok(self.new_intl_plural_rules_value(locale, options))
-                        }
-                        IntlFormatterKind::RelativeTimeFormat => {
-                            let options = options
-                                .as_ref()
-                                .map(|value| self.eval_expr(value, env, event_param, event))
-                                .transpose()?;
-                            let options = self
-                                .intl_relative_time_options_from_value(&locale, options.as_ref())?;
-                            Ok(self.new_intl_relative_time_formatter_value(locale, options))
-                        }
-                        IntlFormatterKind::Segmenter => {
-                            let options = options
-                                .as_ref()
-                                .map(|value| self.eval_expr(value, env, event_param, event))
-                                .transpose()?;
-                            let options =
-                                self.intl_segmenter_options_from_value(options.as_ref())?;
-                            Ok(self.new_intl_segmenter_value(locale, options))
-                        }
-                    }
-                }
+                    called_with_new,
+                } => self.eval_intl_formatter_construct(
+                    *kind,
+                    locales.as_deref(),
+                    options.as_deref(),
+                    *called_with_new,
+                    env,
+                    event_param,
+                    event,
+                ),
                 Expr::IntlFormat { formatter, value } => {
                     let formatter = self.eval_expr(formatter, env, event_param, event)?;
                     let (kind, locale) = self.resolve_intl_formatter(&formatter)?;
@@ -794,16 +920,15 @@ impl Harness {
                 Expr::IntlLocaleConstruct {
                     tag,
                     options,
-                    called_with_new: _called_with_new,
-                } => {
-                    let tag = self.eval_expr(tag, env, event_param, event)?;
-                    let options = options
-                        .as_ref()
-                        .map(|value| self.eval_expr(value, env, event_param, event))
-                        .transpose()?;
-                    let data = self.intl_locale_data_from_input_value(&tag, options.as_ref())?;
-                    Ok(self.new_intl_locale_value(data))
-                }
+                    called_with_new,
+                } => self.eval_intl_locale_construct(
+                    tag,
+                    options.as_deref(),
+                    *called_with_new,
+                    env,
+                    event_param,
+                    event,
+                ),
                 Expr::IntlLocaleMethod { locale, method } => {
                     let locale = self.eval_expr(locale, env, event_param, event)?;
                     let data = self.resolve_intl_locale_data(&locale)?;

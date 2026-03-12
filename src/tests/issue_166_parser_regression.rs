@@ -1,7 +1,8 @@
 use super::*;
 
 fn find_function<'a>(stmts: &'a [Stmt], target: &str) -> &'a ScriptHandler {
-    stmts.iter()
+    stmts
+        .iter()
         .find_map(|stmt| match stmt {
             Stmt::FunctionDecl { name, handler, .. } if name == target => Some(handler),
             _ => None,

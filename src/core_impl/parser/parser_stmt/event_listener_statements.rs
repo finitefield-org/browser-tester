@@ -109,8 +109,7 @@ pub(crate) fn build_listener_reference_handler(callback_name: &str) -> Result<Sc
     while event_param == callback_name {
         event_param.push('_');
     }
-    let stmts =
-        parse_block_statements(&format!("{callback_name}.call(this, {event_param});"))?;
+    let stmts = parse_block_statements(&format!("{callback_name}.call(this, {event_param});"))?;
     Ok(ScriptHandler {
         params: vec![FunctionParam {
             name: event_param,
