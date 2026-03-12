@@ -3120,6 +3120,53 @@ impl Harness {
         }
     }
 
+    pub(crate) fn xml_serializer_object_property(
+        &self,
+        entries: &ObjectValue,
+        key: &str,
+    ) -> Option<Value> {
+        if !matches!(
+            Self::object_get_entry(entries, INTERNAL_XML_SERIALIZER_OBJECT_KEY),
+            Some(Value::Bool(true))
+        ) {
+            return None;
+        }
+        match key {
+            "serializeToString" => {
+                Self::placeholder_backed_object_builtin_property_value(entries, key)
+            }
+            _ => None,
+        }
+    }
+
+    fn serialize_xml_target_to_string(&self, target: &Value) -> Result<String> {
+        match target {
+            Value::Node(node) => Ok(self.dom.dump_node(*node)),
+            Value::Object(object) => {
+                let entries = object.borrow();
+                if matches!(
+                    Self::object_get_entry(&entries, INTERNAL_DOCUMENT_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    return Ok(self.dom.dump_node(self.dom.root));
+                }
+                if matches!(
+                    Self::object_get_entry(&entries, INTERNAL_PARSED_DOCUMENT_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) && let Some(root) = Self::parsed_document_root_from_entries(&entries)
+                {
+                    return Ok(self.dom.dump_node(root));
+                }
+                Err(Error::ScriptRuntime(
+                    "XMLSerializer.serializeToString requires a Node".into(),
+                ))
+            }
+            _ => Err(Error::ScriptRuntime(
+                "XMLSerializer.serializeToString requires a Node".into(),
+            )),
+        }
+    }
+
     fn tree_walker_mask_for_node(&self, node: NodeId) -> u32 {
         match self.node_type_number(node) {
             1 => 0x1,
@@ -3229,6 +3276,44 @@ impl Harness {
                 Ok(Some(self.new_parsed_document_value_from_markup(
                     &markup, false, mime_type,
                 )?))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    pub(crate) fn eval_xml_serializer_member_call(
+        &mut self,
+        serializer_object: &Rc<RefCell<ObjectValue>>,
+        member: &str,
+        evaluated_args: &[Value],
+    ) -> Result<Option<Value>> {
+        let (is_serializer, shadowed) = {
+            let entries = serializer_object.borrow();
+            (
+                matches!(
+                    Self::object_get_entry(&entries, INTERNAL_XML_SERIALIZER_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ),
+                Self::placeholder_backed_object_builtin_is_shadowed(&entries, member),
+            )
+        };
+        if !is_serializer {
+            return Ok(None);
+        }
+        if shadowed {
+            return Ok(None);
+        }
+
+        match member {
+            "serializeToString" => {
+                if evaluated_args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "XMLSerializer.serializeToString requires exactly one argument".into(),
+                    ));
+                }
+                Ok(Some(Value::String(
+                    self.serialize_xml_target_to_string(&evaluated_args[0])?,
+                )))
             }
             _ => Ok(None),
         }

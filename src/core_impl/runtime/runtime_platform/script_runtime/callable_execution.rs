@@ -55,9 +55,9 @@ impl Harness {
                     )),
                     _ => None,
                 },
-                Stmt::Return { value: Some(Expr::Await(inner)) } => {
-                    Some((index, (**inner).clone(), TopLevelAwaitResumeKind::Return))
-                }
+                Stmt::Return {
+                    value: Some(Expr::Await(inner)),
+                } => Some((index, (**inner).clone(), TopLevelAwaitResumeKind::Return)),
                 _ => None,
             })
     }
@@ -460,6 +460,7 @@ impl Harness {
             "document" => "Document",
             "parsed_document" => "Document",
             "dom_parser" => "DOMParser",
+            "xml_serializer" => "XMLSerializer",
             "tree_walker" => "TreeWalker",
             "range" => "Range",
             "selection" => "Selection",
@@ -1726,6 +1727,21 @@ impl Harness {
                 self.eval_dom_parser_member_call(&object, &member, args)?
                     .ok_or_else(|| {
                         Error::ScriptRuntime(format!("unsupported DOMParser method: {member}"))
+                    })
+            }
+            "xml_serializer" => {
+                let Value::Object(object) = receiver else {
+                    return Err(Self::incompatible_receiver_error(&family));
+                };
+                if !matches!(
+                    Self::object_get_entry(&object.borrow(), INTERNAL_XML_SERIALIZER_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    return Err(Self::incompatible_receiver_error(&family));
+                }
+                self.eval_xml_serializer_member_call(&object, &member, args)?
+                    .ok_or_else(|| {
+                        Error::ScriptRuntime(format!("unsupported XMLSerializer method: {member}"))
                     })
             }
             "tree_walker" => {
@@ -5017,6 +5033,14 @@ impl Harness {
                         }
                         Ok(Self::new_dom_parser_instance_value())
                     }
+                    "xml_serializer_constructor" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime(
+                                "XMLSerializer constructor does not take arguments".into(),
+                            ));
+                        }
+                        Ok(Self::new_xml_serializer_instance_value())
+                    }
                     "document_constructor" => {
                         if !args.is_empty() {
                             return Err(Error::ScriptRuntime(
@@ -7275,16 +7299,15 @@ impl Harness {
                     .push(initialized);
             }
 
-            let captured_env_seed = (!function.global_scope)
-                .then(|| function.captured_env.borrow().share());
+            let captured_env_seed =
+                (!function.global_scope).then(|| function.captured_env.borrow().share());
             let shared_env_frame_start = (!function.global_scope).then(|| {
                 this.push_shared_listener_capture_env_frame(function.captured_env.clone(), true)
             });
 
             let result = this.with_isolated_loop_control_scope(|this| {
                 (|| -> Result<Value> {
-                    let captured_env_before_call =
-                        captured_env_seed.as_ref().map(ScriptEnv::share);
+                    let captured_env_before_call = captured_env_seed.as_ref().map(ScriptEnv::share);
                     let mut call_env = if function.global_scope {
                         this.script_runtime.env.to_map()
                     } else {

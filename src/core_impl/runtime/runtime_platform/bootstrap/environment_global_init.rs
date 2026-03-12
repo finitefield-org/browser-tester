@@ -501,6 +501,7 @@ impl Harness {
         let html_option_element_constructor = Self::new_builtin_placeholder_function();
         let html_select_element_constructor = Self::new_builtin_placeholder_function();
         let dom_parser_constructor = Self::new_dom_parser_constructor_value();
+        let xml_serializer_constructor = Self::new_xml_serializer_constructor_value();
         let document_constructor = Self::new_document_constructor_value();
         let node_constants = Self::new_object_value(vec![
             ("ELEMENT_NODE".to_string(), Value::Number(1)),
@@ -612,6 +613,7 @@ impl Harness {
             &html_input_element_constructor,
             &html_select_element_constructor,
             &dom_parser_constructor,
+            &xml_serializer_constructor,
             &document_constructor,
             &node_constants,
             &node_filter_constants,
@@ -1194,6 +1196,9 @@ impl Harness {
         self.script_runtime
             .env
             .insert("DOMParser".to_string(), dom_parser_constructor);
+        self.script_runtime
+            .env
+            .insert("XMLSerializer".to_string(), xml_serializer_constructor);
         self.script_runtime
             .env
             .insert("Node".to_string(), node_constants);

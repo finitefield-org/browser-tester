@@ -1435,6 +1435,25 @@ impl Harness {
                                 return Ok(value);
                             }
                         }
+                        let is_xml_serializer_object = {
+                            let entries = object.borrow();
+                            matches!(
+                                Self::object_get_entry(
+                                    &entries,
+                                    INTERNAL_XML_SERIALIZER_OBJECT_KEY
+                                ),
+                                Some(Value::Bool(true))
+                            )
+                        };
+                        if is_xml_serializer_object {
+                            if let Some(value) = self.eval_xml_serializer_member_call(
+                                object,
+                                member,
+                                &evaluated_args,
+                            )? {
+                                return Ok(value);
+                            }
+                        }
                         let is_parsed_document_object = {
                             let entries = object.borrow();
                             matches!(

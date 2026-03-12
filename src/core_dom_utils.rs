@@ -168,6 +168,7 @@ pub(crate) const INTERNAL_FETCH_REQUEST_METHOD_KEY: &str = "\u{0}\u{0}bt_fetch:r
 pub(crate) const INTERNAL_HEADERS_OBJECT_KEY: &str = "\u{0}\u{0}bt_fetch:headers";
 pub(crate) const INTERNAL_HEADERS_ENTRIES_KEY: &str = "\u{0}\u{0}bt_fetch:headers:entries";
 pub(crate) const INTERNAL_DOM_PARSER_OBJECT_KEY: &str = "\u{0}\u{0}bt_dom_parser";
+pub(crate) const INTERNAL_XML_SERIALIZER_OBJECT_KEY: &str = "\u{0}\u{0}bt_xml_serializer";
 pub(crate) const INTERNAL_PARSED_DOCUMENT_OBJECT_KEY: &str = "\u{0}\u{0}bt_parsed_document";
 pub(crate) const INTERNAL_PARSED_DOCUMENT_ROOT_NODE_KEY: &str =
     "\u{0}\u{0}bt_parsed_document:root_node";

@@ -3265,6 +3265,13 @@ impl Harness {
         )])
     }
 
+    pub(crate) fn new_xml_serializer_constructor_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("xml_serializer_constructor".to_string()),
+        )])
+    }
+
     pub(crate) fn new_document_parse_html_callable(sanitize: bool) -> Value {
         let kind = if sanitize {
             "document_parse_html"
@@ -4603,6 +4610,13 @@ impl Harness {
         )])
     }
 
+    pub(crate) fn new_xml_serializer_instance_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_XML_SERIALIZER_OBJECT_KEY.to_string(),
+            Value::Bool(true),
+        )])
+    }
+
     pub(crate) fn new_function_call_callable() -> Value {
         Self::new_object_value(vec![(
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
@@ -4934,6 +4948,14 @@ impl Harness {
         }
     }
 
+    pub(crate) fn xml_serializer_receiver_builtin_method(key: &str) -> Option<Value> {
+        if key == "serializeToString" {
+            Some(Self::new_receiver_builtin_callable("xml_serializer", key))
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn tree_walker_receiver_builtin_method(key: &str) -> Option<Value> {
         if key == "nextNode" {
             Some(Self::new_receiver_builtin_callable("tree_walker", key))
@@ -5098,6 +5120,13 @@ impl Harness {
             Self::object_get_entry(entries, INTERNAL_DOM_PARSER_OBJECT_KEY),
             Some(Value::Bool(true))
         ) && let Some(value) = Self::dom_parser_receiver_builtin_method(key)
+        {
+            return Some(value);
+        }
+        if matches!(
+            Self::object_get_entry(entries, INTERNAL_XML_SERIALIZER_OBJECT_KEY),
+            Some(Value::Bool(true))
+        ) && let Some(value) = Self::xml_serializer_receiver_builtin_method(key)
         {
             return Some(value);
         }
@@ -6867,6 +6896,7 @@ impl Harness {
             "before_unload_event_constructor" => Some(("BeforeUnloadEvent", 1)),
             "image_data_constructor" => Some(("ImageData", 2)),
             "dom_parser_constructor" => Some(("DOMParser", 0)),
+            "xml_serializer_constructor" => Some(("XMLSerializer", 0)),
             "document_constructor" => Some(("Document", 0)),
             "document_parse_html" => Some(("parseHTML", 1)),
             "document_parse_html_unsafe" => Some(("parseHTMLUnsafe", 1)),
@@ -7248,6 +7278,7 @@ impl Harness {
             ("parsed_document", "createRange") => ("createRange", 0),
             ("parsed_document", "append") => ("append", 0),
             ("dom_parser", "parseFromString") => ("parseFromString", 2),
+            ("xml_serializer", "serializeToString") => ("serializeToString", 1),
             ("tree_walker", "nextNode") => ("nextNode", 0),
             ("range", "setStart") => ("setStart", 2),
             ("range", "setEnd") => ("setEnd", 2),
@@ -7420,6 +7451,11 @@ impl Harness {
                     Some(Value::Bool(true))
                 ) {
                     "DOMParser".to_string()
+                } else if matches!(
+                    Self::object_get_entry(&entries, INTERNAL_XML_SERIALIZER_OBJECT_KEY),
+                    Some(Value::Bool(true))
+                ) {
+                    "XMLSerializer".to_string()
                 } else if matches!(
                     Self::object_get_entry(&entries, INTERNAL_TREE_WALKER_OBJECT_KEY),
                     Some(Value::Bool(true))
@@ -8161,6 +8197,7 @@ impl Harness {
                 "before_unload_event_constructor" => "before_unload_event_constructor",
                 "image_data_constructor" => "image_data_constructor",
                 "dom_parser_constructor" => "dom_parser_constructor",
+                "xml_serializer_constructor" => "xml_serializer_constructor",
                 "document_constructor" => "document_constructor",
                 "document_parse_html" => "document_parse_html",
                 "document_parse_html_unsafe" => "document_parse_html_unsafe",
@@ -10312,6 +10349,14 @@ impl Harness {
             Some(Value::Bool(true))
         ) {
             if let Some(value) = self.dom_parser_object_property(entries, key) {
+                return Ok(Some(value));
+            }
+        }
+        if matches!(
+            Self::object_get_entry(entries, INTERNAL_XML_SERIALIZER_OBJECT_KEY),
+            Some(Value::Bool(true))
+        ) {
+            if let Some(value) = self.xml_serializer_object_property(entries, key) {
                 return Ok(Some(value));
             }
         }

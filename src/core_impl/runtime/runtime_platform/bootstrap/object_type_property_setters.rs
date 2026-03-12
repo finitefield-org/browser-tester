@@ -201,6 +201,7 @@ impl Harness {
             | "HTMLOptionElement"
             | "HTMLSelectElement"
             | "DOMParser"
+            | "XMLSerializer"
             | "Document"
             | "Node"
             | "NodeFilter"
