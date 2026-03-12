@@ -42,6 +42,7 @@ pub(crate) const INTERNAL_INTL_OPTIONS_KEY: &str = "\u{0}\u{0}bt_intl:options";
 pub(crate) const INTERNAL_INTL_LOCALE_DATA_KEY: &str = "\u{0}\u{0}bt_intl:localeData";
 pub(crate) const INTERNAL_INTL_CASE_FIRST_KEY: &str = "\u{0}\u{0}bt_intl:caseFirst";
 pub(crate) const INTERNAL_INTL_SENSITIVITY_KEY: &str = "\u{0}\u{0}bt_intl:sensitivity";
+pub(crate) const INTERNAL_INTL_NUMERIC_KEY: &str = "\u{0}\u{0}bt_intl:numeric";
 pub(crate) const INTERNAL_INTL_BOUND_COMPARE_KEY: &str = "\u{0}\u{0}bt_intl:boundCompare";
 pub(crate) const INTERNAL_INTL_BOUND_FORMAT_KEY: &str = "\u{0}\u{0}bt_intl:boundFormat";
 pub(crate) const INTERNAL_INTL_SEGMENTS_KEY: &str = "\u{0}\u{0}bt_intl:segments";

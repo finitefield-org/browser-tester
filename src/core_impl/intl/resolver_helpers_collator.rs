@@ -163,7 +163,7 @@ impl Harness {
     pub(crate) fn resolve_intl_collator_options(
         &self,
         value: &Value,
-    ) -> Result<(String, String, String)> {
+    ) -> Result<(String, String, String, bool)> {
         let Value::Object(entries) = value else {
             return Err(Error::ScriptRuntime(
                 "Intl.Collator.compare requires an Intl.Collator instance".into(),
@@ -203,7 +203,9 @@ impl Harness {
                 _ => None,
             })
             .unwrap_or_else(|| "variant".to_string());
-        Ok((locale, case_first, sensitivity))
+        let numeric = Self::object_get_entry(&entries, INTERNAL_INTL_NUMERIC_KEY)
+            .is_some_and(|value| value.truthy());
+        Ok((locale, case_first, sensitivity, numeric))
     }
 
     pub(crate) fn intl_collator_compare_strings(
@@ -212,17 +214,53 @@ impl Harness {
         locale: &str,
         case_first: &str,
         sensitivity: &str,
+        numeric: bool,
     ) -> i64 {
         let case_priority = match case_first {
             "upper" => 0i32,
             _ => 1i32,
         };
 
-        let mut left_chars = left.chars();
-        let mut right_chars = right.chars();
+        let left_chars = left.chars().collect::<Vec<_>>();
+        let right_chars = right.chars().collect::<Vec<_>>();
+        let mut left_index = 0usize;
+        let mut right_index = 0usize;
         loop {
-            match (left_chars.next(), right_chars.next()) {
+            if numeric
+                && left_chars
+                    .get(left_index)
+                    .is_some_and(|ch| ch.to_digit(10).is_some())
+                && right_chars
+                    .get(right_index)
+                    .is_some_and(|ch| ch.to_digit(10).is_some())
+            {
+                let left_start = left_index;
+                while left_index < left_chars.len() && left_chars[left_index].to_digit(10).is_some()
+                {
+                    left_index += 1;
+                }
+
+                let right_start = right_index;
+                while right_index < right_chars.len()
+                    && right_chars[right_index].to_digit(10).is_some()
+                {
+                    right_index += 1;
+                }
+
+                let numeric_cmp = Self::intl_collator_compare_digit_runs(
+                    &left_chars[left_start..left_index],
+                    &right_chars[right_start..right_index],
+                );
+                if numeric_cmp != 0 {
+                    return numeric_cmp;
+                }
+                continue;
+            }
+
+            match (left_chars.get(left_index), right_chars.get(right_index)) {
                 (Some(left), Some(right)) => {
+                    left_index += 1;
+                    right_index += 1;
                     let (lp, ls, lc) = Self::intl_collator_char_key(left, locale, case_priority);
                     let (rp, rs, rc) = Self::intl_collator_char_key(right, locale, case_priority);
 
@@ -243,8 +281,38 @@ impl Harness {
         }
     }
 
+    fn intl_collator_compare_digit_runs(left: &[char], right: &[char]) -> i64 {
+        let left_significant = left
+            .iter()
+            .position(|ch| ch.to_digit(10).unwrap_or(0) != 0)
+            .unwrap_or(left.len());
+        let right_significant = right
+            .iter()
+            .position(|ch| ch.to_digit(10).unwrap_or(0) != 0)
+            .unwrap_or(right.len());
+
+        let left_len = left.len().saturating_sub(left_significant);
+        let right_len = right.len().saturating_sub(right_significant);
+        if left_len != right_len {
+            return if left_len < right_len { -1 } else { 1 };
+        }
+
+        for (left_digit, right_digit) in left[left_significant..]
+            .iter()
+            .zip(right[right_significant..].iter())
+        {
+            let left_digit = left_digit.to_digit(10).unwrap_or(0);
+            let right_digit = right_digit.to_digit(10).unwrap_or(0);
+            if left_digit != right_digit {
+                return if left_digit < right_digit { -1 } else { 1 };
+            }
+        }
+
+        0
+    }
+
     pub(crate) fn intl_collator_char_key(
-        ch: char,
+        ch: &char,
         locale: &str,
         case_priority: i32,
     ) -> (i32, i32, i32) {

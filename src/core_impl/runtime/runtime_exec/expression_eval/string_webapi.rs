@@ -769,6 +769,7 @@ impl Harness {
                         .unwrap_or_else(|| DEFAULT_LOCALE.to_string());
                     let mut case_first = "false".to_string();
                     let mut sensitivity = "variant".to_string();
+                    let mut numeric = false;
                     if let Some(options) = options {
                         let options = self.eval_expr(options, env, event_param, event)?;
                         if let Value::Object(entries) = options {
@@ -783,6 +784,11 @@ impl Harness {
                             {
                                 sensitivity = value;
                             }
+                            if let Some(value) = Self::object_get_entry(&entries, "numeric") {
+                                if !matches!(value, Value::Undefined) {
+                                    numeric = value.truthy();
+                                }
+                            }
                         }
                     }
                     Ok(Value::Number(Self::intl_collator_compare_strings(
@@ -791,6 +797,7 @@ impl Harness {
                         &locale,
                         &case_first,
                         &sensitivity,
+                        numeric,
                     )))
                 }
                 Expr::StringIsWellFormed(value) => {

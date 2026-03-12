@@ -331,11 +331,12 @@ impl Harness {
     pub(crate) fn intl_collator_options_from_value(
         &self,
         options: Option<&Value>,
-    ) -> Result<(String, String)> {
+    ) -> Result<(String, String, bool)> {
         let mut case_first = "false".to_string();
         let mut sensitivity = "variant".to_string();
+        let mut numeric = false;
         let Some(options) = options else {
-            return Ok((case_first, sensitivity));
+            return Ok((case_first, sensitivity, numeric));
         };
 
         match options {
@@ -364,6 +365,11 @@ impl Harness {
                         sensitivity = parsed;
                     }
                 }
+                if let Some(value) = Self::object_get_entry(&entries, "numeric") {
+                    if !matches!(value, Value::Undefined) {
+                        numeric = value.truthy();
+                    }
+                }
             }
             _ => {
                 return Err(Error::ScriptRuntime(
@@ -372,7 +378,7 @@ impl Harness {
             }
         }
 
-        Ok((case_first, sensitivity))
+        Ok((case_first, sensitivity, numeric))
     }
 
     pub(crate) fn new_intl_collator_compare_callable(
@@ -380,6 +386,7 @@ impl Harness {
         locale: String,
         case_first: String,
         sensitivity: String,
+        numeric: bool,
     ) -> Value {
         Self::new_object_value(vec![
             (
@@ -399,6 +406,7 @@ impl Harness {
                 INTERNAL_INTL_SENSITIVITY_KEY.to_string(),
                 Value::String(sensitivity),
             ),
+            (INTERNAL_INTL_NUMERIC_KEY.to_string(), Value::Bool(numeric)),
         ])
     }
 
@@ -407,11 +415,13 @@ impl Harness {
         locale: String,
         case_first: String,
         sensitivity: String,
+        numeric: bool,
     ) -> Value {
         let compare = self.new_intl_collator_compare_callable(
             locale.clone(),
             case_first.clone(),
             sensitivity.clone(),
+            numeric,
         );
         self.new_intl_instance_value(
             "Collator",
@@ -429,6 +439,7 @@ impl Harness {
                     INTERNAL_INTL_SENSITIVITY_KEY.to_string(),
                     Value::String(sensitivity),
                 ),
+                (INTERNAL_INTL_NUMERIC_KEY.to_string(), Value::Bool(numeric)),
                 (INTERNAL_INTL_BOUND_COMPARE_KEY.to_string(), compare),
             ],
         )
@@ -483,7 +494,8 @@ impl Harness {
         &mut self,
         receiver: &Value,
     ) -> Result<Value> {
-        let (locale, case_first, sensitivity) = self.resolve_intl_collator_options(receiver)?;
+        let (locale, case_first, sensitivity, numeric) =
+            self.resolve_intl_collator_options(receiver)?;
         let Value::Object(entries) = receiver else {
             return Err(Error::ScriptRuntime(
                 "Intl.Collator.compare requires an Intl.Collator instance".into(),
@@ -494,7 +506,8 @@ impl Harness {
         {
             return Ok(value);
         }
-        let compare = self.new_intl_collator_compare_callable(locale, case_first, sensitivity);
+        let compare =
+            self.new_intl_collator_compare_callable(locale, case_first, sensitivity, numeric);
         Self::object_set_entry(
             &mut entries.borrow_mut(),
             INTERNAL_INTL_BOUND_COMPARE_KEY.to_string(),

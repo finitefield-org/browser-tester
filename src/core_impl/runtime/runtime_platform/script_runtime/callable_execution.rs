@@ -1229,7 +1229,7 @@ impl Harness {
                 }
             }
             "intl_collator" => {
-                let (locale, case_first, sensitivity) = self
+                let (locale, case_first, sensitivity, numeric) = self
                     .resolve_intl_collator_options(&receiver)
                     .map_err(|_| Self::incompatible_receiver_error(&family))?;
                 match member.as_str() {
@@ -1239,7 +1239,7 @@ impl Harness {
                         ("sensitivity".into(), Value::String(sensitivity)),
                         ("ignorePunctuation".into(), Value::Bool(false)),
                         ("collation".into(), Value::String("default".to_string())),
-                        ("numeric".into(), Value::Bool(false)),
+                        ("numeric".into(), Value::Bool(numeric)),
                         ("caseFirst".into(), Value::String(case_first)),
                     ])),
                     _ => Err(Error::ScriptRuntime(format!(
@@ -4383,7 +4383,7 @@ impl Harness {
                         )
                     }
                     "intl_collator_compare" => {
-                        let (locale, case_first, sensitivity) =
+                        let (locale, case_first, sensitivity, numeric) =
                             self.resolve_intl_collator_options(callable)?;
                         let left = args
                             .first()
@@ -4397,6 +4397,7 @@ impl Harness {
                             &locale,
                             &case_first,
                             &sensitivity,
+                            numeric,
                         )))
                     }
                     "intl_date_time_format" => {

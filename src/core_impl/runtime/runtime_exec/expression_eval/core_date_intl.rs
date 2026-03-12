@@ -56,9 +56,9 @@ impl Harness {
                 let options = options
                     .map(|value| self.eval_expr(value, env, event_param, event))
                     .transpose()?;
-                let (case_first, sensitivity) =
+                let (case_first, sensitivity, numeric) =
                     self.intl_collator_options_from_value(options.as_ref())?;
-                Ok(self.new_intl_collator_value(locale, case_first, sensitivity))
+                Ok(self.new_intl_collator_value(locale, case_first, sensitivity, numeric))
             }
             IntlFormatterKind::DateTimeFormat => {
                 let options = options
@@ -463,7 +463,7 @@ impl Harness {
                     right,
                 } => {
                     let collator = self.eval_expr(collator, env, event_param, event)?;
-                    let (locale, case_first, sensitivity) =
+                    let (locale, case_first, sensitivity, numeric) =
                         self.resolve_intl_collator_options(&collator)?;
                     let left = self.eval_expr(left, env, event_param, event)?.as_string();
                     let right = self.eval_expr(right, env, event_param, event)?.as_string();
@@ -473,6 +473,7 @@ impl Harness {
                         &locale,
                         &case_first,
                         &sensitivity,
+                        numeric,
                     )))
                 }
                 Expr::IntlCollatorCompareGetter { collator } => {
@@ -610,7 +611,7 @@ impl Harness {
                             Ok(self.intl_date_time_resolved_options_value(locale, &options))
                         }
                         IntlFormatterKind::Collator => {
-                            let (locale, case_first, sensitivity) =
+                            let (locale, case_first, sensitivity, numeric) =
                                 self.resolve_intl_collator_options(&formatter)?;
                             Ok(Self::new_object_value(vec![
                                 ("locale".into(), Value::String(locale)),
@@ -618,7 +619,7 @@ impl Harness {
                                 ("sensitivity".into(), Value::String(sensitivity)),
                                 ("ignorePunctuation".into(), Value::Bool(false)),
                                 ("collation".into(), Value::String("default".to_string())),
-                                ("numeric".into(), Value::Bool(false)),
+                                ("numeric".into(), Value::Bool(numeric)),
                                 ("caseFirst".into(), Value::String(case_first)),
                             ]))
                         }
