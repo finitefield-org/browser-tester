@@ -479,6 +479,48 @@ impl Harness {
         }
     }
 
+    fn ensure_top_level_global_sync_names(
+        &mut self,
+        stmts: &[Stmt],
+        env: &mut HashMap<String, Value>,
+    ) {
+        if Self::env_scope_depth(env) != 0 {
+            return;
+        }
+
+        let lexical_bindings = Self::env_top_level_lexical_binding_names(env);
+        let mut sync_names = HashSet::new();
+        if let Some(Value::Array(existing)) = env.get(INTERNAL_GLOBAL_SYNC_NAMES_KEY) {
+            for entry in existing.borrow().iter() {
+                if let Value::String(name) = entry {
+                    sync_names.insert(name.clone());
+                }
+            }
+        }
+        for name in self.script_runtime.env.keys() {
+            sync_names.insert(name.clone());
+        }
+        for name in env.keys() {
+            sync_names.insert(name.clone());
+        }
+        sync_names.extend(Self::collect_var_declared_names(stmts));
+        sync_names.extend(Self::collect_function_decls(stmts).into_keys());
+
+        let mut sync_names = sync_names
+            .into_iter()
+            .filter(|name| !Self::is_internal_env_key(name) && !lexical_bindings.contains(name))
+            .collect::<Vec<_>>();
+        sync_names.sort();
+        if sync_names.is_empty() {
+            env.remove(INTERNAL_GLOBAL_SYNC_NAMES_KEY);
+            return;
+        }
+        env.insert(
+            INTERNAL_GLOBAL_SYNC_NAMES_KEY.to_string(),
+            Self::new_array_value(sync_names.into_iter().map(Value::String).collect()),
+        );
+    }
+
     pub(crate) fn collect_var_declared_names(stmts: &[Stmt]) -> HashSet<String> {
         let mut out = HashSet::new();
         for stmt in stmts {
@@ -2241,6 +2283,7 @@ impl Harness {
                     ),
                 );
             }
+            self.ensure_top_level_global_sync_names(stmts, env);
         }
         self.script_runtime
             .listener_capture_env_stack
@@ -2321,8 +2364,10 @@ impl Harness {
                                     .borrow_mut()
                                     .insert(name.clone(), function.clone());
                             }
-                            env.insert(name.clone(), function);
+                            env.insert(name.clone(), function.clone());
                             self.set_const_binding(env, name, false);
+                            self.sync_global_binding_if_needed(env, name, &function);
+                            self.sync_scheduled_task_captures_for_binding(name, &function);
                         }
                         Stmt::ClassDecl {
                             name,
@@ -2942,18 +2987,17 @@ impl Harness {
                                 VarAssignOp::Add => {
                                     let value = self.eval_expr(expr, env, event_param, event)?;
                                     if self.try_append_string_binding_in_place(env, name, &value)? {
-                                        let needs_sync = !Self::arguments_param_indexes_for_name(
-                                            env, name,
-                                        )
-                                        .is_empty()
-                                            || Self::env_should_sync_global_name(env, name)
-                                            || !self.scheduler.task_queue.is_empty()
-                                            || matches!(
-                                                expr,
-                                                Expr::SetTimeout { .. }
-                                                    | Expr::SetInterval { .. }
-                                                    | Expr::RequestAnimationFrame { .. }
-                                            );
+                                        let needs_sync =
+                                            !Self::arguments_param_indexes_for_name(env, name)
+                                                .is_empty()
+                                                || Self::env_should_sync_global_name(env, name)
+                                                || !self.scheduler.task_queue.is_empty()
+                                                || matches!(
+                                                    expr,
+                                                    Expr::SetTimeout { .. }
+                                                        | Expr::SetInterval { .. }
+                                                        | Expr::RequestAnimationFrame { .. }
+                                                );
                                         if needs_sync {
                                             let next = env.get(name).cloned().ok_or_else(|| {
                                                 Error::ScriptRuntime(format!(
