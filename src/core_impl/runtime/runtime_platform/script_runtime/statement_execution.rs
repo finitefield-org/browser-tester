@@ -208,6 +208,7 @@ impl Harness {
                         is_event_handler_property: false,
                         is_arrow,
                         handler: handler.clone(),
+                        function: None,
                         captured_env,
                         captured_pending_function_decls: self
                             .script_runtime
@@ -708,6 +709,25 @@ impl Harness {
             ));
         }
         Ok(())
+    }
+
+    fn try_append_string_binding_in_place(
+        &mut self,
+        env: &mut HashMap<String, Value>,
+        name: &str,
+        rhs: &Value,
+    ) -> Result<bool> {
+        let rhs = self.to_primitive_for_addition(rhs)?;
+        if matches!(rhs, Value::Symbol(_)) {
+            return Err(Error::ScriptRuntime(
+                "Cannot convert a Symbol value to a string".into(),
+            ));
+        }
+        let Some(Value::String(existing)) = env.get_mut(name) else {
+            return Ok(false);
+        };
+        existing.push_str(&rhs.as_string());
+        Ok(true)
     }
 
     fn collect_direct_block_lexical_bindings(
@@ -2844,6 +2864,34 @@ impl Harness {
                                 }
                                 VarAssignOp::Add => {
                                     let value = self.eval_expr(expr, env, event_param, event)?;
+                                    if self.try_append_string_binding_in_place(env, name, &value)? {
+                                        let needs_sync = !Self::arguments_param_indexes_for_name(
+                                            env, name,
+                                        )
+                                        .is_empty()
+                                            || Self::env_should_sync_global_name(env, name)
+                                            || !self.scheduler.task_queue.is_empty()
+                                            || matches!(
+                                                expr,
+                                                Expr::SetTimeout { .. }
+                                                    | Expr::SetInterval { .. }
+                                                    | Expr::RequestAnimationFrame { .. }
+                                            );
+                                        if needs_sync {
+                                            let next = env.get(name).cloned().ok_or_else(|| {
+                                                Error::ScriptRuntime(format!(
+                                                    "unknown variable: {name}"
+                                                ))
+                                            })?;
+                                            self.sync_arguments_after_param_write(env, name, &next);
+                                            self.sync_global_binding_if_needed(env, name, &next);
+                                            self.sync_scheduled_task_captures_for_binding(
+                                                name, &next,
+                                            );
+                                            self.bind_timer_id_to_task_env(name, expr, &next);
+                                        }
+                                        continue;
+                                    }
                                     self.add_values(&previous, &value)?
                                 }
                                 VarAssignOp::Sub => {

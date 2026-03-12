@@ -1,6 +1,22 @@
 use super::*;
 
 impl Harness {
+    pub(crate) fn string_char_len(value: &str) -> usize {
+        if value.is_ascii() {
+            value.len()
+        } else {
+            value.chars().count()
+        }
+    }
+
+    pub(crate) fn string_char_at(value: &str, index: usize) -> Option<char> {
+        if value.is_ascii() {
+            value.as_bytes().get(index).copied().map(char::from)
+        } else {
+            value.chars().nth(index)
+        }
+    }
+
     pub(crate) fn normalize_slice_index(len: usize, index: i64) -> usize {
         if index < 0 {
             len.saturating_sub(index.unsigned_abs() as usize)
@@ -26,15 +42,23 @@ impl Harness {
     }
 
     pub(crate) fn char_index_to_byte(value: &str, char_index: usize) -> usize {
-        value
-            .char_indices()
-            .nth(char_index)
-            .map(|(idx, _)| idx)
-            .unwrap_or(value.len())
+        if value.is_ascii() {
+            char_index.min(value.len())
+        } else {
+            value
+                .char_indices()
+                .nth(char_index)
+                .map(|(idx, _)| idx)
+                .unwrap_or(value.len())
+        }
     }
 
     pub(crate) fn utf16_length(value: &str) -> usize {
-        value.chars().map(char::len_utf16).sum()
+        if value.is_ascii() {
+            value.len()
+        } else {
+            value.chars().map(char::len_utf16).sum()
+        }
     }
 
     pub(crate) fn utf16_index_to_byte(value: &str, utf16_index: usize) -> Option<usize> {
@@ -84,6 +108,9 @@ impl Harness {
     }
 
     pub(crate) fn byte_index_to_utf16_index(value: &str, byte_index: usize) -> usize {
+        if value.is_ascii() {
+            return byte_index.min(value.len());
+        }
         let prefix = if byte_index <= value.len() {
             &value[..byte_index]
         } else {
@@ -145,7 +172,13 @@ impl Harness {
         if start >= end {
             return String::new();
         }
-        value.chars().skip(start).take(end - start).collect()
+        if value.is_ascii() {
+            let start = start.min(value.len());
+            let end = end.min(value.len());
+            value[start..end].to_string()
+        } else {
+            value.chars().skip(start).take(end - start).collect()
+        }
     }
 
     pub(crate) fn split_string(
@@ -627,6 +660,10 @@ impl Harness {
     ) -> Option<usize> {
         let start_byte = Self::char_index_to_byte(value, start_char_idx);
         let pos = value.get(start_byte..)?.find(search)?;
-        Some(value[..start_byte + pos].chars().count())
+        if value.is_ascii() {
+            Some(start_byte + pos)
+        } else {
+            Some(value[..start_byte + pos].chars().count())
+        }
     }
 }

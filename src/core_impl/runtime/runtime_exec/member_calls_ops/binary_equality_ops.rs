@@ -988,7 +988,7 @@ impl Harness {
         )
     }
 
-    fn to_primitive_for_addition(&mut self, value: &Value) -> Result<Value> {
+    pub(crate) fn to_primitive_for_addition(&mut self, value: &Value) -> Result<Value> {
         if Self::is_primitive_value(value) || matches!(value, Value::Date(_)) {
             return Ok(value.clone());
         }
@@ -1035,11 +1035,12 @@ impl Harness {
             ));
         }
         if matches!(left, Value::String(_)) || matches!(right, Value::String(_)) {
-            return Ok(Value::String(format!(
-                "{}{}",
-                left.as_string(),
-                right.as_string()
-            )));
+            let left = left.as_string();
+            let right = right.as_string();
+            let mut out = String::with_capacity(left.len() + right.len());
+            out.push_str(&left);
+            out.push_str(&right);
+            return Ok(Value::String(out));
         }
 
         if matches!(left, Value::BigInt(_)) || matches!(right, Value::BigInt(_)) {

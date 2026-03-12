@@ -14,7 +14,10 @@ impl Harness {
         }
     }
 
-    fn arguments_param_indexes_for_name(env: &HashMap<String, Value>, name: &str) -> Vec<usize> {
+    pub(crate) fn arguments_param_indexes_for_name(
+        env: &HashMap<String, Value>,
+        name: &str,
+    ) -> Vec<usize> {
         let Some(Value::Array(bindings)) = env.get(INTERNAL_ARGUMENTS_PARAM_BINDINGS_KEY) else {
             return Vec::new();
         };
@@ -708,6 +711,7 @@ impl Harness {
                 is_event_handler_property: true,
                 is_arrow: function.is_arrow,
                 handler: handler.clone(),
+                function: Some(function.clone()),
                 captured_env: function.captured_env.clone(),
                 captured_pending_function_decls: function.captured_pending_function_decls.clone(),
             };
@@ -818,6 +822,7 @@ impl Harness {
                 is_event_handler_property: true,
                 is_arrow: function.is_arrow,
                 handler: function.handler.clone(),
+                function: Some(function.clone()),
                 captured_env: function.captured_env.clone(),
                 captured_pending_function_decls: function.captured_pending_function_decls.clone(),
             };

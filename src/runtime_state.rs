@@ -739,6 +739,7 @@ pub(crate) struct Listener {
     pub(crate) is_event_handler_property: bool,
     pub(crate) is_arrow: bool,
     pub(crate) handler: ScriptHandler,
+    pub(crate) function: Option<Rc<FunctionValue>>,
     pub(crate) captured_env: Rc<RefCell<ScriptEnv>>,
     pub(crate) captured_pending_function_decls:
         Vec<Arc<HashMap<String, (ScriptHandler, bool, bool)>>>,
@@ -1221,6 +1222,12 @@ pub(crate) struct ListenerCaptureFrame {
     pub(crate) inherit_outer_pending: bool,
 }
 
+#[derive(Debug)]
+pub(crate) struct PendingAsyncFunctionSuspend {
+    pub(crate) awaited_promise: Rc<RefCell<PromiseValue>>,
+    pub(crate) continuation: Value,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum ModuleExportBinding {
     Local(String),
@@ -1304,6 +1311,7 @@ pub(crate) struct ScriptRuntimeState {
     pub(crate) symbol_constructor_prototype: Option<Rc<RefCell<ObjectValue>>>,
     pub(crate) typed_array_constructor_prototypes: HashMap<String, Rc<RefCell<ObjectValue>>>,
     pub(crate) constructor_static_methods: HashMap<String, Value>,
+    pub(crate) pending_async_function_suspend: Option<PendingAsyncFunctionSuspend>,
 }
 
 impl ScriptRuntimeState {

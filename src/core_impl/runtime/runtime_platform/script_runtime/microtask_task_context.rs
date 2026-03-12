@@ -144,7 +144,7 @@ impl Harness {
         })
     }
 
-    fn listener_event_argument(&mut self, event: &mut EventState) -> Value {
+    pub(crate) fn listener_event_argument(&mut self, event: &mut EventState) -> Value {
         let target = event
             .target_value
             .as_ref()
@@ -725,6 +725,28 @@ impl Harness {
             }
         }
         result
+    }
+
+    pub(crate) fn push_shared_listener_capture_env_frame(
+        &mut self,
+        shared_env: Rc<RefCell<ScriptEnv>>,
+        inherit_outer_pending: bool,
+    ) -> usize {
+        let start_len = self.script_runtime.listener_capture_env_stack.len();
+        self.script_runtime
+            .listener_capture_env_stack
+            .push(ListenerCaptureFrame {
+                shared_env: Some(shared_env),
+                inherit_outer_pending,
+                ..ListenerCaptureFrame::default()
+            });
+        start_len
+    }
+
+    pub(crate) fn restore_listener_capture_env_stack(&mut self, start_len: usize) {
+        self.script_runtime
+            .listener_capture_env_stack
+            .truncate(start_len);
     }
 
     pub(crate) fn is_internal_env_key(name: &str) -> bool {

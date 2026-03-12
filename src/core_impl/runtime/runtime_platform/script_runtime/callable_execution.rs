@@ -1,6 +1,21 @@
 use super::*;
 
 const IMAGE_DATA_MAX_DEFAULT_ELEMENTS: usize = 1_000_000;
+const INTERNAL_ASYNC_FUNCTION_SUSPENDED: &str = "\u{0}\u{0}bt_async_function_suspended";
+const INTERNAL_ASYNC_AWAIT_VALUE_PARAM: &str = "__bt_async_await_value";
+
+#[derive(Clone)]
+enum TopLevelAwaitResumeKind {
+    Ignore,
+    Declare { name: String, kind: VarDeclKind },
+    Assign { name: String },
+    Return,
+}
+
+enum TopLevelAwaitOutcome {
+    Resolved(Value),
+    Pending(Rc<RefCell<PromiseValue>>),
+}
 
 impl Harness {
     fn has_simple_parameter_list(handler: &ScriptHandler) -> bool {
@@ -9,6 +24,127 @@ impl Harness {
                 && param.default.is_none()
                 && !param.name.starts_with("__bt_callback_arg_")
         })
+    }
+
+    fn first_suspendable_top_level_await(
+        stmts: &[Stmt],
+    ) -> Option<(usize, Expr, TopLevelAwaitResumeKind)> {
+        stmts
+            .iter()
+            .enumerate()
+            .find_map(|(index, stmt)| match stmt {
+                Stmt::Expr(Expr::Await(inner)) => {
+                    Some((index, (**inner).clone(), TopLevelAwaitResumeKind::Ignore))
+                }
+                Stmt::VarDecl { name, kind, expr } => match expr {
+                    Expr::Await(inner) => Some((
+                        index,
+                        (**inner).clone(),
+                        TopLevelAwaitResumeKind::Declare {
+                            name: name.clone(),
+                            kind: kind.clone(),
+                        },
+                    )),
+                    _ => None,
+                },
+                Stmt::VarAssign { name, op, expr } => match (op, expr) {
+                    (VarAssignOp::Assign, Expr::Await(inner)) => Some((
+                        index,
+                        (**inner).clone(),
+                        TopLevelAwaitResumeKind::Assign { name: name.clone() },
+                    )),
+                    _ => None,
+                },
+                Stmt::Return { value: Some(Expr::Await(inner)) } => {
+                    Some((index, (**inner).clone(), TopLevelAwaitResumeKind::Return))
+                }
+                _ => None,
+            })
+    }
+
+    fn eval_top_level_await_expr(
+        &mut self,
+        expr: &Expr,
+        env: &mut HashMap<String, Value>,
+        event_param: &Option<String>,
+        event: &EventState,
+    ) -> Result<TopLevelAwaitOutcome> {
+        let value = self.eval_expr(expr, env, event_param, event)?;
+        let promise = self.promise_resolve_value_as_promise(value)?;
+        loop {
+            let settled = {
+                let promise_ref = promise.borrow();
+                match &promise_ref.state {
+                    PromiseState::Pending => None,
+                    PromiseState::Fulfilled(value) => Some(Ok(value.clone())),
+                    PromiseState::Rejected(reason) => Some(Err(reason.clone())),
+                }
+            };
+            match settled {
+                Some(Ok(value)) => return Ok(TopLevelAwaitOutcome::Resolved(value)),
+                Some(Err(reason)) => return Err(Error::ScriptThrown(ThrownValue::new(reason))),
+                None => {
+                    if !self.scheduler.microtask_queue.is_empty() {
+                        self.run_microtask_queue()?;
+                        continue;
+                    }
+                    let ran_timers = self.run_due_timers_internal()?;
+                    if ran_timers == 0 {
+                        return Ok(TopLevelAwaitOutcome::Pending(promise));
+                    }
+                }
+            }
+        }
+    }
+
+    fn build_top_level_await_continuation_handler(
+        resume: &TopLevelAwaitResumeKind,
+        remaining: &[Stmt],
+    ) -> ScriptHandler {
+        let mut params = Vec::new();
+        let mut stmts = Vec::new();
+
+        match resume {
+            TopLevelAwaitResumeKind::Ignore => {}
+            TopLevelAwaitResumeKind::Declare { name, kind } => {
+                params.push(FunctionParam {
+                    name: INTERNAL_ASYNC_AWAIT_VALUE_PARAM.to_string(),
+                    default: None,
+                    is_rest: false,
+                });
+                stmts.push(Stmt::VarDecl {
+                    name: name.clone(),
+                    kind: kind.clone(),
+                    expr: Expr::Var(INTERNAL_ASYNC_AWAIT_VALUE_PARAM.to_string()),
+                });
+            }
+            TopLevelAwaitResumeKind::Assign { name } => {
+                params.push(FunctionParam {
+                    name: INTERNAL_ASYNC_AWAIT_VALUE_PARAM.to_string(),
+                    default: None,
+                    is_rest: false,
+                });
+                stmts.push(Stmt::VarAssign {
+                    name: name.clone(),
+                    op: VarAssignOp::Assign,
+                    expr: Expr::Var(INTERNAL_ASYNC_AWAIT_VALUE_PARAM.to_string()),
+                });
+            }
+            TopLevelAwaitResumeKind::Return => {
+                params.push(FunctionParam {
+                    name: INTERNAL_ASYNC_AWAIT_VALUE_PARAM.to_string(),
+                    default: None,
+                    is_rest: false,
+                });
+                stmts.push(Stmt::Return {
+                    value: Some(Expr::Var(INTERNAL_ASYNC_AWAIT_VALUE_PARAM.to_string())),
+                });
+                return ScriptHandler { params, stmts };
+            }
+        }
+
+        stmts.extend(remaining.iter().cloned());
+        ScriptHandler { params, stmts }
     }
 
     fn make_function_value_with_kind(
@@ -7104,17 +7240,21 @@ impl Harness {
                     .push(initialized);
             }
 
+            let shared_env_frame_start = (!function.global_scope).then(|| {
+                this.push_shared_listener_capture_env_frame(function.captured_env.clone(), true)
+            });
+
             let result = this.with_isolated_loop_control_scope(|this| {
                 (|| -> Result<Value> {
-                    let captured_env_before_call = if function.global_scope {
-                        HashMap::new()
-                    } else {
-                        function.captured_env.borrow().to_map()
-                    };
+                    let captured_env_before_call = (!function.global_scope)
+                        .then(|| function.captured_env.borrow().share());
                     let mut call_env = if function.global_scope {
                         this.script_runtime.env.to_map()
                     } else {
-                        captured_env_before_call.clone()
+                        captured_env_before_call
+                            .as_ref()
+                            .map(ScriptEnv::to_map)
+                            .unwrap_or_default()
                     };
                     call_env.remove(INTERNAL_RETURN_SLOT);
                     let scope_depth = Self::env_scope_depth(&call_env);
@@ -7273,7 +7413,6 @@ impl Harness {
                             &call_event,
                         )?;
                     }
-                    let mut body_env = call_env.clone();
                     let param_names = function
                         .handler
                         .params
@@ -7316,20 +7455,110 @@ impl Harness {
                             pending: HashSet::new(),
                         });
                     }
-                    let flow = this.execute_stmts_with_pending_scope(
-                        &function.handler.stmts,
-                        &event_param,
-                        &mut call_event,
-                        &mut body_env,
-                        false,
-                    );
+                    let mut pending_async_suspend = None;
+                    let flow_result = if function.is_async && !function.is_generator {
+                        if let Some((await_index, await_expr, resume_kind)) =
+                            Self::first_suspendable_top_level_await(&function.handler.stmts)
+                        {
+                            let prefix_flow = this.execute_stmts_with_pending_scope(
+                                &function.handler.stmts[..await_index],
+                                &event_param,
+                                &mut call_event,
+                                &mut call_env,
+                                false,
+                            )?;
+                            Ok(match prefix_flow {
+                                ExecFlow::Continue => match this.eval_top_level_await_expr(
+                                    &await_expr,
+                                    &mut call_env,
+                                    &event_param,
+                                    &call_event,
+                                )? {
+                                    TopLevelAwaitOutcome::Resolved(awaited_value) => {
+                                        match &resume_kind {
+                                            TopLevelAwaitResumeKind::Ignore => {}
+                                            TopLevelAwaitResumeKind::Declare { name, kind } => {
+                                                call_env.insert(name.clone(), awaited_value);
+                                                this.set_const_binding(
+                                                    &mut call_env,
+                                                    &name,
+                                                    matches!(kind, VarDeclKind::Const),
+                                                );
+                                            }
+                                            TopLevelAwaitResumeKind::Assign { name } => {
+                                                call_env.insert(name.clone(), awaited_value);
+                                            }
+                                            TopLevelAwaitResumeKind::Return => {
+                                                call_env.insert(
+                                                    INTERNAL_RETURN_SLOT.to_string(),
+                                                    awaited_value,
+                                                );
+                                            }
+                                        };
+                                        if matches!(resume_kind, TopLevelAwaitResumeKind::Return) {
+                                            ExecFlow::Return
+                                        } else {
+                                            this.execute_stmts_with_pending_scope(
+                                                &function.handler.stmts[await_index + 1..],
+                                                &event_param,
+                                                &mut call_event,
+                                                &mut call_env,
+                                                false,
+                                            )?
+                                        }
+                                    }
+                                    TopLevelAwaitOutcome::Pending(awaited_promise) => {
+                                        let continuation_handler =
+                                            Self::build_top_level_await_continuation_handler(
+                                                &resume_kind,
+                                                &function.handler.stmts[await_index + 1..],
+                                            );
+                                        let continuation = this.make_function_value_with_kind(
+                                            continuation_handler,
+                                            &call_env,
+                                            false,
+                                            true,
+                                            false,
+                                            true,
+                                            false,
+                                            false,
+                                            None,
+                                            None,
+                                        );
+                                        pending_async_suspend = Some(PendingAsyncFunctionSuspend {
+                                            awaited_promise,
+                                            continuation,
+                                        });
+                                        ExecFlow::Continue
+                                    }
+                                },
+                                other => other,
+                            })
+                        } else {
+                            this.execute_stmts_with_pending_scope(
+                                &function.handler.stmts,
+                                &event_param,
+                                &mut call_event,
+                                &mut call_env,
+                                false,
+                            )
+                        }
+                    } else {
+                        this.execute_stmts_with_pending_scope(
+                            &function.handler.stmts,
+                            &event_param,
+                            &mut call_event,
+                            &mut call_env,
+                            false,
+                        )
+                    };
                     if pushed_non_tdz_scope {
                         this.script_runtime.tdz_scope_stack.pop();
                     }
                     if yield_collector.is_some() {
                         let _ = this.script_runtime.generator_yield_stack.pop();
                     }
-                    let flow = match flow {
+                    let flow = match flow_result {
                         Ok(flow) => flow,
                         Err(Error::ScriptRuntime(msg))
                             if function.is_generator
@@ -7344,7 +7573,7 @@ impl Harness {
                         .map(|values| values.borrow().clone())
                         .unwrap_or_default();
                     let generator_return_value = if matches!(flow, ExecFlow::Return) {
-                        body_env
+                        call_env
                             .get(INTERNAL_RETURN_SLOT)
                             .cloned()
                             .unwrap_or(Value::Undefined)
@@ -7361,7 +7590,7 @@ impl Harness {
                         }
                         let before = global_values_before_call.get(name);
                         let global_after = this.script_runtime.env.get(name).cloned();
-                        let call_after = body_env.get(name).cloned();
+                        let call_after = call_env.get(name).cloned();
                         let global_changed = match (before, global_after.as_ref()) {
                             (Some(prev), Some(next)) => !this.strict_equal(prev, next),
                             (None, Some(_)) => true,
@@ -7383,6 +7612,9 @@ impl Harness {
                     }
                     if !function.global_scope {
                         let mut captured_env = function.captured_env.borrow_mut();
+                        let captured_env_before_call = captured_env_before_call
+                            .as_ref()
+                            .expect("non-global functions always snapshot their capture env");
                         for name in captured_env_before_call.keys() {
                             if Self::is_internal_env_key(name)
                                 || function.local_bindings.contains(name.as_str())
@@ -7392,7 +7624,7 @@ impl Harness {
                                 continue;
                             }
                             let before = captured_env_before_call.get(name);
-                            let after = body_env.get(name);
+                            let after = call_env.get(name);
                             let changed = match (before, after) {
                                 (Some(prev), Some(next)) => !this.strict_equal(prev, next),
                                 (None, Some(_)) => true,
@@ -7419,6 +7651,12 @@ impl Harness {
                             }
                         }
                     }
+                    if let Some(suspend) = pending_async_suspend {
+                        this.script_runtime.pending_async_function_suspend = Some(suspend);
+                        return Err(Error::ScriptRuntime(
+                            INTERNAL_ASYNC_FUNCTION_SUSPENDED.into(),
+                        ));
+                    }
                     if function.is_generator {
                         if function.is_async {
                             return Ok(this.new_async_generator_value(generator_yields));
@@ -7431,12 +7669,15 @@ impl Harness {
                         ExecFlow::Continue => Ok(Value::Undefined),
                         ExecFlow::Break(label) => Err(Self::break_flow_error(&label)),
                         ExecFlow::ContinueLoop(label) => Err(Self::continue_flow_error(&label)),
-                        ExecFlow::Return => Ok(body_env
+                        ExecFlow::Return => Ok(call_env
                             .remove(INTERNAL_RETURN_SLOT)
                             .unwrap_or(Value::Undefined)),
                     }
                 })()
             });
+            if let Some(start) = shared_env_frame_start {
+                this.restore_listener_capture_env_stack(start);
+            }
 
             if private_bindings.is_some() {
                 this.script_runtime.private_binding_stack.pop();
@@ -7457,6 +7698,24 @@ impl Harness {
                 Ok(value) => {
                     if let Err(err) = self.promise_resolve(&promise, value) {
                         self.promise_reject(&promise, Self::promise_error_reason(err));
+                    }
+                }
+                Err(Error::ScriptRuntime(msg)) if msg == INTERNAL_ASYNC_FUNCTION_SUSPENDED => {
+                    if let Some(suspend) = self.script_runtime.pending_async_function_suspend.take()
+                    {
+                        self.promise_add_reaction(
+                            &suspend.awaited_promise,
+                            PromiseReactionKind::Then {
+                                on_fulfilled: Some(suspend.continuation),
+                                on_rejected: None,
+                                result: promise.clone(),
+                            },
+                        );
+                    } else {
+                        self.promise_reject(
+                            &promise,
+                            Value::String("async function suspended without continuation".into()),
+                        );
                     }
                 }
                 Err(err) => self.promise_reject(&promise, Self::promise_error_reason(err)),

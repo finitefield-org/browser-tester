@@ -554,7 +554,7 @@ impl Harness {
             return true;
         }
         Self::own_property_integer_key(key)
-            .is_some_and(|index| (index as usize) < text.chars().count())
+            .is_some_and(|index| (index as usize) < Self::string_char_len(&text))
     }
 
     pub(crate) fn string_wrapper_builtin_descriptor_value(
@@ -564,14 +564,14 @@ impl Harness {
         let text = Self::string_wrapper_value_from_object(entries)?;
         if key == "length" {
             return Some(Self::own_data_property_descriptor_with_attrs(
-                Value::Number(text.chars().count() as i64),
+                Value::Number(Self::string_char_len(&text) as i64),
                 false,
                 false,
                 false,
             ));
         }
         let index = Self::own_property_integer_key(key)? as usize;
-        let ch = text.chars().nth(index)?;
+        let ch = Self::string_char_at(&text, index)?;
         Some(Self::own_data_property_descriptor_with_attrs(
             Value::String(ch.to_string()),
             false,

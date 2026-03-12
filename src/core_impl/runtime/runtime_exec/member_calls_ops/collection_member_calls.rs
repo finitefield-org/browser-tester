@@ -217,13 +217,12 @@ impl Harness {
                         "charAt supports zero or one argument".into(),
                     ));
                 }
-                let len = text.chars().count();
+                let len = Self::string_char_len(text);
                 let index = evaluated_args.first().map(Self::value_to_i64).unwrap_or(0);
                 if index < 0 || (index as usize) >= len {
                     Value::String(String::new())
                 } else {
-                    text.chars()
-                        .nth(index as usize)
+                    Self::string_char_at(text, index as usize)
                         .map(|ch| Value::String(ch.to_string()))
                         .unwrap_or_else(|| Value::String(String::new()))
                 }
@@ -295,14 +294,13 @@ impl Harness {
                         "at supports zero or one argument".into(),
                     ));
                 }
-                let len = text.chars().count() as i64;
+                let len = Self::string_char_len(text) as i64;
                 let index = evaluated_args.first().map(Self::value_to_i64).unwrap_or(0);
                 let index = if index < 0 { len + index } else { index };
                 if index < 0 || index >= len {
                     Value::Undefined
                 } else {
-                    text.chars()
-                        .nth(index as usize)
+                    Self::string_char_at(text, index as usize)
                         .map(|ch| Value::String(ch.to_string()))
                         .unwrap_or(Value::Undefined)
                 }
@@ -370,7 +368,7 @@ impl Harness {
                     ));
                 }
                 let search = self.coerce_to_string_for_tostring(search)?;
-                let len = text.chars().count();
+                let len = Self::string_char_len(text);
                 let end = evaluated_args
                     .get(1)
                     .map(Self::value_to_i64)
@@ -397,7 +395,7 @@ impl Harness {
                     ));
                 }
                 let search = self.coerce_to_string_for_tostring(&evaluated_args[0])?;
-                let len = text.chars().count() as i64;
+                let len = Self::string_char_len(text) as i64;
                 let mut position = evaluated_args.get(1).map(Self::value_to_i64).unwrap_or(0);
                 if position < 0 {
                     position = 0;
@@ -413,7 +411,7 @@ impl Harness {
                     ));
                 }
                 let search = self.coerce_to_string_for_tostring(&evaluated_args[0])?;
-                let len = text.chars().count() as i64;
+                let len = Self::string_char_len(text) as i64;
                 let mut position = evaluated_args.get(1).map(Self::value_to_i64).unwrap_or(0);
                 if position < 0 {
                     position = 0;
@@ -437,11 +435,11 @@ impl Harness {
                 let position = if position < 0 { 0 } else { position.min(len) } as usize;
                 let candidate = Self::substring_chars(text, 0, position.saturating_add(1));
                 let found = if search.is_empty() {
-                    Some(position.min(candidate.chars().count()))
+                    Some(position.min(Self::string_char_len(&candidate)))
                 } else {
                     candidate
                         .rfind(&search)
-                        .map(|byte| candidate[..byte].chars().count())
+                        .map(|byte| Self::string_char_len(&candidate[..byte]))
                 };
                 Value::Number(found.map(|idx| idx as i64).unwrap_or(-1))
             }
@@ -530,7 +528,7 @@ impl Harness {
                         "String.slice supports up to two arguments".into(),
                     ));
                 }
-                let len = text.chars().count();
+                let len = Self::string_char_len(text);
                 let start = evaluated_args
                     .first()
                     .map(Self::value_to_i64)
@@ -738,7 +736,7 @@ impl Harness {
                     ));
                 }
                 let target_length = Self::value_to_i64(&evaluated_args[0]).max(0) as usize;
-                let current_len = text.chars().count();
+                let current_len = Self::string_char_len(text);
                 if target_length <= current_len {
                     return Ok(Some(Value::String(text.to_string())));
                 }
@@ -752,7 +750,7 @@ impl Harness {
                 }
                 let mut filler = String::new();
                 let needed = target_length - current_len;
-                while filler.chars().count() < needed {
+                while Self::string_char_len(&filler) < needed {
                     filler.push_str(&pad);
                 }
                 let filler = filler.chars().take(needed).collect::<String>();
@@ -765,7 +763,7 @@ impl Harness {
                     ));
                 }
                 let target_length = Self::value_to_i64(&evaluated_args[0]).max(0) as usize;
-                let current_len = text.chars().count();
+                let current_len = Self::string_char_len(text);
                 if target_length <= current_len {
                     return Ok(Some(Value::String(text.to_string())));
                 }
@@ -779,7 +777,7 @@ impl Harness {
                 }
                 let mut filler = String::new();
                 let needed = target_length - current_len;
-                while filler.chars().count() < needed {
+                while Self::string_char_len(&filler) < needed {
                     filler.push_str(&pad);
                 }
                 let filler = filler.chars().take(needed).collect::<String>();
@@ -830,7 +828,7 @@ impl Harness {
                     ));
                 }
                 let search = self.coerce_to_string_for_tostring(&evaluated_args[0])?;
-                let len = text.chars().count() as i64;
+                let len = Self::string_char_len(text) as i64;
                 let mut position = evaluated_args.get(1).map(Self::value_to_i64).unwrap_or(0);
                 if position < 0 {
                     position = 0;
@@ -845,7 +843,7 @@ impl Harness {
                         "substring supports up to two arguments".into(),
                     ));
                 }
-                let len = text.chars().count();
+                let len = Self::string_char_len(text);
                 let start = evaluated_args
                     .first()
                     .map(Self::value_to_i64)

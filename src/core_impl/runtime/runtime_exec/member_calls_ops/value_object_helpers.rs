@@ -8479,7 +8479,7 @@ impl Harness {
 
     fn object_property_from_string_value(&self, text: &str, key: &str) -> Value {
         if key == "length" {
-            Value::Number(text.chars().count() as i64)
+            Value::Number(Self::string_char_len(text) as i64)
         } else if key == "constructor" {
             Value::StringConstructor
         } else if self.is_iterator_property_key(key) {
@@ -8487,8 +8487,7 @@ impl Harness {
         } else if matches!(key, "toString" | "valueOf") || Self::is_string_method_name(key) {
             Self::new_receiver_builtin_callable("string", key)
         } else if let Ok(index) = key.parse::<usize>() {
-            text.chars()
-                .nth(index)
+            Self::string_char_at(text, index)
                 .map(|ch| Value::String(ch.to_string()))
                 .unwrap_or(Value::Undefined)
         } else {

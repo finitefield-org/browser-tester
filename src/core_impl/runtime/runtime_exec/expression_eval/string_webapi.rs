@@ -13,7 +13,7 @@ impl Harness {
                 Expr::StringCharAt { value, index } => {
                     let value = self.eval_expr(value, env, event_param, event)?;
                     let value = self.coerce_string_method_receiver(&value)?;
-                    let len = value.chars().count();
+                    let len = Self::string_char_len(&value);
                     let index = index
                         .as_ref()
                         .map(|value| self.eval_expr(value, env, event_param, event))
@@ -23,9 +23,7 @@ impl Harness {
                     if index < 0 || (index as usize) >= len {
                         Ok(Value::String(String::new()))
                     } else {
-                        Ok(value
-                            .chars()
-                            .nth(index as usize)
+                        Ok(Self::string_char_at(&value, index as usize)
                             .map(|ch| Value::String(ch.to_string()))
                             .unwrap_or_else(|| Value::String(String::new())))
                     }
@@ -93,7 +91,7 @@ impl Harness {
                 Expr::StringAt { value, index } => {
                     let value = self.eval_expr(value, env, event_param, event)?;
                     let value = self.coerce_string_method_receiver(&value)?;
-                    let len = value.chars().count() as i64;
+                    let len = Self::string_char_len(&value) as i64;
                     let index = index
                         .as_ref()
                         .map(|value| self.eval_expr(value, env, event_param, event))
@@ -104,9 +102,7 @@ impl Harness {
                     if index < 0 || index >= len {
                         Ok(Value::Undefined)
                     } else {
-                        Ok(value
-                            .chars()
-                            .nth(index as usize)
+                        Ok(Self::string_char_at(&value, index as usize)
                             .map(|ch| Value::String(ch.to_string()))
                             .unwrap_or(Value::Undefined))
                     }
@@ -195,7 +191,7 @@ impl Harness {
                     ));
                     }
                     let search = self.coerce_to_string_for_tostring(&search)?;
-                    let len = value.chars().count() as i64;
+                    let len = Self::string_char_len(&value) as i64;
                     let mut position = position
                         .as_ref()
                         .map(|value| self.eval_expr(value, env, event_param, event))
@@ -224,7 +220,7 @@ impl Harness {
                     ));
                     }
                     let search = self.coerce_to_string_for_tostring(&search)?;
-                    let len = value.chars().count() as i64;
+                    let len = Self::string_char_len(&value) as i64;
                     let mut position = position
                         .as_ref()
                         .map(|value| self.eval_expr(value, env, event_param, event))
@@ -253,7 +249,7 @@ impl Harness {
                     ));
                     }
                     let search = self.coerce_to_string_for_tostring(&search)?;
-                    let len = value.chars().count();
+                    let len = Self::string_char_len(&value);
                     let end = length
                         .as_ref()
                         .map(|value| self.eval_expr(value, env, event_param, event))
@@ -366,7 +362,7 @@ impl Harness {
                         }
                         other => {
                             let text = self.coerce_string_method_receiver(&other)?;
-                            let len = text.chars().count();
+                            let len = Self::string_char_len(&text);
                             let start = start
                                 .as_ref()
                                 .map(|value| self.eval_expr(value, env, event_param, event))
@@ -389,7 +385,7 @@ impl Harness {
                 Expr::StringSubstring { value, start, end } => {
                     let value = self.eval_expr(value, env, event_param, event)?;
                     let value = self.coerce_string_method_receiver(&value)?;
-                    let len = value.chars().count();
+                    let len = Self::string_char_len(&value);
                     let start = start
                         .as_ref()
                         .map(|value| self.eval_expr(value, env, event_param, event))
@@ -597,7 +593,7 @@ impl Harness {
                     let value = self.coerce_string_method_receiver(&value)?;
                     let search = self.eval_expr(search, env, event_param, event)?;
                     let search = self.coerce_to_string_for_tostring(&search)?;
-                    let len = value.chars().count() as i64;
+                    let len = Self::string_char_len(&value) as i64;
                     let mut position = position
                         .as_ref()
                         .map(|value| self.eval_expr(value, env, event_param, event))
@@ -623,7 +619,7 @@ impl Harness {
                     let value = self.coerce_string_method_receiver(&value)?;
                     let search = self.eval_expr(search, env, event_param, event)?;
                     let search = self.coerce_to_string_for_tostring(&search)?;
-                    let len = value.chars().count() as i64;
+                    let len = Self::string_char_len(&value) as i64;
                     let position = position
                         .as_ref()
                         .map(|value| self.eval_expr(value, env, event_param, event))
@@ -633,11 +629,11 @@ impl Harness {
                     let position = if position < 0 { 0 } else { position.min(len) } as usize;
                     let candidate = Self::substring_chars(&value, 0, position.saturating_add(1));
                     let found = if search.is_empty() {
-                        Some(position.min(candidate.chars().count()))
+                        Some(position.min(Self::string_char_len(&candidate)))
                     } else {
                         candidate
                             .rfind(&search)
-                            .map(|byte| candidate[..byte].chars().count())
+                            .map(|byte| Self::string_char_len(&candidate[..byte]))
                     };
                     Ok(Value::Number(found.map(|idx| idx as i64).unwrap_or(-1)))
                 }
@@ -696,7 +692,7 @@ impl Harness {
                     let value = self.coerce_string_method_receiver(&value)?;
                     let target_length = self.eval_expr(target_length, env, event_param, event)?;
                     let target_length = Self::value_to_i64(&target_length).max(0) as usize;
-                    let current_len = value.chars().count();
+                    let current_len = Self::string_char_len(&value);
                     if target_length <= current_len {
                         return Ok(Value::String(value));
                     }
@@ -712,7 +708,7 @@ impl Harness {
                     }
                     let mut filler = String::new();
                     let needed = target_length - current_len;
-                    while filler.chars().count() < needed {
+                    while Self::string_char_len(&filler) < needed {
                         filler.push_str(&pad);
                     }
                     let filler = filler.chars().take(needed).collect::<String>();
@@ -727,7 +723,7 @@ impl Harness {
                     let value = self.coerce_string_method_receiver(&value)?;
                     let target_length = self.eval_expr(target_length, env, event_param, event)?;
                     let target_length = Self::value_to_i64(&target_length).max(0) as usize;
-                    let current_len = value.chars().count();
+                    let current_len = Self::string_char_len(&value);
                     if target_length <= current_len {
                         return Ok(Value::String(value));
                     }
@@ -743,7 +739,7 @@ impl Harness {
                     }
                     let mut filler = String::new();
                     let needed = target_length - current_len;
-                    while filler.chars().count() < needed {
+                    while Self::string_char_len(&filler) < needed {
                         filler.push_str(&pad);
                     }
                     let filler = filler.chars().take(needed).collect::<String>();

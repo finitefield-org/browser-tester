@@ -50,11 +50,48 @@ impl Harness {
                     event.event_type, target_label, current_label, phase, event.default_prevented
                 ));
             }
-            let pending_scope_start =
-                self.push_pending_function_decl_scopes(&listener.captured_pending_function_decls);
-            let call_result = self.execute_handler(&listener.handler, event, &mut listener_env);
-            self.restore_pending_function_decl_scopes(pending_scope_start);
+            let used_function_dispatch = listener
+                .function
+                .as_ref()
+                .is_some_and(|function| function.is_async || function.is_generator);
+            let call_result = if let Some(function) = listener
+                .function
+                .as_ref()
+                .filter(|function| function.is_async || function.is_generator)
             {
+                let event_param = function.handler.first_event_param();
+                let event_args = if event_param.is_some() {
+                    vec![self.listener_event_argument(event)]
+                } else {
+                    Vec::new()
+                };
+                let this_value = event
+                    .current_target_value
+                    .as_ref()
+                    .cloned()
+                    .unwrap_or(Value::Node(event.current_target));
+                let callable = Value::Function(function.clone());
+                self.execute_callable_value_with_this_and_env(
+                    &callable,
+                    &event_args,
+                    event,
+                    Some(&listener_env),
+                    Some(this_value),
+                )
+                .map(|_| ())
+            } else {
+                let pending_scope_start =
+                    self.push_pending_function_decl_scopes(&listener.captured_pending_function_decls);
+                let shared_env_frame_start = self.push_shared_listener_capture_env_frame(
+                    listener.captured_env.clone(),
+                    true,
+                );
+                let result = self.execute_handler(&listener.handler, event, &mut listener_env);
+                self.restore_listener_capture_env_stack(shared_env_frame_start);
+                self.restore_pending_function_decl_scopes(pending_scope_start);
+                result
+            };
+            if !used_function_dispatch {
                 let mut captured_env = listener.captured_env.borrow_mut();
                 for key in &captured_keys {
                     let before = captured_env_snapshot.get(key);

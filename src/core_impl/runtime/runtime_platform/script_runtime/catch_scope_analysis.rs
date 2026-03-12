@@ -425,56 +425,75 @@ impl Harness {
     }
 
     pub(crate) fn sync_listener_capture_env_if_shared(&mut self, env: &HashMap<String, Value>) {
-        let Some(frame) = self
+        let Some(frame_index) = self
             .script_runtime
             .listener_capture_env_stack
             .iter()
             .rev()
-            .find(|frame| frame.shared_env.is_some())
+            .position(|frame| frame.shared_env.is_some())
         else {
             return;
         };
+        let frame_index = self.script_runtime.listener_capture_env_stack.len() - 1 - frame_index;
+        let frame = &self.script_runtime.listener_capture_env_stack[frame_index];
         let Some(shared_env) = frame.shared_env.as_ref() else {
             return;
         };
-        if Rc::strong_count(shared_env) <= 1 {
+        if Rc::strong_count(shared_env) <= 2 {
             return;
         }
-        let mut effective_env = env.clone();
-        for (name, value) in &frame.pending_env_updates {
-            if let Some(value) = value {
-                effective_env.insert(name.clone(), value.clone());
-            } else {
-                effective_env.remove(name);
-            }
-        }
-        let snapshot = shared_env.borrow().to_map();
-        let mut next_snapshot = snapshot.clone();
-        let mut changed = false;
-        for (name, previous) in &snapshot {
-            if Self::is_internal_env_key(name) {
+        let effective_value = |name: &str| match frame.pending_env_updates.get(name) {
+            Some(Some(value)) => Some(value),
+            Some(None) => None,
+            None => env.get(name),
+        };
+        let mut changed_entries = Vec::new();
+        let mut added = Vec::new();
+        let shared_snapshot = shared_env.borrow();
+        let shared_keys = shared_snapshot
+            .keys()
+            .filter(|name| !Self::is_internal_env_key(name))
+            .cloned()
+            .collect::<Vec<_>>();
+        for name in &shared_keys {
+            let Some(previous) = shared_snapshot.get(name) else {
+                continue;
+            };
+            let Some(next) = effective_value(name) else {
+                continue;
+            };
+            if self.strict_equal(previous, next) {
                 continue;
             }
-            match effective_env.get(name) {
-                Some(next) => {
-                    if self.strict_equal(previous, next) {
-                        continue;
-                    }
-                    next_snapshot.insert(name.clone(), next.clone());
-                    changed = true;
-                }
-                None => continue,
-            }
+            changed_entries.push((name.clone(), next.clone()));
         }
-        for (name, next) in &effective_env {
-            if Self::is_internal_env_key(name) || snapshot.contains_key(name) {
+        for (name, next) in &frame.pending_env_updates {
+            let Some(next) = next else {
+                continue;
+            };
+            if Self::is_internal_env_key(name) || shared_snapshot.contains_key(name) {
                 continue;
             }
-            next_snapshot.insert(name.clone(), next.clone());
-            changed = true;
+            added.push((name.clone(), next.clone()));
         }
-        if changed {
-            *shared_env.borrow_mut() = ScriptEnv::from_snapshot(&next_snapshot);
+        for (name, next) in env {
+            if Self::is_internal_env_key(name)
+                || shared_snapshot.contains_key(name)
+                || frame.pending_env_updates.contains_key(name)
+            {
+                continue;
+            }
+            added.push((name.clone(), next.clone()));
+        }
+        drop(shared_snapshot);
+        if !changed_entries.is_empty() || !added.is_empty() {
+            let mut shared_env = shared_env.borrow_mut();
+            for (name, value) in changed_entries {
+                shared_env.insert(name, value);
+            }
+            for (name, value) in added {
+                shared_env.insert(name, value);
+            }
         }
     }
 }

@@ -1668,6 +1668,7 @@ impl Harness {
                                 is_event_handler_property: false,
                                 is_arrow: function.is_arrow,
                                 handler: function.handler.clone(),
+                                function: Some(function.clone()),
                                 captured_env: function.captured_env.clone(),
                                 captured_pending_function_decls: function
                                     .captured_pending_function_decls
@@ -2789,6 +2790,7 @@ impl Harness {
                             is_event_handler_property: false,
                             is_arrow: function.is_arrow,
                             handler: function.handler.clone(),
+                            function: Some(function.clone()),
                             captured_env: function.captured_env.clone(),
                             captured_pending_function_decls: function
                                 .captured_pending_function_decls
@@ -2850,6 +2852,7 @@ impl Harness {
                                 is_event_handler_property: false,
                                 is_arrow: function.is_arrow,
                                 handler: function.handler.clone(),
+                                function: Some(function.clone()),
                                 captured_env: function.captured_env.clone(),
                                 captured_pending_function_decls: function
                                     .captured_pending_function_decls
