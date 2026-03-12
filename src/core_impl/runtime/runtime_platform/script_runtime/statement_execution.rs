@@ -198,8 +198,31 @@ impl Harness {
     ) {
         match op {
             ListenerRegistrationOp::Add => {
-                let captured_env = self.ensure_listener_capture_env();
-                *captured_env.borrow_mut() = ScriptEnv::from_snapshot(env);
+                let function = self.make_function_value(
+                    handler.clone(),
+                    env,
+                    false,
+                    false,
+                    false,
+                    is_arrow,
+                    false,
+                );
+                let (function, captured_env, captured_pending_function_decls) = match function {
+                    Value::Function(function) => (
+                        Some(function.clone()),
+                        function.captured_env.clone(),
+                        function.captured_pending_function_decls.clone(),
+                    ),
+                    _ => {
+                        let captured_env = self.ensure_listener_capture_env();
+                        *captured_env.borrow_mut() = ScriptEnv::from_snapshot(env);
+                        (
+                            None,
+                            captured_env,
+                            self.script_runtime.pending_function_decls.clone(),
+                        )
+                    }
+                };
                 self.listeners.add(
                     node,
                     event_type.to_string(),
@@ -208,12 +231,9 @@ impl Harness {
                         is_event_handler_property: false,
                         is_arrow,
                         handler: handler.clone(),
-                        function: None,
+                        function,
                         captured_env,
-                        captured_pending_function_decls: self
-                            .script_runtime
-                            .pending_function_decls
-                            .clone(),
+                        captured_pending_function_decls,
                     },
                 );
             }
@@ -429,6 +449,34 @@ impl Harness {
             out.extend(Self::direct_tdz_binding_names(stmt));
         }
         out
+    }
+
+    fn collect_direct_lexical_binding_names(stmts: &[Stmt]) -> HashSet<String> {
+        let mut out = HashSet::new();
+        for stmt in stmts {
+            for (name, is_lexical) in Self::direct_decl_binding_kinds(stmt) {
+                if is_lexical {
+                    out.insert(name);
+                }
+            }
+        }
+        out
+    }
+
+    pub(crate) fn env_top_level_lexical_binding_names(
+        env: &HashMap<String, Value>,
+    ) -> HashSet<String> {
+        match env.get(INTERNAL_TOP_LEVEL_LEXICAL_BINDINGS_KEY) {
+            Some(Value::Array(bindings)) => bindings
+                .borrow()
+                .iter()
+                .filter_map(|entry| match entry {
+                    Value::String(name) => Some(name.clone()),
+                    _ => None,
+                })
+                .collect(),
+            _ => HashSet::new(),
+        }
     }
 
     pub(crate) fn collect_var_declared_names(stmts: &[Stmt]) -> HashSet<String> {
@@ -2168,8 +2216,32 @@ impl Harness {
         env: &mut HashMap<String, Value>,
         inherit_outer_pending: bool,
     ) -> Result<ExecFlow> {
+        let saved_expression_env_overrides =
+            std::mem::take(&mut self.script_runtime.expression_env_overrides);
         let pending = Self::collect_function_decls(stmts);
         let pending_scope_start = self.push_pending_function_decl_scope(pending);
+        let scope_depth = Self::env_scope_depth(env);
+        let prev_top_level_lexical_bindings =
+            env.get(INTERNAL_TOP_LEVEL_LEXICAL_BINDINGS_KEY).cloned();
+        if scope_depth == 0 {
+            let mut lexical_binding_names = Self::env_top_level_lexical_binding_names(env)
+                .into_iter()
+                .collect::<Vec<_>>();
+            lexical_binding_names.extend(Self::collect_direct_lexical_binding_names(stmts));
+            lexical_binding_names.sort();
+            lexical_binding_names.dedup();
+            if !lexical_binding_names.is_empty() {
+                env.insert(
+                    INTERNAL_TOP_LEVEL_LEXICAL_BINDINGS_KEY.to_string(),
+                    Self::new_array_value(
+                        lexical_binding_names
+                            .into_iter()
+                            .map(Value::String)
+                            .collect(),
+                    ),
+                );
+            }
+        }
         self.script_runtime
             .listener_capture_env_stack
             .push(ListenerCaptureFrame {
@@ -2186,6 +2258,7 @@ impl Harness {
             let mut initialized_var_bindings = HashSet::new();
             let flow_result = (|| -> Result<ExecFlow> {
                 for stmt in stmts {
+                    self.script_runtime.expression_env_overrides.clear();
                     self.apply_pending_listener_capture_env_updates(env);
                     self.sync_top_level_env_from_runtime(env);
                     self.sync_listener_capture_env_if_shared(env);
@@ -2243,6 +2316,10 @@ impl Harness {
                             );
                             if let Value::Function(function_value) = &function {
                                 self.set_function_public_name(function_value, name);
+                                function_value
+                                    .captured_env
+                                    .borrow_mut()
+                                    .insert(name.clone(), function.clone());
                             }
                             env.insert(name.clone(), function);
                             self.set_const_binding(env, name, false);
@@ -5479,6 +5556,38 @@ impl Harness {
                                 };
 
                                 let prev_item = env.get(item_var).cloned();
+                                let prev_local_bindings =
+                                    env.get(INTERNAL_LOCAL_BINDINGS_KEY).cloned();
+                                let mut local_binding_names = prev_local_bindings
+                                    .as_ref()
+                                    .and_then(|value| match value {
+                                        Value::Array(bindings) => Some(
+                                            bindings
+                                                .borrow()
+                                                .iter()
+                                                .filter_map(|entry| match entry {
+                                                    Value::String(name) => Some(name.clone()),
+                                                    _ => None,
+                                                })
+                                                .collect::<Vec<_>>(),
+                                        ),
+                                        _ => None,
+                                    })
+                                    .unwrap_or_default();
+                                if !local_binding_names.iter().any(|name| name == item_var) {
+                                    local_binding_names.push(item_var.clone());
+                                }
+                                local_binding_names.sort();
+                                local_binding_names.dedup();
+                                env.insert(
+                                    INTERNAL_LOCAL_BINDINGS_KEY.to_string(),
+                                    Self::new_array_value(
+                                        local_binding_names
+                                            .into_iter()
+                                            .map(Value::String)
+                                            .collect(),
+                                    ),
+                                );
                                 let loop_result = (|| -> Result<ExecFlow> {
                                     match source {
                                         ForOfSource::Values(items) => {
@@ -5487,12 +5596,23 @@ impl Harness {
                                                 self.sync_global_binding_if_needed(
                                                     env, item_var, &item,
                                                 );
-                                                match self.execute_stmts(
+                                                let shared_env_frame_start = self
+                                                    .push_shared_listener_capture_env_frame(
+                                                        Rc::new(RefCell::new(
+                                                            ScriptEnv::from_snapshot(env),
+                                                        )),
+                                                        true,
+                                                    );
+                                                let flow = self.execute_stmts(
                                                     body,
                                                     event_param,
                                                     event,
                                                     env,
-                                                )? {
+                                                );
+                                                self.restore_listener_capture_env_stack(
+                                                    shared_env_frame_start,
+                                                );
+                                                match flow? {
                                                     ExecFlow::Continue => {}
                                                     ExecFlow::ContinueLoop(label) => {
                                                         if self.loop_should_consume_continue(&label)
@@ -5525,6 +5645,13 @@ impl Harness {
                                                 self.sync_global_binding_if_needed(
                                                     env, item_var, &item,
                                                 );
+                                                let shared_env_frame_start = self
+                                                    .push_shared_listener_capture_env_frame(
+                                                        Rc::new(RefCell::new(
+                                                            ScriptEnv::from_snapshot(env),
+                                                        )),
+                                                        true,
+                                                    );
                                                 let flow = match self.execute_stmts(
                                                     body,
                                                     event_param,
@@ -5533,12 +5660,18 @@ impl Harness {
                                                 ) {
                                                     Ok(flow) => flow,
                                                     Err(err) => {
+                                                        self.restore_listener_capture_env_stack(
+                                                            shared_env_frame_start,
+                                                        );
                                                         self.for_of_internal_iterator_close_if_needed(
                                                         &iterator, event,
                                                     )?;
                                                         return Err(err);
                                                     }
                                                 };
+                                                self.restore_listener_capture_env_stack(
+                                                    shared_env_frame_start,
+                                                );
                                                 match flow {
                                                     ExecFlow::Continue => {}
                                                     ExecFlow::ContinueLoop(label) => {
@@ -5583,6 +5716,13 @@ impl Harness {
                                                 self.sync_global_binding_if_needed(
                                                     env, item_var, &item,
                                                 );
+                                                let shared_env_frame_start = self
+                                                    .push_shared_listener_capture_env_frame(
+                                                        Rc::new(RefCell::new(
+                                                            ScriptEnv::from_snapshot(env),
+                                                        )),
+                                                        true,
+                                                    );
                                                 let flow = match self.execute_stmts(
                                                     body,
                                                     event_param,
@@ -5591,12 +5731,18 @@ impl Harness {
                                                 ) {
                                                     Ok(flow) => flow,
                                                     Err(err) => {
+                                                        self.restore_listener_capture_env_stack(
+                                                            shared_env_frame_start,
+                                                        );
                                                         self.for_of_protocol_iterator_close(
                                                             &iterator, event,
                                                         )?;
                                                         return Err(err);
                                                     }
                                                 };
+                                                self.restore_listener_capture_env_stack(
+                                                    shared_env_frame_start,
+                                                );
                                                 match flow {
                                                     ExecFlow::Continue => {}
                                                     ExecFlow::ContinueLoop(label) => {
@@ -5635,6 +5781,14 @@ impl Harness {
                                     self.sync_global_binding_if_needed(env, item_var, &prev);
                                 } else {
                                     env.remove(item_var);
+                                }
+                                match prev_local_bindings {
+                                    Some(value) => {
+                                        env.insert(INTERNAL_LOCAL_BINDINGS_KEY.to_string(), value);
+                                    }
+                                    None => {
+                                        env.remove(INTERNAL_LOCAL_BINDINGS_KEY);
+                                    }
                                 }
                                 loop_result
                             })();
@@ -6121,6 +6275,17 @@ impl Harness {
 
         self.script_runtime.listener_capture_env_stack.pop();
         self.restore_pending_function_decl_scopes(pending_scope_start);
+        if scope_depth == 0 {
+            match prev_top_level_lexical_bindings {
+                Some(value) => {
+                    env.insert(INTERNAL_TOP_LEVEL_LEXICAL_BINDINGS_KEY.to_string(), value);
+                }
+                None => {
+                    env.remove(INTERNAL_TOP_LEVEL_LEXICAL_BINDINGS_KEY);
+                }
+            }
+        }
+        self.script_runtime.expression_env_overrides = saved_expression_env_overrides;
         result
     }
 
@@ -6130,6 +6295,7 @@ impl Harness {
         }
 
         let runtime_snapshot = self.script_runtime.env.to_map();
+        let lexical_bindings = Self::env_top_level_lexical_binding_names(env);
         let Some(Value::Array(sync_names)) = env.get(INTERNAL_GLOBAL_SYNC_NAMES_KEY) else {
             return;
         };
@@ -6142,7 +6308,7 @@ impl Harness {
             })
             .collect::<Vec<_>>();
         for name in sync_names {
-            if Self::is_internal_env_key(&name) {
+            if Self::is_internal_env_key(&name) || lexical_bindings.contains(&name) {
                 continue;
             }
             let Some(runtime_value) = runtime_snapshot.get(&name).cloned() else {

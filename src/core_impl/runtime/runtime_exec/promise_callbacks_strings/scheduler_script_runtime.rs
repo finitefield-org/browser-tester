@@ -155,7 +155,19 @@ impl Harness {
         key_prefix: &str,
     ) -> (TimerCallback, HashMap<String, Value>) {
         match callback {
-            TimerCallback::Reference(name) => (TimerCallback::Reference(name.clone()), env.clone()),
+            TimerCallback::Reference(name) => {
+                let mut timer_env = env.clone();
+                if !timer_env.contains_key(name) {
+                    if let Some(pending) = self.resolve_listener_capture_pending_value(name) {
+                        if let Some(value) = pending {
+                            timer_env.insert(name.clone(), value);
+                        }
+                    } else if let Some(value) = self.resolve_pending_function_decl(name, env) {
+                        timer_env.insert(name.clone(), value);
+                    }
+                }
+                (TimerCallback::Reference(name.clone()), timer_env)
+            }
             TimerCallback::Inline(handler) => {
                 let callback_value = self.make_function_value(
                     handler.clone(),
@@ -303,8 +315,16 @@ impl Harness {
                 this.run_in_task_context(|inner| {
                     inner
                         .execute_stmts(&stmts, &None, &mut event, env)
-                        .map(|_| ())
-                })
+                        .map(|_| ())?;
+                    if Self::env_scope_depth(env) == 0 {
+                        inner.script_runtime.env = ScriptEnv::from_snapshot(env);
+                    }
+                    Ok(())
+                })?;
+                if Self::env_scope_depth(env) == 0 {
+                    *env = this.script_runtime.env.to_map();
+                }
+                Ok(())
             });
             if is_module {
                 let _ = self.script_runtime.module_referrer_stack.pop();

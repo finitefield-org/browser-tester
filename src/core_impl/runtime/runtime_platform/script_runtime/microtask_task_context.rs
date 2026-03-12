@@ -537,7 +537,7 @@ impl Harness {
         Self::new_object_value(entries)
     }
 
-    fn sync_event_argument_back_to_state(
+    pub(crate) fn sync_event_argument_back_to_state(
         event: &mut EventState,
         callback_env: &HashMap<String, Value>,
         event_param: Option<&str>,
@@ -744,9 +744,45 @@ impl Harness {
     }
 
     pub(crate) fn restore_listener_capture_env_stack(&mut self, start_len: usize) {
+        if start_len >= self.script_runtime.listener_capture_env_stack.len() {
+            return;
+        }
+
+        let mut propagated_updates = HashMap::new();
+        let mut fallback_shared_env = None;
+        for frame in &mut self.script_runtime.listener_capture_env_stack[start_len..] {
+            if fallback_shared_env.is_none() {
+                fallback_shared_env = frame.shared_env.clone();
+            }
+            propagated_updates.extend(std::mem::take(&mut frame.pending_env_updates));
+        }
+
         self.script_runtime
             .listener_capture_env_stack
             .truncate(start_len);
+
+        if propagated_updates.is_empty() {
+            return;
+        }
+
+        if let Some(parent) = self.script_runtime.listener_capture_env_stack.last_mut() {
+            parent.pending_env_updates.extend(propagated_updates);
+            return;
+        }
+
+        if let Some(shared_env) = fallback_shared_env {
+            let mut shared_env = shared_env.borrow_mut();
+            for (name, value) in propagated_updates {
+                if Self::is_internal_env_key(&name) {
+                    continue;
+                }
+                if let Some(value) = value {
+                    shared_env.insert(name, value);
+                } else {
+                    shared_env.remove(&name);
+                }
+            }
+        }
     }
 
     pub(crate) fn is_internal_env_key(name: &str) -> bool {
@@ -761,6 +797,18 @@ impl Harness {
     }
 
     pub(crate) fn env_should_sync_global_name(env: &HashMap<String, Value>, name: &str) -> bool {
+        if let Some(Value::Array(local_bindings)) = env.get(INTERNAL_LOCAL_BINDINGS_KEY) {
+            if local_bindings
+                .borrow()
+                .iter()
+                .any(|entry| matches!(entry, Value::String(value) if value == name))
+            {
+                return false;
+            }
+        }
+        if Self::env_top_level_lexical_binding_names(env).contains(name) {
+            return false;
+        }
         match env.get(INTERNAL_GLOBAL_SYNC_NAMES_KEY) {
             Some(Value::Array(names)) => names
                 .borrow()

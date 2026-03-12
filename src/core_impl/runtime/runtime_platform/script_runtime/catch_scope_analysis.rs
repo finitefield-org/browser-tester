@@ -439,9 +439,6 @@ impl Harness {
         let Some(shared_env) = frame.shared_env.as_ref() else {
             return;
         };
-        if Rc::strong_count(shared_env) <= 2 {
-            return;
-        }
         let effective_value = |name: &str| match frame.pending_env_updates.get(name) {
             Some(Some(value)) => Some(value),
             Some(None) => None,

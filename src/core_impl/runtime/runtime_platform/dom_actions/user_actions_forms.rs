@@ -1206,8 +1206,10 @@ impl Harness {
                     Value::Bool(true),
                 ),
                 ("type".to_string(), Value::String(event.to_string())),
-                ("bubbles".to_string(), Value::Bool(true)),
-                ("cancelable".to_string(), Value::Bool(true)),
+                // Direct dispatch to window/global aliases behaves like a synthetic EventTarget
+                // dispatch payload, not a user-action keyboard event on a DOM node.
+                ("bubbles".to_string(), Value::Bool(false)),
+                ("cancelable".to_string(), Value::Bool(false)),
                 ("key".to_string(), Value::String(init.key.clone())),
                 (
                     "code".to_string(),

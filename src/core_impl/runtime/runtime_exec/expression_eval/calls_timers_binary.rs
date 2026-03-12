@@ -383,6 +383,13 @@ impl Harness {
         Self::is_symbol_storage_key(key) || !Self::is_internal_object_key(key)
     }
 
+    fn object_assign_accessor_property_key(key: &str) -> Option<&str> {
+        key.strip_prefix(INTERNAL_OBJECT_GETTER_KEY_PREFIX)
+            .or_else(|| key.strip_prefix(INTERNAL_OBJECT_SETTER_KEY_PREFIX))
+            .or_else(|| key.strip_prefix(INTERNAL_OBJECT_UNDEFINED_GETTER_KEY_PREFIX))
+            .or_else(|| key.strip_prefix(INTERNAL_OBJECT_UNDEFINED_SETTER_KEY_PREFIX))
+    }
+
     fn object_assign_enumerable_keys(&mut self, value: &Value) -> Vec<String> {
         match value {
             Value::Object(entries) => {
@@ -435,14 +442,27 @@ impl Harness {
                     );
                     return keys;
                 }
-                entries
+                let mut keys = entries
                     .iter()
                     .filter(|(key, _)| {
                         Self::object_assign_is_copyable_key(key)
                             && !Self::is_non_enumerable_object_key(&*entries, key)
                     })
                     .map(|(key, _)| key.clone())
-                    .collect()
+                    .collect::<Vec<_>>();
+                let mut seen = keys.iter().cloned().collect::<HashSet<_>>();
+                for (key, _) in entries.iter() {
+                    let Some(property_key) = Self::object_assign_accessor_property_key(key) else {
+                        continue;
+                    };
+                    if Self::is_non_enumerable_object_key(&*entries, property_key) {
+                        continue;
+                    }
+                    if seen.insert(property_key.to_string()) {
+                        keys.push(property_key.to_string());
+                    }
+                }
+                keys
             }
             Value::Array(values) => {
                 let values = values.borrow();
@@ -463,6 +483,18 @@ impl Harness {
                         })
                         .map(|(key, _)| key.clone()),
                 );
+                let mut seen = keys.iter().cloned().collect::<HashSet<_>>();
+                for (key, _) in values.properties.iter() {
+                    let Some(property_key) = Self::object_assign_accessor_property_key(key) else {
+                        continue;
+                    };
+                    if Self::is_non_enumerable_object_key(&values.properties, property_key) {
+                        continue;
+                    }
+                    if seen.insert(property_key.to_string()) {
+                        keys.push(property_key.to_string());
+                    }
+                }
                 keys
             }
             Value::Node(node) => {
@@ -490,6 +522,18 @@ impl Harness {
                         })
                         .map(|(key, _)| key.clone()),
                 );
+                let mut seen = keys.iter().cloned().collect::<HashSet<_>>();
+                for (key, _) in nodes_ref.properties.iter() {
+                    let Some(property_key) = Self::object_assign_accessor_property_key(key) else {
+                        continue;
+                    };
+                    if Self::is_non_enumerable_object_key(&nodes_ref.properties, property_key) {
+                        continue;
+                    }
+                    if seen.insert(property_key.to_string()) {
+                        keys.push(property_key.to_string());
+                    }
+                }
                 keys
             }
             Value::String(text) => text
@@ -724,7 +768,9 @@ impl Harness {
                         return Ok(super_result);
                     }
                     self.ensure_binding_initialized(env, target)?;
-                    let callee = if let Some(pending) =
+                    let callee = if let Some(callee) = env.get(target).cloned() {
+                        callee
+                    } else if let Some(pending) =
                         self.resolve_listener_capture_pending_value(target)
                     {
                         let Some(callee) = pending else {
@@ -732,8 +778,6 @@ impl Harness {
                                 "unknown variable: {target}"
                             )));
                         };
-                        callee
-                    } else if let Some(callee) = env.get(target).cloned() {
                         callee
                     } else if let Some(callee) = self.resolve_pending_function_decl(target, env) {
                         callee
@@ -1633,14 +1677,23 @@ impl Harness {
                         return Self::super_prototype_from_env(env);
                     }
                     self.ensure_binding_initialized(env, name)?;
-                    if let Some(pending) = self.resolve_listener_capture_pending_value(name) {
+                    if let Some(value) = self
+                        .script_runtime
+                        .expression_env_overrides
+                        .get(name)
+                        .cloned()
+                        .flatten()
+                    {
+                        Ok(value)
+                    } else if let Some(value) = env.get(name).cloned() {
+                        Ok(value)
+                    } else if let Some(pending) = self.resolve_listener_capture_pending_value(name)
+                    {
                         if let Some(value) = pending {
                             Ok(value)
                         } else {
                             Err(Error::ScriptRuntime(format!("unknown variable: {name}")))
                         }
-                    } else if let Some(value) = env.get(name).cloned() {
-                        Ok(value)
                     } else if let Some(value) = self.resolve_pending_function_decl(name, env) {
                         Ok(value)
                     } else {

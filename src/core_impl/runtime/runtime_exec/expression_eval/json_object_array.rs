@@ -2888,9 +2888,9 @@ impl Harness {
         env: &HashMap<String, Value>,
         target: &str,
     ) -> Option<Value> {
-        self.resolve_listener_capture_pending_value(target)
-            .flatten()
-            .or_else(|| env.get(target).cloned())
+        env.get(target)
+            .cloned()
+            .or_else(|| self.resolve_listener_capture_pending_value(target).flatten())
     }
 
     pub(crate) fn eval_expr_json_object_array(

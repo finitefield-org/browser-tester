@@ -50,15 +50,22 @@ impl Harness {
                     event.event_type, target_label, current_label, phase, event.default_prevented
                 ));
             }
-            let used_function_dispatch = listener
-                .function
-                .as_ref()
-                .is_some_and(|function| function.is_async || function.is_generator);
-            let call_result = if let Some(function) = listener
-                .function
-                .as_ref()
-                .filter(|function| function.is_async || function.is_generator)
-            {
+            let used_function_dispatch = listener.function.is_some();
+            let call_result = if let Some(function) = listener.function.as_ref() {
+                {
+                    let mut captured_env = listener.captured_env.borrow_mut();
+                    for (name, value) in &listener_env {
+                        if Self::is_internal_env_key(name)
+                            || function.local_bindings.contains(name.as_str())
+                            || function.captured_global_names.contains(name.as_str())
+                            || matches!(name.as_str(), "this" | "arguments")
+                            || !captured_env.contains_key(name)
+                        {
+                            continue;
+                        }
+                        captured_env.insert(name.clone(), value.clone());
+                    }
+                }
                 let event_param = function.handler.first_event_param();
                 let event_args = if event_param.is_some() {
                     vec![self.listener_event_argument(event)]
@@ -70,13 +77,15 @@ impl Harness {
                     .as_ref()
                     .cloned()
                     .unwrap_or(Value::Node(event.current_target));
-                let callable = Value::Function(function.clone());
-                self.execute_callable_value_with_this_and_env(
-                    &callable,
+                let event_snapshot = event.clone();
+                self.execute_function_call(
+                    function.clone(),
                     &event_args,
-                    event,
+                    &event_snapshot,
                     Some(&listener_env),
                     Some(this_value),
+                    None,
+                    Some(event),
                 )
                 .map(|_| ())
             } else {
@@ -111,6 +120,28 @@ impl Harness {
                         captured_env.remove(key);
                     }
                 }
+            }
+            if used_function_dispatch {
+                let captured_env_after = listener.captured_env.borrow().to_map();
+                for key in &captured_keys {
+                    let before = captured_env_snapshot.get(key);
+                    let after = captured_env_after.get(key);
+                    let changed = match (before, after) {
+                        (Some(prev), Some(next)) => !self.strict_equal(prev, next),
+                        (None, Some(_)) => true,
+                        (Some(_), None) => true,
+                        (None, None) => false,
+                    };
+                    if !changed {
+                        continue;
+                    }
+                    if let Some(value) = after.cloned() {
+                        env.insert(key.clone(), value);
+                    } else {
+                        env.remove(key);
+                    }
+                }
+                listener_env = env.clone();
             }
             for key in current_keys {
                 let listener_value = listener_env.get(&key).cloned();

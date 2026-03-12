@@ -8,6 +8,58 @@ impl Harness {
         names
     }
 
+    fn callback_local_bindings(callback: &ScriptHandler) -> HashSet<String> {
+        Self::collect_function_scope_bindings(callback)
+    }
+
+    fn sync_callback_env_back_to_outer(
+        &mut self,
+        before: &HashMap<String, Value>,
+        after: &HashMap<String, Value>,
+        outer_env: &mut HashMap<String, Value>,
+        local_bindings: &HashSet<String>,
+    ) {
+        let mut names = before
+            .keys()
+            .chain(after.keys())
+            .filter(|name| !Self::is_internal_env_key(name))
+            .cloned()
+            .collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+
+        for name in names {
+            if local_bindings.contains(name.as_str()) {
+                continue;
+            }
+
+            let before_value = before.get(&name);
+            let after_value = after.get(&name);
+            let changed = match (before_value, after_value) {
+                (Some(prev), Some(next)) => !self.strict_equal(prev, next),
+                (None, Some(_)) | (Some(_), None) => true,
+                (None, None) => false,
+            };
+            if !changed {
+                continue;
+            }
+
+            match after_value.cloned() {
+                Some(next) => {
+                    outer_env.insert(name.clone(), next.clone());
+                    self.sync_arguments_after_param_write(outer_env, &name, &next);
+                    self.sync_global_binding_if_needed(outer_env, &name, &next);
+                    self.sync_scheduled_task_captures_for_binding(&name, &next);
+                }
+                None => {
+                    outer_env.remove(&name);
+                    self.sync_global_binding_if_needed(outer_env, &name, &Value::Undefined);
+                    self.sync_scheduled_task_captures_for_binding(&name, &Value::Undefined);
+                }
+            }
+        }
+    }
+
     pub(crate) fn execute_array_callback(
         &mut self,
         callback: &ScriptHandler,
@@ -15,8 +67,19 @@ impl Harness {
         env: &HashMap<String, Value>,
         event: &EventState,
     ) -> Result<Value> {
+        let local_bindings = Self::callback_local_bindings(callback);
         let mut callback_env = env.clone();
         callback_env.remove(INTERNAL_RETURN_SLOT);
+        if !local_bindings.is_empty() {
+            let mut local_binding_names = local_bindings.iter().cloned().collect::<Vec<_>>();
+            local_binding_names.sort();
+            callback_env.insert(
+                INTERNAL_LOCAL_BINDINGS_KEY.to_string(),
+                Self::new_array_value(
+                    local_binding_names.into_iter().map(Value::String).collect(),
+                ),
+            );
+        }
         let mut callback_event = event.clone();
         let event_param = None;
         self.with_isolated_loop_control_scope(|this| {
@@ -35,12 +98,17 @@ impl Harness {
                     pending: HashSet::new(),
                 });
             }
+            let shared_env_frame_start = this.push_shared_listener_capture_env_frame(
+                Rc::new(RefCell::new(ScriptEnv::from_snapshot(&callback_env))),
+                true,
+            );
             let flow = this.execute_stmts(
                 &callback.stmts,
                 &event_param,
                 &mut callback_event,
                 &mut callback_env,
             );
+            this.restore_listener_capture_env_stack(shared_env_frame_start);
             if pushed_non_tdz_scope {
                 this.script_runtime.tdz_scope_stack.pop();
             }
@@ -64,15 +132,24 @@ impl Harness {
         env: &mut HashMap<String, Value>,
         event: &EventState,
     ) -> Result<()> {
-        let mut previous_values = Vec::with_capacity(callback.params.len());
-        for param in &callback.params {
-            previous_values.push((param.name.clone(), env.get(&param.name).cloned()));
+        let callback_before = env.clone();
+        let local_bindings = Self::callback_local_bindings(callback);
+        let mut callback_env = env.clone();
+        callback_env.remove(INTERNAL_RETURN_SLOT);
+        if !local_bindings.is_empty() {
+            let mut local_binding_names = local_bindings.iter().cloned().collect::<Vec<_>>();
+            local_binding_names.sort();
+            callback_env.insert(
+                INTERNAL_LOCAL_BINDINGS_KEY.to_string(),
+                Self::new_array_value(
+                    local_binding_names.into_iter().map(Value::String).collect(),
+                ),
+            );
         }
-
         let mut callback_event = event.clone();
         let event_param = None;
         let result = self.with_isolated_loop_control_scope(|this| {
-            this.bind_handler_params(callback, args, env, &event_param, &callback_event)?;
+            this.bind_handler_params(callback, args, &mut callback_env, &event_param, &callback_event)?;
             let non_tdz_shadowed = Self::callback_non_tdz_shadowed_names(callback);
             let pushed_non_tdz_scope = !non_tdz_shadowed.is_empty();
             if pushed_non_tdz_scope {
@@ -81,21 +158,24 @@ impl Harness {
                     pending: HashSet::new(),
                 });
             }
-            let flow = this.execute_stmts(&callback.stmts, &event_param, &mut callback_event, env);
+            let shared_env_frame_start = this.push_shared_listener_capture_env_frame(
+                Rc::new(RefCell::new(ScriptEnv::from_snapshot(&callback_env))),
+                true,
+            );
+            let flow = this.execute_stmts(
+                &callback.stmts,
+                &event_param,
+                &mut callback_event,
+                &mut callback_env,
+            );
+            this.restore_listener_capture_env_stack(shared_env_frame_start);
             if pushed_non_tdz_scope {
                 this.script_runtime.tdz_scope_stack.pop();
             }
             flow
         });
-        env.remove(INTERNAL_RETURN_SLOT);
-
-        for (name, previous) in previous_values {
-            if let Some(previous) = previous {
-                env.insert(name, previous);
-            } else {
-                env.remove(&name);
-            }
-        }
+        callback_env.remove(INTERNAL_RETURN_SLOT);
+        self.sync_callback_env_back_to_outer(&callback_before, &callback_env, env, &local_bindings);
 
         match result? {
             ExecFlow::Continue | ExecFlow::Return => Ok(()),
