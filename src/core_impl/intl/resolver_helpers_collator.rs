@@ -316,8 +316,8 @@ impl Harness {
         locale: &str,
         case_priority: i32,
     ) -> (i32, i32, i32) {
-        let lower = ch.to_ascii_lowercase();
-        let is_upper = ch.is_ascii_uppercase();
+        let lower = ch.to_lowercase().next().unwrap_or(*ch);
+        let is_upper = ch.is_uppercase();
 
         let (primary, secondary) = if Self::intl_locale_family(locale) == "sv" {
             match lower {
