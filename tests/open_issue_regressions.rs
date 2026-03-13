@@ -1,4 +1,4 @@
-use browser_tester::Harness;
+use browser_tester::{Harness, KeyboardEventInit};
 
 #[test]
 fn click_toggles_button_inside_open_dialog() -> browser_tester::Result<()> {
@@ -117,5 +117,66 @@ fn click_preserves_pre_request_animation_frame_processing_state() -> browser_tes
     harness.flush()?;
 
     harness.assert_text("#status", "false|true")?;
+    Ok(())
+}
+
+#[test]
+fn dispatch_keyboard_completes_async_keydown_handlers_waiting_for_animation_frame(
+) -> browser_tester::Result<()> {
+    let html = r#"
+    <textarea id="input"></textarea>
+    <textarea id="result"></textarea>
+    <script>
+      (() => {
+        const input = document.getElementById("input");
+        const result = document.getElementById("result");
+
+        function nextFrame() {
+          return new Promise((resolve) => {
+            window.requestAnimationFrame(() => resolve());
+          });
+        }
+
+        async function runDedupe() {
+          await nextFrame();
+          const seen = new Set();
+          const lines = [];
+          for (const rawLine of input.value.split(/\r?\n/)) {
+            if (rawLine === "" || seen.has(rawLine)) {
+              continue;
+            }
+            seen.add(rawLine);
+            lines.push(rawLine);
+          }
+          result.value = lines.join("\n");
+        }
+
+        document.addEventListener("keydown", (event) => {
+          if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key === "Enter") {
+            event.preventDefault();
+            runDedupe();
+          }
+        });
+      })();
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.type_text("#input", "A\nA\nB")?;
+    harness.dispatch_keyboard(
+        "document",
+        "keydown",
+        KeyboardEventInit {
+            key: "Enter".to_string(),
+            ctrl_key: true,
+            ..KeyboardEventInit::default()
+        },
+    )?;
+
+    harness.assert_value("#result", "")?;
+
+    harness.flush()?;
+
+    harness.assert_value("#result", "A\nB")?;
     Ok(())
 }

@@ -680,4 +680,39 @@ impl Harness {
             )),
         }
     }
+
+    pub(crate) fn array_like_values_from_value_with_live_properties(
+        &mut self,
+        value: &Value,
+    ) -> Result<Vec<Value>> {
+        match value {
+            Value::Object(entries) => {
+                let is_iterator = {
+                    let entries_ref = entries.borrow();
+                    Self::is_iterator_object(&entries_ref)
+                };
+                if is_iterator {
+                    return self.iterator_collect_remaining_values(entries);
+                }
+                let entries = entries.borrow();
+                if Self::is_url_search_params_object(&entries) {
+                    return Ok(Self::url_search_params_pairs_from_object_entries(&entries)
+                        .into_iter()
+                        .map(|(name, value)| {
+                            Self::new_array_value(vec![Value::String(name), Value::String(value)])
+                        })
+                        .collect::<Vec<_>>());
+                }
+                drop(entries);
+                let length_value = self.object_property_from_value(value, "length")?;
+                let length = Self::to_non_negative_usize(&length_value, "array-like length")?;
+                let mut out = Vec::with_capacity(length);
+                for index in 0..length {
+                    out.push(self.object_property_from_value(value, &index.to_string())?);
+                }
+                Ok(out)
+            }
+            _ => self.array_like_values_from_value(value),
+        }
+    }
 }

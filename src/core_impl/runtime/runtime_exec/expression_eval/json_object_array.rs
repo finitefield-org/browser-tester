@@ -3308,7 +3308,7 @@ impl Harness {
                 }
                 Expr::ArrayFrom { source, map_fn } => {
                     let source = self.eval_expr(source, env, event_param, event)?;
-                    let values = self.array_like_values_from_value(&source)?;
+                    let values = self.array_like_values_from_value_with_live_properties(&source)?;
                     if let Some(map_fn) = map_fn {
                         let callback = self.eval_expr(map_fn, env, event_param, event)?;
                         let mut mapped = Vec::with_capacity(values.len());
