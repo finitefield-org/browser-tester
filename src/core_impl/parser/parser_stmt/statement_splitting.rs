@@ -29,7 +29,7 @@ pub(crate) fn split_top_level_statements(body: &str) -> Vec<String> {
                 let block_open = brace_open_stack.pop();
                 if scanner.is_top_level() {
                     let tail = body.get(i..).unwrap_or_default();
-                    if should_split_after_closing_brace(body, block_open, tail) {
+                    if should_split_after_closing_brace(body, start, block_open, tail) {
                         if let Some(part) = body.get(start..i) {
                             out.push(part.to_string());
                         }
@@ -73,11 +73,15 @@ pub(crate) fn split_top_level_statements(body: &str) -> Vec<String> {
 
 pub(crate) fn should_split_after_closing_brace(
     body: &str,
+    statement_start: usize,
     block_open: Option<usize>,
     tail: &str,
 ) -> bool {
     let tail = tail.trim_start();
     if tail.is_empty() {
+        return false;
+    }
+    if closing_brace_continues_expression(body, statement_start, block_open, tail) {
         return false;
     }
     if tail.starts_with(':') {
@@ -107,6 +111,118 @@ pub(crate) fn should_split_after_closing_brace(
         return false;
     }
     true
+}
+
+fn closing_brace_continues_expression(
+    body: &str,
+    statement_start: usize,
+    block_open: Option<usize>,
+    tail: &str,
+) -> bool {
+    if !tail_starts_expression_continuation(tail) {
+        return false;
+    }
+    let Some(block_open) = block_open else {
+        return false;
+    };
+    let head = body
+        .get(statement_start..block_open)
+        .unwrap_or_default()
+        .trim_end();
+    if head.is_empty() {
+        return false;
+    }
+    if find_top_level_assignment(head).is_some() {
+        return true;
+    }
+    if let Some(last_sig) = last_top_level_significant_byte(head) {
+        if matches!(
+            last_sig,
+            b'='
+                | b','
+                | b':'
+                | b'?'
+                | b'('
+                | b'['
+                | b'+'
+                | b'-'
+                | b'*'
+                | b'/'
+                | b'%'
+                | b'&'
+                | b'|'
+                | b'^'
+                | b'!'
+                | b'~'
+                | b'<'
+                | b'>'
+        ) {
+            return true;
+        }
+    }
+    ends_with_keyword(head, "return")
+        || ends_with_keyword(head, "throw")
+        || ends_with_keyword(head, "yield")
+}
+
+fn tail_starts_expression_continuation(tail: &str) -> bool {
+    let tail = tail.trim_start();
+    if tail.is_empty() {
+        return false;
+    }
+    if matches!(tail.as_bytes()[0], b'.' | b'[' | b'(' | b'`' | b'?' | b'+' | b'-') {
+        return true;
+    }
+    for op in [
+        "||", "&&", "??", "**", "*", "/", "%", "&", "|", "^", "==", "!=", "<", ">", "<=", ">=",
+        "instanceof", "in",
+    ] {
+        if is_keyword_or_operator_prefix(tail, op) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_keyword_or_operator_prefix(src: &str, token: &str) -> bool {
+    let Some(rest) = src.strip_prefix(token) else {
+        return false;
+    };
+    if token.as_bytes().iter().all(|b| b.is_ascii_alphabetic()) {
+        return rest.is_empty() || !is_ident_char(*rest.as_bytes().first().unwrap_or(&b'\0'));
+    }
+    true
+}
+
+fn last_top_level_significant_byte(src: &str) -> Option<u8> {
+    let bytes = src.as_bytes();
+    let mut i = 0usize;
+    let mut scanner = JsLexScanner::new();
+    let mut last = None;
+
+    while i < bytes.len() {
+        let current = i;
+        let b = bytes[current];
+        let was_normal = scanner.in_normal();
+        i = scanner.advance(bytes, current);
+        if was_normal && !b.is_ascii_whitespace() && scanner.mode == JsLexMode::Normal {
+            last = Some(bytes[i - 1]);
+        }
+    }
+
+    last
+}
+
+fn ends_with_keyword(src: &str, keyword: &str) -> bool {
+    let trimmed = src.trim_end();
+    let Some(prefix) = trimmed.strip_suffix(keyword) else {
+        return false;
+    };
+    prefix.is_empty()
+        || !prefix
+            .as_bytes()
+            .last()
+            .is_some_and(|b| is_ident_char(*b))
 }
 
 pub(crate) fn is_do_statement_prefix(src: &str) -> bool {

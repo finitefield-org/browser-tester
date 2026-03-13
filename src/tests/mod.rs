@@ -224,6 +224,7 @@ mod issue_121_127_finitefield_site_regressions;
 mod issue_130_131_csv_editor_split_target;
 mod issue_165_parser_regression;
 mod issue_166_parser_regression;
+mod issue_185_parser_regression;
 mod issue_70_window_open_fallback;
 mod issue_72_intl_format_hijack;
 mod issue_74_download_artifacts;
