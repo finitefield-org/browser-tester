@@ -696,13 +696,14 @@ impl Harness {
         ) {
             return Some("UTC".to_string());
         }
-        if let Some(canonical) = Self::intl_known_time_zone_offsets()
-            .iter()
-            .find_map(|(canonical, _)| {
-                canonical
-                    .eq_ignore_ascii_case(trimmed)
-                    .then(|| (*canonical).to_string())
-            })
+        if let Some(canonical) =
+            Self::intl_known_time_zone_offsets()
+                .iter()
+                .find_map(|(canonical, _)| {
+                    canonical
+                        .eq_ignore_ascii_case(trimmed)
+                        .then(|| (*canonical).to_string())
+                })
         {
             return Some(canonical);
         }

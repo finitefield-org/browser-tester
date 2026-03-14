@@ -121,8 +121,8 @@ fn click_preserves_pre_request_animation_frame_processing_state() -> browser_tes
 }
 
 #[test]
-fn dispatch_keyboard_completes_async_keydown_handlers_waiting_for_animation_frame(
-) -> browser_tester::Result<()> {
+fn dispatch_keyboard_completes_async_keydown_handlers_waiting_for_animation_frame()
+-> browser_tester::Result<()> {
     let html = r#"
     <textarea id="input"></textarea>
     <textarea id="result"></textarea>
@@ -178,5 +178,434 @@ fn dispatch_keyboard_completes_async_keydown_handlers_waiting_for_animation_fram
     harness.flush()?;
 
     harness.assert_value("#result", "A\nB")?;
+    Ok(())
+}
+
+#[test]
+fn iife_helper_listener_reads_live_outer_let_after_sibling_render() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="open">Open</button>
+    <button id="copy">Copy</button>
+    <p id="result"></p>
+    <script>
+      (() => {
+        let lastComputation = null;
+
+        function bindActions() {
+          document.getElementById("open").addEventListener("click", () => {
+            document.body.setAttribute("data-opened", "yes");
+          });
+          document.getElementById("copy").addEventListener("click", () => {
+            document.getElementById("result").textContent =
+              lastComputation ? lastComputation.value : "null";
+          });
+        }
+
+        function render() {
+          lastComputation = { value: "1.23 mg/L", canCopy: true };
+        }
+
+        bindActions();
+        render();
+      })();
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#open")?;
+    harness.click("#copy")?;
+    harness.assert_text("#result", "1.23 mg/L")?;
+    Ok(())
+}
+
+#[test]
+fn nested_call_preserves_caller_local_close_binding() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="go" type="button">go</button>
+    <div id="out"></div>
+    <script>
+      (() => {
+        function make(source) {
+          let index = 0;
+
+          function current() {
+            return source[index] || "";
+          }
+
+          function consume() {
+            const char = source[index] || "";
+            index += 1;
+            return char;
+          }
+
+          function parseSequence(stopChar) {
+            let seen = "";
+            while (index < source.length && current() !== stopChar) {
+              seen += consume();
+            }
+            return "seen=" + seen + "|stop=" + stopChar + "|curr=" + (current() || "<eof>") + "|index=" + index;
+          }
+
+          function parseBracketGroup() {
+            const open = consume();
+            const close = open === "(" ? ")" : "]";
+            const inner = parseSequence(close);
+            return "after=" + (current() || "<eof>") + "|close=" + close + "|index=" + index + "|" + inner;
+          }
+
+          return parseBracketGroup();
+        }
+
+        document.getElementById("go").addEventListener("click", () => {
+          document.getElementById("out").textContent = make("(SO4)3");
+        });
+      })();
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#go")?;
+    harness.assert_text(
+        "#out",
+        "after=)|close=)|index=4|seen=SO4|stop=)|curr=)|index=4",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn plain_formula_parser_accepts_parenthesized_groups() -> browser_tester::Result<()> {
+    let html = r#"
+    <div>
+      <input id="formula" value="Al2(SO4)3" />
+      <button id="go" type="button">go</button>
+      <div id="out"></div>
+    </div>
+    <script>
+    (() => {
+      const weights = { Al: 26.982, S: 32.06, O: 15.999 };
+      const input = document.getElementById("formula");
+      const out = document.getElementById("out");
+
+      function parserError(message) {
+        return { message };
+      }
+
+      function multiplyCounts(map, factor) {
+        const out = {};
+        Object.keys(map).forEach((key) => {
+          out[key] = map[key] * factor;
+        });
+        return out;
+      }
+
+      function mergeCounts(target, source) {
+        Object.keys(source).forEach((key) => {
+          target[key] = (target[key] || 0) + source[key];
+        });
+      }
+
+      function createParser(source) {
+        let index = 0;
+
+        function current() {
+          return source[index] || "";
+        }
+
+        function consume() {
+          const char = source[index] || "";
+          index += 1;
+          return char;
+        }
+
+        function isDigit(char) {
+          return /[0-9]/.test(char);
+        }
+
+        function isUpper(char) {
+          return /[A-Z]/.test(char);
+        }
+
+        function isLower(char) {
+          return /[a-z]/.test(char);
+        }
+
+        function parseNumber() {
+          const start = index;
+          let sawDigit = false;
+
+          while (isDigit(current())) {
+            sawDigit = true;
+            consume();
+          }
+
+          const raw = source.slice(start, index);
+          if (!sawDigit) {
+            throw parserError("invalid number");
+          }
+
+          return { raw, value: Number(raw) };
+        }
+
+        function parseOptionalMultiplier() {
+          if (isDigit(current())) return parseNumber();
+          return { raw: "", value: 1 };
+        }
+
+        function parseElementSymbol() {
+          const first = current();
+          if (!isUpper(first)) {
+            throw parserError("invalid symbol");
+          }
+          let symbol = consume();
+          if (isLower(current())) symbol += consume();
+          if (!weights[symbol]) {
+            throw parserError("unknown element");
+          }
+          return symbol;
+        }
+
+        function parseBracketGroup() {
+          const open = consume();
+          const close = open === "(" ? ")" : "]";
+          const inner = parseSequence(close, 1);
+          if (current() !== close) {
+            throw parserError("Bracket mismatch detected.");
+          }
+          consume();
+          const multiplier = parseOptionalMultiplier();
+          return {
+            counts: multiplyCounts(inner.counts, multiplier.value),
+            order: inner.order.slice(),
+            normalized: open + inner.normalized + close + multiplier.raw
+          };
+        }
+
+        function parseElementGroup() {
+          const symbol = parseElementSymbol();
+          const count = parseOptionalMultiplier();
+          return {
+            counts: { [symbol]: count.value },
+            order: [symbol],
+            normalized: symbol + count.raw
+          };
+        }
+
+        function parseGroup(nesting) {
+          const char = current();
+          if (char === "(" || char === "[") {
+            return parseBracketGroup();
+          }
+          return parseElementGroup();
+        }
+
+        function parseSequence(stopChar, nesting) {
+          const counts = {};
+          const order = [];
+          let normalized = "";
+
+          while (index < source.length && current() !== stopChar) {
+            if (current() === ")" || current() === "]") {
+              throw parserError("unexpected close");
+            }
+            const group = parseGroup(nesting);
+            mergeCounts(counts, group.counts);
+            group.order.forEach((item) => {
+              if (!order.includes(item)) order.push(item);
+            });
+            normalized += group.normalized;
+          }
+
+          return { counts, order, normalized };
+        }
+
+        function parseFragment() {
+          const body = parseSequence("", 1);
+          if (index !== source.length) {
+            throw parserError("invalid tail");
+          }
+          return {
+            counts: multiplyCounts(body.counts, 1),
+            order: body.order.slice(),
+            normalized: body.normalized
+          };
+        }
+
+        return { parseFragment };
+      }
+
+      document.getElementById("go").addEventListener("click", () => {
+        try {
+          const parsed = createParser(input.value).parseFragment();
+          out.textContent = parsed.normalized + "|" + JSON.stringify(parsed.counts);
+        } catch (error) {
+          out.textContent = error && error.message ? error.message : "unknown";
+        }
+      });
+    })();
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#go")?;
+    let actual = harness.dump_dom("#out")?;
+    assert!(
+        actual.contains("Al2(SO4)3|")
+            && actual.contains("\"Al\":2")
+            && actual.contains("\"S\":3")
+            && actual.contains("\"O\":12"),
+        "expected parenthesized formula parser to succeed; actual: {actual}"
+    );
+    Ok(())
+}
+
+#[test]
+fn foreach_attached_click_handler_reassigns_outer_state() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="reset-a" type="button">Reset A</button>
+    <button id="reset-b" type="button">Reset B</button>
+    <input id="status" value="" />
+    <script>
+      let state = { value: "1.2" };
+      function createDefaultState() {
+        return { value: "" };
+      }
+      function renderControls() {
+        document.getElementById("status").value = state.value;
+      }
+      const els = {
+        resetButtons: [
+          document.getElementById("reset-a"),
+          document.getElementById("reset-b")
+        ]
+      };
+      renderControls();
+      els.resetButtons.forEach((button) => button?.addEventListener("click", () => {
+        state = createDefaultState();
+        renderControls();
+      }));
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#reset-a")?;
+    harness.assert_value("#status", "")?;
+    Ok(())
+}
+
+#[test]
+fn foreach_attached_click_handler_reassigns_outer_state_in_iife_page_flow()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <button id="open" type="button">Open</button>
+    <button id="reset" type="button">Reset</button>
+    <input id="burn" value="" />
+    <input id="price" value="" />
+    <input id="idle" value="" />
+    <p id="status"></p>
+    <script>
+      (() => {
+        const messages = { reset: "Inputs reset." };
+        const els = {
+          openButton: document.getElementById("open"),
+          resetButtons: [document.getElementById("reset")],
+          burn: document.getElementById("burn"),
+          price: document.getElementById("price"),
+          idle: document.getElementById("idle"),
+          status: document.getElementById("status"),
+        };
+
+        function createDefaultState() {
+          return {
+            presetKind: "small",
+            fuelBurnValue: "20",
+            priceValue: "",
+            idleMinutes: "",
+          };
+        }
+
+        let state = createDefaultState();
+
+        function setStatus(text) {
+          els.status.textContent = text || "";
+        }
+
+        function renderAll() {
+          els.burn.value = state.fuelBurnValue;
+          els.price.value = state.priceValue;
+          els.idle.value = state.idleMinutes;
+        }
+
+        function attachEvents() {
+          els.openButton.addEventListener("click", () => {
+            state.priceValue = "155";
+            state.idleMinutes = "300";
+            renderAll();
+          });
+          els.resetButtons.forEach((button) => button?.addEventListener("click", () => {
+            state = createDefaultState();
+            renderAll();
+            setStatus(messages.reset);
+          }));
+        }
+
+        renderAll();
+        attachEvents();
+      })();
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#open")?;
+    harness.assert_value("#price", "155")?;
+    harness.assert_value("#idle", "300")?;
+
+    harness.click("#reset")?;
+    harness.assert_value("#burn", "20")?;
+    harness.assert_value("#price", "")?;
+    harness.assert_value("#idle", "")?;
+    harness.assert_text("#status", "Inputs reset.")?;
+    Ok(())
+}
+
+#[test]
+fn for_of_loop_supports_array_destructuring_binding() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="out"></div>
+    <script>
+      const entries = Object.entries({ mode: "mooring" });
+      for (const [key, value] of entries) {
+        document.getElementById("out").textContent = key + ":" + value;
+      }
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#out", "mode:mooring")?;
+    Ok(())
+}
+
+#[test]
+fn append_child_syncs_select_value_for_preselected_option() -> browser_tester::Result<()> {
+    let html = r#"
+    <select id="s"></select>
+    <p id="out"></p>
+    <script>
+      const s = document.getElementById("s");
+      ["g", "kg", "ml"].forEach((value) => {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value;
+        if (value === "ml") {
+          option.selected = true;
+        }
+        s.appendChild(option);
+      });
+      document.getElementById("out").textContent = "value:" + s.value;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#out", "value:ml")?;
+    harness.assert_value("#s", "ml")?;
     Ok(())
 }

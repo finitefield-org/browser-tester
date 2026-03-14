@@ -138,8 +138,7 @@ fn closing_brace_continues_expression(
     if let Some(last_sig) = last_top_level_significant_byte(head) {
         if matches!(
             last_sig,
-            b'='
-                | b','
+            b'=' | b','
                 | b':'
                 | b'?'
                 | b'('
@@ -170,12 +169,31 @@ fn tail_starts_expression_continuation(tail: &str) -> bool {
     if tail.is_empty() {
         return false;
     }
-    if matches!(tail.as_bytes()[0], b'.' | b'[' | b'(' | b'`' | b'?' | b'+' | b'-') {
+    if matches!(
+        tail.as_bytes()[0],
+        b'.' | b'[' | b'(' | b'`' | b'?' | b'+' | b'-'
+    ) {
         return true;
     }
     for op in [
-        "||", "&&", "??", "**", "*", "/", "%", "&", "|", "^", "==", "!=", "<", ">", "<=", ">=",
-        "instanceof", "in",
+        "||",
+        "&&",
+        "??",
+        "**",
+        "*",
+        "/",
+        "%",
+        "&",
+        "|",
+        "^",
+        "==",
+        "!=",
+        "<",
+        ">",
+        "<=",
+        ">=",
+        "instanceof",
+        "in",
     ] {
         if is_keyword_or_operator_prefix(tail, op) {
             return true;
@@ -218,11 +236,7 @@ fn ends_with_keyword(src: &str, keyword: &str) -> bool {
     let Some(prefix) = trimmed.strip_suffix(keyword) else {
         return false;
     };
-    prefix.is_empty()
-        || !prefix
-            .as_bytes()
-            .last()
-            .is_some_and(|b| is_ident_char(*b))
+    prefix.is_empty() || !prefix.as_bytes().last().is_some_and(|b| is_ident_char(*b))
 }
 
 pub(crate) fn is_do_statement_prefix(src: &str) -> bool {

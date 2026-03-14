@@ -748,37 +748,81 @@ pub(crate) struct Listener {
 #[derive(Debug, Default, Clone)]
 pub(crate) struct ListenerStore {
     pub(crate) map: HashMap<NodeId, HashMap<String, Vec<Listener>>>,
+    pub(crate) capture_name_counts: HashMap<String, usize>,
 }
 
 impl ListenerStore {
+    fn increment_capture_names(&mut self, listener: &Listener) {
+        let captured_env = listener.captured_env.borrow();
+        for name in captured_env.keys() {
+            if name.starts_with("\u{0}\u{0}bt_") {
+                continue;
+            }
+            *self.capture_name_counts.entry(name.clone()).or_insert(0) += 1;
+        }
+    }
+
+    fn decrement_capture_names(&mut self, listener: &Listener) {
+        let captured_env = listener.captured_env.borrow();
+        for name in captured_env.keys() {
+            if name.starts_with("\u{0}\u{0}bt_") {
+                continue;
+            }
+            let Some(count) = self.capture_name_counts.get_mut(name) else {
+                continue;
+            };
+            if *count <= 1 {
+                self.capture_name_counts.remove(name);
+            } else {
+                *count -= 1;
+            }
+        }
+    }
+
     pub(crate) fn add(&mut self, node_id: NodeId, event: String, listener: Listener) {
-        let listeners = self
-            .map
+        let should_add = {
+            let listeners = self
+                .map
+                .entry(node_id)
+                .or_default()
+                .entry(event.clone())
+                .or_default();
+
+            // Match browser semantics: dedupe only when addEventListener() re-registers
+            // the same callback reference for the same type/capture pair.
+            // Event handler properties (onclick, oninput, ...) are a separate slot and
+            // must not be deduped against addEventListener listeners.
+            if !listener.is_event_handler_property {
+                if let Some(new_callback_ref) = listener.handler.listener_callback_reference() {
+                    if listeners.iter().any(|existing| {
+                        !existing.is_event_handler_property
+                            && existing.capture == listener.capture
+                            && existing
+                                .handler
+                                .listener_callback_reference()
+                                .is_some_and(|existing_ref| existing_ref == new_callback_ref)
+                    }) {
+                        false
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                }
+            } else {
+                true
+            }
+        };
+        if !should_add {
+            return;
+        }
+        self.increment_capture_names(&listener);
+        self.map
             .entry(node_id)
             .or_default()
             .entry(event)
-            .or_default();
-
-        // Match browser semantics: dedupe only when addEventListener() re-registers
-        // the same callback reference for the same type/capture pair.
-        // Event handler properties (onclick, oninput, ...) are a separate slot and
-        // must not be deduped against addEventListener listeners.
-        if !listener.is_event_handler_property {
-            if let Some(new_callback_ref) = listener.handler.listener_callback_reference() {
-                if listeners.iter().any(|existing| {
-                    !existing.is_event_handler_property
-                        && existing.capture == listener.capture
-                        && existing
-                            .handler
-                            .listener_callback_reference()
-                            .is_some_and(|existing_ref| existing_ref == new_callback_ref)
-                }) {
-                    return;
-                }
-            }
-        }
-
-        listeners.push(listener);
+            .or_default()
+            .push(listener);
     }
 
     pub(crate) fn remove(
@@ -788,29 +832,40 @@ impl ListenerStore {
         capture: bool,
         handler: &ScriptHandler,
     ) -> bool {
-        let Some(events) = self.map.get_mut(&node_id) else {
-            return false;
-        };
-        let Some(listeners) = events.get_mut(event) else {
+        let Some((listener, remove_node)) = ({
+            let Some(events) = self.map.get_mut(&node_id) else {
+                return false;
+            };
+
+            let listener = {
+                let Some(listeners) = events.get_mut(event) else {
+                    return false;
+                };
+                let Some(pos) = listeners.iter().position(|listener| {
+                    !listener.is_event_handler_property
+                        && listener.capture == capture
+                        && listener.handler == *handler
+                }) else {
+                    return false;
+                };
+                let listener = listeners.remove(pos);
+                let remove_event = listeners.is_empty();
+                if remove_event {
+                    events.remove(event);
+                }
+                listener
+            };
+
+            Some((listener, events.is_empty()))
+        }) else {
             return false;
         };
 
-        if let Some(pos) = listeners.iter().position(|listener| {
-            !listener.is_event_handler_property
-                && listener.capture == capture
-                && listener.handler == *handler
-        }) {
-            listeners.remove(pos);
-            if listeners.is_empty() {
-                events.remove(event);
-            }
-            if events.is_empty() {
-                self.map.remove(&node_id);
-            }
-            return true;
+        self.decrement_capture_names(&listener);
+        if remove_node {
+            self.map.remove(&node_id);
         }
-
-        false
+        true
     }
 
     pub(crate) fn remove_event_handler_property(
@@ -819,28 +874,38 @@ impl ListenerStore {
         event: &str,
         handler: &ScriptHandler,
     ) -> bool {
-        let Some(events) = self.map.get_mut(&node_id) else {
-            return false;
-        };
-        let Some(listeners) = events.get_mut(event) else {
+        let Some((listener, remove_node)) = ({
+            let Some(events) = self.map.get_mut(&node_id) else {
+                return false;
+            };
+
+            let listener = {
+                let Some(listeners) = events.get_mut(event) else {
+                    return false;
+                };
+                let Some(pos) = listeners.iter().position(|listener| {
+                    listener.is_event_handler_property && listener.handler == *handler
+                }) else {
+                    return false;
+                };
+                let listener = listeners.remove(pos);
+                let remove_event = listeners.is_empty();
+                if remove_event {
+                    events.remove(event);
+                }
+                listener
+            };
+
+            Some((listener, events.is_empty()))
+        }) else {
             return false;
         };
 
-        if let Some(pos) = listeners
-            .iter()
-            .position(|listener| listener.is_event_handler_property && listener.handler == *handler)
-        {
-            listeners.remove(pos);
-            if listeners.is_empty() {
-                events.remove(event);
-            }
-            if events.is_empty() {
-                self.map.remove(&node_id);
-            }
-            return true;
+        self.decrement_capture_names(&listener);
+        if remove_node {
+            self.map.remove(&node_id);
         }
-
-        false
+        true
     }
 
     pub(crate) fn replace_event_handler_property(
@@ -1218,8 +1283,8 @@ impl std::ops::DerefMut for ScriptEnv {
 #[derive(Debug, Default)]
 pub(crate) struct ListenerCaptureFrame {
     pub(crate) shared_env: Option<Rc<RefCell<ScriptEnv>>>,
+    pub(crate) shared_env_owned_by_scope: bool,
     pub(crate) pending_env_updates: HashMap<String, Option<Value>>,
-    pub(crate) inherit_outer_pending: bool,
 }
 
 #[derive(Debug)]

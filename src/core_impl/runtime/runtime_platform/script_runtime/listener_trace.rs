@@ -89,12 +89,10 @@ impl Harness {
                 )
                 .map(|_| ())
             } else {
-                let pending_scope_start =
-                    self.push_pending_function_decl_scopes(&listener.captured_pending_function_decls);
-                let shared_env_frame_start = self.push_shared_listener_capture_env_frame(
-                    listener.captured_env.clone(),
-                    true,
-                );
+                let pending_scope_start = self
+                    .push_pending_function_decl_scopes(&listener.captured_pending_function_decls);
+                let shared_env_frame_start = self
+                    .push_shared_listener_capture_env_frame(listener.captured_env.clone(), true);
                 let result = self.execute_handler(&listener.handler, event, &mut listener_env);
                 self.restore_listener_capture_env_stack(shared_env_frame_start);
                 self.restore_pending_function_decl_scopes(pending_scope_start);

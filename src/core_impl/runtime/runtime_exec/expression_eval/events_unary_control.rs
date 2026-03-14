@@ -673,6 +673,7 @@ impl Harness {
                             .flatten()
                             .or_else(|| env.get(name).cloned())
                             .or_else(|| self.resolve_pending_function_decl(name, env))
+                            .or_else(|| self.resolve_runtime_global_identifier(name))
                             .as_ref()
                             .map_or("undefined", |value| match value {
                             Value::Null => "object",

@@ -2888,9 +2888,20 @@ impl Harness {
         env: &HashMap<String, Value>,
         target: &str,
     ) -> Option<Value> {
-        env.get(target)
-            .cloned()
-            .or_else(|| self.resolve_listener_capture_pending_value(target).flatten())
+        self.resolve_listener_capture_pending_value(target)
+            .flatten()
+            .or_else(|| env.get(target).cloned())
+            .or_else(|| self.resolve_runtime_global_identifier(target))
+    }
+
+    pub(crate) fn resolve_runtime_global_identifier(&self, name: &str) -> Option<Value> {
+        self.script_runtime.env.get(name).cloned().or_else(|| {
+            if Self::is_internal_env_key(name) {
+                return None;
+            }
+            let window = self.dom_runtime.window_object.borrow();
+            Self::object_get_entry(&window, name)
+        })
     }
 
     pub(crate) fn eval_expr_json_object_array(

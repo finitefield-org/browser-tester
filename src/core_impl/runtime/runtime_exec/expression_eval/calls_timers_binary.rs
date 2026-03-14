@@ -282,17 +282,7 @@ impl Harness {
         &self,
         name: &str,
     ) -> Option<Option<Value>> {
-        let len = self.script_runtime.listener_capture_env_stack.len();
-        let start = (0..len)
-            .rev()
-            .find(|&index| {
-                !self.script_runtime.listener_capture_env_stack[index].inherit_outer_pending
-            })
-            .unwrap_or(0);
-        for frame in self.script_runtime.listener_capture_env_stack[start..]
-            .iter()
-            .rev()
-        {
+        for frame in self.script_runtime.listener_capture_env_stack.iter().rev() {
             if let Some(value) = frame.pending_env_updates.get(name) {
                 return Some(value.clone());
             }
@@ -1704,8 +1694,6 @@ impl Harness {
                         .flatten()
                     {
                         Ok(value)
-                    } else if let Some(value) = env.get(name).cloned() {
-                        Ok(value)
                     } else if let Some(pending) = self.resolve_listener_capture_pending_value(name)
                     {
                         if let Some(value) = pending {
@@ -1713,7 +1701,11 @@ impl Harness {
                         } else {
                             Err(Error::ScriptRuntime(format!("unknown variable: {name}")))
                         }
+                    } else if let Some(value) = env.get(name).cloned() {
+                        Ok(value)
                     } else if let Some(value) = self.resolve_pending_function_decl(name, env) {
+                        Ok(value)
+                    } else if let Some(value) = self.resolve_runtime_global_identifier(name) {
                         Ok(value)
                     } else {
                         Err(Error::ScriptRuntime(format!("unknown variable: {name}")))

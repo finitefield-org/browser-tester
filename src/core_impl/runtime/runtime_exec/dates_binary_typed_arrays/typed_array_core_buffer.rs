@@ -654,9 +654,9 @@ impl Harness {
     ) -> Result<Value> {
         match method {
             TypedArrayStaticMethod::From => {
-                if values.len() != 1 {
+                if values.is_empty() || values.len() > 3 {
                     return Err(Error::ScriptRuntime(format!(
-                        "{}.from requires exactly one argument",
+                        "{}.from requires a source argument and supports at most mapFn/thisArg",
                         kind.name()
                     )));
                 }
@@ -668,8 +668,22 @@ impl Harness {
                         ));
                     }
                 }
-                let values = self.array_like_values_from_value(&source)?;
-                self.new_typed_array_from_values(kind, &values)
+                let mut source_values = self.array_like_values_from_value(&source)?;
+                if values.len() >= 2 {
+                    let callback = values[1].clone();
+                    let callback_event =
+                        EventState::new("typedarray.from", self.dom.root, self.scheduler.now_ms);
+                    let mut mapped = Vec::with_capacity(source_values.len());
+                    for (index, value) in source_values.into_iter().enumerate() {
+                        mapped.push(self.execute_callback_value(
+                            &callback,
+                            &[value, Value::Number(index as i64)],
+                            &callback_event,
+                        )?);
+                    }
+                    source_values = mapped;
+                }
+                self.new_typed_array_from_values(kind, &source_values)
             }
             TypedArrayStaticMethod::Of => self.new_typed_array_from_values(kind, &values),
         }

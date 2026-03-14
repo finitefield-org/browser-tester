@@ -8728,10 +8728,33 @@ impl Harness {
             return Ok(value);
         }
         if !has_explicit_prototype {
-            if key == "constructor" {
-                return Ok(Value::TypedArrayConstructor(
-                    TypedArrayConstructorKind::Concrete(kind),
-                ));
+            match key {
+                "constructor" => {
+                    return Ok(Value::TypedArrayConstructor(
+                        TypedArrayConstructorKind::Concrete(kind),
+                    ));
+                }
+                "byteLength" => {
+                    return Ok(Value::Number(values.borrow().observed_byte_length() as i64));
+                }
+                "byteOffset" => {
+                    let value_ref = values.borrow();
+                    let byte_offset = if value_ref.observed_length() == 0
+                        && value_ref.byte_offset >= value_ref.buffer.borrow().byte_length()
+                    {
+                        0
+                    } else {
+                        value_ref.byte_offset
+                    };
+                    return Ok(Value::Number(byte_offset as i64));
+                }
+                "buffer" => {
+                    return Ok(Value::ArrayBuffer(values.borrow().buffer.clone()));
+                }
+                "BYTES_PER_ELEMENT" => {
+                    return Ok(Value::Number(kind.bytes_per_element() as i64));
+                }
+                _ => {}
             }
             if self.is_iterator_property_key(key) {
                 return Ok(Self::new_receiver_builtin_callable("typed_array", "values"));

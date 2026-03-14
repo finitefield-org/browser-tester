@@ -199,22 +199,64 @@ impl Harness {
     }
 
     fn get_bounding_client_rect_value(&self, node: NodeId) -> Result<Value> {
-        let left = self
+        let mut left = self
             .dom
             .offset_left(node)?
             .saturating_sub(self.dom_runtime.document_scroll_x);
-        let top = self
+        let mut top = self
             .dom
             .offset_top(node)?
             .saturating_sub(self.dom_runtime.document_scroll_y);
         let width = self.dom.offset_width(node)?;
         let height = self.dom.offset_height(node)?;
+
+        if self.node_uses_sticky_position(node) {
+            if let Some(sticky_left) = self.sticky_inset_px(node, "left") {
+                left = left.max(sticky_left);
+            }
+            if let Some(sticky_top) = self.sticky_inset_px(node, "top") {
+                top = top.max(sticky_top);
+            }
+        }
+
         let right = left.saturating_add(width);
         let bottom = top.saturating_add(height);
 
         Ok(Self::new_dom_rect_value(
             left, top, right, bottom, width, height,
         ))
+    }
+
+    fn node_uses_sticky_position(&self, node: NodeId) -> bool {
+        self.computed_style_property_value(node, None, "position")
+            .map(|value| value.trim().eq_ignore_ascii_case("sticky"))
+            .unwrap_or(false)
+    }
+
+    fn sticky_inset_px(&self, node: NodeId, property: &str) -> Option<i64> {
+        let value = self
+            .computed_style_property_value(node, None, property)
+            .ok()?;
+        Self::parse_css_length_to_px(&value)
+    }
+
+    fn parse_css_length_to_px(raw: &str) -> Option<i64> {
+        let normalized = raw.trim().to_ascii_lowercase();
+        if normalized.is_empty() || normalized == "auto" {
+            return None;
+        }
+
+        let px = if let Some(stripped) = normalized.strip_suffix("px") {
+            stripped.trim().parse::<f64>().ok()?
+        } else if let Some(stripped) = normalized.strip_suffix("rem") {
+            stripped.trim().parse::<f64>().ok()? * 16.0
+        } else if let Some(stripped) = normalized.strip_suffix("em") {
+            stripped.trim().parse::<f64>().ok()? * 16.0
+        } else {
+            normalized.parse::<f64>().ok()?
+        };
+
+        px.is_finite().then_some(px.round() as i64)
     }
 
     fn node_has_client_rects(&self, node: NodeId) -> bool {

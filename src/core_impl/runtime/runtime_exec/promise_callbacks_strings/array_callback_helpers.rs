@@ -49,12 +49,18 @@ impl Harness {
                     outer_env.insert(name.clone(), next.clone());
                     self.sync_arguments_after_param_write(outer_env, &name, &next);
                     self.sync_global_binding_if_needed(outer_env, &name, &next);
-                    self.sync_scheduled_task_captures_for_binding(&name, &next);
+                    self.sync_scheduled_task_captures_for_binding_if_escaping(
+                        outer_env, &name, &next,
+                    );
                 }
                 None => {
                     outer_env.remove(&name);
                     self.sync_global_binding_if_needed(outer_env, &name, &Value::Undefined);
-                    self.sync_scheduled_task_captures_for_binding(&name, &Value::Undefined);
+                    self.sync_scheduled_task_captures_for_binding_if_escaping(
+                        outer_env,
+                        &name,
+                        &Value::Undefined,
+                    );
                 }
             }
         }
@@ -75,9 +81,7 @@ impl Harness {
             local_binding_names.sort();
             callback_env.insert(
                 INTERNAL_LOCAL_BINDINGS_KEY.to_string(),
-                Self::new_array_value(
-                    local_binding_names.into_iter().map(Value::String).collect(),
-                ),
+                Self::new_array_value(local_binding_names.into_iter().map(Value::String).collect()),
             );
         }
         let mut callback_event = event.clone();
@@ -141,15 +145,19 @@ impl Harness {
             local_binding_names.sort();
             callback_env.insert(
                 INTERNAL_LOCAL_BINDINGS_KEY.to_string(),
-                Self::new_array_value(
-                    local_binding_names.into_iter().map(Value::String).collect(),
-                ),
+                Self::new_array_value(local_binding_names.into_iter().map(Value::String).collect()),
             );
         }
         let mut callback_event = event.clone();
         let event_param = None;
         let result = self.with_isolated_loop_control_scope(|this| {
-            this.bind_handler_params(callback, args, &mut callback_env, &event_param, &callback_event)?;
+            this.bind_handler_params(
+                callback,
+                args,
+                &mut callback_env,
+                &event_param,
+                &callback_event,
+            )?;
             let non_tdz_shadowed = Self::callback_non_tdz_shadowed_names(callback);
             let pushed_non_tdz_scope = !non_tdz_shadowed.is_empty();
             if pushed_non_tdz_scope {

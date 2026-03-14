@@ -42,10 +42,30 @@ impl Harness {
             return;
         }
 
-        for task in &mut self.scheduler.task_queue {
-            if task.env.contains_key(name) {
-                task.env.insert(name.to_string(), value.clone());
+        if self.listeners.capture_name_counts.contains_key(name) {
+            for events in self.listeners.map.values_mut() {
+                for listeners in events.values_mut() {
+                    for listener in listeners.iter_mut() {
+                        let captured_has_binding =
+                            listener.captured_env.borrow().contains_key(name);
+                        if !captured_has_binding {
+                            continue;
+                        }
+                        listener
+                            .captured_env
+                            .borrow_mut()
+                            .insert(name.to_string(), value.clone());
+                    }
+                }
             }
+        }
+
+        for task in &mut self.scheduler.task_queue {
+            let task_has_binding = task.env.contains_key(name);
+            if !task_has_binding {
+                continue;
+            }
+            task.env.insert(name.to_string(), value.clone());
 
             let env_snapshot = task.env.to_map();
             for entry in env_snapshot.values() {

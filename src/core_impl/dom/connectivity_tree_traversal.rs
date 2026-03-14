@@ -93,6 +93,28 @@ impl Dom {
         self.id_index = next;
     }
 
+    pub(crate) fn subtree_contains_nonempty_id(&self, node_id: NodeId) -> bool {
+        if !self.is_valid_node(node_id) {
+            return false;
+        }
+        let mut stack = vec![node_id];
+        while let Some(node) = stack.pop() {
+            if let NodeType::Element(element) = &self.nodes[node.0].node_type {
+                if element
+                    .attrs
+                    .get("id")
+                    .is_some_and(|value| !value.is_empty())
+                {
+                    return true;
+                }
+            }
+            for child in self.nodes[node.0].children.iter().rev() {
+                stack.push(*child);
+            }
+        }
+        false
+    }
+
     pub(crate) fn index_id_map(next: &mut HashMap<String, Vec<NodeId>>, id: &str, node_id: NodeId) {
         if id.is_empty() {
             return;

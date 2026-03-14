@@ -730,14 +730,14 @@ impl Harness {
     pub(crate) fn push_shared_listener_capture_env_frame(
         &mut self,
         shared_env: Rc<RefCell<ScriptEnv>>,
-        inherit_outer_pending: bool,
+        _inherit_outer_pending: bool,
     ) -> usize {
         let start_len = self.script_runtime.listener_capture_env_stack.len();
         self.script_runtime
             .listener_capture_env_stack
             .push(ListenerCaptureFrame {
                 shared_env: Some(shared_env),
-                inherit_outer_pending,
+                shared_env_owned_by_scope: false,
                 ..ListenerCaptureFrame::default()
             });
         start_len
@@ -796,17 +796,46 @@ impl Harness {
         }
     }
 
-    pub(crate) fn env_should_sync_global_name(env: &HashMap<String, Value>, name: &str) -> bool {
-        if let Some(Value::Array(local_bindings)) = env.get(INTERNAL_LOCAL_BINDINGS_KEY) {
-            if local_bindings
+    pub(crate) fn env_has_local_or_lexical_binding(
+        env: &HashMap<String, Value>,
+        name: &str,
+    ) -> bool {
+        if Self::env_has_local_binding(env, name) {
+            return true;
+        }
+        Self::env_top_level_lexical_binding_names(env).contains(name)
+    }
+
+    pub(crate) fn env_local_or_lexical_binding_names(
+        env: &HashMap<String, Value>,
+    ) -> HashSet<String> {
+        let mut names = match env.get(INTERNAL_LOCAL_BINDINGS_KEY) {
+            Some(Value::Array(local_bindings)) => local_bindings
                 .borrow()
                 .iter()
-                .any(|entry| matches!(entry, Value::String(value) if value == name))
-            {
-                return false;
-            }
+                .filter_map(|entry| match entry {
+                    Value::String(value) => Some(value.clone()),
+                    _ => None,
+                })
+                .collect::<HashSet<_>>(),
+            _ => HashSet::new(),
+        };
+        names.extend(Self::env_top_level_lexical_binding_names(env));
+        names
+    }
+
+    pub(crate) fn env_has_local_binding(env: &HashMap<String, Value>, name: &str) -> bool {
+        match env.get(INTERNAL_LOCAL_BINDINGS_KEY) {
+            Some(Value::Array(local_bindings)) => local_bindings
+                .borrow()
+                .iter()
+                .any(|entry| matches!(entry, Value::String(value) if value == name)),
+            _ => false,
         }
-        if Self::env_top_level_lexical_binding_names(env).contains(name) {
+    }
+
+    pub(crate) fn env_should_sync_global_name(env: &HashMap<String, Value>, name: &str) -> bool {
+        if Self::env_has_local_or_lexical_binding(env, name) {
             return false;
         }
         match env.get(INTERNAL_GLOBAL_SYNC_NAMES_KEY) {
@@ -820,9 +849,14 @@ impl Harness {
 
     pub(crate) fn ensure_listener_capture_env(&mut self) -> Rc<RefCell<ScriptEnv>> {
         if let Some(frame) = self.script_runtime.listener_capture_env_stack.last_mut() {
+            if frame.shared_env.is_none() {
+                frame.shared_env = Some(Rc::new(RefCell::new(ScriptEnv::default())));
+                frame.shared_env_owned_by_scope = true;
+            }
             frame
                 .shared_env
-                .get_or_insert_with(|| Rc::new(RefCell::new(ScriptEnv::default())))
+                .as_ref()
+                .expect("shared env should exist after initialization")
                 .clone()
         } else {
             Rc::new(RefCell::new(ScriptEnv::default()))
@@ -861,24 +895,19 @@ impl Harness {
         &mut self,
         env: &mut HashMap<String, Value>,
     ) {
-        let len = self.script_runtime.listener_capture_env_stack.len();
-        if len == 0 {
+        if self.script_runtime.listener_capture_env_stack.is_empty() {
             return;
         }
-        let start = (0..len)
-            .rev()
-            .find(|&index| {
-                !self.script_runtime.listener_capture_env_stack[index].inherit_outer_pending
-            })
-            .unwrap_or(0);
-        if self.script_runtime.listener_capture_env_stack[start..]
+        if self
+            .script_runtime
+            .listener_capture_env_stack
             .iter()
             .all(|frame| frame.pending_env_updates.is_empty())
         {
             return;
         }
         let mut updates = HashMap::new();
-        for frame in &mut self.script_runtime.listener_capture_env_stack[start..] {
+        for frame in &mut self.script_runtime.listener_capture_env_stack {
             updates.extend(std::mem::take(&mut frame.pending_env_updates));
         }
         for (name, value) in updates {
@@ -933,6 +962,81 @@ impl Harness {
             self.script_runtime
                 .env
                 .insert(name.to_string(), value.clone());
+        }
+    }
+
+    pub(crate) fn sync_scheduled_task_captures_for_binding_if_escaping(
+        &mut self,
+        env: &HashMap<String, Value>,
+        name: &str,
+        value: &Value,
+    ) {
+        if Self::is_internal_env_key(name) {
+            return;
+        }
+
+        let shared_frame_tracks_name = self
+            .script_runtime
+            .listener_capture_env_stack
+            .iter()
+            .rev()
+            .find(|frame| frame.shared_env.is_some())
+            .is_some_and(|frame| {
+                frame.shared_env_owned_by_scope
+                    || frame.pending_env_updates.contains_key(name)
+                    || frame
+                        .shared_env
+                        .as_ref()
+                        .is_some_and(|shared_env| shared_env.borrow().contains_key(name))
+            });
+
+        if Self::env_has_local_binding(env, name) && !shared_frame_tracks_name {
+            return;
+        }
+
+        if !shared_frame_tracks_name
+            && !Self::env_should_sync_global_name(env, name)
+            && !Self::env_top_level_lexical_binding_names(env).contains(name)
+            && !self.listeners.capture_name_counts.contains_key(name)
+            && self.scheduler.task_queue.is_empty()
+        {
+            return;
+        }
+
+        self.sync_function_captures_in_env_for_binding(env, name, value);
+        self.sync_scheduled_task_captures_for_binding(name, value);
+    }
+
+    fn sync_function_captures_in_env_for_binding(
+        &mut self,
+        env: &HashMap<String, Value>,
+        name: &str,
+        value: &Value,
+    ) {
+        let mut seen_function_ids = HashSet::new();
+        for entry in env.values() {
+            let Value::Function(function) = entry else {
+                continue;
+            };
+            if !seen_function_ids.insert(function.function_id) {
+                continue;
+            }
+            if function.global_scope || function.local_bindings.contains(name) {
+                continue;
+            }
+            if !function.captured_env.borrow().contains_key(name) {
+                continue;
+            }
+
+            function
+                .captured_env
+                .borrow_mut()
+                .insert(name.to_string(), value.clone());
+            self.queue_listener_capture_env_update_for_shared_env(
+                &function.captured_env,
+                name.to_string(),
+                Some(value.clone()),
+            );
         }
     }
 }

@@ -841,7 +841,15 @@ pub(crate) fn parse_destructure_assign(stmt: &str) -> Result<Option<Stmt>> {
     }
 
     if lhs.starts_with('[') && lhs.ends_with(']') {
-        let pattern = parse_array_destructure_assignment_pattern(lhs)?;
+        let pattern = match parse_array_destructure_assignment_pattern(lhs) {
+            Ok(pattern) => pattern,
+            Err(err) => {
+                if let Some(lowered) = lower_array_destructure_assignment_stmt(lhs, rhs)? {
+                    return Ok(Some(lowered));
+                }
+                return Err(err);
+            }
+        };
         let expr = parse_expr(rhs)?;
         return Ok(Some(Stmt::ArrayDestructureAssign {
             pattern,
@@ -860,6 +868,87 @@ pub(crate) fn parse_destructure_assign(stmt: &str) -> Result<Option<Stmt>> {
     }
 
     Ok(None)
+}
+
+fn lower_array_destructure_assignment_stmt(lhs: &str, rhs: &str) -> Result<Option<Stmt>> {
+    let mut cursor = Cursor::new(lhs);
+    cursor.skip_ws();
+    let items_src = cursor.read_balanced_block(b'[', b']')?;
+    cursor.skip_ws();
+    if !cursor.eof() {
+        return Ok(None);
+    }
+
+    let mut items = split_top_level_by_char(&items_src, b',');
+    while items.len() > 1 && items.last().is_some_and(|item| item.trim().is_empty()) {
+        items.pop();
+    }
+
+    let mut parsed_items = Vec::with_capacity(items.len());
+    let mut needs_lowering = false;
+    for item in items {
+        let item = item.trim();
+        if item.is_empty() {
+            parsed_items.push(None);
+            continue;
+        }
+        if item.strip_prefix("...").is_some() || find_top_level_assignment(item).is_some() {
+            return Ok(None);
+        }
+        if !is_valid_destructure_assignment_target(item) {
+            return Ok(None);
+        }
+        if !is_ident(item) {
+            needs_lowering = true;
+        }
+        parsed_items.push(Some(item.to_string()));
+    }
+
+    if !needs_lowering {
+        return Ok(None);
+    }
+
+    let temp_name = fresh_destructure_temp_name(lhs, rhs);
+    let mut lowered = format!("{{ const {temp_name} = {rhs};");
+    for (index, target) in parsed_items.iter().enumerate() {
+        let Some(target) = target else {
+            continue;
+        };
+        lowered.push(' ');
+        lowered.push_str(target);
+        lowered.push_str(" = ");
+        lowered.push_str(&temp_name);
+        lowered.push('[');
+        lowered.push_str(&index.to_string());
+        lowered.push_str("];");
+    }
+    lowered.push_str(" }");
+
+    Ok(parse_block_stmt(&lowered)?)
+}
+
+fn fresh_destructure_temp_name(lhs: &str, rhs: &str) -> String {
+    let mut index = 0usize;
+    loop {
+        let candidate = format!("__bt_array_destructure_{index}");
+        if !lhs.contains(&candidate) && !rhs.contains(&candidate) {
+            return candidate;
+        }
+        index += 1;
+    }
+}
+
+fn is_valid_destructure_assignment_target(target: &str) -> bool {
+    let assignment_src = format!("{target} = 0");
+    let supports_assignment = |result: Result<Option<Stmt>>| match result {
+        Ok(Some(_)) => true,
+        Ok(None) | Err(_) => false,
+    };
+
+    supports_assignment(parse_var_assign(&assignment_src))
+        || supports_assignment(parse_object_assign(&assignment_src))
+        || supports_assignment(parse_private_assign(&assignment_src))
+        || supports_assignment(parse_dom_assignment(&assignment_src))
 }
 
 pub(crate) fn parse_array_destructure_pattern(pattern: &str) -> Result<Vec<Option<String>>> {

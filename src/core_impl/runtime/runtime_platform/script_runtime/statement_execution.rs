@@ -2256,7 +2256,7 @@ impl Harness {
         event_param: &Option<String>,
         event: &mut EventState,
         env: &mut HashMap<String, Value>,
-        inherit_outer_pending: bool,
+        _inherit_outer_pending: bool,
     ) -> Result<ExecFlow> {
         let saved_expression_env_overrides =
             std::mem::take(&mut self.script_runtime.expression_env_overrides);
@@ -2287,10 +2287,7 @@ impl Harness {
         }
         self.script_runtime
             .listener_capture_env_stack
-            .push(ListenerCaptureFrame {
-                inherit_outer_pending,
-                ..ListenerCaptureFrame::default()
-            });
+            .push(ListenerCaptureFrame::default());
 
         let result = (|| -> Result<ExecFlow> {
             Self::validate_const_redeclarations(stmts)?;
@@ -2317,7 +2314,8 @@ impl Harness {
                                         name,
                                         &Value::Undefined,
                                     );
-                                    self.sync_scheduled_task_captures_for_binding(
+                                    self.sync_scheduled_task_captures_for_binding_if_escaping(
+                                        env,
                                         name,
                                         &Value::Undefined,
                                     );
@@ -2331,7 +2329,9 @@ impl Harness {
                                 self.mark_tdz_initialized(&mut pending_tdz_bindings, name);
                             }
                             self.sync_global_binding_if_needed(env, name, &value);
-                            self.sync_scheduled_task_captures_for_binding(name, &value);
+                            self.sync_scheduled_task_captures_for_binding_if_escaping(
+                                env, name, &value,
+                            );
                             self.bind_timer_id_to_task_env(name, expr, &value);
                             if matches!(kind, VarDeclKind::Var) && !matches!(expr, Expr::Undefined)
                             {
@@ -2367,7 +2367,9 @@ impl Harness {
                             env.insert(name.clone(), function.clone());
                             self.set_const_binding(env, name, false);
                             self.sync_global_binding_if_needed(env, name, &function);
-                            self.sync_scheduled_task_captures_for_binding(name, &function);
+                            self.sync_scheduled_task_captures_for_binding_if_escaping(
+                                env, name, &function,
+                            );
                         }
                         Stmt::ClassDecl {
                             name,
@@ -3006,8 +3008,8 @@ impl Harness {
                                             })?;
                                             self.sync_arguments_after_param_write(env, name, &next);
                                             self.sync_global_binding_if_needed(env, name, &next);
-                                            self.sync_scheduled_task_captures_for_binding(
-                                                name, &next,
+                                            self.sync_scheduled_task_captures_for_binding_if_escaping(
+                                                env, name, &next,
                                             );
                                             self.bind_timer_id_to_task_env(name, expr, &next);
                                         }
@@ -3088,7 +3090,9 @@ impl Harness {
                             env.insert(name.clone(), next.clone());
                             self.sync_arguments_after_param_write(env, name, &next);
                             self.sync_global_binding_if_needed(env, name, &next);
-                            self.sync_scheduled_task_captures_for_binding(name, &next);
+                            self.sync_scheduled_task_captures_for_binding_if_escaping(
+                                env, name, &next,
+                            );
                             self.bind_timer_id_to_task_env(name, expr, &next);
                         }
                         Stmt::PrivateAssign {
@@ -3123,7 +3127,9 @@ impl Harness {
                             env.insert(name.clone(), next.clone());
                             self.sync_arguments_after_param_write(env, name, &next);
                             self.sync_global_binding_if_needed(env, name, &next);
-                            self.sync_scheduled_task_captures_for_binding(name, &next);
+                            self.sync_scheduled_task_captures_for_binding_if_escaping(
+                                env, name, &next,
+                            );
                         }
                         Stmt::ArrayDestructureAssign {
                             pattern,
@@ -3166,7 +3172,11 @@ impl Harness {
                                     }
                                 }
                                 self.sync_global_binding_if_needed(env, target_name, &next);
-                                self.sync_scheduled_task_captures_for_binding(target_name, &next);
+                                self.sync_scheduled_task_captures_for_binding_if_escaping(
+                                    env,
+                                    target_name,
+                                    &next,
+                                );
                             }
                             if let Some(rest_name) = &pattern.rest {
                                 if !is_declaration {
@@ -3194,7 +3204,9 @@ impl Harness {
                                     }
                                 }
                                 self.sync_global_binding_if_needed(env, rest_name, &next);
-                                self.sync_scheduled_task_captures_for_binding(rest_name, &next);
+                                self.sync_scheduled_task_captures_for_binding_if_escaping(
+                                    env, rest_name, &next,
+                                );
                             }
                         }
                         Stmt::ObjectDestructureAssign {
@@ -3240,7 +3252,11 @@ impl Harness {
                                     }
                                 }
                                 self.sync_global_binding_if_needed(env, target_name, &next);
-                                self.sync_scheduled_task_captures_for_binding(target_name, &next);
+                                self.sync_scheduled_task_captures_for_binding_if_escaping(
+                                    env,
+                                    target_name,
+                                    &next,
+                                );
                             }
                             if let Some(rest_name) = &pattern.rest {
                                 if !is_declaration {
@@ -3278,7 +3294,9 @@ impl Harness {
                                     }
                                 }
                                 self.sync_global_binding_if_needed(env, rest_name, &next);
-                                self.sync_scheduled_task_captures_for_binding(rest_name, &next);
+                                self.sync_scheduled_task_captures_for_binding_if_escaping(
+                                    env, rest_name, &next,
+                                );
                             }
                         }
                         Stmt::ObjectAssign {

@@ -63,6 +63,11 @@ impl Dom {
             NodeType::Element(_) => {}
         }
 
+        let removed_ids = self.nodes[node_id.0]
+            .children
+            .iter()
+            .copied()
+            .any(|child| self.subtree_contains_nonempty_id(child));
         let old_children = std::mem::take(&mut self.nodes[node_id.0].children);
         for child in old_children {
             self.nodes[child.0].parent = None;
@@ -70,7 +75,9 @@ impl Dom {
         if !value.is_empty() {
             self.create_text(node_id, value.to_string());
         }
-        self.rebuild_id_index();
+        if removed_ids {
+            self.rebuild_id_index();
+        }
         Ok(())
     }
 
@@ -118,6 +125,16 @@ impl Dom {
 
         let context_tag = self.tag_name(node_id).map(|tag| tag.to_string());
         let fragment = self.parse_html_fragment_for_context(html, context_tag.as_deref())?;
+        let removed_ids = self.nodes[node_id.0]
+            .children
+            .iter()
+            .copied()
+            .any(|child| self.subtree_contains_nonempty_id(child));
+        let added_ids = fragment.nodes[fragment.root.0]
+            .children
+            .iter()
+            .copied()
+            .any(|child| fragment.subtree_contains_nonempty_id(child));
 
         let old_children = std::mem::take(&mut self.nodes[node_id.0].children);
         for child in old_children {
@@ -130,7 +147,9 @@ impl Dom {
         }
 
         self.normalize_implied_table_bodies()?;
-        self.rebuild_id_index();
+        if removed_ids || added_ids {
+            self.rebuild_id_index();
+        }
         self.sync_select_values_including_subtree(node_id)?;
         Ok(())
     }
@@ -166,6 +185,12 @@ impl Dom {
 
         let context_tag = self.tag_name(parent).map(|tag| tag.to_string());
         let fragment = self.parse_html_fragment_for_context(html, context_tag.as_deref())?;
+        let removed_ids = self.subtree_contains_nonempty_id(node_id);
+        let added_ids = fragment.nodes[fragment.root.0]
+            .children
+            .iter()
+            .copied()
+            .any(|child| fragment.subtree_contains_nonempty_id(child));
 
         self.nodes[parent.0].children.remove(index);
         self.nodes[node_id.0].parent = None;
@@ -181,7 +206,9 @@ impl Dom {
         }
 
         self.normalize_implied_table_bodies()?;
-        self.rebuild_id_index();
+        if removed_ids || added_ids {
+            self.rebuild_id_index();
+        }
         self.sync_select_values_including_subtree(parent)?;
         Ok(())
     }

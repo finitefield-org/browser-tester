@@ -439,9 +439,18 @@ impl Harness {
         let Some(shared_env) = frame.shared_env.as_ref() else {
             return;
         };
+        let allow_local_bindings = frame.shared_env_owned_by_scope;
+        let restricted_names =
+            (!allow_local_bindings).then(|| Self::env_local_or_lexical_binding_names(env));
+        let is_restricted_name = |name: &str| {
+            restricted_names
+                .as_ref()
+                .is_some_and(|names| names.contains(name))
+        };
         let effective_value = |name: &str| match frame.pending_env_updates.get(name) {
             Some(Some(value)) => Some(value),
             Some(None) => None,
+            None if is_restricted_name(name) => None,
             None => env.get(name),
         };
         let mut changed_entries = Vec::new();
@@ -468,12 +477,18 @@ impl Harness {
             let Some(next) = next else {
                 continue;
             };
+            if is_restricted_name(name) {
+                continue;
+            }
             if Self::is_internal_env_key(name) || shared_snapshot.contains_key(name) {
                 continue;
             }
             added.push((name.clone(), next.clone()));
         }
         for (name, next) in env {
+            if is_restricted_name(name) {
+                continue;
+            }
             if Self::is_internal_env_key(name)
                 || shared_snapshot.contains_key(name)
                 || frame.pending_env_updates.contains_key(name)

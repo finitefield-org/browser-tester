@@ -1062,19 +1062,18 @@ pub(crate) fn collect_top_level_if_branch_candidate_ends(src: &str) -> Vec<usize
         let b = bytes[current];
         let was_top_level = scanner.is_top_level();
         i = scanner.advance(bytes, i);
-        if !was_top_level {
-            continue;
-        }
+        let is_top_level = scanner.is_top_level();
 
         match b {
-            b';' => out.push(i),
+            b';' if was_top_level => out.push(i),
             b'}' => {
-                if scanner.is_top_level() {
+                if is_top_level {
                     out.push(i);
                 }
             }
             b'e' => {
-                if current + 4 <= bytes.len()
+                if was_top_level
+                    && current + 4 <= bytes.len()
                     && &bytes[current..current + 4] == b"else"
                     && (current == 0 || !is_ident_char(bytes[current - 1]))
                     && (current + 4 == bytes.len() || !is_ident_char(bytes[current + 4]))
@@ -1172,6 +1171,32 @@ pub(crate) fn parse_if_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut else_raw = None;
     let mut branch_error = None;
 
+    if tail.starts_with('{') {
+        let mut branch_cursor = Cursor::new(tail);
+        if branch_cursor.read_balanced_block(b'{', b'}').is_ok() {
+            branch_cursor.skip_ws();
+            branch_cursor.consume_byte(b';');
+            branch_cursor.skip_ws();
+
+            let candidate_then = tail[..branch_cursor.i].trim_end();
+            let rest = tail[branch_cursor.i..].trim_start();
+            if parse_if_branch(candidate_then).is_ok() {
+                if rest.is_empty() {
+                    then_raw = Some(candidate_then);
+                    else_raw = None;
+                } else if let Some(candidate_else) = strip_else_prefix(rest) {
+                    match parse_if_branch(candidate_else) {
+                        Ok(_) => {
+                            then_raw = Some(candidate_then);
+                            else_raw = Some(candidate_else);
+                        }
+                        Err(err) => branch_error = Some(err),
+                    }
+                }
+            }
+        }
+    }
+
     for end in collect_top_level_if_branch_candidate_ends(tail) {
         let Some(candidate_then) = tail.get(..end) else {
             continue;
@@ -1229,6 +1254,117 @@ pub(crate) fn parse_if_stmt(stmt: &str) -> Result<Option<Stmt>> {
         then_stmts,
         else_stmts,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_if_stmt_accepts_else_if_branch_with_array_destructure_assignment() {
+        let stmt = r#"if (action === "duplicate") {
+              state.rows.splice(index + 1, 0, createRow(state.rows[index]));
+            } else if (action === "delete") {
+              if (state.rows.length === 1) {
+                state.rows[0] = createRow();
+              } else {
+                state.rows.splice(index, 1);
+              }
+            } else if (action === "up" && index > 0) {
+              [state.rows[index - 1], state.rows[index]] = [state.rows[index], state.rows[index - 1]];
+            } else if (action === "down" && index < state.rows.length - 1) {
+              [state.rows[index + 1], state.rows[index]] = [state.rows[index], state.rows[index + 1]];
+            }"#;
+
+        let parsed = parse_if_stmt(stmt).expect("parser should not fail");
+        assert!(parsed.is_some(), "expected if statement to parse");
+    }
+
+    #[test]
+    fn parse_if_stmt_accepts_else_if_pair_with_array_destructure_assignment() {
+        let stmt = r#"if (action === "up" && index > 0) {
+              [state.rows[index - 1], state.rows[index]] = [state.rows[index], state.rows[index - 1]];
+            } else if (action === "down" && index < state.rows.length - 1) {
+              [state.rows[index + 1], state.rows[index]] = [state.rows[index], state.rows[index + 1]];
+            }"#;
+
+        let parsed = parse_if_stmt(stmt).expect("parser should not fail");
+        assert!(parsed.is_some(), "expected if statement to parse");
+    }
+
+    #[test]
+    fn parse_if_stmt_accepts_nested_if_block_before_else_if_pair() {
+        let stmt = r#"if (action === "delete") {
+              if (state.rows.length === 1) {
+                state.rows[0] = createRow();
+              } else {
+                state.rows.splice(index, 1);
+              }
+            } else if (action === "up" && index > 0) {
+              [state.rows[index - 1], state.rows[index]] = [state.rows[index], state.rows[index - 1]];
+            } else if (action === "down" && index < state.rows.length - 1) {
+              [state.rows[index + 1], state.rows[index]] = [state.rows[index], state.rows[index + 1]];
+            }"#;
+
+        let parsed = parse_if_stmt(stmt).expect("parser should not fail");
+        assert!(parsed.is_some(), "expected if statement to parse");
+    }
+
+    #[test]
+    fn parse_for_stmt_accepts_for_of_with_array_destructuring_binding() {
+        let stmt = r#"for (const [key, value] of entries) {
+              output.push(key + ":" + value);
+            }"#;
+
+        let parsed = parse_for_stmt(stmt).expect("parser should not fail");
+        match parsed {
+            Some(Stmt::ForOf { item_var, body, .. }) => {
+                assert!(
+                    item_var.starts_with("__bt_for_in_of_binding_"),
+                    "destructuring loop should lower through an internal temp binding"
+                );
+                assert!(
+                    matches!(
+                        body.first(),
+                        Some(Stmt::ArrayDestructureAssign {
+                            decl_kind: Some(VarDeclKind::Const),
+                            ..
+                        })
+                    ),
+                    "loop body should start with array destructuring declaration"
+                );
+            }
+            other => panic!("expected for...of statement, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_for_stmt_accepts_for_of_with_object_destructuring_binding() {
+        let stmt = r#"for ({ value, unit: displayUnit } of rows) {
+              output.push(value + displayUnit);
+            }"#;
+
+        let parsed = parse_for_stmt(stmt).expect("parser should not fail");
+        match parsed {
+            Some(Stmt::ForOf { item_var, body, .. }) => {
+                assert!(
+                    item_var.starts_with("__bt_for_in_of_binding_"),
+                    "destructuring loop should lower through an internal temp binding"
+                );
+                assert!(
+                    matches!(
+                        body.first(),
+                        Some(Stmt::ObjectDestructureAssign {
+                            decl_kind: None,
+                            ..
+                        })
+                    ),
+                    "loop body should start with object destructuring assignment"
+                );
+            }
+            other => panic!("expected for...of statement, got {other:?}"),
+        }
+    }
 }
 
 pub(crate) fn parse_while_stmt(stmt: &str) -> Result<Option<Stmt>> {
@@ -1768,6 +1904,7 @@ pub(crate) fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let header_src = cursor.read_balanced_block(b'(', b')')?;
     let header_src = header_src.trim();
     let header_parts = split_top_level_by_char(header_src, b';');
+    let mut body_prologue = Vec::new();
 
     let parsed_for = if is_for_await {
         if header_parts.len() != 1 {
@@ -1775,7 +1912,7 @@ pub(crate) fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
                 "for await statement requires an of-clause: {stmt}"
             )));
         }
-        let Some((kind, item_var, iterable_src)) = parse_for_in_of_stmt(header_src)? else {
+        let Some((kind, binding, iterable_src)) = parse_for_in_of_stmt(header_src)? else {
             return Err(Error::ScriptParse(format!(
                 "for await statement requires an of-clause: {stmt}"
             )));
@@ -1785,9 +1922,10 @@ pub(crate) fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
                 "for await statement only supports of: {stmt}"
             )));
         }
+        body_prologue = binding.body_prologue;
         let iterable = parse_expr(iterable_src.trim())?;
         Stmt::ForAwaitOf {
-            item_var,
+            item_var: binding.item_var,
             iterable,
             body: Vec::new(),
         }
@@ -1807,11 +1945,13 @@ pub(crate) fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
             body: Vec::new(),
         }
     } else if header_parts.len() == 1 {
-        let Some((kind, item_var, iterable_src)) = parse_for_in_of_stmt(header_src)? else {
+        let Some((kind, binding, iterable_src)) = parse_for_in_of_stmt(header_src)? else {
             return Err(Error::ScriptParse(format!(
                 "unsupported for statement: {stmt}"
             )));
         };
+        body_prologue = binding.body_prologue;
+        let item_var = binding.item_var;
         if kind == ForInOfKind::Of && item_var == "async" {
             return Err(Error::ScriptParse(
                 "The left-hand side of a for-of loop may not be 'async'".into(),
@@ -1843,7 +1983,12 @@ pub(crate) fn parse_for_stmt(stmt: &str) -> Result<Option<Stmt>> {
             "for statement has no body: {stmt}"
         )));
     }
-    let body = parse_if_branch(body_raw)?;
+    let mut body = parse_if_branch(body_raw)?;
+    if !body_prologue.is_empty() {
+        let mut combined = body_prologue;
+        combined.extend(body);
+        body = combined;
+    }
 
     let stmt = match parsed_for {
         Stmt::For {
@@ -1886,7 +2031,13 @@ enum ForInOfKind {
     Of,
 }
 
-fn parse_for_in_of_stmt(header: &str) -> Result<Option<(ForInOfKind, String, &str)>> {
+#[derive(Debug, Clone)]
+struct ForInOfBinding {
+    item_var: String,
+    body_prologue: Vec<Stmt>,
+}
+
+fn parse_for_in_of_stmt(header: &str) -> Result<Option<(ForInOfKind, ForInOfBinding, &str)>> {
     let header = header.trim();
     if header.is_empty() {
         return Ok(None);
@@ -1914,8 +2065,69 @@ fn parse_for_in_of_stmt(header: &str) -> Result<Option<(ForInOfKind, String, &st
         )));
     }
 
-    let item_var = parse_for_in_of_var(left)?;
-    Ok(Some((kind, item_var, right)))
+    let binding = parse_for_in_of_binding(left, header)?;
+    Ok(Some((kind, binding, right)))
+}
+
+fn parse_for_in_of_binding(raw: &str, scope_src: &str) -> Result<ForInOfBinding> {
+    let (decl_kind, binding_src) = parse_for_in_of_binding_prefix(raw);
+    let binding_src = binding_src.trim();
+    if binding_src.starts_with('[') {
+        let item_var = fresh_for_in_of_binding_temp_name(scope_src);
+        return Ok(ForInOfBinding {
+            item_var: item_var.clone(),
+            body_prologue: vec![Stmt::ArrayDestructureAssign {
+                pattern: parse_array_destructure_assignment_pattern(binding_src)?,
+                expr: Expr::Var(item_var),
+                decl_kind,
+            }],
+        });
+    }
+    if binding_src.starts_with('{') {
+        let item_var = fresh_for_in_of_binding_temp_name(scope_src);
+        return Ok(ForInOfBinding {
+            item_var: item_var.clone(),
+            body_prologue: vec![Stmt::ObjectDestructureAssign {
+                pattern: parse_object_destructure_assignment_pattern(binding_src)?,
+                expr: Expr::Var(item_var),
+                decl_kind,
+            }],
+        });
+    }
+
+    Ok(ForInOfBinding {
+        item_var: parse_for_in_of_var(raw)?,
+        body_prologue: Vec::new(),
+    })
+}
+
+fn parse_for_in_of_binding_prefix(raw: &str) -> (Option<VarDeclKind>, &str) {
+    let raw = raw.trim();
+    for (keyword, kind) in [
+        ("const", VarDeclKind::Const),
+        ("let", VarDeclKind::Let),
+        ("var", VarDeclKind::Var),
+    ] {
+        let Some(after) = raw.strip_prefix(keyword) else {
+            continue;
+        };
+        if after.as_bytes().first().is_some_and(|b| is_ident_char(*b)) {
+            continue;
+        }
+        return (Some(kind), after.trim_start());
+    }
+    (None, raw)
+}
+
+fn fresh_for_in_of_binding_temp_name(scope_src: &str) -> String {
+    let mut index = 0usize;
+    loop {
+        let candidate = format!("__bt_for_in_of_binding_{index}");
+        if !scope_src.contains(&candidate) {
+            return candidate;
+        }
+        index += 1;
+    }
 }
 
 pub(crate) fn find_top_level_in_of_keyword(src: &str, keyword: &str) -> Result<Option<usize>> {

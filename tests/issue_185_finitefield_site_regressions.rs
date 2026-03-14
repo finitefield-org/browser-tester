@@ -1,8 +1,8 @@
 use browser_tester::Harness;
 
 #[test]
-fn issue_185_inline_object_literal_computed_lookup_returns_selected_value(
-) -> browser_tester::Result<()> {
+fn issue_185_inline_object_literal_computed_lookup_returns_selected_value()
+-> browser_tester::Result<()> {
     let html = r#"
       <div id="out"></div>
       <script>
@@ -27,8 +27,8 @@ fn issue_185_inline_object_literal_computed_lookup_returns_selected_value(
 }
 
 #[test]
-fn issue_185_inline_object_literal_lookup_survives_template_interpolation(
-) -> browser_tester::Result<()> {
+fn issue_185_inline_object_literal_lookup_survives_template_interpolation()
+-> browser_tester::Result<()> {
     let html = r#"
       <pre id="out"></pre>
       <script>

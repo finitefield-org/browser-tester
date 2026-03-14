@@ -694,13 +694,13 @@ pub(crate) fn parse_typed_array_expr(src: &str) -> Result<Option<Expr>> {
             "of" => TypedArrayStaticMethod::Of,
             _ => return Ok(None),
         };
-        if matches!(method, TypedArrayStaticMethod::From)
-            && (args.len() != 1 || args[0].trim().is_empty())
-        {
-            return Err(Error::ScriptParse(format!(
-                "{}.from requires exactly one argument",
-                constructor_name
-            )));
+        if matches!(method, TypedArrayStaticMethod::From) {
+            if args.is_empty() || args.len() > 3 || args[0].trim().is_empty() {
+                return Err(Error::ScriptParse(format!(
+                    "{}.from requires a source argument and supports at most mapFn/thisArg",
+                    constructor_name
+                )));
+            }
         }
         let mut parsed = Vec::with_capacity(args.len());
         for arg in args {

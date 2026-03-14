@@ -1,8 +1,8 @@
 use browser_tester::Harness;
 
 #[test]
-fn issue_174_datetimeformat_accepts_chicago_and_formats_cross_zone_results(
-) -> browser_tester::Result<()> {
+fn issue_174_datetimeformat_accepts_chicago_and_formats_cross_zone_results()
+-> browser_tester::Result<()> {
     let html = r#"
       <pre id="out"></pre>
       <script>
@@ -49,8 +49,8 @@ fn issue_174_datetimeformat_accepts_chicago_and_formats_cross_zone_results(
 }
 
 #[test]
-fn issue_175_datetimeformat_surfaces_new_york_dst_nonexistent_and_ambiguous_times(
-) -> browser_tester::Result<()> {
+fn issue_175_datetimeformat_surfaces_new_york_dst_nonexistent_and_ambiguous_times()
+-> browser_tester::Result<()> {
     let html = r#"
       <pre id="out"></pre>
       <script>

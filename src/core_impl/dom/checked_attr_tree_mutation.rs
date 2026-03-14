@@ -611,12 +611,17 @@ impl Dom {
             cursor = self.parent(node);
         }
 
-        if let Some(old_parent) = self.parent(child) {
+        let old_parent = self.parent(child);
+        let child_has_ids = self.subtree_contains_nonempty_id(child);
+        if let Some(old_parent) = old_parent {
             self.nodes[old_parent.0].children.retain(|id| *id != child);
         }
         self.nodes[child.0].parent = Some(parent);
         self.nodes[parent.0].children.push(child);
-        self.rebuild_id_index();
+        if child_has_ids {
+            self.rebuild_id_index();
+        }
+        self.sync_selects_affected_by_tree_mutation(parent, child, old_parent)?;
         Ok(())
     }
 
@@ -679,7 +684,9 @@ impl Dom {
             cursor = self.parent(node);
         }
 
-        if let Some(old_parent) = self.parent(child) {
+        let old_parent = self.parent(child);
+        let child_has_ids = self.subtree_contains_nonempty_id(child);
+        if let Some(old_parent) = old_parent {
             self.nodes[old_parent.0].children.retain(|id| *id != child);
         }
 
@@ -695,7 +702,10 @@ impl Dom {
 
         self.nodes[child.0].parent = Some(parent);
         self.nodes[parent.0].children.insert(index, child);
-        self.rebuild_id_index();
+        if child_has_ids {
+            self.rebuild_id_index();
+        }
+        self.sync_selects_affected_by_tree_mutation(parent, child, old_parent)?;
         Ok(())
     }
 
@@ -764,7 +774,10 @@ impl Dom {
             cursor = self.parent(node);
         }
 
-        if let Some(old_parent) = self.parent(new_child) {
+        let moved_from_parent = self.parent(new_child);
+        let new_child_has_ids = self.subtree_contains_nonempty_id(new_child);
+        let old_child_has_ids = self.subtree_contains_nonempty_id(old_child);
+        if let Some(old_parent) = moved_from_parent {
             self.nodes[old_parent.0]
                 .children
                 .retain(|id| *id != new_child);
@@ -779,7 +792,11 @@ impl Dom {
         self.nodes[new_child.0].parent = Some(parent);
         self.nodes[parent.0].children[index] = new_child;
         self.nodes[old_child.0].parent = None;
-        self.rebuild_id_index();
+        if new_child_has_ids || old_child_has_ids {
+            self.rebuild_id_index();
+        }
+        self.sync_selects_affected_by_tree_mutation(parent, new_child, moved_from_parent)?;
+        self.sync_selects_affected_by_tree_mutation(parent, old_child, Some(parent))?;
         Ok(())
     }
 
@@ -808,9 +825,13 @@ impl Dom {
                 "removeChild target is not a direct child".into(),
             ));
         }
+        let child_has_ids = self.subtree_contains_nonempty_id(child);
         self.nodes[parent.0].children.retain(|id| *id != child);
         self.nodes[child.0].parent = None;
-        self.rebuild_id_index();
+        if child_has_ids {
+            self.rebuild_id_index();
+        }
+        self.sync_selects_affected_by_tree_mutation(parent, child, Some(parent))?;
         Ok(())
     }
 
@@ -822,5 +843,77 @@ impl Dom {
             return Ok(());
         };
         self.remove_child(parent, node)
+    }
+
+    fn sync_selects_affected_by_tree_mutation(
+        &mut self,
+        parent: NodeId,
+        child: NodeId,
+        old_parent: Option<NodeId>,
+    ) -> Result<()> {
+        let mut selects = Vec::new();
+        let mut selected_options = Vec::new();
+        self.push_select_node_or_ancestor(parent, &mut selects);
+        self.push_select_node_or_ancestor(child, &mut selects);
+        self.collect_select_descendants(child, &mut selects);
+        self.collect_selected_option_descendants(child, &mut selected_options);
+        if let Some(old_parent) = old_parent {
+            self.push_select_node_or_ancestor(old_parent, &mut selects);
+        }
+        for option in selected_options {
+            self.sync_select_value_for_option(option)?;
+        }
+        selects.sort_unstable_by_key(|node| node.0);
+        selects.dedup();
+        for select in selects {
+            self.sync_select_value(select)?;
+        }
+        Ok(())
+    }
+
+    fn push_select_node_or_ancestor(&self, node: NodeId, out: &mut Vec<NodeId>) {
+        if !self.is_valid_node(node) {
+            return;
+        }
+        if self
+            .tag_name(node)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("select"))
+        {
+            out.push(node);
+        }
+        if let Some(select) = self.find_ancestor_by_tag(node, "select") {
+            out.push(select);
+        }
+    }
+
+    fn collect_select_descendants(&self, node: NodeId, out: &mut Vec<NodeId>) {
+        if !self.is_valid_node(node) {
+            return;
+        }
+        for child in self.nodes[node.0].children.iter().copied() {
+            if self
+                .tag_name(child)
+                .is_some_and(|tag| tag.eq_ignore_ascii_case("select"))
+            {
+                out.push(child);
+            }
+            self.collect_select_descendants(child, out);
+        }
+    }
+
+    fn collect_selected_option_descendants(&self, node: NodeId, out: &mut Vec<NodeId>) {
+        if !self.is_valid_node(node) {
+            return;
+        }
+        if self
+            .tag_name(node)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("option"))
+            && self.element(node).is_some_and(|element| element.selected)
+        {
+            out.push(node);
+        }
+        for child in self.nodes[node.0].children.iter().copied() {
+            self.collect_selected_option_descendants(child, out);
+        }
     }
 }

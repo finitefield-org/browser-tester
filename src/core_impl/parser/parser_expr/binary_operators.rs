@@ -533,9 +533,6 @@ pub(crate) fn parse_add_expr(src: &str) -> Result<Expr> {
     if src.len() != trimmed.len() {
         return parse_expr(src);
     }
-    if let Some(update) = parse_update_expr(src)? {
-        return Ok(update);
-    }
     let (parts, ops) = split_top_level_add_sub(src);
     if ops.is_empty() {
         return parse_mul_expr(src);
