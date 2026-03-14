@@ -2,6 +2,45 @@ use super::*;
 use unicode_normalization::UnicodeNormalization;
 
 impl Harness {
+    fn array_flat_depth_arg(value: Option<&Value>) -> usize {
+        let Some(value) = value else {
+            return 1;
+        };
+        let depth = Self::coerce_number_for_global(value);
+        if depth.is_nan() || depth <= 0.0 {
+            0
+        } else if !depth.is_finite() {
+            usize::MAX
+        } else {
+            depth.floor().min(usize::MAX as f64) as usize
+        }
+    }
+
+    fn flatten_array_value_into(out: &mut Vec<Value>, value: Value, depth: usize) {
+        match value {
+            Value::Array(values) if depth > 0 => {
+                let snapshot = {
+                    let values = values.borrow();
+                    ArrayValue {
+                        elements: values.elements.clone(),
+                        properties: values.properties.clone(),
+                    }
+                };
+                for index in 0..snapshot.len() {
+                    if Self::array_index_is_hole(&snapshot, index) {
+                        continue;
+                    }
+                    Self::flatten_array_value_into(
+                        out,
+                        snapshot[index].clone(),
+                        depth.saturating_sub(1),
+                    );
+                }
+            }
+            other => out.push(other),
+        }
+    }
+
     pub(crate) fn eval_date_member_call(
         &mut self,
         value: &Rc<RefCell<i64>>,
@@ -1086,6 +1125,29 @@ impl Harness {
                         ],
                         event,
                     )?);
+                }
+                Self::new_array_value(out)
+            }
+            "flat" => {
+                if evaluated_args.len() > 1 {
+                    return Err(Error::ScriptRuntime(
+                        "flat supports zero or one argument".into(),
+                    ));
+                }
+                let snapshot = {
+                    let values = values.borrow();
+                    ArrayValue {
+                        elements: values.elements.clone(),
+                        properties: values.properties.clone(),
+                    }
+                };
+                let depth = Self::array_flat_depth_arg(evaluated_args.first());
+                let mut out = Vec::new();
+                for index in 0..snapshot.len() {
+                    if Self::array_index_is_hole(&snapshot, index) {
+                        continue;
+                    }
+                    Self::flatten_array_value_into(&mut out, snapshot[index].clone(), depth);
                 }
                 Self::new_array_value(out)
             }

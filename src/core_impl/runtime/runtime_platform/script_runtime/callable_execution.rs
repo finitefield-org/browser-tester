@@ -18,6 +18,47 @@ enum TopLevelAwaitOutcome {
 }
 
 impl Harness {
+    fn css_escape_identifier(input: &str) -> String {
+        let chars: Vec<char> = input.chars().collect();
+        let mut out = String::new();
+
+        for (index, ch) in chars.iter().copied().enumerate() {
+            let code = ch as u32;
+            let is_digit = ch.is_ascii_digit();
+            let is_letter = ch.is_ascii_alphabetic();
+            let is_allowed = code >= 0x80 || is_digit || is_letter || matches!(ch, '-' | '_');
+
+            if code == 0 {
+                out.push('\u{fffd}');
+                continue;
+            }
+
+            if (code <= 0x1f)
+                || code == 0x7f
+                || (index == 0 && is_digit)
+                || (index == 1 && is_digit && chars.first() == Some(&'-'))
+            {
+                out.push('\\');
+                out.push_str(&format!("{code:x} "));
+                continue;
+            }
+
+            if index == 0 && ch == '-' && chars.len() == 1 {
+                out.push_str("\\-");
+                continue;
+            }
+
+            if is_allowed {
+                out.push(ch);
+            } else {
+                out.push('\\');
+                out.push(ch);
+            }
+        }
+
+        out
+    }
+
     fn has_simple_parameter_list(handler: &ScriptHandler) -> bool {
         handler.params.iter().all(|param| {
             !param.is_rest
@@ -6199,6 +6240,16 @@ impl Harness {
                             ));
                         }
                         Self::structured_clone_value_with_options(&args[0], args.get(1))
+                    }
+                    "global_css_escape" => {
+                        if args.len() != 1 {
+                            return Err(Error::ScriptRuntime(
+                                "CSS.escape requires exactly one argument".into(),
+                            ));
+                        }
+                        Ok(Value::String(Self::css_escape_identifier(
+                            &args[0].as_string(),
+                        )))
                     }
                     "global_request_animation_frame" => {
                         if args.is_empty() {

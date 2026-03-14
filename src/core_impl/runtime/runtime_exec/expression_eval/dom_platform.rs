@@ -2074,18 +2074,13 @@ impl Harness {
     }
 
     fn document_active_element_property_value(&self) -> Value {
-        if let Some(active) = self.dom.active_element() {
-            if self.dom.is_connected(active) {
-                return Value::Node(active);
-            }
-        }
-        if let Some(body) = self.dom.body() {
-            return Value::Node(body);
-        }
-        if let Some(document_element) = self.dom.document_element() {
-            return Value::Node(document_element);
-        }
-        Value::Null
+        self.dom
+            .active_element()
+            .filter(|node| self.dom.is_connected(*node))
+            .or_else(|| self.dom.body())
+            .or_else(|| self.dom.document_element())
+            .map(Value::Node)
+            .unwrap_or(Value::Null)
     }
 
     pub(crate) fn node_type_number(&self, node: NodeId) -> i64 {

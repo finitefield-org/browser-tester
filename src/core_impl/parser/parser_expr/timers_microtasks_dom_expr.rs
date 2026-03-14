@@ -184,6 +184,7 @@ fn is_known_non_dom_global_name(name: &str) -> bool {
             | "Number"
             | "BigInt"
             | "Symbol"
+            | "CSS"
             | "Function"
             | "GeneratorFunction"
             | "AsyncGeneratorFunction"
@@ -259,6 +260,17 @@ pub(crate) fn parse_dom_access(src: &str) -> Result<Option<(DomQuery, DomProp)>>
     };
 
     let nested = parse_dom_property_segment(&mut cursor)?;
+    let (target, head, nested) = if matches!(target, DomQuery::DocumentRoot)
+        && head == "activeElement"
+        && nested.is_some()
+    {
+        let nested_head = nested
+            .clone()
+            .expect("activeElement nested property should exist");
+        (DomQuery::ActiveElement, nested_head, None)
+    } else {
+        (target, head, nested)
+    };
 
     cursor.skip_ws();
     if !cursor.eof() {

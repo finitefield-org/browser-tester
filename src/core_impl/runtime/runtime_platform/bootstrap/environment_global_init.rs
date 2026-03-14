@@ -173,6 +173,10 @@ impl Harness {
         let location = Value::Object(self.dom_runtime.location_object.clone());
         let history = Value::Object(self.location_history.history_object.clone());
         let navigation = Value::Object(self.location_history.navigation_object.clone());
+        let css = Self::new_object_value(vec![(
+            "escape".into(),
+            Self::new_global_css_escape_callable(),
+        )]);
 
         let navigator = Self::new_object_value(vec![
             (INTERNAL_NAVIGATOR_OBJECT_KEY.into(), Value::Bool(true)),
@@ -899,6 +903,11 @@ impl Harness {
 
         let window = Value::Object(self.dom_runtime.window_object.clone());
         let document = Value::Object(self.dom_runtime.document_object.clone());
+        Self::object_set_entry(
+            &mut self.dom_runtime.window_object.borrow_mut(),
+            "CSS".to_string(),
+            css.clone(),
+        );
 
         self.script_runtime
             .env
@@ -912,6 +921,7 @@ impl Harness {
         self.script_runtime
             .env
             .insert("clientInformation".to_string(), navigator.clone());
+        self.script_runtime.env.insert("CSS".to_string(), css);
         self.script_runtime.env.insert("Intl".to_string(), intl);
         for (name, value) in core_constructor_bindings {
             self.script_runtime.env.insert(name, value);

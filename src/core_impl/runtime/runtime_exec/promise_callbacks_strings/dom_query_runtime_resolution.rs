@@ -1,6 +1,18 @@
 use super::*;
 
 impl Harness {
+    pub(crate) fn document_active_element_node(&mut self) -> Result<Option<NodeId>> {
+        if let Some(active) = self.dom.active_element() {
+            if self.dom.is_connected(active) {
+                return Ok(Some(active));
+            }
+        }
+        if let Some(body) = self.dom.body() {
+            return Ok(Some(body));
+        }
+        Ok(self.dom.document_element())
+    }
+
     fn map_selector_api_result<T>(&self, result: Result<T>) -> Result<T> {
         match result {
             Ok(value) => Ok(value),
@@ -300,6 +312,7 @@ impl Harness {
             DomQuery::DocumentBody => Ok(Some(self.dom.ensure_document_body_element()?)),
             DomQuery::DocumentHead => Ok(self.dom.head()),
             DomQuery::DocumentElement => Ok(self.dom.document_element()),
+            DomQuery::ActiveElement => self.document_active_element_node(),
             DomQuery::ById(id) => Ok(self.dom.by_id(id)),
             DomQuery::BySelector(selector) => {
                 self.map_selector_api_result(self.dom.query_selector(selector))
@@ -369,6 +382,7 @@ impl Harness {
             DomQuery::DocumentBody => Ok(Some(self.dom.ensure_document_body_element()?)),
             DomQuery::DocumentHead => Ok(self.dom.head()),
             DomQuery::DocumentElement => Ok(self.dom.document_element()),
+            DomQuery::ActiveElement => self.document_active_element_node(),
             DomQuery::Var(name) => match env.get(name) {
                 Some(Value::Node(node)) => Ok(Some(*node)),
                 Some(Value::Object(entries)) => {

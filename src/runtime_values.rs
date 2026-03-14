@@ -1217,6 +1217,7 @@ pub(crate) enum DomQuery {
     DocumentBody,
     DocumentHead,
     DocumentElement,
+    ActiveElement,
     ById(String),
     BySelector(String),
     BySelectorAll {
@@ -1270,6 +1271,7 @@ impl DomQuery {
             Self::DocumentBody => "document.body".into(),
             Self::DocumentHead => "document.head".into(),
             Self::DocumentElement => "document.documentElement".into(),
+            Self::ActiveElement => "document.activeElement".into(),
             Self::ById(id) => format!("document.getElementById('{id}')"),
             Self::BySelector(selector) => format!("document.querySelector('{selector}')"),
             Self::BySelectorAll { selector } => format!("document.querySelectorAll('{selector}')"),

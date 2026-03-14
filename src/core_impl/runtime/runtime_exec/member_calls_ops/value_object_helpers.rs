@@ -4554,6 +4554,13 @@ impl Harness {
         )])
     }
 
+    pub(crate) fn new_global_css_escape_callable() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("global_css_escape".to_string()),
+        )])
+    }
+
     pub(crate) fn new_global_request_animation_frame_callable() -> Value {
         Self::new_object_value(vec![(
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
@@ -6928,6 +6935,7 @@ impl Harness {
             "window_print_function" => Some(("print", 0)),
             "window_report_error_function" => Some(("reportError", 1)),
             "window_prompt_function" => Some(("prompt", 0)),
+            "global_css_escape" => Some(("escape", 1)),
             "intl_collator_compare" => Some(("compare", 2)),
             "intl_date_time_format" => Some(("format", 1)),
             "intl_duration_format" => Some(("format", 1)),
@@ -8294,6 +8302,7 @@ impl Harness {
                 "global_decode_uri_component" => "global_decode_uri_component",
                 "global_atob" => "global_atob",
                 "global_btoa" => "global_btoa",
+                "global_css_escape" => "global_css_escape",
                 "global_structured_clone" => "global_structured_clone",
                 "global_request_animation_frame" => "global_request_animation_frame",
                 "global_set_timeout" => "global_set_timeout",
@@ -8405,6 +8414,7 @@ impl Harness {
             name,
             "forEach"
                 | "map"
+                | "flat"
                 | "flatMap"
                 | "filter"
                 | "reduce"
