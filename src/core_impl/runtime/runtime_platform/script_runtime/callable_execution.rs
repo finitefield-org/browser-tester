@@ -5074,6 +5074,7 @@ impl Harness {
                         )
                     }
                     "fetch_function" => self.eval_fetch_call_from_values(args),
+                    "match_media_function" => self.eval_match_media_call_from_values(args),
                     "window_close_function" => {
                         self.browser_apis.window_closed = true;
                         self.sync_window_runtime_properties();

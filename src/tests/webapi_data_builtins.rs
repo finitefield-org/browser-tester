@@ -3027,6 +3027,33 @@ fn match_media_uses_registered_mocks_and_records_calls() -> Result<()> {
 }
 
 #[test]
+fn window_match_media_is_exposed_as_function_for_typeof_checks() -> Result<()> {
+    let html = r#"
+        <button id='btn'>run</button>
+        <p id='result'></p>
+        <script>
+          document.getElementById('btn').addEventListener('click', () => {
+            const hasFn = typeof window.matchMedia === 'function';
+            const matches = hasFn
+              ? String(window.matchMedia('(max-width: 1079px)').matches)
+              : 'skipped';
+            document.getElementById('result').textContent = hasFn + ':' + matches;
+          });
+        </script>
+        "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_match_media_mock("(max-width: 1079px)", true);
+    h.click("#btn")?;
+    h.assert_text("#result", "true:true")?;
+    assert_eq!(
+        h.take_match_media_calls(),
+        vec!["(max-width: 1079px)".to_string()]
+    );
+    Ok(())
+}
+
+#[test]
 fn match_media_default_value_can_be_configured() -> Result<()> {
     let html = r#"
         <button id='btn'>run</button>

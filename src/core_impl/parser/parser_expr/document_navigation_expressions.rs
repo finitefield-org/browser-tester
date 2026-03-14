@@ -43,7 +43,9 @@ pub(crate) fn parse_document_create_element_expr(src: &str) -> Result<Option<Str
         return Ok(None);
     }
     cursor.skip_ws();
-    cursor.expect_byte(b'(')?;
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
     cursor.skip_ws();
     if !matches!(cursor.peek(), Some(b'\'') | Some(b'"')) {
         return Ok(None);
@@ -75,7 +77,9 @@ pub(crate) fn parse_document_create_text_node_expr(src: &str) -> Result<Option<S
         return Ok(None);
     }
     cursor.skip_ws();
-    cursor.expect_byte(b'(')?;
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
     cursor.skip_ws();
     if !matches!(cursor.peek(), Some(b'\'') | Some(b'"')) {
         return Ok(None);

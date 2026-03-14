@@ -48,6 +48,68 @@ fn object_url_anchor_downloads_are_recorded_with_metadata_and_count() -> Result<
 }
 
 #[test]
+fn data_url_anchor_downloads_are_recorded_with_metadata_and_bytes() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const csv = "\ufeffa,b\n1,2";
+            const anchor = document.createElement('a');
+            anchor.href = `data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`;
+            anchor.download = 'sample.csv';
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+          });
+        </script>
+    "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+
+    assert_eq!(
+        h.take_downloads(),
+        vec![DownloadArtifact {
+            filename: Some("sample.csv".to_string()),
+            mime_type: Some("text/csv".to_string()),
+            bytes: "\u{feff}a,b\n1,2".as_bytes().to_vec(),
+        }]
+    );
+    assert!(h.take_location_navigations().is_empty());
+    Ok(())
+}
+
+#[test]
+fn base64_data_url_anchor_downloads_are_recorded() -> Result<()> {
+    let html = r#"
+        <button id='run'>run</button>
+        <script>
+          document.getElementById('run').addEventListener('click', () => {
+            const anchor = document.createElement('a');
+            anchor.href = 'data:text/plain;base64,aGVsbG8=';
+            anchor.download = 'hello.txt';
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+          });
+        </script>
+    "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.click("#run")?;
+
+    assert_eq!(
+        h.take_downloads(),
+        vec![DownloadArtifact {
+            filename: Some("hello.txt".to_string()),
+            mime_type: Some("text/plain".to_string()),
+            bytes: b"hello".to_vec(),
+        }]
+    );
+    Ok(())
+}
+
+#[test]
 fn object_url_anchor_download_with_empty_filename_and_blank_target_captures_without_navigation()
 -> Result<()> {
     let html = r#"

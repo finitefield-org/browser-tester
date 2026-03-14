@@ -525,6 +525,69 @@ pub(crate) fn parse_template_literal(src: &str) -> Result<Expr> {
     Ok(Expr::Add(parts))
 }
 
+fn is_radix_digit(byte: u8, radix: u32) -> bool {
+    match radix {
+        2 => matches!(byte, b'0' | b'1'),
+        8 => matches!(byte, b'0'..=b'7'),
+        10 => byte.is_ascii_digit(),
+        16 => byte.is_ascii_hexdigit(),
+        _ => false,
+    }
+}
+
+fn normalize_digit_sequence(src: &str, radix: u32) -> Option<String> {
+    let bytes = src.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+
+    let mut normalized = String::with_capacity(src.len());
+    for (index, &byte) in bytes.iter().enumerate() {
+        if byte == b'_' {
+            let prev = index.checked_sub(1).and_then(|i| bytes.get(i)).copied();
+            let next = bytes.get(index + 1).copied();
+            if !prev.is_some_and(|value| is_radix_digit(value, radix))
+                || !next.is_some_and(|value| is_radix_digit(value, radix))
+            {
+                return None;
+            }
+            continue;
+        }
+
+        if !is_radix_digit(byte, radix) {
+            return None;
+        }
+        normalized.push((byte as char).to_ascii_lowercase());
+    }
+
+    Some(normalized)
+}
+
+fn normalize_decimal_mantissa(src: &str) -> Option<String> {
+    if let Some((integer, fraction)) = src.split_once('.') {
+        if fraction.contains('.') {
+            return None;
+        }
+        let integer = normalize_digit_sequence(integer, 10)?;
+        let fraction = if fraction.is_empty() {
+            String::new()
+        } else {
+            normalize_digit_sequence(fraction, 10)?
+        };
+        Some(format!("{integer}.{fraction}"))
+    } else {
+        normalize_digit_sequence(src, 10)
+    }
+}
+
+fn has_legacy_leading_zero_with_separator(integer_part: &str) -> bool {
+    if !integer_part.contains('_') {
+        return false;
+    }
+    let normalized = integer_part.replace('_', "");
+    normalized.len() > 1 && normalized.starts_with('0')
+}
+
 pub(crate) fn parse_numeric_literal(src: &str) -> Result<Option<Expr>> {
     if src.is_empty() {
         return Ok(None);
@@ -548,18 +611,51 @@ pub(crate) fn parse_numeric_literal(src: &str) -> Result<Option<Expr>> {
     }
 
     if src.as_bytes().iter().any(|b| matches!(b, b'e' | b'E')) {
+        let Some(exp_index) = src.as_bytes().iter().position(|b| matches!(b, b'e' | b'E')) else {
+            return Ok(None);
+        };
         if !matches!(src.as_bytes().first(), Some(b) if b.is_ascii_digit() || *b == b'.') {
             return Ok(None);
         }
         if src
             .as_bytes()
             .iter()
-            .any(|b| !matches!(b, b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-'))
+            .any(|b| !matches!(b, b'0'..=b'9' | b'_' | b'.' | b'e' | b'E' | b'+' | b'-'))
         {
             return Ok(None);
         }
+        if src[exp_index + 1..]
+            .as_bytes()
+            .iter()
+            .any(|b| matches!(b, b'e' | b'E'))
+        {
+            return Ok(None);
+        }
+        let mantissa_src = &src[..exp_index];
+        let exponent_src = &src[exp_index + 1..];
+        let exponent_sign = exponent_src
+            .chars()
+            .next()
+            .filter(|ch| matches!(ch, '+' | '-'))
+            .map(|ch| ch.to_string())
+            .unwrap_or_default();
+        let exponent_digits_src = &exponent_src[exponent_sign.len()..];
+        let integer_part = mantissa_src
+            .split_once('.')
+            .map(|(integer, _)| integer)
+            .unwrap_or(mantissa_src);
+        if has_legacy_leading_zero_with_separator(integer_part) {
+            return Err(Error::ScriptParse(format!(
+                "invalid numeric literal: {src}"
+            )));
+        }
+        let mantissa = normalize_decimal_mantissa(mantissa_src)
+            .ok_or_else(|| Error::ScriptParse(format!("invalid numeric literal: {src}")))?;
+        let exponent_digits = normalize_digit_sequence(exponent_digits_src, 10)
+            .ok_or_else(|| Error::ScriptParse(format!("invalid numeric literal: {src}")))?;
         let n: f64 = src
-            .parse()
+            .parse::<f64>()
+            .or_else(|_| format!("{mantissa}e{exponent_sign}{exponent_digits}").parse::<f64>())
             .map_err(|_| Error::ScriptParse(format!("invalid numeric literal: {src}")))?;
         if !n.is_finite() {
             return Err(Error::ScriptParse(format!(
@@ -569,30 +665,50 @@ pub(crate) fn parse_numeric_literal(src: &str) -> Result<Option<Expr>> {
         return Ok(Some(Expr::Float(n)));
     }
 
-    if src.as_bytes().iter().all(|b| b.is_ascii_digit()) {
-        let n: i64 = src
+    if src
+        .as_bytes()
+        .iter()
+        .all(|b| b.is_ascii_digit() || *b == b'_')
+    {
+        if has_legacy_leading_zero_with_separator(src) {
+            return Err(Error::ScriptParse(format!(
+                "invalid numeric literal: {src}"
+            )));
+        }
+        let normalized = normalize_digit_sequence(src, 10)
+            .ok_or_else(|| Error::ScriptParse(format!("invalid numeric literal: {src}")))?;
+        let n: i64 = normalized
             .parse()
             .map_err(|_| Error::ScriptParse(format!("invalid numeric literal: {src}")))?;
         return Ok(Some(Expr::Number(n)));
     }
 
-    let mut dot_count = 0usize;
-    for b in src.as_bytes() {
-        if *b == b'.' {
-            dot_count += 1;
-        } else if !b.is_ascii_digit() {
-            return Ok(None);
-        }
-    }
-
-    if dot_count != 1 {
+    if src.matches('.').count() != 1 {
         return Ok(None);
     }
     if src.starts_with('.') {
         return Ok(None);
     }
+    if src
+        .as_bytes()
+        .iter()
+        .any(|b| !matches!(b, b'0'..=b'9' | b'_' | b'.'))
+    {
+        return Ok(None);
+    }
+    let integer_part = src
+        .split_once('.')
+        .map(|(integer, _)| integer)
+        .unwrap_or(src);
+    if has_legacy_leading_zero_with_separator(integer_part) {
+        return Err(Error::ScriptParse(format!(
+            "invalid numeric literal: {src}"
+        )));
+    }
+    let normalized = normalize_decimal_mantissa(src)
+        .ok_or_else(|| Error::ScriptParse(format!("invalid numeric literal: {src}")))?;
 
-    let n: f64 = src
+    let n: f64 = normalized
         .parse()
         .map_err(|_| Error::ScriptParse(format!("invalid numeric literal: {src}")))?;
     if !n.is_finite() {
@@ -619,7 +735,8 @@ pub(crate) fn parse_bigint_literal(src: &str) -> Result<Option<Expr>> {
         } else if let Some(binary) = raw.strip_prefix("0b").or_else(|| raw.strip_prefix("0B")) {
             (binary, 2u32)
         } else {
-            if raw.len() > 1 && raw.starts_with('0') {
+            let normalized = raw.replace('_', "");
+            if normalized.len() > 1 && normalized.starts_with('0') {
                 return Err(Error::ScriptParse(format!(
                     "invalid numeric literal: {src}"
                 )));
@@ -627,11 +744,8 @@ pub(crate) fn parse_bigint_literal(src: &str) -> Result<Option<Expr>> {
             (raw, 10u32)
         };
 
-    if digits.is_empty() {
-        return Err(Error::ScriptParse(format!(
-            "invalid numeric literal: {src}"
-        )));
-    }
+    let digits = normalize_digit_sequence(digits, radix)
+        .ok_or_else(|| Error::ScriptParse(format!("invalid numeric literal: {src}")))?;
 
     let value = JsBigInt::parse_bytes(digits.as_bytes(), radix)
         .ok_or_else(|| Error::ScriptParse(format!("invalid numeric literal: {src}")))?;
@@ -648,14 +762,10 @@ pub(crate) fn parse_prefixed_integer_literal(
         return Ok(None);
     }
 
-    let digits = &src[prefix.len()..];
-    if digits.is_empty() {
-        return Err(Error::ScriptParse(format!(
-            "invalid numeric literal: {src}"
-        )));
-    }
+    let digits = normalize_digit_sequence(&src[prefix.len()..], radix)
+        .ok_or_else(|| Error::ScriptParse(format!("invalid numeric literal: {src}")))?;
 
-    let n = i64::from_str_radix(digits, radix)
+    let n = i64::from_str_radix(&digits, radix)
         .map_err(|_| Error::ScriptParse(format!("invalid numeric literal: {src}")))?;
     Ok(Some(Expr::Number(n)))
 }

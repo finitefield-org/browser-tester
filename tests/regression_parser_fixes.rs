@@ -530,17 +530,80 @@ fn if_else_block_with_math_min_spread_parses() -> browser_tester::Result<()> {
 }
 
 #[test]
-fn window_match_media_property_reference_parses() -> browser_tester::Result<()> {
+fn numeric_separator_literals_parse_across_common_forms() -> browser_tester::Result<()> {
     let html = r#"
     <div id='r'></div>
     <script>
-      const mediaFactory = window.matchMedia;
-      document.getElementById("r").textContent = String(mediaFactory === undefined);
+      const decimal = 1_000_000_000;
+      const float = 12_345.6_7;
+      const scientific = 1_2.3_4e5_6;
+      const hex = 0xAB_CD;
+      const binary = 0b1010_0001;
+      const bigint = 9_876_543_210n;
+      document.getElementById("r").textContent =
+        [
+          String(decimal),
+          String(float),
+          String(scientific === 1.234e57),
+          String(hex),
+          String(binary),
+          bigint.toString()
+        ].join("|");
     </script>
     "#;
 
     let h = Harness::from_html(html)?;
-    h.assert_text("#r", "true")?;
+    h.assert_text("#r", "1000000000|12345.67|true|43981|161|9876543210")?;
+    Ok(())
+}
+
+#[test]
+fn numeric_separator_after_legacy_leading_zero_is_rejected() {
+    let err = Harness::from_html("<script>const value = 0_1;</script>").unwrap_err();
+    match err {
+        browser_tester::Error::ScriptParse(msg) => assert!(msg.contains("invalid numeric literal")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_match_media_property_reference_is_callable() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id='run'>run</button>
+    <div id='r'></div>
+    <script>
+      const mediaFactory = window.matchMedia;
+      document.getElementById("run").addEventListener("click", () => {
+        const result = mediaFactory("(prefers-color-scheme: dark)");
+        document.getElementById("r").textContent =
+          typeof mediaFactory + ":" + String(result.matches);
+      });
+    </script>
+    "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_match_media_mock("(prefers-color-scheme: dark)", true);
+    h.click("#run")?;
+    h.assert_text("#r", "function:true")?;
+    assert_eq!(
+        h.take_match_media_calls(),
+        vec!["(prefers-color-scheme: dark)".to_string()]
+    );
+    Ok(())
+}
+
+#[test]
+fn document_member_reference_assignment_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='r'></div>
+    <script>
+      var createElement = document.createElement;
+      document.getElementById("r").textContent = typeof createElement;
+    </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#r", "function")?;
     Ok(())
 }
 

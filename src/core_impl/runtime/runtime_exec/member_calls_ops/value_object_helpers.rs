@@ -3312,6 +3312,13 @@ impl Harness {
         )])
     }
 
+    pub(crate) fn new_match_media_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("match_media_function".to_string()),
+        )])
+    }
+
     pub(crate) fn new_window_close_callable_value() -> Value {
         Self::new_object_value(vec![(
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
@@ -6901,6 +6908,7 @@ impl Harness {
             "document_parse_html" => Some(("parseHTML", 1)),
             "document_parse_html_unsafe" => Some(("parseHTMLUnsafe", 1)),
             "fetch_function" => Some(("fetch", 1)),
+            "match_media_function" => Some(("matchMedia", 1)),
             "window_close_function" => Some(("close", 0)),
             "window_stop_function" => Some(("stop", 0)),
             "window_focus_function" => Some(("focus", 0)),
@@ -8202,6 +8210,7 @@ impl Harness {
                 "document_parse_html" => "document_parse_html",
                 "document_parse_html_unsafe" => "document_parse_html_unsafe",
                 "fetch_function" => "fetch_function",
+                "match_media_function" => "match_media_function",
                 "window_close_function" => "window_close_function",
                 "window_stop_function" => "window_stop_function",
                 "window_focus_function" => "window_focus_function",

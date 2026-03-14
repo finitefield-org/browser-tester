@@ -1,4 +1,5 @@
 use super::*;
+use crate::core_dom_utils::{decode_base64_to_binary_string, decode_uri_like};
 
 impl Harness {
     pub(crate) fn default_fetch_status_text(status: i64) -> String {
@@ -330,6 +331,39 @@ impl Harness {
             .is_some_and(|tag| tag.eq_ignore_ascii_case("a") || tag.eq_ignore_ascii_case("area"))
     }
 
+    fn parse_data_url_download_artifact(href: &str) -> Result<Option<(Option<String>, Vec<u8>)>> {
+        let Some((scheme, rest)) = href.split_once(':') else {
+            return Ok(None);
+        };
+        if !scheme.eq_ignore_ascii_case("data") {
+            return Ok(None);
+        }
+
+        let Some((meta, payload)) = rest.split_once(',') else {
+            return Ok(None);
+        };
+        let is_base64 = meta
+            .split(';')
+            .skip(1)
+            .any(|part| part.trim().eq_ignore_ascii_case("base64"));
+        let media_type = meta
+            .split(';')
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_ascii_lowercase())
+            .or_else(|| Some("text/plain".to_string()));
+        let bytes = if is_base64 {
+            decode_base64_to_binary_string(payload)?
+                .chars()
+                .map(|ch| ch as u32 as u8)
+                .collect()
+        } else {
+            decode_uri_like(payload, true)?.into_bytes()
+        };
+        Ok(Some((media_type, bytes)))
+    }
+
     pub(crate) fn maybe_capture_anchor_download(&mut self, target: NodeId) -> Result<bool> {
         if !self.is_hyperlink_element(target) {
             return Ok(false);
@@ -339,14 +373,20 @@ impl Harness {
         };
 
         let href = self.resolve_anchor_href(target);
-        let Some(blob) = self.browser_apis.blob_url_objects.get(&href).cloned() else {
-            return Ok(false);
-        };
-        let blob = blob.borrow();
-        let mime_type = if blob.mime_type.is_empty() {
-            None
+        let (mime_type, bytes) = if let Some(blob) =
+            self.browser_apis.blob_url_objects.get(&href).cloned()
+        {
+            let blob = blob.borrow();
+            let mime_type = if blob.mime_type.is_empty() {
+                None
+            } else {
+                Some(blob.mime_type.clone())
+            };
+            (mime_type, blob.bytes.clone())
+        } else if let Some((mime_type, bytes)) = Self::parse_data_url_download_artifact(&href)? {
+            (mime_type, bytes)
         } else {
-            Some(blob.mime_type.clone())
+            return Ok(false);
         };
 
         self.browser_apis.downloads.push(DownloadArtifact {
@@ -356,7 +396,7 @@ impl Harness {
                 Some(filename)
             },
             mime_type,
-            bytes: blob.bytes.clone(),
+            bytes,
         });
         Ok(true)
     }

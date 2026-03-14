@@ -407,6 +407,7 @@ impl Harness {
         let cookie_store = self.cookie_store_global_value();
         let caches = self.cache_storage_global_value();
         let fetch_callable = Self::new_fetch_callable_value();
+        let match_media_callable = Self::new_match_media_callable_value();
         let close_callable = Self::new_window_close_callable_value();
         let stop_callable = Self::new_window_stop_callable_value();
         let focus_callable = Self::new_window_focus_callable_value();
@@ -581,6 +582,7 @@ impl Harness {
             &cookie_store,
             &caches,
             &fetch_callable,
+            &match_media_callable,
             &request_constructor,
             &headers_constructor,
             &url_constructor,
@@ -964,6 +966,9 @@ impl Harness {
         self.script_runtime
             .env
             .insert("fetch".to_string(), fetch_callable);
+        self.script_runtime
+            .env
+            .insert("matchMedia".to_string(), match_media_callable);
         self.script_runtime
             .env
             .insert("close".to_string(), close_callable);
