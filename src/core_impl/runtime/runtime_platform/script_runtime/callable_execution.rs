@@ -244,6 +244,12 @@ impl Harness {
             }
         }
         drop(captured_env_snapshot);
+        if !global_scope && !captured_global_names.is_empty() {
+            let mut captured_env = captured_env.borrow_mut();
+            for name in &captured_global_names {
+                captured_env.remove(name);
+            }
+        }
         let function_id = self.script_runtime.allocate_function_id();
         if !self.script_runtime.private_binding_stack.is_empty() {
             let mut captured_private_bindings = HashMap::new();
@@ -7733,8 +7739,10 @@ impl Harness {
                             .is_some_and(|env| Self::env_has_local_or_lexical_binding(env, name))
                     };
                     let effective_call_binding = |this: &Self, name: &str| {
-                        this.resolve_listener_capture_pending_value(name)
-                            .unwrap_or_else(|| call_env.get(name).cloned())
+                        if let Some(pending) = this.resolve_listener_capture_pending_value(name) {
+                            return pending;
+                        }
+                        call_env.get(name).cloned()
                     };
                     for name in &global_sync_keys {
                         if Self::is_internal_env_key(name)
@@ -7779,6 +7787,7 @@ impl Harness {
                     }
                     let mut scheduled_capture_updates = Vec::new();
                     if !function.global_scope {
+                        let captured_env_after_call = function.captured_env.borrow().share();
                         let mut captured_env = function.captured_env.borrow_mut();
                         let captured_env_before_call = captured_env_before_call
                             .as_ref()
@@ -7792,7 +7801,10 @@ impl Harness {
                                 continue;
                             }
                             let before = captured_env_before_call.get(name);
-                            let call_after = effective_call_binding(this, name);
+                            let call_after = captured_env_after_call
+                                .get(name)
+                                .cloned()
+                                .or_else(|| effective_call_binding(this, name));
                             let after = call_after.as_ref();
                             let changed = match (before, after) {
                                 (Some(prev), Some(next)) => !this.strict_equal(prev, next),

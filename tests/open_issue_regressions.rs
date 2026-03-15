@@ -273,6 +273,141 @@ fn nested_call_preserves_caller_local_close_binding() -> browser_tester::Result<
 }
 
 #[test]
+fn nested_call_keeps_caller_local_binding_before_follow_up_calls() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="go" type="button">go</button>
+    <div id="out"></div>
+    <script>
+      (() => {
+        function make(source) {
+          let index = 0;
+
+          function consume() {
+            const char = source[index] || "";
+            index += 1;
+            return char;
+          }
+
+          function parseSequence(stopChar) {
+            let seen = "";
+            while (index < source.length && source[index] !== stopChar) {
+              seen += consume();
+            }
+            return seen;
+          }
+
+          function parseBracketGroup() {
+            const open = consume();
+            const close = open === "(" ? ")" : "]";
+            const inner = parseSequence(close);
+            return "close=" + close + "|inner=" + inner + "|index=" + index;
+          }
+
+          return parseBracketGroup();
+        }
+
+        document.getElementById("go").addEventListener("click", () => {
+          document.getElementById("out").textContent = make("(SO4)3");
+        });
+      })();
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#go")?;
+    harness.assert_text("#out", "close=)|inner=SO4|index=4")?;
+    Ok(())
+}
+
+#[test]
+fn nested_call_keeps_caller_local_binding_after_sibling_call() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="go" type="button">go</button>
+    <div id="out"></div>
+    <script>
+      (() => {
+        function make(source) {
+          let index = 0;
+
+          function current() {
+            return source[index] || "";
+          }
+
+          function consume() {
+            const char = source[index] || "";
+            index += 1;
+            return char;
+          }
+
+          function parseSequence(stopChar) {
+            let seen = "";
+            while (index < source.length && current() !== stopChar) {
+              seen += consume();
+            }
+            return seen;
+          }
+
+          function parseBracketGroup() {
+            const open = consume();
+            const close = open === "(" ? ")" : "]";
+            const inner = parseSequence(close);
+            const after = current();
+            return "close=" + close + "|after=" + after + "|inner=" + inner + "|index=" + index;
+          }
+
+          return parseBracketGroup();
+        }
+
+        document.getElementById("go").addEventListener("click", () => {
+          document.getElementById("out").textContent = make("(SO4)3");
+        });
+      })();
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#go")?;
+    harness.assert_text("#out", "close=)|after=)|inner=SO4|index=4")?;
+    Ok(())
+}
+
+#[test]
+fn trivial_nested_call_does_not_replace_local_close_with_window_close()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <button id="go" type="button">go</button>
+    <div id="out"></div>
+    <script>
+      (() => {
+        function make() {
+          function noop() {
+            return "ok";
+          }
+
+          function parseBracketGroup() {
+            const close = ")";
+            const inner = noop();
+            return "close=" + close + "|inner=" + inner;
+          }
+
+          return parseBracketGroup();
+        }
+
+        document.getElementById("go").addEventListener("click", () => {
+          document.getElementById("out").textContent = make();
+        });
+      })();
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#go")?;
+    harness.assert_text("#out", "close=)|inner=ok")?;
+    Ok(())
+}
+
+
+#[test]
 fn plain_formula_parser_accepts_parenthesized_groups() -> browser_tester::Result<()> {
     let html = r#"
     <div>

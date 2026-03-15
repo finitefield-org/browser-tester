@@ -1686,6 +1686,11 @@ impl Harness {
                         return Self::super_prototype_from_env(env);
                     }
                     self.ensure_binding_initialized(env, name)?;
+                    if Self::env_has_local_or_lexical_binding(env, name) {
+                        if let Some(value) = env.get(name).cloned() {
+                            return Ok(value);
+                        }
+                    }
                     if let Some(value) = self
                         .script_runtime
                         .expression_env_overrides
