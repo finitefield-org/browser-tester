@@ -439,6 +439,9 @@ impl Harness {
         let Some(shared_env) = frame.shared_env.as_ref() else {
             return;
         };
+        if frame.pending_env_updates.is_empty() {
+            return;
+        }
         let allow_local_bindings = frame.shared_env_owned_by_scope;
         let restricted_names =
             (!allow_local_bindings).then(|| Self::env_local_or_lexical_binding_names(env));
@@ -447,64 +450,23 @@ impl Harness {
                 .as_ref()
                 .is_some_and(|names| names.contains(name))
         };
-        let effective_value = |name: &str| match frame.pending_env_updates.get(name) {
-            Some(Some(value)) => Some(value),
-            Some(None) => None,
-            None if is_restricted_name(name) => None,
-            None => env.get(name),
-        };
-        let mut changed_entries = Vec::new();
-        let mut added = Vec::new();
-        let shared_snapshot = shared_env.borrow();
-        let shared_keys = shared_snapshot
-            .keys()
-            .filter(|name| !Self::is_internal_env_key(name))
-            .cloned()
-            .collect::<Vec<_>>();
-        for name in &shared_keys {
-            let Some(previous) = shared_snapshot.get(name) else {
-                continue;
-            };
-            let Some(next) = effective_value(name) else {
-                continue;
-            };
-            if self.strict_equal(previous, next) {
-                continue;
-            }
-            changed_entries.push((name.clone(), next.clone()));
-        }
+        let mut shared_env = shared_env.borrow_mut();
         for (name, next) in &frame.pending_env_updates {
-            let Some(next) = next else {
-                continue;
-            };
-            if is_restricted_name(name) {
+            if Self::is_internal_env_key(name) || is_restricted_name(name) {
                 continue;
             }
-            if Self::is_internal_env_key(name) || shared_snapshot.contains_key(name) {
-                continue;
-            }
-            added.push((name.clone(), next.clone()));
-        }
-        for (name, next) in env {
-            if is_restricted_name(name) {
-                continue;
-            }
-            if Self::is_internal_env_key(name)
-                || shared_snapshot.contains_key(name)
-                || frame.pending_env_updates.contains_key(name)
-            {
-                continue;
-            }
-            added.push((name.clone(), next.clone()));
-        }
-        drop(shared_snapshot);
-        if !changed_entries.is_empty() || !added.is_empty() {
-            let mut shared_env = shared_env.borrow_mut();
-            for (name, value) in changed_entries {
-                shared_env.insert(name, value);
-            }
-            for (name, value) in added {
-                shared_env.insert(name, value);
+            match next {
+                Some(value) => {
+                    let unchanged = shared_env
+                        .get(name)
+                        .is_some_and(|previous| self.strict_equal(previous, value));
+                    if !unchanged {
+                        shared_env.insert(name.clone(), value.clone());
+                    }
+                }
+                None => {
+                    shared_env.remove(name);
+                }
             }
         }
     }

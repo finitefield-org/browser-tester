@@ -406,6 +406,134 @@ fn trivial_nested_call_does_not_replace_local_close_with_window_close()
     Ok(())
 }
 
+#[test]
+fn nested_call_keeps_captured_index_visible_to_bare_reads() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="go" type="button">go</button>
+    <div id="out"></div>
+    <script>
+      (() => {
+        function make(source) {
+          let index = 0;
+
+          function current() {
+            return source[index] || "";
+          }
+
+          function consume() {
+            const char = source[index] || "";
+            index += 1;
+            return char;
+          }
+
+          function parseDigits() {
+            const start = index;
+            while (/[0-9]/.test(current())) {
+              consume();
+            }
+            return "start=" + start + "|index=" + index + "|curr=" + current() + "|raw=" + source.slice(start, index);
+          }
+
+          consume();
+          consume();
+          return parseDigits();
+        }
+
+        document.getElementById("go").addEventListener("click", () => {
+          document.getElementById("out").textContent = make("Al2(SO4)3");
+        });
+      })();
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#go")?;
+    harness.assert_text("#out", "start=2|index=3|curr=(|raw=2")?;
+    Ok(())
+}
+
+#[test]
+fn nested_parse_number_keeps_outer_progress_visible() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="go" type="button">go</button>
+    <div id="out"></div>
+    <script>
+      (() => {
+        function createParser(source) {
+          let index = 0;
+
+          function current() {
+            return source[index] || "";
+          }
+
+          function consume() {
+            const char = source[index] || "";
+            index += 1;
+            return char;
+          }
+
+          function isDigit(char) {
+            return /[0-9]/.test(char);
+          }
+
+          function isUpper(char) {
+            return /[A-Z]/.test(char);
+          }
+
+          function isLower(char) {
+            return /[a-z]/.test(char);
+          }
+
+          function parseNumber() {
+            const start = index;
+            while (isDigit(current())) {
+              consume();
+            }
+            return source.slice(start, index);
+          }
+
+          function parseOptionalMultiplier() {
+            if (isDigit(current())) return parseNumber();
+            return "";
+          }
+
+          function parseElementSymbol() {
+            const first = current();
+            if (!isUpper(first)) {
+              throw new Error("invalid symbol");
+            }
+            let symbol = consume();
+            if (isLower(current())) symbol += consume();
+            return symbol;
+          }
+
+          function parseElementGroup() {
+            const symbol = parseElementSymbol();
+            const count = parseOptionalMultiplier();
+            return symbol + count + "|index=" + index + "|curr=" + current();
+          }
+
+          return parseElementGroup();
+        }
+
+        document.getElementById("go").addEventListener("click", () => {
+          try {
+            document.getElementById("out").textContent = createParser("Al2(SO4)3");
+          } catch (error) {
+            document.getElementById("out").textContent =
+              error && error.message ? error.message : "unknown";
+          }
+        });
+      })();
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#go")?;
+    harness.assert_text("#out", "Al2|index=3|curr=(")?;
+    Ok(())
+}
+
 
 #[test]
 fn plain_formula_parser_accepts_parenthesized_groups() -> browser_tester::Result<()> {

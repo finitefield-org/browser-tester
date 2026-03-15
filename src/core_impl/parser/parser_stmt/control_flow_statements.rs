@@ -44,7 +44,12 @@ pub(crate) fn parse_block_statements_with_flags(
                     stmt,
                     allow_top_level_export,
                     allow_top_level_import,
-                )?;
+                )
+                .map_err(|err| {
+                    Error::ScriptParse(format!(
+                        "statement parse failed: stmt={stmt:?} err={err:?}"
+                    ))
+                })?;
                 stmts.push(parsed);
             }
         }
@@ -1091,6 +1096,151 @@ pub(crate) fn collect_top_level_if_branch_candidate_ends(src: &str) -> Vec<usize
     out
 }
 
+fn consume_simple_statement_len(src: &str) -> usize {
+    let bytes = src.as_bytes();
+    let mut scanner = JsLexScanner::new();
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        let current = i;
+        let b = bytes[current];
+        let was_top_level = scanner.is_top_level();
+        i = scanner.advance(bytes, i);
+        if was_top_level && b == b';' {
+            let mut cursor = Cursor::new(src);
+            cursor.set_pos(i);
+            cursor.skip_ws();
+            return cursor.i;
+        }
+    }
+
+    src.len()
+}
+
+fn consume_single_statement_len(src: &str) -> Result<usize> {
+    let mut cursor = Cursor::new(src);
+    cursor.skip_ws();
+
+    if cursor.eof() {
+        return Err(Error::ScriptParse("empty single statement".into()));
+    }
+
+    if cursor.peek() == Some(b'{') {
+        let _ = cursor.read_balanced_block(b'{', b'}')?;
+        cursor.skip_ws();
+        cursor.consume_byte(b';');
+        cursor.skip_ws();
+        return Ok(cursor.i);
+    }
+
+    let statement_start = cursor.i;
+
+    if consume_keyword(&mut cursor, "if") {
+        cursor.skip_ws();
+        let _ = cursor.read_balanced_block(b'(', b')')?;
+        let then_len = consume_single_statement_len(&src[cursor.i..])?;
+        cursor.set_pos(cursor.i + then_len);
+        cursor.skip_ws();
+        if consume_keyword(&mut cursor, "else") {
+            cursor.skip_ws();
+            let else_len = consume_single_statement_len(&src[cursor.i..])?;
+            cursor.set_pos(cursor.i + else_len);
+        }
+        cursor.skip_ws();
+        return Ok(cursor.i);
+    }
+
+    cursor.set_pos(statement_start);
+    if consume_keyword(&mut cursor, "for") {
+        cursor.skip_ws();
+        if consume_keyword(&mut cursor, "await") {
+            cursor.skip_ws();
+        }
+        let _ = cursor.read_balanced_block(b'(', b')')?;
+        let body_len = consume_single_statement_len(&src[cursor.i..])?;
+        cursor.set_pos(cursor.i + body_len);
+        cursor.skip_ws();
+        return Ok(cursor.i);
+    }
+
+    cursor.set_pos(statement_start);
+    if consume_keyword(&mut cursor, "while") || consume_keyword(&mut cursor, "with") {
+        cursor.skip_ws();
+        let _ = cursor.read_balanced_block(b'(', b')')?;
+        let body_len = consume_single_statement_len(&src[cursor.i..])?;
+        cursor.set_pos(cursor.i + body_len);
+        cursor.skip_ws();
+        return Ok(cursor.i);
+    }
+
+    cursor.set_pos(statement_start);
+    if consume_keyword(&mut cursor, "do") {
+        cursor.skip_ws();
+        let body_len = consume_single_statement_len(&src[cursor.i..])?;
+        cursor.set_pos(cursor.i + body_len);
+        cursor.skip_ws();
+        if !consume_keyword(&mut cursor, "while") {
+            return Err(Error::ScriptParse("do statement requires while".into()));
+        }
+        cursor.skip_ws();
+        let _ = cursor.read_balanced_block(b'(', b')')?;
+        cursor.skip_ws();
+        cursor.consume_byte(b';');
+        cursor.skip_ws();
+        return Ok(cursor.i);
+    }
+
+    cursor.set_pos(statement_start);
+    if consume_keyword(&mut cursor, "switch") {
+        cursor.skip_ws();
+        let _ = cursor.read_balanced_block(b'(', b')')?;
+        cursor.skip_ws();
+        if cursor.peek() != Some(b'{') {
+            return Err(Error::ScriptParse("switch statement requires a block".into()));
+        }
+        let _ = cursor.read_balanced_block(b'{', b'}')?;
+        cursor.skip_ws();
+        cursor.consume_byte(b';');
+        cursor.skip_ws();
+        return Ok(cursor.i);
+    }
+
+    cursor.set_pos(statement_start);
+    if consume_keyword(&mut cursor, "try") {
+        cursor.skip_ws();
+        if cursor.peek() != Some(b'{') {
+            return Err(Error::ScriptParse("try statement requires a block".into()));
+        }
+        let _ = cursor.read_balanced_block(b'{', b'}')?;
+        cursor.skip_ws();
+        if consume_keyword(&mut cursor, "catch") {
+            cursor.skip_ws();
+            if cursor.peek() == Some(b'(') {
+                let _ = cursor.read_balanced_block(b'(', b')')?;
+                cursor.skip_ws();
+            }
+            if cursor.peek() != Some(b'{') {
+                return Err(Error::ScriptParse("catch clause requires a block".into()));
+            }
+            let _ = cursor.read_balanced_block(b'{', b'}')?;
+            cursor.skip_ws();
+        }
+        if consume_keyword(&mut cursor, "finally") {
+            cursor.skip_ws();
+            if cursor.peek() != Some(b'{') {
+                return Err(Error::ScriptParse("finally clause requires a block".into()));
+            }
+            let _ = cursor.read_balanced_block(b'{', b'}')?;
+            cursor.skip_ws();
+        }
+        cursor.consume_byte(b';');
+        cursor.skip_ws();
+        return Ok(cursor.i);
+    }
+
+    Ok(statement_start + consume_simple_statement_len(&src[statement_start..]))
+}
+
 pub(crate) fn is_ident_char(b: u8) -> bool {
     b == b'_' || b == b'$' || b.is_ascii_alphanumeric()
 }
@@ -1171,7 +1321,35 @@ pub(crate) fn parse_if_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let mut else_raw = None;
     let mut branch_error = None;
 
-    if tail.starts_with('{') {
+    if let Ok(then_end) = consume_single_statement_len(tail) {
+        if let Some(candidate_then) = tail.get(..then_end) {
+            let candidate_then = candidate_then.trim_end();
+            let rest = tail.get(then_end..).unwrap_or_default().trim_start();
+            if !candidate_then.is_empty() {
+                if rest.is_empty() {
+                    then_raw = Some(candidate_then);
+                    else_raw = None;
+                } else if let Some(candidate_else_src) = strip_else_prefix(rest) {
+                    if let Ok(else_end) = consume_single_statement_len(candidate_else_src) {
+                        let candidate_else = candidate_else_src
+                            .get(..else_end)
+                            .unwrap_or_default()
+                            .trim_end();
+                        let extra = candidate_else_src
+                            .get(else_end..)
+                            .unwrap_or_default()
+                            .trim_start();
+                        if !candidate_else.is_empty() && extra.is_empty() {
+                            then_raw = Some(candidate_then);
+                            else_raw = Some(candidate_else);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if then_raw.is_none() && tail.starts_with('{') {
         let mut branch_cursor = Cursor::new(tail);
         if branch_cursor.read_balanced_block(b'{', b'}').is_ok() {
             branch_cursor.skip_ws();
@@ -1198,6 +1376,9 @@ pub(crate) fn parse_if_stmt(stmt: &str) -> Result<Option<Stmt>> {
     }
 
     for end in collect_top_level_if_branch_candidate_ends(tail) {
+        if then_raw.is_some() {
+            break;
+        }
         let Some(candidate_then) = tail.get(..end) else {
             continue;
         };
@@ -1308,6 +1489,32 @@ mod tests {
 
         let parsed = parse_if_stmt(stmt).expect("parser should not fail");
         assert!(parsed.is_some(), "expected if statement to parse");
+    }
+
+    #[test]
+    fn parse_if_stmt_keeps_dangling_else_attached_to_inner_if() {
+        let stmt = r#"if (outer) if (inner) work(); else recover();"#;
+
+        let parsed = parse_if_stmt(stmt).expect("parser should not fail");
+        match parsed {
+            Some(Stmt::If {
+                then_stmts,
+                else_stmts,
+                ..
+            }) => {
+                assert!(else_stmts.is_empty(), "outer if should not have else");
+                match then_stmts.as_slice() {
+                    [Stmt::If { else_stmts, .. }] => {
+                        assert!(
+                            !else_stmts.is_empty(),
+                            "inner if should retain the dangling else branch"
+                        );
+                    }
+                    other => panic!("expected inner if branch, got {other:?}"),
+                }
+            }
+            other => panic!("expected if statement, got {other:?}"),
+        }
     }
 
     #[test]

@@ -910,12 +910,27 @@ impl Harness {
         for frame in &mut self.script_runtime.listener_capture_env_stack {
             updates.extend(std::mem::take(&mut frame.pending_env_updates));
         }
-        let restricted_names = Self::env_local_or_lexical_binding_names(env);
+        let allow_local_bindings = self
+            .script_runtime
+            .listener_capture_env_stack
+            .iter()
+            .rev()
+            .find_map(|frame| {
+                frame.shared_env
+                    .as_ref()
+                    .map(|_| frame.shared_env_owned_by_scope)
+            })
+            .unwrap_or(false);
+        let restricted_names =
+            (!allow_local_bindings).then(|| Self::env_local_or_lexical_binding_names(env));
         for (name, value) in updates {
             if Self::is_internal_env_key(&name) {
                 continue;
             }
-            if restricted_names.contains(&name) {
+            if restricted_names
+                .as_ref()
+                .is_some_and(|names| names.contains(&name))
+            {
                 continue;
             }
             if let Some(value) = value {

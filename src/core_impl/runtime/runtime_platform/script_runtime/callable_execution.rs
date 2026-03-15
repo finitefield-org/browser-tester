@@ -7801,10 +7801,23 @@ impl Harness {
                                 continue;
                             }
                             let before = captured_env_before_call.get(name);
-                            let call_after = captured_env_after_call
-                                .get(name)
-                                .cloned()
-                                .or_else(|| effective_call_binding(this, name));
+                            let call_after_from_env = effective_call_binding(this, name);
+                            let call_after_from_shared =
+                                captured_env_after_call.get(name).cloned();
+                            let call_after = match (
+                                before,
+                                call_after_from_env.as_ref(),
+                                call_after_from_shared.as_ref(),
+                            ) {
+                                (Some(prev), Some(env_next), Some(shared_next))
+                                    if this.strict_equal(prev, env_next)
+                                        && !this.strict_equal(prev, shared_next) =>
+                                {
+                                    Some(shared_next.clone())
+                                }
+                                (Some(_), None, Some(shared_next)) => Some(shared_next.clone()),
+                                _ => call_after_from_env.or(call_after_from_shared),
+                            };
                             let after = call_after.as_ref();
                             let changed = match (before, after) {
                                 (Some(prev), Some(next)) => !this.strict_equal(prev, next),
