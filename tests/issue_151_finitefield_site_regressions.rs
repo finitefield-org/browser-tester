@@ -122,6 +122,25 @@ fn issue_151_nested_const_shadow_named_pick_does_not_overwrite_outer_pick()
 }
 
 #[test]
+fn issue_151_plain_object_get_method_is_not_hijacked_as_form_data() -> browser_tester::Result<()> {
+    let html = r#"
+      <p id='out'></p>
+      <script>
+        const store = {
+          get(name) {
+            return 'value:' + name;
+          }
+        };
+        document.getElementById('out').textContent = store.get('W1');
+      </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#out", "value:W1")?;
+    Ok(())
+}
+
+#[test]
 fn issue_151_minimal_buildplan_pick_map_not_clobbered() -> browser_tester::Result<()> {
     let html = r#"
       <p id='out'></p>

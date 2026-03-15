@@ -82,6 +82,7 @@ pub(crate) const INTERNAL_NAMED_NODE_MAP_OBJECT_KEY: &str = "\u{0}\u{0}bt_named_
 pub(crate) const INTERNAL_NAMED_NODE_MAP_OWNER_NODE_KEY: &str =
     "\u{0}\u{0}bt_named_node_map:owner_node";
 pub(crate) const INTERNAL_SCOPE_DEPTH_KEY: &str = "\u{0}\u{0}bt_scope_depth";
+pub(crate) const INTERNAL_PENDING_SCOPE_START_KEY: &str = "\u{0}\u{0}bt_pending_scope_start";
 pub(crate) const INTERNAL_GLOBAL_SYNC_NAMES_KEY: &str = "\u{0}\u{0}bt_global_sync_names";
 pub(crate) const INTERNAL_LOCAL_BINDINGS_KEY: &str = "\u{0}\u{0}bt_local_bindings";
 pub(crate) const INTERNAL_TOP_LEVEL_LEXICAL_BINDINGS_KEY: &str =

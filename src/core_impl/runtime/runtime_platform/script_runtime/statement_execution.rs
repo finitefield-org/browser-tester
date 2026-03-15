@@ -2298,6 +2298,19 @@ impl Harness {
             let mut initialized_var_bindings = HashSet::new();
             let flow_result = (|| -> Result<ExecFlow> {
                 for stmt in stmts {
+                    for (name, value) in self.script_runtime.expression_env_overrides.clone() {
+                        if Self::is_internal_env_key(&name) {
+                            continue;
+                        }
+                        if Self::env_has_local_binding(env, &name) {
+                            continue;
+                        }
+                        if let Some(value) = value {
+                            env.insert(name, value);
+                        } else {
+                            env.remove(&name);
+                        }
+                    }
                     self.script_runtime.expression_env_overrides.clear();
                     self.apply_pending_listener_capture_env_updates(env);
                     self.sync_top_level_env_from_runtime(env);
@@ -2825,6 +2838,23 @@ impl Harness {
                                                     {
                                                         local_declared_names.insert(name);
                                                     }
+                                                }
+                                                if !local_declared_names.is_empty() {
+                                                    let mut local_binding_names =
+                                                        local_declared_names
+                                                            .iter()
+                                                            .cloned()
+                                                            .collect::<Vec<_>>();
+                                                    local_binding_names.sort();
+                                                    block_env.insert(
+                                                        INTERNAL_LOCAL_BINDINGS_KEY.to_string(),
+                                                        Self::new_array_value(
+                                                            local_binding_names
+                                                                .into_iter()
+                                                                .map(Value::String)
+                                                                .collect(),
+                                                        ),
+                                                    );
                                                 }
                                                 match self.execute_stmts(
                                                     &handler.stmts,
@@ -4949,35 +4979,73 @@ impl Harness {
                             let prev_index_const = index_var
                                 .as_ref()
                                 .is_some_and(|name| self.is_const_binding(env, name));
+                            let prev_local_bindings = env.get(INTERNAL_LOCAL_BINDINGS_KEY).cloned();
+                            let mut local_binding_names = prev_local_bindings
+                                .as_ref()
+                                .and_then(|value| match value {
+                                    Value::Array(bindings) => Some(
+                                        bindings
+                                            .borrow()
+                                            .iter()
+                                            .filter_map(|entry| match entry {
+                                                Value::String(name) => Some(name.clone()),
+                                                _ => None,
+                                            })
+                                            .collect::<Vec<_>>(),
+                                    ),
+                                    _ => None,
+                                })
+                                .unwrap_or_default();
+                            if !local_binding_names.iter().any(|name| name == item_var) {
+                                local_binding_names.push(item_var.clone());
+                            }
+                            if let Some(index_var) = index_var {
+                                if !local_binding_names.iter().any(|name| name == index_var) {
+                                    local_binding_names.push(index_var.clone());
+                                }
+                            }
+                            local_binding_names.sort();
+                            local_binding_names.dedup();
+                            env.insert(
+                                INTERNAL_LOCAL_BINDINGS_KEY.to_string(),
+                                Self::new_array_value(
+                                    local_binding_names.into_iter().map(Value::String).collect(),
+                                ),
+                            );
                             self.set_const_binding(env, item_var, false);
                             if let Some(index_var) = index_var {
                                 self.set_const_binding(env, index_var, false);
                             }
 
-                            for (idx, class_name) in classes.iter().enumerate() {
-                                let item_value = Value::String(class_name.clone());
-                                env.insert(item_var.clone(), item_value.clone());
-                                self.sync_global_binding_if_needed(env, item_var, &item_value);
-                                if let Some(index_var) = index_var {
-                                    let index_value = Value::Number(idx as i64);
-                                    env.insert(index_var.clone(), index_value.clone());
-                                    self.sync_global_binding_if_needed(
-                                        env,
-                                        index_var,
-                                        &index_value,
-                                    );
-                                }
-                                match self.execute_stmts(body, event_param, event, env)? {
-                                    ExecFlow::Continue => {}
-                                    ExecFlow::Break(None) => break,
-                                    ExecFlow::Break(label) => return Ok(ExecFlow::Break(label)),
-                                    ExecFlow::ContinueLoop(None) => continue,
-                                    ExecFlow::ContinueLoop(label) => {
-                                        return Ok(ExecFlow::ContinueLoop(label));
+                            let loop_result = (|| -> Result<ExecFlow> {
+                                for (idx, class_name) in classes.iter().enumerate() {
+                                    let item_value = Value::String(class_name.clone());
+                                    env.insert(item_var.clone(), item_value.clone());
+                                    self.sync_global_binding_if_needed(env, item_var, &item_value);
+                                    if let Some(index_var) = index_var {
+                                        let index_value = Value::Number(idx as i64);
+                                        env.insert(index_var.clone(), index_value.clone());
+                                        self.sync_global_binding_if_needed(
+                                            env,
+                                            index_var,
+                                            &index_value,
+                                        );
                                     }
-                                    ExecFlow::Return => return Ok(ExecFlow::Return),
+                                    match self.execute_stmts(body, event_param, event, env)? {
+                                        ExecFlow::Continue => {}
+                                        ExecFlow::Break(None) => break,
+                                        ExecFlow::Break(label) => {
+                                            return Ok(ExecFlow::Break(label));
+                                        }
+                                        ExecFlow::ContinueLoop(None) => continue,
+                                        ExecFlow::ContinueLoop(label) => {
+                                            return Ok(ExecFlow::ContinueLoop(label));
+                                        }
+                                        ExecFlow::Return => return Ok(ExecFlow::Return),
+                                    }
                                 }
-                            }
+                                Ok(ExecFlow::Continue)
+                            })();
 
                             if let Some(prev) = prev_item {
                                 env.insert(item_var.clone(), prev.clone());
@@ -4994,6 +5062,18 @@ impl Harness {
                                     env.remove(index_var);
                                 }
                                 self.set_const_binding(env, index_var, prev_index_const);
+                            }
+                            match prev_local_bindings {
+                                Some(value) => {
+                                    env.insert(INTERNAL_LOCAL_BINDINGS_KEY.to_string(), value);
+                                }
+                                None => {
+                                    env.remove(INTERNAL_LOCAL_BINDINGS_KEY);
+                                }
+                            }
+                            match loop_result? {
+                                ExecFlow::Continue => {}
+                                flow => return Ok(flow),
                             }
                         }
                         Stmt::DomSetAttribute {
@@ -5301,35 +5381,73 @@ impl Harness {
                             let prev_index_const = index_var
                                 .as_ref()
                                 .is_some_and(|name| self.is_const_binding(env, name));
+                            let prev_local_bindings = env.get(INTERNAL_LOCAL_BINDINGS_KEY).cloned();
+                            let mut local_binding_names = prev_local_bindings
+                                .as_ref()
+                                .and_then(|value| match value {
+                                    Value::Array(bindings) => Some(
+                                        bindings
+                                            .borrow()
+                                            .iter()
+                                            .filter_map(|entry| match entry {
+                                                Value::String(name) => Some(name.clone()),
+                                                _ => None,
+                                            })
+                                            .collect::<Vec<_>>(),
+                                    ),
+                                    _ => None,
+                                })
+                                .unwrap_or_default();
+                            if !local_binding_names.iter().any(|name| name == item_var) {
+                                local_binding_names.push(item_var.clone());
+                            }
+                            if let Some(index_var) = index_var {
+                                if !local_binding_names.iter().any(|name| name == index_var) {
+                                    local_binding_names.push(index_var.clone());
+                                }
+                            }
+                            local_binding_names.sort();
+                            local_binding_names.dedup();
+                            env.insert(
+                                INTERNAL_LOCAL_BINDINGS_KEY.to_string(),
+                                Self::new_array_value(
+                                    local_binding_names.into_iter().map(Value::String).collect(),
+                                ),
+                            );
                             self.set_const_binding(env, item_var, false);
                             if let Some(index_var) = index_var {
                                 self.set_const_binding(env, index_var, false);
                             }
 
-                            for (idx, node) in items.iter().enumerate() {
-                                let item_value = Value::Node(*node);
-                                env.insert(item_var.clone(), item_value.clone());
-                                self.sync_global_binding_if_needed(env, item_var, &item_value);
-                                if let Some(index_var) = index_var {
-                                    let index_value = Value::Number(idx as i64);
-                                    env.insert(index_var.clone(), index_value.clone());
-                                    self.sync_global_binding_if_needed(
-                                        env,
-                                        index_var,
-                                        &index_value,
-                                    );
-                                }
-                                match self.execute_stmts(body, event_param, event, env)? {
-                                    ExecFlow::Continue => {}
-                                    ExecFlow::Break(None) => break,
-                                    ExecFlow::Break(label) => return Ok(ExecFlow::Break(label)),
-                                    ExecFlow::ContinueLoop(None) => continue,
-                                    ExecFlow::ContinueLoop(label) => {
-                                        return Ok(ExecFlow::ContinueLoop(label));
+                            let loop_result = (|| -> Result<ExecFlow> {
+                                for (idx, node) in items.iter().enumerate() {
+                                    let item_value = Value::Node(*node);
+                                    env.insert(item_var.clone(), item_value.clone());
+                                    self.sync_global_binding_if_needed(env, item_var, &item_value);
+                                    if let Some(index_var) = index_var {
+                                        let index_value = Value::Number(idx as i64);
+                                        env.insert(index_var.clone(), index_value.clone());
+                                        self.sync_global_binding_if_needed(
+                                            env,
+                                            index_var,
+                                            &index_value,
+                                        );
                                     }
-                                    ExecFlow::Return => return Ok(ExecFlow::Return),
+                                    match self.execute_stmts(body, event_param, event, env)? {
+                                        ExecFlow::Continue => {}
+                                        ExecFlow::Break(None) => break,
+                                        ExecFlow::Break(label) => {
+                                            return Ok(ExecFlow::Break(label));
+                                        }
+                                        ExecFlow::ContinueLoop(None) => continue,
+                                        ExecFlow::ContinueLoop(label) => {
+                                            return Ok(ExecFlow::ContinueLoop(label));
+                                        }
+                                        ExecFlow::Return => return Ok(ExecFlow::Return),
+                                    }
                                 }
-                            }
+                                Ok(ExecFlow::Continue)
+                            })();
 
                             if let Some(prev) = prev_item {
                                 env.insert(item_var.clone(), prev.clone());
@@ -5346,6 +5464,18 @@ impl Harness {
                                     env.remove(index_var);
                                 }
                                 self.set_const_binding(env, index_var, prev_index_const);
+                            }
+                            match prev_local_bindings {
+                                Some(value) => {
+                                    env.insert(INTERNAL_LOCAL_BINDINGS_KEY.to_string(), value);
+                                }
+                                None => {
+                                    env.remove(INTERNAL_LOCAL_BINDINGS_KEY);
+                                }
+                            }
+                            match loop_result? {
+                                ExecFlow::Continue => {}
+                                flow => return Ok(flow),
                             }
                         }
                         Stmt::ArrayForEach { target, callback } => {

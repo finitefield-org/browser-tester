@@ -223,12 +223,11 @@ impl Harness {
         event_param: &Option<String>,
         event: &EventState,
     ) -> Result<Value> {
-        let target_value = env
-            .get(target)
-            .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {}", target)))?;
+        let target_value =
+            self.eval_expr(&Expr::Var(target.to_string()), env, event_param, event)?;
 
         if let Some(value) = self.eval_cache_storage_map_method_dispatch(
-            target_value,
+            &target_value,
             method,
             args,
             env,
@@ -243,7 +242,7 @@ impl Harness {
             .collect::<Result<Vec<_>>>()?;
         let member = Self::map_instance_method_name(method);
 
-        let supports_direct_dispatch = match target_value {
+        let supports_direct_dispatch = match &target_value {
             Value::Map(map) => {
                 let map_ref = map.borrow();
                 Self::object_get_entry(&map_ref.properties, member).is_none()
@@ -282,13 +281,13 @@ impl Harness {
             _ => false,
         };
         if !supports_direct_dispatch {
-            let callee = self.object_property_from_value(target_value, member)?;
+            let callee = self.object_property_from_value(&target_value, member)?;
             if !matches!(callee, Value::Undefined | Value::Null)
                 && !Self::is_builtin_placeholder_callable(&callee)
             {
                 return self.execute_named_member_with_receiver(
                     &callee,
-                    target_value,
+                    &target_value,
                     member,
                     &evaluated_args,
                     env,
@@ -297,7 +296,7 @@ impl Harness {
             }
         }
 
-        if let Value::Set(set) = target_value {
+        if let Value::Set(set) = &target_value {
             let set = set.clone();
             return match method {
                 MapInstanceMethod::Has => {
@@ -353,7 +352,7 @@ impl Harness {
             };
         }
 
-        if let Value::FormData(entries) = target_value {
+        if let Value::FormData(entries) = &target_value {
             return match method {
                 MapInstanceMethod::Get => {
                     if evaluated_args.is_empty() {
@@ -400,7 +399,7 @@ impl Harness {
             };
         }
 
-        if let Value::WeakMap(weak_map) = target_value {
+        if let Value::WeakMap(weak_map) = &target_value {
             let weak_map = weak_map.clone();
             return match method {
                 MapInstanceMethod::Get => {
@@ -500,7 +499,7 @@ impl Harness {
             };
         }
 
-        if let Value::WeakSet(weak_set) = target_value {
+        if let Value::WeakSet(weak_set) = &target_value {
             let weak_set = weak_set.clone();
             return match method {
                 MapInstanceMethod::Has => {
@@ -554,7 +553,7 @@ impl Harness {
             };
         }
 
-        if let Value::Object(entries) = target_value {
+        if let Value::Object(entries) = &target_value {
             let entries = entries.clone();
             if Self::is_cookie_store_object(&entries.borrow()) {
                 let member = match method {
@@ -666,7 +665,7 @@ impl Harness {
             }
         }
 
-        let Value::Map(map) = target_value else {
+        let Value::Map(map) = &target_value else {
             if method == MapInstanceMethod::Clear {
                 return self.eval_expr(
                     &Expr::MemberCall {
@@ -879,12 +878,11 @@ impl Harness {
         event_param: &Option<String>,
         event: &EventState,
     ) -> Result<Value> {
-        let target_value = env
-            .get(target)
-            .ok_or_else(|| Error::ScriptRuntime(format!("unknown variable: {}", target)))?;
+        let target_value =
+            self.eval_expr(&Expr::Var(target.to_string()), env, event_param, event)?;
 
         if let Some(value) = self.eval_cache_storage_set_method_dispatch(
-            target_value,
+            &target_value,
             method,
             args,
             env,
@@ -900,7 +898,7 @@ impl Harness {
             .collect::<Result<Vec<_>>>()?;
         let member = Self::set_instance_method_name(method);
 
-        let supports_direct_dispatch = match target_value {
+        let supports_direct_dispatch = match &target_value {
             Value::Set(set) => {
                 let set_ref = set.borrow();
                 Self::object_get_entry(&set_ref.properties, member).is_none()
@@ -919,13 +917,13 @@ impl Harness {
             _ => false,
         };
         if !supports_direct_dispatch {
-            let callee = self.object_property_from_value(target_value, member)?;
+            let callee = self.object_property_from_value(&target_value, member)?;
             if !matches!(callee, Value::Undefined | Value::Null)
                 && !Self::is_builtin_placeholder_callable(&callee)
             {
                 return self.execute_named_member_with_receiver(
                     &callee,
-                    target_value,
+                    &target_value,
                     member,
                     &evaluated_args,
                     env,
@@ -934,7 +932,7 @@ impl Harness {
             }
         }
 
-        if let Value::WeakSet(weak_set) = target_value {
+        if let Value::WeakSet(weak_set) = &target_value {
             let weak_set = weak_set.clone();
             return match method {
                 SetInstanceMethod::Add => {
@@ -971,7 +969,7 @@ impl Harness {
             };
         }
 
-        let Value::Set(set) = target_value else {
+        let Value::Set(set) = &target_value else {
             if method == SetInstanceMethod::Add {
                 return self.eval_expr(
                     &Expr::MemberCall {

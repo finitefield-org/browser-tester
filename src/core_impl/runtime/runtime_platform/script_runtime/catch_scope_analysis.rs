@@ -439,9 +439,6 @@ impl Harness {
         let Some(shared_env) = frame.shared_env.as_ref() else {
             return;
         };
-        if frame.pending_env_updates.is_empty() {
-            return;
-        }
         let allow_local_bindings = frame.shared_env_owned_by_scope;
         let restricted_names =
             (!allow_local_bindings).then(|| Self::env_local_or_lexical_binding_names(env));
@@ -450,24 +447,75 @@ impl Harness {
                 .as_ref()
                 .is_some_and(|names| names.contains(name))
         };
-        let mut shared_env = shared_env.borrow_mut();
-        for (name, next) in &frame.pending_env_updates {
-            if Self::is_internal_env_key(name) || is_restricted_name(name) {
-                continue;
-            }
-            match next {
-                Some(value) => {
-                    let unchanged = shared_env
-                        .get(name)
-                        .is_some_and(|previous| self.strict_equal(previous, value));
-                    if !unchanged {
-                        shared_env.insert(name.clone(), value.clone());
+        let shared_snapshot = shared_env.borrow();
+        let shared_keys = shared_snapshot
+            .keys()
+            .filter(|name| !Self::is_internal_env_key(name))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut changed_entries = Vec::new();
+        let mut removed_entries = Vec::new();
+
+        for name in &shared_keys {
+            let previous = shared_snapshot
+                .get(name)
+                .expect("shared key should still exist in snapshot");
+            match frame.pending_env_updates.get(name) {
+                Some(Some(next)) => {
+                    if !self.strict_equal(previous, next) {
+                        changed_entries.push((name.clone(), next.clone()));
                     }
                 }
-                None => {
-                    shared_env.remove(name);
-                }
+                Some(None) => removed_entries.push(name.clone()),
+                None if is_restricted_name(name) => {}
+                None => match env.get(name) {
+                    Some(next) if !self.strict_equal(previous, next) => {
+                        changed_entries.push((name.clone(), next.clone()));
+                    }
+                    None => removed_entries.push(name.clone()),
+                    _ => {}
+                },
             }
+        }
+
+        let mut added_entries = Vec::new();
+        for (name, next) in &frame.pending_env_updates {
+            let Some(next) = next else {
+                continue;
+            };
+            if Self::is_internal_env_key(name)
+                || is_restricted_name(name)
+                || shared_snapshot.contains_key(name)
+            {
+                continue;
+            }
+            added_entries.push((name.clone(), next.clone()));
+        }
+        for (name, next) in env {
+            if Self::is_internal_env_key(name)
+                || is_restricted_name(name)
+                || shared_snapshot.contains_key(name)
+                || frame.pending_env_updates.contains_key(name)
+            {
+                continue;
+            }
+            added_entries.push((name.clone(), next.clone()));
+        }
+        drop(shared_snapshot);
+
+        if changed_entries.is_empty() && removed_entries.is_empty() && added_entries.is_empty() {
+            return;
+        }
+
+        let mut shared_env = shared_env.borrow_mut();
+        for (name, value) in changed_entries {
+            shared_env.insert(name, value);
+        }
+        for name in removed_entries {
+            shared_env.remove(&name);
+        }
+        for (name, value) in added_entries {
+            shared_env.insert(name, value);
         }
     }
 }

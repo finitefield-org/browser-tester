@@ -51,11 +51,17 @@ fn nested_function_scope_bindings_keep_caller_local_close() -> Result<()> {
     let parse_bracket_group = find_function(&make.stmts, "parseBracketGroup");
     let bindings = Harness::collect_function_scope_bindings(parse_bracket_group);
 
-    assert!(bindings.contains("open"), "missing open binding: {bindings:?}");
+    assert!(
+        bindings.contains("open"),
+        "missing open binding: {bindings:?}"
+    );
     assert!(
         bindings.contains("close"),
         "missing close binding: {bindings:?}"
     );
-    assert!(bindings.contains("inner"), "missing inner binding: {bindings:?}");
+    assert!(
+        bindings.contains("inner"),
+        "missing inner binding: {bindings:?}"
+    );
     Ok(())
 }

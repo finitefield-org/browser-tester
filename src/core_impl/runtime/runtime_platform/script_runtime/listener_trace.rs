@@ -11,6 +11,7 @@ impl Harness {
         let listeners = self.listeners.get(node_id, &event.event_type, capture);
         for listener in listeners {
             let mut listener_env = env.clone();
+            self.project_pending_listener_capture_env_updates(&mut listener_env);
             if !listener.is_arrow {
                 let this_value = event
                     .current_target_value
@@ -57,6 +58,7 @@ impl Harness {
                     for (name, value) in &listener_env {
                         if Self::is_internal_env_key(name)
                             || function.local_bindings.contains(name.as_str())
+                            || Self::env_has_local_binding(&captured_env_snapshot, name)
                             || function.captured_global_names.contains(name.as_str())
                             || matches!(name.as_str(), "this" | "arguments")
                             || !captured_env.contains_key(name)

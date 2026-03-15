@@ -46,9 +46,7 @@ pub(crate) fn parse_block_statements_with_flags(
                     allow_top_level_import,
                 )
                 .map_err(|err| {
-                    Error::ScriptParse(format!(
-                        "statement parse failed: stmt={stmt:?} err={err:?}"
-                    ))
+                    Error::ScriptParse(format!("statement parse failed: stmt={stmt:?} err={err:?}"))
                 })?;
                 stmts.push(parsed);
             }
@@ -1196,7 +1194,9 @@ fn consume_single_statement_len(src: &str) -> Result<usize> {
         let _ = cursor.read_balanced_block(b'(', b')')?;
         cursor.skip_ws();
         if cursor.peek() != Some(b'{') {
-            return Err(Error::ScriptParse("switch statement requires a block".into()));
+            return Err(Error::ScriptParse(
+                "switch statement requires a block".into(),
+            ));
         }
         let _ = cursor.read_balanced_block(b'{', b'}')?;
         cursor.skip_ws();

@@ -372,8 +372,8 @@ fn nested_call_keeps_caller_local_binding_after_sibling_call() -> browser_tester
 }
 
 #[test]
-fn trivial_nested_call_does_not_replace_local_close_with_window_close()
--> browser_tester::Result<()> {
+fn trivial_nested_call_does_not_replace_local_close_with_window_close() -> browser_tester::Result<()>
+{
     let html = r#"
     <button id="go" type="button">go</button>
     <div id="out"></div>
@@ -533,7 +533,6 @@ fn nested_parse_number_keeps_outer_progress_visible() -> browser_tester::Result<
     harness.assert_text("#out", "Al2|index=3|curr=(")?;
     Ok(())
 }
-
 
 #[test]
 fn plain_formula_parser_accepts_parenthesized_groups() -> browser_tester::Result<()> {

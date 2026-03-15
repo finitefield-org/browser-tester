@@ -125,7 +125,7 @@ impl Harness {
         };
         self.with_callback_scope_depth(env, |this, callback_env| {
             this.with_isolated_loop_control_scope(|this| {
-                this.apply_pending_listener_capture_env_updates(callback_env);
+                this.project_pending_listener_capture_env_updates(callback_env);
                 this.bind_handler_params(handler, &event_args, callback_env, &event_param, event)?;
                 let flow = this.execute_stmts(&handler.stmts, &event_param, event, callback_env)?;
                 Self::sync_event_argument_back_to_state(
@@ -617,6 +617,7 @@ impl Harness {
     ) -> Result<()> {
         match callback {
             TimerCallback::Reference(name) => {
+                self.apply_pending_listener_capture_env_updates(env);
                 let callable = env
                     .get(name)
                     .cloned()
@@ -749,12 +750,22 @@ impl Harness {
         }
 
         let mut propagated_updates = HashMap::new();
-        let mut fallback_shared_env = None;
         for frame in &mut self.script_runtime.listener_capture_env_stack[start_len..] {
-            if fallback_shared_env.is_none() {
-                fallback_shared_env = frame.shared_env.clone();
+            let pending_updates = std::mem::take(&mut frame.pending_env_updates);
+            if let Some(shared_env) = frame.shared_env.as_ref() {
+                let mut shared_env = shared_env.borrow_mut();
+                for (name, value) in &pending_updates {
+                    if Self::is_internal_env_key(name) {
+                        continue;
+                    }
+                    if let Some(value) = value {
+                        shared_env.insert(name.clone(), value.clone());
+                    } else {
+                        shared_env.remove(name);
+                    }
+                }
             }
-            propagated_updates.extend(std::mem::take(&mut frame.pending_env_updates));
+            propagated_updates.extend(pending_updates);
         }
 
         self.script_runtime
@@ -767,21 +778,6 @@ impl Harness {
 
         if let Some(parent) = self.script_runtime.listener_capture_env_stack.last_mut() {
             parent.pending_env_updates.extend(propagated_updates);
-            return;
-        }
-
-        if let Some(shared_env) = fallback_shared_env {
-            let mut shared_env = shared_env.borrow_mut();
-            for (name, value) in propagated_updates {
-                if Self::is_internal_env_key(&name) {
-                    continue;
-                }
-                if let Some(value) = value {
-                    shared_env.insert(name, value);
-                } else {
-                    shared_env.remove(&name);
-                }
-            }
         }
     }
 
@@ -891,24 +887,32 @@ impl Harness {
         }
     }
 
-    pub(crate) fn apply_pending_listener_capture_env_updates(
+    pub(crate) fn pending_listener_capture_scope_start(env: &HashMap<String, Value>) -> usize {
+        match env.get(INTERNAL_PENDING_SCOPE_START_KEY) {
+            Some(Value::Number(start)) if *start >= 0 => *start as usize,
+            _ => 0,
+        }
+    }
+
+    fn listener_capture_pending_updates_snapshot_from(
+        &self,
+        start: usize,
+    ) -> HashMap<String, Option<Value>> {
+        let mut updates = HashMap::new();
+        let start = start.min(self.script_runtime.listener_capture_env_stack.len());
+        for frame in &self.script_runtime.listener_capture_env_stack[start..] {
+            updates.extend(frame.pending_env_updates.clone());
+        }
+        updates
+    }
+
+    fn apply_listener_capture_pending_updates_map(
         &mut self,
         env: &mut HashMap<String, Value>,
+        updates: HashMap<String, Option<Value>>,
     ) {
-        if self.script_runtime.listener_capture_env_stack.is_empty() {
+        if updates.is_empty() {
             return;
-        }
-        if self
-            .script_runtime
-            .listener_capture_env_stack
-            .iter()
-            .all(|frame| frame.pending_env_updates.is_empty())
-        {
-            return;
-        }
-        let mut updates = HashMap::new();
-        for frame in &mut self.script_runtime.listener_capture_env_stack {
-            updates.extend(std::mem::take(&mut frame.pending_env_updates));
         }
         let allow_local_bindings = self
             .script_runtime
@@ -916,7 +920,8 @@ impl Harness {
             .iter()
             .rev()
             .find_map(|frame| {
-                frame.shared_env
+                frame
+                    .shared_env
                     .as_ref()
                     .map(|_| frame.shared_env_owned_by_scope)
             })
@@ -941,6 +946,35 @@ impl Harness {
         }
     }
 
+    pub(crate) fn project_pending_listener_capture_env_updates(
+        &mut self,
+        env: &mut HashMap<String, Value>,
+    ) {
+        if self.script_runtime.listener_capture_env_stack.is_empty() {
+            return;
+        }
+        let updates = self.listener_capture_pending_updates_snapshot_from(0);
+        self.apply_listener_capture_pending_updates_map(env, updates);
+    }
+
+    pub(crate) fn apply_pending_listener_capture_env_updates(
+        &mut self,
+        env: &mut HashMap<String, Value>,
+    ) {
+        if self.script_runtime.listener_capture_env_stack.is_empty() {
+            return;
+        }
+        let drain_start = Self::pending_listener_capture_scope_start(env)
+            .min(self.script_runtime.listener_capture_env_stack.len());
+        let updates = self.listener_capture_pending_updates_snapshot_from(drain_start);
+        if updates.is_empty() {
+            return;
+        }
+        self.apply_listener_capture_pending_updates_map(env, updates);
+        for frame in &mut self.script_runtime.listener_capture_env_stack[drain_start..] {
+            frame.pending_env_updates.clear();
+        }
+    }
 
     pub(crate) fn push_pending_function_decl_scope(
         &mut self,
@@ -995,6 +1029,7 @@ impl Harness {
             return;
         }
 
+        let local_binding = Self::env_has_local_binding(env, name);
         let shared_frame_tracks_name = self
             .script_runtime
             .listener_capture_env_stack
@@ -1002,6 +1037,9 @@ impl Harness {
             .rev()
             .find(|frame| frame.shared_env.is_some())
             .is_some_and(|frame| {
+                if local_binding && !frame.shared_env_owned_by_scope {
+                    return false;
+                }
                 frame.shared_env_owned_by_scope
                     || frame.pending_env_updates.contains_key(name)
                     || frame
@@ -1009,8 +1047,7 @@ impl Harness {
                         .as_ref()
                         .is_some_and(|shared_env| shared_env.borrow().contains_key(name))
             });
-
-        if Self::env_has_local_binding(env, name) && !shared_frame_tracks_name {
+        if local_binding && !shared_frame_tracks_name {
             return;
         }
 
@@ -1047,7 +1084,6 @@ impl Harness {
             if !function.captured_env.borrow().contains_key(name) {
                 continue;
             }
-
             function
                 .captured_env
                 .borrow_mut()

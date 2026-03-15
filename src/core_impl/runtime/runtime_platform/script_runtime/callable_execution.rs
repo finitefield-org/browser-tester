@@ -207,8 +207,10 @@ impl Harness {
         let captured_env = if global_scope {
             Rc::new(RefCell::new(self.script_runtime.env.share()))
         } else {
+            let mut captured_snapshot = env.clone();
+            self.project_pending_listener_capture_env_updates(&mut captured_snapshot);
             let captured_env = self.ensure_listener_capture_env();
-            *captured_env.borrow_mut() = ScriptEnv::from_snapshot(env);
+            *captured_env.borrow_mut() = ScriptEnv::from_snapshot(&captured_snapshot);
             captured_env
         };
         let captured_env_snapshot = captured_env.borrow();
@@ -244,8 +246,11 @@ impl Harness {
             }
         }
         drop(captured_env_snapshot);
-        if !global_scope && !captured_global_names.is_empty() {
+        if !global_scope && (!captured_global_names.is_empty() || !local_bindings.is_empty()) {
             let mut captured_env = captured_env.borrow_mut();
+            for name in &local_bindings {
+                captured_env.remove(name);
+            }
             for name in &captured_global_names {
                 captured_env.remove(name);
             }
@@ -7357,6 +7362,7 @@ impl Harness {
                     .push(initialized);
             }
 
+            let listener_capture_scope_start = this.script_runtime.listener_capture_env_stack.len();
             let captured_env_seed =
                 (!function.global_scope).then(|| function.captured_env.borrow().share());
             let shared_env_frame_start = (!function.global_scope).then(|| {
@@ -7378,7 +7384,10 @@ impl Harness {
                         call_env.remove(name);
                     }
                     call_env.remove(INTERNAL_RETURN_SLOT);
+                    call_env.remove(INTERNAL_LOCAL_BINDINGS_KEY);
                     if let Some(caller_view) = caller_env {
+                        let caller_scope_start =
+                            Self::pending_listener_capture_scope_start(caller_view);
                         for name in Self::env_top_level_lexical_binding_names(&call_env) {
                             if Self::is_internal_env_key(&name)
                                 || function.local_bindings.contains(name.as_str())
@@ -7387,8 +7396,15 @@ impl Harness {
                             {
                                 continue;
                             }
-                            if let Some(value) = caller_view.get(&name).cloned() {
-                                call_env.insert(name, value);
+                            if let Some(pending) = this.resolve_listener_capture_pending_value_from(
+                                caller_scope_start,
+                                &name,
+                            ) {
+                                if let Some(value) = pending {
+                                    call_env.insert(name, value);
+                                } else {
+                                    call_env.remove(&name);
+                                }
                             }
                         }
                     }
@@ -7396,6 +7412,10 @@ impl Harness {
                     call_env.insert(
                         INTERNAL_SCOPE_DEPTH_KEY.to_string(),
                         Value::Number(scope_depth.saturating_add(1)),
+                    );
+                    call_env.insert(
+                        INTERNAL_PENDING_SCOPE_START_KEY.to_string(),
+                        Value::Number(listener_capture_scope_start as i64),
                     );
                     if function.is_arrow {
                         if !call_env.contains_key("this") {
@@ -7539,7 +7559,7 @@ impl Harness {
                             ..ListenerCaptureFrame::default()
                         });
                     let bind_result = (|| -> Result<()> {
-                        this.apply_pending_listener_capture_env_updates(&mut call_env);
+                        this.project_pending_listener_capture_env_updates(&mut call_env);
                         this.bind_handler_params(
                             &function.handler,
                             args,
@@ -7739,10 +7759,21 @@ impl Harness {
                             .is_some_and(|env| Self::env_has_local_or_lexical_binding(env, name))
                     };
                     let effective_call_binding = |this: &Self, name: &str| {
+                        let current_scope_pending = this
+                            .resolve_listener_capture_pending_value_from(
+                                Self::pending_listener_capture_scope_start(&call_env),
+                                name,
+                            );
+                        if let Some(pending) = current_scope_pending {
+                            return pending;
+                        }
+                        if let Some(value) = call_env.get(name).cloned() {
+                            return Some(value);
+                        }
                         if let Some(pending) = this.resolve_listener_capture_pending_value(name) {
                             return pending;
                         }
-                        call_env.get(name).cloned()
+                        None
                     };
                     for name in &global_sync_keys {
                         if Self::is_internal_env_key(name)
@@ -7802,8 +7833,7 @@ impl Harness {
                             }
                             let before = captured_env_before_call.get(name);
                             let call_after_from_env = effective_call_binding(this, name);
-                            let call_after_from_shared =
-                                captured_env_after_call.get(name).cloned();
+                            let call_after_from_shared = captured_env_after_call.get(name).cloned();
                             let call_after = match (
                                 before,
                                 call_after_from_env.as_ref(),
@@ -7831,12 +7861,23 @@ impl Harness {
                             if let Some(next) = call_after {
                                 captured_env.insert(name.clone(), next.clone());
                                 if caller_shadows_name(name) {
-                                    this.script_runtime.expression_env_overrides.remove(name);
-                                } else {
-                                    this.script_runtime
-                                        .expression_env_overrides
-                                        .insert(name.clone(), Some(next.clone()));
+                                    if let Some(parent_index) = shared_env_frame_start
+                                        .and_then(|start| start.checked_sub(1))
+                                    {
+                                        if let Some(parent_frame) = this
+                                            .script_runtime
+                                            .listener_capture_env_stack
+                                            .get_mut(parent_index)
+                                        {
+                                            parent_frame
+                                                .pending_env_updates
+                                                .insert(name.clone(), Some(next.clone()));
+                                        }
+                                    }
                                 }
+                                this.script_runtime
+                                    .expression_env_overrides
+                                    .insert(name.clone(), Some(next.clone()));
                                 this.queue_listener_capture_env_update_for_shared_env(
                                     &function.captured_env,
                                     name.clone(),
@@ -7846,12 +7887,23 @@ impl Harness {
                             } else {
                                 captured_env.remove(name);
                                 if caller_shadows_name(name) {
-                                    this.script_runtime.expression_env_overrides.remove(name);
-                                } else {
-                                    this.script_runtime
-                                        .expression_env_overrides
-                                        .insert(name.clone(), None);
+                                    if let Some(parent_index) = shared_env_frame_start
+                                        .and_then(|start| start.checked_sub(1))
+                                    {
+                                        if let Some(parent_frame) = this
+                                            .script_runtime
+                                            .listener_capture_env_stack
+                                            .get_mut(parent_index)
+                                        {
+                                            parent_frame
+                                                .pending_env_updates
+                                                .insert(name.clone(), None);
+                                        }
+                                    }
                                 }
+                                this.script_runtime
+                                    .expression_env_overrides
+                                    .insert(name.clone(), None);
                                 this.queue_listener_capture_env_update_for_shared_env(
                                     &function.captured_env,
                                     name.clone(),

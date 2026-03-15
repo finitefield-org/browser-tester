@@ -1,6 +1,51 @@
 use super::*;
 
 impl Harness {
+    fn dispatch_event_target_with_expr_env_sync(
+        &mut self,
+        target_object: Rc<RefCell<ObjectValue>>,
+        event_payload: Value,
+        env: &HashMap<String, Value>,
+    ) -> Result<EventState> {
+        let mut dispatch_env = env.clone();
+        self.project_pending_listener_capture_env_updates(&mut dispatch_env);
+        let dispatched =
+            self.dispatch_event_target_with_env(target_object, event_payload, &mut dispatch_env)?;
+
+        let mut names = env
+            .keys()
+            .filter(|name| !Self::is_internal_env_key(name))
+            .cloned()
+            .collect::<HashSet<_>>();
+        names.extend(
+            dispatch_env
+                .keys()
+                .filter(|name| !Self::is_internal_env_key(name))
+                .cloned(),
+        );
+        let mut changed = Vec::new();
+        for name in names {
+            let before = env.get(&name);
+            let after = dispatch_env.get(&name);
+            let changed_value = match (before, after) {
+                (Some(prev), Some(next)) => !self.strict_equal(prev, next),
+                (None, Some(_)) => true,
+                (Some(_), None) => true,
+                (None, None) => false,
+            };
+            if changed_value {
+                changed.push((name, after.cloned()));
+            }
+        }
+        if let Some(frame) = self.script_runtime.listener_capture_env_stack.last_mut() {
+            for (name, value) in changed {
+                frame.pending_env_updates.insert(name, value);
+            }
+        }
+
+        Ok(dispatched)
+    }
+
     fn execute_callable_value_with_env_and_sync(
         &mut self,
         callable: &Value,
@@ -278,16 +323,28 @@ impl Harness {
         Ok(Some(value))
     }
 
-    pub(crate) fn resolve_listener_capture_pending_value(
+    pub(crate) fn resolve_listener_capture_pending_value_from(
         &self,
+        start: usize,
         name: &str,
     ) -> Option<Option<Value>> {
-        for frame in self.script_runtime.listener_capture_env_stack.iter().rev() {
+        let start = start.min(self.script_runtime.listener_capture_env_stack.len());
+        for frame in self.script_runtime.listener_capture_env_stack[start..]
+            .iter()
+            .rev()
+        {
             if let Some(value) = frame.pending_env_updates.get(name) {
                 return Some(value.clone());
             }
         }
         None
+    }
+
+    pub(crate) fn resolve_listener_capture_pending_value(
+        &self,
+        name: &str,
+    ) -> Option<Option<Value>> {
+        self.resolve_listener_capture_pending_value_from(0, name)
     }
 
     fn current_dynamic_import_referrer(&self) -> String {
@@ -1005,8 +1062,11 @@ impl Harness {
                                 return Ok(Value::Bool(!dispatched.default_prevented));
                             }
                             if is_event_target_object {
-                                let dispatched =
-                                    self.dispatch_event_target(object.clone(), event_payload)?;
+                                let dispatched = self.dispatch_event_target_with_expr_env_sync(
+                                    object.clone(),
+                                    event_payload,
+                                    env,
+                                )?;
                                 return Ok(Value::Bool(!dispatched.default_prevented));
                             }
                         }
@@ -1686,7 +1746,17 @@ impl Harness {
                         return Self::super_prototype_from_env(env);
                     }
                     self.ensure_binding_initialized(env, name)?;
+                    let current_scope_pending = self.resolve_listener_capture_pending_value_from(
+                        Self::pending_listener_capture_scope_start(env),
+                        name,
+                    );
                     if Self::env_has_local_or_lexical_binding(env, name) {
+                        if let Some(pending) = current_scope_pending.clone() {
+                            if let Some(value) = pending {
+                                return Ok(value);
+                            }
+                            return Err(Error::ScriptRuntime(format!("unknown variable: {name}")));
+                        }
                         if let Some(value) = env.get(name).cloned() {
                             return Ok(value);
                         }
@@ -1699,19 +1769,24 @@ impl Harness {
                         .flatten()
                     {
                         Ok(value)
-                    } else if let Some(pending) = self.resolve_listener_capture_pending_value(name)
+                    } else if let Some(Some(value)) =
+                        self.resolve_listener_capture_pending_value(name)
                     {
+                        Ok(value)
+                    } else if let Some(value) = env.get(name).cloned() {
+                        Ok(value)
+                    } else if let Some(pending) = current_scope_pending {
                         if let Some(value) = pending {
                             Ok(value)
                         } else {
                             Err(Error::ScriptRuntime(format!("unknown variable: {name}")))
                         }
-                    } else if let Some(value) = env.get(name).cloned() {
-                        Ok(value)
                     } else if let Some(value) = self.resolve_pending_function_decl(name, env) {
                         Ok(value)
                     } else if let Some(value) = self.resolve_runtime_global_identifier(name) {
                         Ok(value)
+                    } else if self.resolve_listener_capture_pending_value(name).is_some() {
+                        Err(Error::ScriptRuntime(format!("unknown variable: {name}")))
                     } else {
                         Err(Error::ScriptRuntime(format!("unknown variable: {name}")))
                     }
