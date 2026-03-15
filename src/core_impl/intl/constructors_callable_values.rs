@@ -287,6 +287,7 @@ impl Harness {
             captured_env: Rc::new(RefCell::new(ScriptEnv::default())),
             captured_pending_function_decls: Vec::new(),
             captured_global_names: HashSet::new(),
+            captured_names: HashSet::new(),
             local_bindings: HashSet::new(),
             prototype_object: Rc::new(RefCell::new(ObjectValue::default())),
             global_scope: true,

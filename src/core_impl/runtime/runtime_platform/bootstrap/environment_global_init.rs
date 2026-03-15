@@ -413,6 +413,7 @@ impl Harness {
         let fetch_callable = Self::new_fetch_callable_value();
         let match_media_callable = Self::new_match_media_callable_value();
         let close_callable = Self::new_window_close_callable_value();
+        let open_callable = Self::new_window_open_callable_value();
         let stop_callable = Self::new_window_stop_callable_value();
         let focus_callable = Self::new_window_focus_callable_value();
         let scroll_callable = Self::new_window_scroll_callable_value();
@@ -625,6 +626,7 @@ impl Harness {
             &node_filter_constants,
             &local_storage,
             &close_callable,
+            &open_callable,
             &stop_callable,
             &focus_callable,
             &scroll_callable,
@@ -982,6 +984,9 @@ impl Harness {
         self.script_runtime
             .env
             .insert("close".to_string(), close_callable);
+        self.script_runtime
+            .env
+            .insert("open".to_string(), open_callable);
         self.script_runtime
             .env
             .insert("stop".to_string(), stop_callable);

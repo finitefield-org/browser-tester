@@ -69,6 +69,40 @@ fn click_toggles_button_inside_open_dialog() -> browser_tester::Result<()> {
 }
 
 #[test]
+fn window_open_returns_popup_stub_for_print_flows() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="go">go</button>
+    <div id="out"></div>
+    <script>
+      document.getElementById("go").addEventListener("click", () => {
+        const win = window.open("", "_blank", "noopener,noreferrer");
+        if (!win) {
+          document.getElementById("out").textContent = "null";
+          return;
+        }
+        win.document.open();
+        win.document.write("<p>print view</p>");
+        win.document.close();
+        win.focus();
+        win.print();
+        document.getElementById("out").textContent = [
+          String(win.closed),
+          String(win.opener === null),
+          String(win.document.readyState),
+        ].join("|");
+      });
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#go")?;
+
+    harness.assert_text("#out", "false|true|complete")?;
+    assert_eq!(harness.take_print_call_count(), 1);
+    Ok(())
+}
+
+#[test]
 fn click_preserves_pre_request_animation_frame_processing_state() -> browser_tester::Result<()> {
     let html = r#"
     <button id="run" type="button">Run</button>
@@ -215,6 +249,104 @@ fn iife_helper_listener_reads_live_outer_let_after_sibling_render() -> browser_t
     harness.click("#open")?;
     harness.click("#copy")?;
     harness.assert_text("#result", "1.23 mg/L")?;
+    Ok(())
+}
+
+#[test]
+fn iife_function_keeps_later_sibling_function_declaration_callable() -> browser_tester::Result<()> {
+    let html = r#"
+    <p id="result"></p>
+    <script>
+      (() => {
+        const state = createDefaultState();
+
+        function createDefaultState() {
+          return {
+            fieldRules: defaultFieldRules(),
+          };
+        }
+
+        function defaultFieldRules() {
+          return ["ok"];
+        }
+
+        document.getElementById("result").textContent = state.fieldRules[0];
+      })();
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn listener_reference_keeps_pending_function_decl_outer_capture() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="go">go</button>
+    <div id="out"></div>
+    <script>
+      (() => {
+        let lastResult = null;
+
+        function attachEvents() {
+          document.getElementById("go").addEventListener("click", openPrintView);
+        }
+
+        function openPrintView() {
+          document.getElementById("out").textContent = lastResult ? lastResult.value : "null";
+        }
+
+        function recompute() {
+          lastResult = { value: "ready" };
+        }
+
+        attachEvents();
+        recompute();
+      })();
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#go")?;
+    harness.assert_text("#out", "ready")?;
+    Ok(())
+}
+
+#[test]
+fn sibling_closure_calls_do_not_prune_scope_capture_env() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="open">open</button>
+    <button id="print">print</button>
+    <div id="out"></div>
+    <script>
+      (() => {
+        const el = {
+          out: document.getElementById("out"),
+          open: document.getElementById("open"),
+          print: document.getElementById("print"),
+        };
+        let state = { mode: "ready" };
+        let lastResult = { value: "ok" };
+
+        function openDialog() {
+          el.out.dataset.dialog = "open";
+        }
+
+        function openPrintView() {
+          el.out.textContent = lastResult.value + ":" + state.mode;
+        }
+
+        el.open.addEventListener("click", openDialog);
+        el.print.addEventListener("click", openPrintView);
+      })();
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#open")?;
+    harness.click("#print")?;
+    harness.assert_text("#out", "ok:ready")?;
     Ok(())
 }
 
@@ -869,5 +1001,63 @@ fn append_child_syncs_select_value_for_preselected_option() -> browser_tester::R
     let harness = Harness::from_html(html)?;
     harness.assert_text("#out", "value:ml")?;
     harness.assert_value("#s", "ml")?;
+    Ok(())
+}
+
+#[test]
+fn nested_helper_function_retains_transitive_outer_capture() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="run" type="button">Run</button>
+    <p id="out"></p>
+    <script>
+      (() => {
+        const prefix = "outer";
+
+        function makeHandler() {
+          function formatValue() {
+            return prefix + "-value";
+          }
+
+          return () => {
+            document.getElementById("out").textContent = formatValue();
+          };
+        }
+
+        const handler = makeHandler();
+        document.getElementById("run").addEventListener("click", handler);
+      })();
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#run")?;
+    harness.assert_text("#out", "outer-value")?;
+    Ok(())
+}
+
+#[test]
+fn class_field_initializer_keeps_outer_capture_through_factory() -> browser_tester::Result<()> {
+    let html = r#"
+    <p id="out"></p>
+    <script>
+      (() => {
+        const prefix = "captured";
+
+        function buildWidget() {
+          class Widget {
+            label = prefix + "-field";
+          }
+
+          return Widget;
+        }
+
+        const Widget = buildWidget();
+        document.getElementById("out").textContent = new Widget().label;
+      })();
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#out", "captured-field")?;
     Ok(())
 }

@@ -223,6 +223,10 @@ impl Harness {
                         )
                     }
                 };
+                let captured_names = function
+                    .as_ref()
+                    .map(|function| function.captured_names.clone())
+                    .unwrap_or_else(|| Self::collect_function_capture_names(handler));
                 self.listeners.add(
                     node,
                     event_type.to_string(),
@@ -232,6 +236,7 @@ impl Harness {
                         is_arrow,
                         handler: handler.clone(),
                         function,
+                        captured_names,
                         captured_env,
                         captured_pending_function_decls,
                     },

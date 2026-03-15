@@ -740,6 +740,7 @@ pub(crate) struct Listener {
     pub(crate) is_arrow: bool,
     pub(crate) handler: ScriptHandler,
     pub(crate) function: Option<Rc<FunctionValue>>,
+    pub(crate) captured_names: HashSet<String>,
     pub(crate) captured_env: Rc<RefCell<ScriptEnv>>,
     pub(crate) captured_pending_function_decls:
         Vec<Arc<HashMap<String, (ScriptHandler, bool, bool)>>>,
@@ -749,34 +750,64 @@ pub(crate) struct Listener {
 pub(crate) struct ListenerStore {
     pub(crate) map: HashMap<NodeId, HashMap<String, Vec<Listener>>>,
     pub(crate) capture_name_counts: HashMap<String, usize>,
+    pub(crate) capture_envs_by_name: HashMap<String, Vec<std::rc::Weak<RefCell<ScriptEnv>>>>,
 }
 
 impl ListenerStore {
     fn increment_capture_names(&mut self, listener: &Listener) {
-        let captured_env = listener.captured_env.borrow();
-        for name in captured_env.keys() {
-            if name.starts_with("\u{0}\u{0}bt_") {
+        for name in &listener.captured_names {
+            *self.capture_name_counts.entry(name.clone()).or_insert(0) += 1;
+            let tracked_envs = self.capture_envs_by_name.entry(name.clone()).or_default();
+            tracked_envs.retain(|weak_env| weak_env.strong_count() > 0);
+            if tracked_envs
+                .iter()
+                .filter_map(|weak_env| weak_env.upgrade())
+                .any(|existing| Rc::ptr_eq(&existing, &listener.captured_env))
+            {
                 continue;
             }
-            *self.capture_name_counts.entry(name.clone()).or_insert(0) += 1;
+            tracked_envs.push(Rc::downgrade(&listener.captured_env));
         }
     }
 
     fn decrement_capture_names(&mut self, listener: &Listener) {
-        let captured_env = listener.captured_env.borrow();
-        for name in captured_env.keys() {
-            if name.starts_with("\u{0}\u{0}bt_") {
-                continue;
-            }
+        for name in &listener.captured_names {
             let Some(count) = self.capture_name_counts.get_mut(name) else {
                 continue;
             };
             if *count <= 1 {
                 self.capture_name_counts.remove(name);
+                self.capture_envs_by_name.remove(name);
             } else {
                 *count -= 1;
             }
         }
+    }
+
+    pub(crate) fn captured_envs_for_name(&mut self, name: &str) -> Vec<Rc<RefCell<ScriptEnv>>> {
+        let mut captured_envs = Vec::new();
+        let mut seen = HashSet::new();
+        let mut remove_name_entry = false;
+
+        if let Some(tracked_envs) = self.capture_envs_by_name.get_mut(name) {
+            tracked_envs.retain(|weak_env| {
+                let Some(env) = weak_env.upgrade() else {
+                    return false;
+                };
+                let env_id = Rc::as_ptr(&env) as usize;
+                if seen.insert(env_id) {
+                    captured_envs.push(env);
+                }
+                true
+            });
+            remove_name_entry = tracked_envs.is_empty();
+        }
+
+        if remove_name_entry {
+            self.capture_envs_by_name.remove(name);
+        }
+
+        captured_envs
     }
 
     pub(crate) fn add(&mut self, node_id: NodeId, event: String, listener: Listener) {

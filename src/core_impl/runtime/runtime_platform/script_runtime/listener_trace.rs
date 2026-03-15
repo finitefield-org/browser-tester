@@ -22,17 +22,12 @@ impl Harness {
                 self.set_const_binding(&mut listener_env, "this", false);
             }
             let captured_env_snapshot = listener.captured_env.borrow().to_map();
-            let captured_keys = captured_env_snapshot
-                .keys()
-                .filter(|name| !Self::is_internal_env_key(name))
-                .cloned()
-                .collect::<Vec<_>>();
-            for (name, value) in &captured_env_snapshot {
-                if Self::is_internal_env_key(name) {
-                    continue;
-                }
-                if !listener_env.contains_key(name) {
-                    listener_env.insert(name.clone(), value.clone());
+            let captured_keys = listener.captured_names.iter().cloned().collect::<Vec<_>>();
+            for name in &captured_keys {
+                if let Some(value) = captured_env_snapshot.get(name) {
+                    if !listener_env.contains_key(name) {
+                        listener_env.insert(name.clone(), value.clone());
+                    }
                 }
             }
             let current_keys = env.keys().cloned().collect::<Vec<_>>();
@@ -61,7 +56,7 @@ impl Harness {
                             || Self::env_has_local_binding(&captured_env_snapshot, name)
                             || function.captured_global_names.contains(name.as_str())
                             || matches!(name.as_str(), "this" | "arguments")
-                            || !captured_env.contains_key(name)
+                            || !function.captured_names.contains(name)
                         {
                             continue;
                         }

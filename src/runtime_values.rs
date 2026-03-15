@@ -713,6 +713,7 @@ pub(crate) struct FunctionValue {
     pub(crate) captured_pending_function_decls:
         Vec<Arc<HashMap<String, (ScriptHandler, bool, bool)>>>,
     pub(crate) captured_global_names: HashSet<String>,
+    pub(crate) captured_names: HashSet<String>,
     pub(crate) local_bindings: HashSet<String>,
     pub(crate) prototype_object: Rc<RefCell<ObjectValue>>,
     pub(crate) global_scope: bool,

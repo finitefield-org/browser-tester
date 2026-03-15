@@ -26,7 +26,10 @@ impl Harness {
                 let Value::Function(function) = entry else {
                     continue;
                 };
-                if function.global_scope || function.local_bindings.contains(name) {
+                if function.global_scope
+                    || function.local_bindings.contains(name)
+                    || !function.captured_names.contains(name)
+                {
                     continue;
                 }
                 function
@@ -43,20 +46,14 @@ impl Harness {
         }
 
         if self.listeners.capture_name_counts.contains_key(name) {
-            for events in self.listeners.map.values_mut() {
-                for listeners in events.values_mut() {
-                    for listener in listeners.iter_mut() {
-                        let captured_has_binding =
-                            listener.captured_env.borrow().contains_key(name);
-                        if !captured_has_binding {
-                            continue;
-                        }
-                        listener
-                            .captured_env
-                            .borrow_mut()
-                            .insert(name.to_string(), value.clone());
-                    }
+            for captured_env in self.listeners.captured_envs_for_name(name) {
+                let captured_has_binding = captured_env.borrow().contains_key(name);
+                if !captured_has_binding {
+                    continue;
                 }
+                captured_env
+                    .borrow_mut()
+                    .insert(name.to_string(), value.clone());
             }
         }
 
@@ -72,7 +69,10 @@ impl Harness {
                 let Value::Function(function) = entry else {
                     continue;
                 };
-                if function.global_scope || function.local_bindings.contains(name) {
+                if function.global_scope
+                    || function.local_bindings.contains(name)
+                    || !function.captured_names.contains(name)
+                {
                     continue;
                 }
                 function

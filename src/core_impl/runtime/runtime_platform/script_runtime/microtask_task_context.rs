@@ -731,14 +731,14 @@ impl Harness {
     pub(crate) fn push_shared_listener_capture_env_frame(
         &mut self,
         shared_env: Rc<RefCell<ScriptEnv>>,
-        _inherit_outer_pending: bool,
+        shared_env_owned_by_scope: bool,
     ) -> usize {
         let start_len = self.script_runtime.listener_capture_env_stack.len();
         self.script_runtime
             .listener_capture_env_stack
             .push(ListenerCaptureFrame {
                 shared_env: Some(shared_env),
-                shared_env_owned_by_scope: false,
+                shared_env_owned_by_scope,
                 ..ListenerCaptureFrame::default()
             });
         start_len
@@ -1081,7 +1081,7 @@ impl Harness {
             if function.global_scope || function.local_bindings.contains(name) {
                 continue;
             }
-            if !function.captured_env.borrow().contains_key(name) {
+            if !function.captured_names.contains(name) {
                 continue;
             }
             function

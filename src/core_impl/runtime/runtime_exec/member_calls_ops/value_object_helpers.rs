@@ -3326,6 +3326,13 @@ impl Harness {
         )])
     }
 
+    pub(crate) fn new_window_open_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("window_open_function".to_string()),
+        )])
+    }
+
     pub(crate) fn new_window_stop_callable_value() -> Value {
         Self::new_object_value(vec![(
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
@@ -3435,6 +3442,48 @@ impl Harness {
         Self::new_object_value(vec![(
             INTERNAL_CALLABLE_KIND_KEY.to_string(),
             Value::String("window_prompt_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_popup_window_close_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("popup_window_close_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_popup_window_focus_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("popup_window_focus_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_popup_window_print_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("popup_window_print_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_popup_document_open_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("popup_document_open_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_popup_document_write_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("popup_document_write_function".to_string()),
+        )])
+    }
+
+    pub(crate) fn new_popup_document_close_callable_value() -> Value {
+        Self::new_object_value(vec![(
+            INTERNAL_CALLABLE_KIND_KEY.to_string(),
+            Value::String("popup_document_close_function".to_string()),
         )])
     }
 
@@ -6917,6 +6966,7 @@ impl Harness {
             "fetch_function" => Some(("fetch", 1)),
             "match_media_function" => Some(("matchMedia", 1)),
             "window_close_function" => Some(("close", 0)),
+            "window_open_function" => Some(("open", 0)),
             "window_stop_function" => Some(("stop", 0)),
             "window_focus_function" => Some(("focus", 0)),
             "window_scroll_function" => Some(("scroll", 0)),
@@ -6935,6 +6985,12 @@ impl Harness {
             "window_print_function" => Some(("print", 0)),
             "window_report_error_function" => Some(("reportError", 1)),
             "window_prompt_function" => Some(("prompt", 0)),
+            "popup_window_close_function" => Some(("close", 0)),
+            "popup_window_focus_function" => Some(("focus", 0)),
+            "popup_window_print_function" => Some(("print", 0)),
+            "popup_document_open_function" => Some(("open", 0)),
+            "popup_document_write_function" => Some(("write", 0)),
+            "popup_document_close_function" => Some(("close", 0)),
             "global_css_escape" => Some(("escape", 1)),
             "intl_collator_compare" => Some(("compare", 2)),
             "intl_date_time_format" => Some(("format", 1)),
@@ -8220,6 +8276,7 @@ impl Harness {
                 "fetch_function" => "fetch_function",
                 "match_media_function" => "match_media_function",
                 "window_close_function" => "window_close_function",
+                "window_open_function" => "window_open_function",
                 "window_stop_function" => "window_stop_function",
                 "window_focus_function" => "window_focus_function",
                 "window_scroll_function" => "window_scroll_function",
@@ -8238,6 +8295,12 @@ impl Harness {
                 "window_print_function" => "window_print_function",
                 "window_report_error_function" => "window_report_error_function",
                 "window_prompt_function" => "window_prompt_function",
+                "popup_window_close_function" => "popup_window_close_function",
+                "popup_window_focus_function" => "popup_window_focus_function",
+                "popup_window_print_function" => "popup_window_print_function",
+                "popup_document_open_function" => "popup_document_open_function",
+                "popup_document_write_function" => "popup_document_write_function",
+                "popup_document_close_function" => "popup_document_close_function",
                 "request_constructor" => "request_constructor",
                 "file_constructor" => "file_constructor",
                 "clipboard_item_constructor" => "clipboard_item_constructor",

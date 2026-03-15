@@ -1847,6 +1847,8 @@ impl Harness {
                         let mut named = function.as_ref().clone();
                         named.expression_name = Some(expression_name.clone());
                         named.local_bindings.insert(expression_name.clone());
+                        named.captured_names.remove(expression_name);
+                        named.captured_global_names.remove(expression_name);
                         let named = Rc::new(named);
                         self.sync_function_prototype_object(&named);
                         Ok(Value::Function(named))

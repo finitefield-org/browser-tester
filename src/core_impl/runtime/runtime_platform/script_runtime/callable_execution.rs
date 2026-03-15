@@ -188,6 +188,308 @@ impl Harness {
         ScriptHandler { params, stmts }
     }
 
+    fn selective_function_capture_snapshot(
+        &mut self,
+        env: &HashMap<String, Value>,
+        capture_names: &HashSet<String>,
+    ) -> HashMap<String, Value> {
+        let declared_names = Self::env_local_or_lexical_binding_names(env);
+        let mut captured_snapshot = env
+            .iter()
+            .filter(|(name, _)| Self::is_internal_env_key(name))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect::<HashMap<_, _>>();
+        if let Some(return_slot) = env.get(INTERNAL_RETURN_SLOT).cloned() {
+            captured_snapshot.insert(INTERNAL_RETURN_SLOT.to_string(), return_slot);
+        }
+        for name in capture_names {
+            if let Some(value) = env.get(name).cloned() {
+                captured_snapshot.insert(name.clone(), value);
+            } else if declared_names.contains(name) && !self.has_pending_function_decl(name) {
+                captured_snapshot.insert(name.clone(), Value::Undefined);
+            }
+        }
+        self.project_pending_listener_capture_env_updates(&mut captured_snapshot);
+        captured_snapshot.retain(|name, _| {
+            Self::is_internal_env_key(name)
+                || name == INTERNAL_RETURN_SLOT
+                || capture_names.contains(name)
+        });
+        captured_snapshot
+    }
+
+    fn function_capture_snapshot(function: &FunctionValue) -> HashMap<String, Value> {
+        function
+            .captured_env
+            .borrow()
+            .iter()
+            .filter(|(name, _)| {
+                Self::is_internal_env_key(name)
+                    || *name == INTERNAL_RETURN_SLOT
+                    || function.captured_names.contains(*name)
+            })
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect()
+    }
+
+    fn expand_capture_names_with_pending_function_decls(
+        &self,
+        env: &HashMap<String, Value>,
+        capture_names: &mut HashSet<String>,
+    ) {
+        let mut pending = capture_names.iter().cloned().collect::<Vec<_>>();
+        while let Some(name) = pending.pop() {
+            if let Some(Value::Function(function)) = env.get(&name) {
+                for extra in &function.captured_names {
+                    if capture_names.insert(extra.clone()) {
+                        pending.push(extra.clone());
+                    }
+                }
+                continue;
+            }
+            if env
+                .get(&name)
+                .is_some_and(|value| !matches!(value, Value::Undefined))
+            {
+                continue;
+            }
+            let Some((handler, _, _)) = self
+                .script_runtime
+                .pending_function_decls
+                .iter()
+                .rev()
+                .find_map(|scope| scope.get(&name))
+            else {
+                continue;
+            };
+            for extra in Self::collect_function_capture_names(handler) {
+                if capture_names.insert(extra.clone()) {
+                    pending.push(extra);
+                }
+            }
+        }
+    }
+
+    fn has_pending_function_decl(&self, name: &str) -> bool {
+        self.script_runtime
+            .pending_function_decls
+            .iter()
+            .rev()
+            .any(|scope| scope.contains_key(name))
+    }
+
+    fn popup_window_receiver_object(value: Option<&Value>) -> Result<Rc<RefCell<ObjectValue>>> {
+        let Some(Value::Object(object)) = value else {
+            return Err(Error::ScriptRuntime(
+                "TypeError: popup window method called on incompatible receiver".into(),
+            ));
+        };
+        let is_popup_window = {
+            let entries = object.borrow();
+            matches!(
+                Self::object_get_entry(&entries, INTERNAL_POPUP_WINDOW_OBJECT_KEY),
+                Some(Value::Bool(true))
+            )
+        };
+        if !is_popup_window {
+            return Err(Error::ScriptRuntime(
+                "TypeError: popup window method called on incompatible receiver".into(),
+            ));
+        }
+        Ok(object.clone())
+    }
+
+    fn popup_document_receiver_object(value: Option<&Value>) -> Result<Rc<RefCell<ObjectValue>>> {
+        let Some(Value::Object(object)) = value else {
+            return Err(Error::ScriptRuntime(
+                "TypeError: popup document method called on incompatible receiver".into(),
+            ));
+        };
+        let is_popup_document = {
+            let entries = object.borrow();
+            matches!(
+                Self::object_get_entry(&entries, INTERNAL_POPUP_DOCUMENT_OBJECT_KEY),
+                Some(Value::Bool(true))
+            )
+        };
+        if !is_popup_document {
+            return Err(Error::ScriptRuntime(
+                "TypeError: popup document method called on incompatible receiver".into(),
+            ));
+        }
+        Ok(object.clone())
+    }
+
+    fn window_open_target_url(&self, args: &[Value]) -> String {
+        let requested = args.first().map(Value::as_string).unwrap_or_default();
+        if requested.trim().is_empty() {
+            "about:blank".to_string()
+        } else {
+            self.resolve_document_target_url(&requested)
+        }
+    }
+
+    fn window_open_disables_opener(features: &str) -> bool {
+        features.split(',').any(|raw_feature| {
+            let feature = raw_feature.trim();
+            if feature.is_empty() {
+                return false;
+            }
+            let mut parts = feature.splitn(2, '=');
+            let name = parts.next().unwrap_or_default().trim().to_ascii_lowercase();
+            let value = parts.next().map(|value| value.trim().to_ascii_lowercase());
+            match name.as_str() {
+                "noopener" | "noreferrer" => !matches!(
+                    value.as_deref(),
+                    Some("0") | Some("false") | Some("no")
+                ),
+                _ => false,
+            }
+        })
+    }
+
+    fn new_popup_window_value(&self, url: &str, target: &str, features: &str) -> Value {
+        let popup_window = Rc::new(RefCell::new(ObjectValue::default()));
+        let popup_document = Rc::new(RefCell::new(ObjectValue::default()));
+        let popup_window_value = Value::Object(popup_window.clone());
+        let popup_document_value = Value::Object(popup_document.clone());
+        let opener = if Self::window_open_disables_opener(features) {
+            Value::Null
+        } else {
+            Value::Object(self.dom_runtime.window_object.clone())
+        };
+        let popup_location = Self::new_object_value(vec![(
+            "href".to_string(),
+            Value::String(url.to_string()),
+        )]);
+
+        {
+            let mut document_entries = popup_document.borrow_mut();
+            Self::object_set_entry(
+                &mut document_entries,
+                INTERNAL_POPUP_DOCUMENT_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            );
+            Self::object_set_entry(
+                &mut document_entries,
+                INTERNAL_POPUP_DOCUMENT_HTML_KEY.to_string(),
+                Value::String(String::new()),
+            );
+            Self::object_set_entry(
+                &mut document_entries,
+                "defaultView".to_string(),
+                popup_window_value.clone(),
+            );
+            Self::object_set_entry(
+                &mut document_entries,
+                "URL".to_string(),
+                Value::String(url.to_string()),
+            );
+            Self::object_set_entry(
+                &mut document_entries,
+                "baseURI".to_string(),
+                Value::String(url.to_string()),
+            );
+            Self::object_set_entry(
+                &mut document_entries,
+                "readyState".to_string(),
+                Value::String("complete".to_string()),
+            );
+            Self::object_set_entry(
+                &mut document_entries,
+                "open".to_string(),
+                Self::new_popup_document_open_callable_value(),
+            );
+            Self::object_set_entry(
+                &mut document_entries,
+                "write".to_string(),
+                Self::new_popup_document_write_callable_value(),
+            );
+            Self::object_set_entry(
+                &mut document_entries,
+                "close".to_string(),
+                Self::new_popup_document_close_callable_value(),
+            );
+        }
+
+        {
+            let mut window_entries = popup_window.borrow_mut();
+            Self::object_set_entry(
+                &mut window_entries,
+                INTERNAL_POPUP_WINDOW_OBJECT_KEY.to_string(),
+                Value::Bool(true),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "window".to_string(),
+                popup_window_value.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "globalThis".to_string(),
+                popup_window_value.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "self".to_string(),
+                popup_window_value.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "top".to_string(),
+                popup_window_value.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "parent".to_string(),
+                popup_window_value.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "frames".to_string(),
+                popup_window_value.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "closed".to_string(),
+                Value::Bool(false),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "name".to_string(),
+                Value::String(target.to_string()),
+            );
+            Self::object_set_entry(&mut window_entries, "opener".to_string(), opener);
+            Self::object_set_entry(
+                &mut window_entries,
+                "location".to_string(),
+                popup_location,
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "document".to_string(),
+                popup_document_value.clone(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "close".to_string(),
+                Self::new_popup_window_close_callable_value(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "focus".to_string(),
+                Self::new_popup_window_focus_callable_value(),
+            );
+            Self::object_set_entry(
+                &mut window_entries,
+                "print".to_string(),
+                Self::new_popup_window_print_callable_value(),
+            );
+        }
+
+        popup_window_value
+    }
+
     fn make_function_value_with_kind(
         &mut self,
         handler: ScriptHandler,
@@ -204,16 +506,27 @@ impl Harness {
         let local_bindings = Self::collect_function_scope_bindings(&handler);
         let scope_depth = Self::env_scope_depth(env);
         let captured_pending_function_decls = self.script_runtime.pending_function_decls.clone();
-        let captured_env = if global_scope {
-            Rc::new(RefCell::new(self.script_runtime.env.share()))
+        let mut captured_names = if global_scope {
+            HashSet::new()
+        } else if is_class_constructor {
+            env.keys()
+                .filter(|name| !Self::is_internal_env_key(name) && name.as_str() != INTERNAL_RETURN_SLOT)
+                .cloned()
+                .collect()
         } else {
+            let mut capture_names = Self::collect_function_capture_names(&handler);
+            self.expand_capture_names_with_pending_function_decls(env, &mut capture_names);
+            capture_names
+        };
+        let mut captured_snapshot = if global_scope {
+            HashMap::new()
+        } else if is_class_constructor {
             let mut captured_snapshot = env.clone();
             self.project_pending_listener_capture_env_updates(&mut captured_snapshot);
-            let captured_env = self.ensure_listener_capture_env();
-            *captured_env.borrow_mut() = ScriptEnv::from_snapshot(&captured_snapshot);
-            captured_env
+            captured_snapshot
+        } else {
+            self.selective_function_capture_snapshot(env, &captured_names)
         };
-        let captured_env_snapshot = captured_env.borrow();
         let mut env_local_bindings = match env.get(INTERNAL_LOCAL_BINDINGS_KEY) {
             Some(Value::Array(bindings)) => bindings
                 .borrow()
@@ -227,7 +540,7 @@ impl Harness {
         };
         env_local_bindings.extend(Self::env_top_level_lexical_binding_names(env));
         let mut captured_global_names = HashSet::new();
-        for (name, value) in captured_env_snapshot.iter() {
+        for (name, value) in &captured_snapshot {
             if Self::is_internal_env_key(name) || name == INTERNAL_RETURN_SLOT {
                 continue;
             }
@@ -245,16 +558,45 @@ impl Harness {
                 captured_global_names.insert(name.clone());
             }
         }
-        drop(captured_env_snapshot);
-        if !global_scope && (!captured_global_names.is_empty() || !local_bindings.is_empty()) {
-            let mut captured_env = captured_env.borrow_mut();
+        if !global_scope {
             for name in &local_bindings {
-                captured_env.remove(name);
+                captured_snapshot.remove(name);
             }
             for name in &captured_global_names {
-                captured_env.remove(name);
+                captured_snapshot.remove(name);
             }
+            captured_names.retain(|name| {
+                !local_bindings.contains(name) && !captured_global_names.contains(name)
+            });
         }
+        let missing_capture_names = captured_names
+            .iter()
+            .filter(|name| {
+                !captured_snapshot.contains_key(*name) && !self.has_pending_function_decl(name)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let captured_env = if global_scope {
+            Rc::new(RefCell::new(self.script_runtime.env.share()))
+        } else if captured_names.is_empty() {
+            Rc::new(RefCell::new(if captured_snapshot.is_empty() {
+                ScriptEnv::default()
+            } else {
+                ScriptEnv::from_snapshot(&captured_snapshot)
+            }))
+        } else {
+            let captured_env = self.ensure_listener_capture_env();
+            {
+                let mut shared_env = captured_env.borrow_mut();
+                for (name, value) in captured_snapshot {
+                    shared_env.insert(name, value);
+                }
+            }
+            for name in missing_capture_names {
+                self.queue_listener_capture_env_update_for_shared_env(&captured_env, name, None);
+            }
+            captured_env
+        };
         let function_id = self.script_runtime.allocate_function_id();
         if !self.script_runtime.private_binding_stack.is_empty() {
             let mut captured_private_bindings = HashMap::new();
@@ -274,6 +616,7 @@ impl Harness {
             captured_env,
             captured_pending_function_decls,
             captured_global_names,
+            captured_names,
             local_bindings,
             prototype_object: Rc::new(RefCell::new(ObjectValue::default())),
             global_scope,
@@ -5132,6 +5475,17 @@ impl Harness {
                         self.sync_window_runtime_properties();
                         Ok(Value::Undefined)
                     }
+                    "window_open_function" => {
+                        if args.len() > 3 {
+                            return Err(Error::ScriptRuntime(
+                                "open supports zero to three arguments".into(),
+                            ));
+                        }
+                        let url = self.window_open_target_url(args);
+                        let target = args.get(1).map(Value::as_string).unwrap_or_default();
+                        let features = args.get(2).map(Value::as_string).unwrap_or_default();
+                        Ok(self.new_popup_window_value(&url, &target, &features))
+                    }
                     "window_stop_function" => Ok(Value::Undefined),
                     "window_focus_function" => Ok(Value::Undefined),
                     "window_scroll_function" => {
@@ -5410,6 +5764,75 @@ impl Harness {
                             Some(value) => Ok(Value::String(value)),
                             None => Ok(Value::Null),
                         }
+                    }
+                    "popup_window_close_function" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime("close takes no arguments".into()));
+                        }
+                        let popup_window = Self::popup_window_receiver_object(this_arg.as_ref())?;
+                        Self::object_set_entry(
+                            &mut popup_window.borrow_mut(),
+                            "closed".to_string(),
+                            Value::Bool(true),
+                        );
+                        Ok(Value::Undefined)
+                    }
+                    "popup_window_focus_function" => Ok(Value::Undefined),
+                    "popup_window_print_function" => {
+                        self.platform_mocks.print_call_count =
+                            self.platform_mocks.print_call_count.saturating_add(1);
+                        Ok(Value::Undefined)
+                    }
+                    "popup_document_open_function" => {
+                        let popup_document =
+                            Self::popup_document_receiver_object(this_arg.as_ref())?;
+                        {
+                            let mut document_entries = popup_document.borrow_mut();
+                            Self::object_set_entry(
+                                &mut document_entries,
+                                INTERNAL_POPUP_DOCUMENT_HTML_KEY.to_string(),
+                                Value::String(String::new()),
+                            );
+                            Self::object_set_entry(
+                                &mut document_entries,
+                                "readyState".to_string(),
+                                Value::String("loading".to_string()),
+                            );
+                        }
+                        Ok(this_arg.clone().unwrap_or(Value::Undefined))
+                    }
+                    "popup_document_write_function" => {
+                        let popup_document =
+                            Self::popup_document_receiver_object(this_arg.as_ref())?;
+                        let fragment = args.iter().map(Value::as_string).collect::<String>();
+                        let current_html = {
+                            let document_entries = popup_document.borrow();
+                            Self::object_get_entry(
+                                &document_entries,
+                                INTERNAL_POPUP_DOCUMENT_HTML_KEY,
+                            )
+                            .map(|value| value.as_string())
+                            .unwrap_or_default()
+                        };
+                        Self::object_set_entry(
+                            &mut popup_document.borrow_mut(),
+                            INTERNAL_POPUP_DOCUMENT_HTML_KEY.to_string(),
+                            Value::String(format!("{current_html}{fragment}")),
+                        );
+                        Ok(Value::Undefined)
+                    }
+                    "popup_document_close_function" => {
+                        if !args.is_empty() {
+                            return Err(Error::ScriptRuntime("close takes no arguments".into()));
+                        }
+                        let popup_document =
+                            Self::popup_document_receiver_object(this_arg.as_ref())?;
+                        Self::object_set_entry(
+                            &mut popup_document.borrow_mut(),
+                            "readyState".to_string(),
+                            Value::String("complete".to_string()),
+                        );
+                        Ok(Value::Undefined)
                     }
                     "window_print_function" => {
                         self.platform_mocks.print_call_count =
@@ -7364,20 +7787,20 @@ impl Harness {
 
             let listener_capture_scope_start = this.script_runtime.listener_capture_env_stack.len();
             let captured_env_seed =
-                (!function.global_scope).then(|| function.captured_env.borrow().share());
+                (!function.global_scope).then(|| Self::function_capture_snapshot(&function));
             let shared_env_frame_start = (!function.global_scope).then(|| {
                 this.push_shared_listener_capture_env_frame(function.captured_env.clone(), true)
             });
 
             let result = this.with_isolated_loop_control_scope(|this| {
                 (|| -> Result<Value> {
-                    let captured_env_before_call = captured_env_seed.as_ref().map(ScriptEnv::share);
+                    let captured_env_before_call = captured_env_seed.clone();
                     let mut call_env = if function.global_scope {
                         this.script_runtime.env.to_map()
                     } else {
                         captured_env_before_call
                             .as_ref()
-                            .map(ScriptEnv::to_map)
+                            .cloned()
                             .unwrap_or_default()
                     };
                     for name in &function.local_bindings {
@@ -7388,6 +7811,29 @@ impl Harness {
                     if let Some(caller_view) = caller_env {
                         let caller_scope_start =
                             Self::pending_listener_capture_scope_start(caller_view);
+                        for name in &function.captured_names {
+                            if Self::is_internal_env_key(name)
+                                || function.local_bindings.contains(name.as_str())
+                                || matches!(name.as_str(), "this" | "arguments")
+                                || call_env.contains_key(name)
+                            {
+                                continue;
+                            }
+                            if let Some(pending) = this.resolve_listener_capture_pending_value_from(
+                                caller_scope_start,
+                                name,
+                            ) {
+                                if let Some(value) = pending {
+                                    call_env.insert(name.clone(), value);
+                                } else {
+                                    call_env.remove(name);
+                                }
+                                continue;
+                            }
+                            if let Some(value) = caller_view.get(name).cloned() {
+                                call_env.insert(name.clone(), value);
+                            }
+                        }
                         for name in Self::env_top_level_lexical_binding_names(&call_env) {
                             if Self::is_internal_env_key(&name)
                                 || function.local_bindings.contains(name.as_str())
@@ -7818,19 +8264,12 @@ impl Harness {
                     }
                     let mut scheduled_capture_updates = Vec::new();
                     if !function.global_scope {
-                        let captured_env_after_call = function.captured_env.borrow().share();
+                        let captured_env_after_call = Self::function_capture_snapshot(&function);
                         let mut captured_env = function.captured_env.borrow_mut();
                         let captured_env_before_call = captured_env_before_call
                             .as_ref()
                             .expect("non-global functions always snapshot their capture env");
-                        for name in captured_env_before_call.keys() {
-                            if Self::is_internal_env_key(name)
-                                || function.local_bindings.contains(name.as_str())
-                                || name == "this"
-                                || name == "arguments"
-                            {
-                                continue;
-                            }
+                        for name in &function.captured_names {
                             let before = captured_env_before_call.get(name);
                             let call_after_from_env = effective_call_binding(this, name);
                             let call_after_from_shared = captured_env_after_call.get(name).cloned();
