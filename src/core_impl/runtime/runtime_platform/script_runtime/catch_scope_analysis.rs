@@ -442,12 +442,13 @@ impl Harness {
             Stmt::VarDecl { expr, .. } => {
                 Self::collect_capture_names_from_expr(expr, out);
             }
-            Stmt::ExportDecl { declaration, .. } | Stmt::Label { stmt: declaration, .. } => {
+            Stmt::ExportDecl { declaration, .. }
+            | Stmt::Label {
+                stmt: declaration, ..
+            } => {
                 Self::collect_capture_names_from_stmt(declaration, out);
             }
-            Stmt::ExportDefaultExpr { expr }
-            | Stmt::Throw { value: expr }
-            | Stmt::Expr(expr) => {
+            Stmt::ExportDefaultExpr { expr } | Stmt::Throw { value: expr } | Stmt::Expr(expr) => {
                 Self::collect_capture_names_from_expr(expr, out);
             }
             Stmt::FunctionDecl { handler, .. } => {
@@ -522,7 +523,9 @@ impl Harness {
                     Self::collect_capture_name(rest, out);
                 }
             }
-            Stmt::ObjectAssign { target, path, expr, .. } => {
+            Stmt::ObjectAssign {
+                target, path, expr, ..
+            } => {
                 Self::collect_capture_name(target, out);
                 Self::collect_capture_names_from_exprs(path, out);
                 Self::collect_capture_names_from_expr(expr, out);
@@ -872,7 +875,9 @@ impl Harness {
                 }
             }
             Expr::IntlFormatGetter { formatter }
-            | Expr::IntlCollatorCompareGetter { collator: formatter }
+            | Expr::IntlCollatorCompareGetter {
+                collator: formatter,
+            }
             | Expr::IntlDateTimeResolvedOptions { formatter }
             | Expr::RegexToString { regex: formatter } => {
                 Self::collect_capture_names_from_expr(formatter, out);
@@ -1082,10 +1087,7 @@ impl Harness {
                     Self::collect_capture_names_from_object_literal_entry(entry, out);
                 }
             }
-            Expr::ObjectGetOwnPropertyDescriptor {
-                object,
-                key,
-            }
+            Expr::ObjectGetOwnPropertyDescriptor { object, key }
             | Expr::ObjectHasOwn { object, key } => {
                 Self::collect_capture_names_from_expr(object, out);
                 Self::collect_capture_names_from_expr(key, out);
@@ -1231,8 +1233,7 @@ impl Harness {
                     Self::collect_capture_names_from_expr(end, out);
                 }
             }
-            Expr::StringMatch { value, pattern }
-            | Expr::StringSearch { value, pattern } => {
+            Expr::StringMatch { value, pattern } | Expr::StringSearch { value, pattern } => {
                 Self::collect_capture_names_from_expr(value, out);
                 Self::collect_capture_names_from_expr(pattern, out);
             }
@@ -1303,7 +1304,11 @@ impl Harness {
                     Self::collect_capture_names_from_expr(options, out);
                 }
             }
-            Expr::StructuredClone { value, options } | Expr::Fetch { request: value, options } => {
+            Expr::StructuredClone { value, options }
+            | Expr::Fetch {
+                request: value,
+                options,
+            } => {
                 Self::collect_capture_names_from_expr(value, out);
                 if let Some(options) = options.as_ref() {
                     Self::collect_capture_names_from_expr(options, out);
@@ -1422,8 +1427,7 @@ impl Harness {
             ObjectLiteralEntry::ProtoSetter(value) | ObjectLiteralEntry::Spread(value) => {
                 Self::collect_capture_names_from_expr(value, out);
             }
-            ObjectLiteralEntry::Getter(key, handler)
-            | ObjectLiteralEntry::Setter(key, handler) => {
+            ObjectLiteralEntry::Getter(key, handler) | ObjectLiteralEntry::Setter(key, handler) => {
                 Self::collect_capture_names_from_object_literal_key(key, out);
                 Self::collect_nested_handler_capture_names(handler, out);
             }
@@ -1443,8 +1447,7 @@ impl Harness {
             DomQuery::BySelectorAllIndex { index, .. } => {
                 Self::collect_capture_names_from_dom_index(index, out);
             }
-            DomQuery::QuerySelector { target, .. }
-            | DomQuery::QuerySelectorAll { target, .. } => {
+            DomQuery::QuerySelector { target, .. } | DomQuery::QuerySelectorAll { target, .. } => {
                 Self::collect_capture_names_from_dom_query(target, out);
             }
             DomQuery::Index { target, index }

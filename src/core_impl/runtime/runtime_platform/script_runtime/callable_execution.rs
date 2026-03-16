@@ -340,10 +340,9 @@ impl Harness {
             let name = parts.next().unwrap_or_default().trim().to_ascii_lowercase();
             let value = parts.next().map(|value| value.trim().to_ascii_lowercase());
             match name.as_str() {
-                "noopener" | "noreferrer" => !matches!(
-                    value.as_deref(),
-                    Some("0") | Some("false") | Some("no")
-                ),
+                "noopener" | "noreferrer" => {
+                    !matches!(value.as_deref(), Some("0") | Some("false") | Some("no"))
+                }
                 _ => false,
             }
         })
@@ -359,10 +358,8 @@ impl Harness {
         } else {
             Value::Object(self.dom_runtime.window_object.clone())
         };
-        let popup_location = Self::new_object_value(vec![(
-            "href".to_string(),
-            Value::String(url.to_string()),
-        )]);
+        let popup_location =
+            Self::new_object_value(vec![("href".to_string(), Value::String(url.to_string()))]);
 
         {
             let mut document_entries = popup_document.borrow_mut();
@@ -461,11 +458,7 @@ impl Harness {
                 Value::String(target.to_string()),
             );
             Self::object_set_entry(&mut window_entries, "opener".to_string(), opener);
-            Self::object_set_entry(
-                &mut window_entries,
-                "location".to_string(),
-                popup_location,
-            );
+            Self::object_set_entry(&mut window_entries, "location".to_string(), popup_location);
             Self::object_set_entry(
                 &mut window_entries,
                 "document".to_string(),
@@ -511,7 +504,9 @@ impl Harness {
             HashSet::new()
         } else if is_class_constructor {
             env.keys()
-                .filter(|name| !Self::is_internal_env_key(name) && name.as_str() != INTERNAL_RETURN_SLOT)
+                .filter(|name| {
+                    !Self::is_internal_env_key(name) && name.as_str() != INTERNAL_RETURN_SLOT
+                })
                 .cloned()
                 .collect()
         } else {
@@ -8251,8 +8246,7 @@ impl Harness {
                         );
                     }
                     let caller_has_explicit_binding = |name: &str| {
-                        caller_view
-                            .is_some_and(|env| Self::env_has_explicit_binding(env, name))
+                        caller_view.is_some_and(|env| Self::env_has_explicit_binding(env, name))
                     };
                     let effective_call_binding = |this: &Self, name: &str| {
                         let current_scope_pending = this

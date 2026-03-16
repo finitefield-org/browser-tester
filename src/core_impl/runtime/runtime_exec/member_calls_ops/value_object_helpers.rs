@@ -5090,7 +5090,10 @@ impl Harness {
     }
 
     fn event_target_receiver_builtin_method(key: &str) -> Option<Value> {
-        if matches!(key, "addEventListener" | "removeEventListener" | "dispatchEvent") {
+        if matches!(
+            key,
+            "addEventListener" | "removeEventListener" | "dispatchEvent"
+        ) {
             Some(Self::new_receiver_builtin_callable("event_target", key))
         } else {
             None
@@ -10441,7 +10444,8 @@ impl Harness {
         key: &str,
     ) -> Result<Option<Value>> {
         if Self::is_event_target_object(entries)
-            && let Some(value) = Self::placeholder_backed_object_builtin_property_value(entries, key)
+            && let Some(value) =
+                Self::placeholder_backed_object_builtin_property_value(entries, key)
         {
             return Ok(Some(value));
         }
