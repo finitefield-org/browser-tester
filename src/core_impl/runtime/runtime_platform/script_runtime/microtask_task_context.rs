@@ -950,22 +950,11 @@ impl Harness {
         &mut self,
         env: &mut HashMap<String, Value>,
         updates: HashMap<String, Option<Value>>,
+        allow_local_bindings: bool,
     ) {
         if updates.is_empty() {
             return;
         }
-        let allow_local_bindings = self
-            .script_runtime
-            .listener_capture_env_stack
-            .iter()
-            .rev()
-            .find_map(|frame| {
-                frame
-                    .shared_env
-                    .as_ref()
-                    .map(|_| frame.shared_env_owned_by_scope)
-            })
-            .unwrap_or(false);
         let restricted_names =
             (!allow_local_bindings).then(|| Self::env_local_or_lexical_binding_names(env));
         for (name, value) in updates {
@@ -994,7 +983,19 @@ impl Harness {
             return;
         }
         let updates = self.listener_capture_pending_updates_snapshot_from(0);
-        self.apply_listener_capture_pending_updates_map(env, updates);
+        let allow_local_bindings = self
+            .script_runtime
+            .listener_capture_env_stack
+            .iter()
+            .rev()
+            .find_map(|frame| {
+                frame
+                    .shared_env
+                    .as_ref()
+                    .map(|_| frame.shared_env_owned_by_scope)
+            })
+            .unwrap_or(false);
+        self.apply_listener_capture_pending_updates_map(env, updates, allow_local_bindings);
     }
 
     pub(crate) fn apply_pending_listener_capture_env_updates(
@@ -1010,7 +1011,7 @@ impl Harness {
         if updates.is_empty() {
             return;
         }
-        self.apply_listener_capture_pending_updates_map(env, updates);
+        self.apply_listener_capture_pending_updates_map(env, updates, true);
         for frame in &mut self.script_runtime.listener_capture_env_stack[drain_start..] {
             frame.pending_env_updates.clear();
         }

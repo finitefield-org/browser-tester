@@ -830,9 +830,6 @@ impl Harness {
             | Expr::ArrayBufferDetached(target)
             | Expr::ArrayBufferMaxByteLength(target)
             | Expr::ArrayBufferResizable(target)
-            | Expr::MapMethod { target, .. }
-            | Expr::UrlSearchParamsMethod { target, .. }
-            | Expr::SetMethod { target, .. }
             | Expr::TypedArrayByteLength(target)
             | Expr::TypedArrayByteOffset(target)
             | Expr::TypedArrayBuffer(target)
@@ -850,6 +847,12 @@ impl Harness {
                 Self::collect_capture_name(target, out);
             }
             Expr::FunctionCall { target, args } => {
+                Self::collect_capture_name(target, out);
+                Self::collect_capture_names_from_exprs(args, out);
+            }
+            Expr::MapMethod { target, args, .. }
+            | Expr::UrlSearchParamsMethod { target, args, .. }
+            | Expr::SetMethod { target, args, .. } => {
                 Self::collect_capture_name(target, out);
                 Self::collect_capture_names_from_exprs(args, out);
             }

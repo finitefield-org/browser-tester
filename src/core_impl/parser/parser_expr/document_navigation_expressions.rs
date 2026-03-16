@@ -125,6 +125,9 @@ pub(crate) fn parse_document_has_focus_expr(src: &str) -> Result<bool> {
         }
     }
     cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(false);
+    }
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     if !args_src.trim().is_empty() {
         return Err(Error::ScriptParse(
@@ -160,6 +163,9 @@ pub(crate) fn parse_location_method_expr(src: &str) -> Result<Option<Expr>> {
     };
 
     cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let args = split_top_level_by_char(&args_src, b',');
     let args = if args.len() == 1 && args[0].trim().is_empty() {
@@ -291,6 +297,9 @@ pub(crate) fn parse_history_method_expr(src: &str) -> Result<Option<Expr>> {
     };
 
     cursor.skip_ws();
+    if cursor.peek() != Some(b'(') {
+        return Ok(None);
+    }
     let args_src = cursor.read_balanced_block(b'(', b')')?;
     let args = split_top_level_by_char(&args_src, b',');
     let args = if args.len() == 1 && args[0].trim().is_empty() {
