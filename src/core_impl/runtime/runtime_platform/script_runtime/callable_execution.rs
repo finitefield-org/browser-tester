@@ -7851,17 +7851,19 @@ impl Harness {
                     }
                     call_env.remove(INTERNAL_RETURN_SLOT);
                     call_env.remove(INTERNAL_LOCAL_BINDINGS_KEY);
-                    if let Some(caller_view) = caller_env {
-                        let caller_scope_start =
-                            Self::pending_listener_capture_scope_start(caller_view);
-                        for name in &function.captured_names {
-                            if Self::is_internal_env_key(name)
-                                || function.local_bindings.contains(name.as_str())
-                                || matches!(name.as_str(), "this" | "arguments")
-                                || call_env.contains_key(name)
-                            {
-                                continue;
-                            }
+                    let mut global_sync_keys = HashSet::new();
+                    let caller_view = caller_env;
+                    let caller_scope_start =
+                        caller_view.map(Self::pending_listener_capture_scope_start);
+                    for name in &function.captured_names {
+                        if Self::is_internal_env_key(name)
+                            || function.local_bindings.contains(name.as_str())
+                            || matches!(name.as_str(), "this" | "arguments")
+                            || call_env.contains_key(name)
+                        {
+                            continue;
+                        }
+                        if let Some(caller_scope_start) = caller_scope_start {
                             if let Some(pending) = this.resolve_listener_capture_pending_value_from(
                                 caller_scope_start,
                                 name,
@@ -7873,12 +7875,21 @@ impl Harness {
                                 }
                                 continue;
                             }
-                            if let Some(value) = caller_view.get(name).cloned() {
-                                call_env.insert(name.clone(), value);
-                            }
                         }
-                        let mut lexical_names = Self::env_top_level_lexical_binding_names(&call_env);
-                        lexical_names.extend(Self::env_top_level_lexical_binding_names(caller_view));
+                        if let Some(value) = caller_view.and_then(|env| env.get(name)).cloned() {
+                            call_env.insert(name.clone(), value);
+                            continue;
+                        }
+                        if let Some(value) = this.resolve_runtime_global_identifier(name) {
+                            call_env.insert(name.clone(), value);
+                            global_sync_keys.insert(name.clone());
+                        }
+                    }
+                    if let Some(caller_view) = caller_view {
+                        let mut lexical_names =
+                            Self::env_top_level_lexical_binding_names(&call_env);
+                        lexical_names
+                            .extend(Self::env_top_level_lexical_binding_names(caller_view));
                         for name in lexical_names {
                             if Self::is_internal_env_key(&name)
                                 || function.local_bindings.contains(name.as_str())
@@ -7887,16 +7898,20 @@ impl Harness {
                             {
                                 continue;
                             }
-                            if let Some(pending) = this.resolve_listener_capture_pending_value_from(
-                                caller_scope_start,
-                                &name,
-                            ) {
-                                if let Some(value) = pending {
-                                    call_env.insert(name, value);
-                                } else {
-                                    call_env.remove(&name);
+                            if let Some(caller_scope_start) = caller_scope_start {
+                                if let Some(pending) = this
+                                    .resolve_listener_capture_pending_value_from(
+                                        caller_scope_start,
+                                        &name,
+                                    )
+                                {
+                                    if let Some(value) = pending {
+                                        call_env.insert(name, value);
+                                    } else {
+                                        call_env.remove(&name);
+                                    }
+                                    continue;
                                 }
-                                continue;
                             }
                             if let Some(value) = caller_view.get(&name).cloned() {
                                 call_env.insert(name, value);
@@ -7995,8 +8010,6 @@ impl Harness {
                             );
                         }
                     }
-                    let mut global_sync_keys = HashSet::new();
-                    let caller_view = caller_env;
                     for name in &function.captured_global_names {
                         if Self::is_internal_env_key(name)
                             || function.local_bindings.contains(name)
@@ -8006,7 +8019,7 @@ impl Harness {
                             continue;
                         }
                         global_sync_keys.insert(name.clone());
-                        if let Some(global_value) = this.script_runtime.env.get(name).cloned() {
+                        if let Some(global_value) = this.resolve_runtime_global_identifier(name) {
                             call_env.insert(name.clone(), global_value);
                         } else if !call_env.contains_key(name) {
                             if let Some(value) = caller_view.and_then(|env| env.get(name)).cloned()
@@ -8014,18 +8027,6 @@ impl Harness {
                                 call_env.insert(name.clone(), value);
                             }
                         }
-                    }
-                    for (name, global_value) in this.script_runtime.env.iter() {
-                        if Self::is_internal_env_key(name)
-                            || function.local_bindings.contains(name)
-                            || name == "this"
-                            || name == "arguments"
-                            || call_env.contains_key(name)
-                        {
-                            continue;
-                        }
-                        call_env.insert(name.clone(), global_value.clone());
-                        global_sync_keys.insert(name.clone());
                     }
                     if !global_sync_keys.is_empty() {
                         let mut sync_names = global_sync_keys.iter().cloned().collect::<Vec<_>>();
