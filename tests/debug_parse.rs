@@ -324,6 +324,7 @@ fn debug_parenthesized_formula_trace() {
     println!("trace dom: {}", h.dump_dom("#out").unwrap());
 }
 
+
 #[test]
 fn debug_recursive_closure_stop_char_and_index() {
     let html = r#"

@@ -2303,20 +2303,7 @@ impl Harness {
             let mut initialized_var_bindings = HashSet::new();
             let flow_result = (|| -> Result<ExecFlow> {
                 for stmt in stmts {
-                    for (name, value) in self.script_runtime.expression_env_overrides.clone() {
-                        if Self::is_internal_env_key(&name) {
-                            continue;
-                        }
-                        if Self::env_has_local_binding(env, &name) {
-                            continue;
-                        }
-                        if let Some(value) = value {
-                            env.insert(name, value);
-                        } else {
-                            env.remove(&name);
-                        }
-                    }
-                    self.script_runtime.expression_env_overrides.clear();
+                    self.apply_expression_env_overrides_to_env(env);
                     self.apply_pending_listener_capture_env_updates(env);
                     self.sync_top_level_env_from_runtime(env);
                     self.sync_listener_capture_env_if_shared(env);
@@ -2455,6 +2442,9 @@ impl Harness {
                             };
                             self.set_function_public_name(class_function, name);
                             let class_constructor_id = class_function.function_id;
+                            env.insert(name.clone(), class_constructor.clone());
+                            self.set_const_binding(env, name, false);
+                            self.mark_tdz_initialized(&mut pending_tdz_bindings, name);
 
                             let mut private_bindings = HashMap::new();
                             for method in methods.iter().filter(|method| method.is_private) {
@@ -2919,7 +2909,15 @@ impl Harness {
 
                             env.insert(name.clone(), class_constructor);
                             self.set_const_binding(env, name, false);
-                            self.mark_tdz_initialized(&mut pending_tdz_bindings, name);
+                            let class_value = env.get(name).cloned().ok_or_else(|| {
+                                Error::ScriptRuntime(format!("unknown variable: {name}"))
+                            })?;
+                            self.sync_global_binding_if_needed(env, name, &class_value);
+                            self.sync_scheduled_task_captures_for_binding_if_escaping(
+                                env,
+                                name,
+                                &class_value,
+                            );
                         }
                         Stmt::ExportDecl {
                             declaration,
@@ -3024,30 +3022,17 @@ impl Harness {
                                 VarAssignOp::Add => {
                                     let value = self.eval_expr(expr, env, event_param, event)?;
                                     if self.try_append_string_binding_in_place(env, name, &value)? {
-                                        let needs_sync =
-                                            !Self::arguments_param_indexes_for_name(env, name)
-                                                .is_empty()
-                                                || Self::env_should_sync_global_name(env, name)
-                                                || !self.scheduler.task_queue.is_empty()
-                                                || matches!(
-                                                    expr,
-                                                    Expr::SetTimeout { .. }
-                                                        | Expr::SetInterval { .. }
-                                                        | Expr::RequestAnimationFrame { .. }
-                                                );
-                                        if needs_sync {
-                                            let next = env.get(name).cloned().ok_or_else(|| {
-                                                Error::ScriptRuntime(format!(
-                                                    "unknown variable: {name}"
-                                                ))
-                                            })?;
-                                            self.sync_arguments_after_param_write(env, name, &next);
-                                            self.sync_global_binding_if_needed(env, name, &next);
-                                            self.sync_scheduled_task_captures_for_binding_if_escaping(
-                                                env, name, &next,
-                                            );
-                                            self.bind_timer_id_to_task_env(name, expr, &next);
-                                        }
+                                        let next = env.get(name).cloned().ok_or_else(|| {
+                                            Error::ScriptRuntime(format!(
+                                                "unknown variable: {name}"
+                                            ))
+                                        })?;
+                                        self.sync_arguments_after_param_write(env, name, &next);
+                                        self.sync_global_binding_if_needed(env, name, &next);
+                                        self.sync_scheduled_task_captures_for_binding_if_escaping(
+                                            env, name, &next,
+                                        );
+                                        self.bind_timer_id_to_task_env(name, expr, &next);
                                         continue;
                                     }
                                     self.add_values(&previous, &value)?

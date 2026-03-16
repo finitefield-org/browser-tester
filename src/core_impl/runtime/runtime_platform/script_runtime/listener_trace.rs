@@ -88,8 +88,11 @@ impl Harness {
             } else {
                 let pending_scope_start = self
                     .push_pending_function_decl_scopes(&listener.captured_pending_function_decls);
-                let shared_env_frame_start = self
-                    .push_shared_listener_capture_env_frame(listener.captured_env.clone(), true);
+                let shared_env_frame_start = self.push_shared_listener_capture_env_frame_with_names(
+                    listener.captured_env.clone(),
+                    false,
+                    Some(listener.captured_names.clone()),
+                );
                 let result = self.execute_handler(&listener.handler, event, &mut listener_env);
                 self.restore_listener_capture_env_stack(shared_env_frame_start);
                 self.restore_pending_function_decl_scopes(pending_scope_start);
@@ -117,6 +120,8 @@ impl Harness {
                 }
             }
             if used_function_dispatch {
+                self.apply_expression_env_overrides_to_env(env);
+                self.apply_pending_listener_capture_env_updates(env);
                 let captured_env_after = listener.captured_env.borrow().to_map();
                 for key in &captured_keys {
                     let before = captured_env_snapshot.get(key);

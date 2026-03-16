@@ -1315,6 +1315,7 @@ impl std::ops::DerefMut for ScriptEnv {
 pub(crate) struct ListenerCaptureFrame {
     pub(crate) shared_env: Option<Rc<RefCell<ScriptEnv>>>,
     pub(crate) shared_env_owned_by_scope: bool,
+    pub(crate) tracked_names: Option<HashSet<String>>,
     pub(crate) pending_env_updates: HashMap<String, Option<Value>>,
 }
 

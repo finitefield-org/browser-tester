@@ -1577,10 +1577,16 @@ impl Harness {
                 .as_ref()
                 .is_some_and(|names| names.contains(name))
         };
+        let is_tracked_name = |name: &str| {
+            frame
+                .tracked_names
+                .as_ref()
+                .is_none_or(|names| names.contains(name))
+        };
         let shared_snapshot = shared_env.borrow();
         let shared_keys = shared_snapshot
             .keys()
-            .filter(|name| !Self::is_internal_env_key(name))
+            .filter(|name| !Self::is_internal_env_key(name) && is_tracked_name(name))
             .cloned()
             .collect::<Vec<_>>();
         let mut changed_entries = Vec::new();
@@ -1614,6 +1620,7 @@ impl Harness {
                 continue;
             };
             if Self::is_internal_env_key(name)
+                || !is_tracked_name(name)
                 || is_restricted_name(name)
                 || shared_snapshot.contains_key(name)
             {
@@ -1623,6 +1630,7 @@ impl Harness {
         }
         for (name, next) in env {
             if Self::is_internal_env_key(name)
+                || !is_tracked_name(name)
                 || is_restricted_name(name)
                 || shared_snapshot.contains_key(name)
                 || frame.pending_env_updates.contains_key(name)

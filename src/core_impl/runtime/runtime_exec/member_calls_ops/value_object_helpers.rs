@@ -5089,6 +5089,14 @@ impl Harness {
         }
     }
 
+    fn event_target_receiver_builtin_method(key: &str) -> Option<Value> {
+        if matches!(key, "addEventListener" | "removeEventListener" | "dispatchEvent") {
+            Some(Self::new_receiver_builtin_callable("event_target", key))
+        } else {
+            None
+        }
+    }
+
     fn navigate_event_receiver_builtin_method(key: &str) -> Option<Value> {
         if matches!(key, "intercept" | "scroll") {
             Some(Self::new_receiver_builtin_callable("navigate_event", key))
@@ -5207,6 +5215,11 @@ impl Harness {
         }
         if Self::is_selection_object(entries)
             && let Some(value) = Self::selection_receiver_builtin_method(key)
+        {
+            return Some(value);
+        }
+        if Self::is_event_target_object(entries)
+            && let Some(value) = Self::event_target_receiver_builtin_method(key)
         {
             return Some(value);
         }
@@ -7371,6 +7384,9 @@ impl Harness {
             ("selection", "setBaseAndExtent") => ("setBaseAndExtent", 4),
             ("selection", "setPosition") => ("setPosition", 1),
             ("selection", "toString") => ("toString", 0),
+            ("event_target", "addEventListener") => ("addEventListener", 2),
+            ("event_target", "removeEventListener") => ("removeEventListener", 2),
+            ("event_target", "dispatchEvent") => ("dispatchEvent", 1),
             ("event", "preventDefault") => ("preventDefault", 0),
             ("event", "stopPropagation") => ("stopPropagation", 0),
             ("event", "stopImmediatePropagation") => ("stopImmediatePropagation", 0),
@@ -10424,6 +10440,11 @@ impl Harness {
         entries: &ObjectValue,
         key: &str,
     ) -> Result<Option<Value>> {
+        if Self::is_event_target_object(entries)
+            && let Some(value) = Self::placeholder_backed_object_builtin_property_value(entries, key)
+        {
+            return Ok(Some(value));
+        }
         if let Some(value) = Self::object_property_from_event_entries(entries, key) {
             return Ok(Some(value));
         }
