@@ -1065,7 +1065,7 @@ impl Harness {
                             self.location_history.history_scroll_restoration.clone(),
                         )),
                         DomProp::DefaultView => {
-                            Ok(env.get("window").cloned().unwrap_or(Value::Undefined))
+                            Ok(Value::Object(self.dom_runtime.window_object.clone()))
                         }
                         DomProp::Hidden => {
                             if node == self.dom.root {
