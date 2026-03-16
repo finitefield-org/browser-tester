@@ -8509,6 +8509,8 @@ impl Harness {
                 | "entries"
                 | "fill"
                 | "includes"
+                | "indexOf"
+                | "lastIndexOf"
                 | "slice"
                 | "join"
                 | "concat"

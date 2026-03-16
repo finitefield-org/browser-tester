@@ -18,6 +18,22 @@ enum TopLevelAwaitOutcome {
 }
 
 impl Harness {
+    fn discard_pending_listener_updates_from_frames(
+        &mut self,
+        start: usize,
+        local_bindings: &HashSet<String>,
+    ) {
+        if local_bindings.is_empty() || start >= self.script_runtime.listener_capture_env_stack.len()
+        {
+            return;
+        }
+        for frame in &mut self.script_runtime.listener_capture_env_stack[start..] {
+            for name in local_bindings {
+                frame.pending_env_updates.remove(name);
+            }
+        }
+    }
+
     fn css_escape_identifier(input: &str) -> String {
         let chars: Vec<char> = input.chars().collect();
         let mut out = String::new();
@@ -8104,6 +8120,16 @@ impl Harness {
                     if let Some(expression_name) = function.expression_name.as_ref() {
                         non_tdz_shadowed.insert(expression_name.clone());
                     }
+                    if let Some(caller_view) = caller_view {
+                        non_tdz_shadowed.extend(
+                            Self::env_local_or_lexical_binding_names(caller_view)
+                                .into_iter()
+                                .filter(|name| {
+                                    !function.captured_names.contains(name)
+                                        && !matches!(name.as_str(), "this" | "arguments")
+                                }),
+                        );
+                    }
 
                     let pushed_non_tdz_scope = !non_tdz_shadowed.is_empty();
                     if pushed_non_tdz_scope {
@@ -8490,6 +8516,7 @@ impl Harness {
                 })()
             });
             if let Some(start) = shared_env_frame_start {
+                this.discard_pending_listener_updates_from_frames(start, &function.local_bindings);
                 this.restore_listener_capture_env_stack(start);
             }
 

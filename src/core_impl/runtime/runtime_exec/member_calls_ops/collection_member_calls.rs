@@ -1431,6 +1431,64 @@ impl Harness {
                 }
                 Value::Bool(found)
             }
+            "indexOf" => {
+                if evaluated_args.is_empty() || evaluated_args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "indexOf requires one or two arguments".into(),
+                    ));
+                }
+                let search = evaluated_args[0].clone();
+                let values_ref = values.borrow();
+                let len = values_ref.len() as i64;
+                let mut from = evaluated_args.get(1).map(Self::value_to_i64).unwrap_or(0);
+                if from < 0 {
+                    from = (len + from).max(0);
+                } else {
+                    from = from.min(len);
+                }
+                let mut found = -1i64;
+                for index in from as usize..values_ref.len() {
+                    if Self::array_index_is_hole(&values_ref, index) {
+                        continue;
+                    }
+                    if self.strict_equal(&values_ref[index], &search) {
+                        found = index as i64;
+                        break;
+                    }
+                }
+                Value::Number(found)
+            }
+            "lastIndexOf" => {
+                if evaluated_args.is_empty() || evaluated_args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "lastIndexOf requires one or two arguments".into(),
+                    ));
+                }
+                let search = evaluated_args[0].clone();
+                let values_ref = values.borrow();
+                let len = values_ref.len() as i64;
+                let from = evaluated_args.get(1).map(Self::value_to_i64).unwrap_or(len - 1);
+                let from = if from < 0 {
+                    (len + from).max(-1)
+                } else {
+                    from.min(len - 1)
+                };
+                if from < 0 {
+                    Value::Number(-1)
+                } else {
+                    let mut found = -1i64;
+                    for index in (0..=from as usize).rev() {
+                        if Self::array_index_is_hole(&values_ref, index) {
+                            continue;
+                        }
+                        if self.strict_equal(&values_ref[index], &search) {
+                            found = index as i64;
+                            break;
+                        }
+                    }
+                    Value::Number(found)
+                }
+            }
             "slice" => {
                 if evaluated_args.len() > 2 {
                     return Err(Error::ScriptRuntime(
