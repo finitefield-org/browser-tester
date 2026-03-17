@@ -1,6 +1,16 @@
 use super::*;
 
 impl Harness {
+    fn isolate_callback_const_bindings(env: &mut HashMap<String, Value>) {
+        let Some(Value::Object(bindings)) = env.get(INTERNAL_CONST_BINDINGS_KEY).cloned() else {
+            return;
+        };
+        env.insert(
+            INTERNAL_CONST_BINDINGS_KEY.to_string(),
+            Value::Object(Rc::new(RefCell::new(bindings.borrow().clone()))),
+        );
+    }
+
     fn callback_non_tdz_shadowed_names(callback: &ScriptHandler) -> HashSet<String> {
         let mut names = Self::collect_var_declared_names(&callback.stmts);
         names.extend(callback.params.iter().map(|param| param.name.clone()));
@@ -18,16 +28,17 @@ impl Harness {
         preserve_before: Option<&HashMap<String, Value>>,
         local_bindings: &HashSet<String>,
     ) {
-        if self.script_runtime.listener_capture_env_stack.is_empty() {
-            return;
-        }
-
-        let start = Self::pending_listener_capture_scope_start(env)
-            .min(self.script_runtime.listener_capture_env_stack.len());
-        let mut updates = HashMap::new();
-        for frame in &self.script_runtime.listener_capture_env_stack[start..] {
-            updates.extend(frame.pending_env_updates.clone());
-        }
+        let updates = if self.script_runtime.listener_capture_env_stack.is_empty() {
+            self.script_runtime.expression_env_overrides.clone()
+        } else {
+            let start = Self::pending_listener_capture_scope_start(env)
+                .min(self.script_runtime.listener_capture_env_stack.len());
+            let mut updates = HashMap::new();
+            for frame in &self.script_runtime.listener_capture_env_stack[start..] {
+                updates.extend(frame.pending_env_updates.clone());
+            }
+            updates
+        };
         for (name, value) in updates {
             if Self::is_internal_env_key(&name) {
                 continue;
@@ -186,6 +197,7 @@ impl Harness {
     ) -> Result<Value> {
         let local_bindings = Self::callback_local_bindings(callback);
         let mut callback_env = env.clone();
+        Self::isolate_callback_const_bindings(&mut callback_env);
         self.project_callback_pending_updates_to_env(&mut callback_env, None, &local_bindings);
         let callback_before = callback_env.clone();
         callback_env.remove(INTERNAL_RETURN_SLOT);
@@ -229,6 +241,7 @@ impl Harness {
                 &mut callback_event,
                 &mut callback_env,
             );
+            this.apply_pending_listener_capture_env_updates(&mut callback_env);
             let return_value = flow
                 .as_ref()
                 .ok()
@@ -281,6 +294,7 @@ impl Harness {
         self.project_callback_pending_updates_to_env(env, None, &local_bindings);
         let callback_before = env.clone();
         let mut callback_env = env.clone();
+        Self::isolate_callback_const_bindings(&mut callback_env);
         callback_env.remove(INTERNAL_RETURN_SLOT);
         if !local_bindings.is_empty() {
             let mut local_binding_names = local_bindings.iter().cloned().collect::<Vec<_>>();
@@ -322,6 +336,7 @@ impl Harness {
                 &mut callback_event,
                 &mut callback_env,
             );
+            this.apply_pending_listener_capture_env_updates(&mut callback_env);
             this.restore_listener_capture_env_stack(shared_env_frame_start);
             this.discard_callback_local_pending_updates(&local_bindings);
             if pushed_non_tdz_scope {

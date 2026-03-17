@@ -1280,6 +1280,18 @@ pub(crate) struct ScriptEnv {
 }
 
 impl ScriptEnv {
+    fn clone_env_map(env: &HashMap<String, Value>) -> HashMap<String, Value> {
+        let mut cloned = env.clone();
+        let Some(Value::Object(bindings)) = cloned.get(INTERNAL_CONST_BINDINGS_KEY).cloned() else {
+            return cloned;
+        };
+        cloned.insert(
+            INTERNAL_CONST_BINDINGS_KEY.to_string(),
+            Value::Object(Rc::new(RefCell::new(bindings.borrow().clone()))),
+        );
+        cloned
+    }
+
     pub(crate) fn share(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
@@ -1288,12 +1300,12 @@ impl ScriptEnv {
 
     pub(crate) fn from_snapshot(env: &HashMap<String, Value>) -> Self {
         Self {
-            inner: Arc::new(env.clone()),
+            inner: Arc::new(Self::clone_env_map(env)),
         }
     }
 
     pub(crate) fn to_map(&self) -> HashMap<String, Value> {
-        self.inner.as_ref().clone()
+        Self::clone_env_map(self.inner.as_ref())
     }
 }
 

@@ -934,7 +934,7 @@ impl Harness {
         }
     }
 
-    fn listener_capture_pending_updates_snapshot_from(
+    pub(crate) fn listener_capture_pending_updates_snapshot_from(
         &self,
         start: usize,
     ) -> HashMap<String, Option<Value>> {
@@ -946,7 +946,7 @@ impl Harness {
         updates
     }
 
-    fn apply_listener_capture_pending_updates_map(
+    pub(crate) fn apply_listener_capture_pending_updates_map(
         &mut self,
         env: &mut HashMap<String, Value>,
         updates: HashMap<String, Option<Value>>,
@@ -1106,21 +1106,18 @@ impl Harness {
             .rev()
             .find_map(|(frame_index, frame)| {
                 let shared_env = frame.shared_env.as_ref()?;
-                let same_scope_owned_frame =
-                    frame.shared_env_owned_by_scope && frame_index >= local_scope_start;
-                let tracks_name = if scope_local_binding && !same_scope_owned_frame {
+                let tracks_name_in_frame = frame.pending_env_updates.contains_key(name)
+                    || frame
+                        .tracked_names
+                        .as_ref()
+                        .is_some_and(|tracked_names| tracked_names.contains(name))
+                    || shared_env.borrow().contains_key(name);
+                let owned_frame_tracks_name = frame.shared_env_owned_by_scope
+                    && (frame_index >= local_scope_start || tracks_name_in_frame);
+                let tracks_name = if scope_local_binding && !owned_frame_tracks_name {
                     false
                 } else {
-                    same_scope_owned_frame
-                        || frame.pending_env_updates.contains_key(name)
-                        || frame
-                            .tracked_names
-                            .as_ref()
-                            .is_some_and(|tracked_names| tracked_names.contains(name))
-                        || frame
-                            .shared_env
-                            .as_ref()
-                            .is_some_and(|shared_env| shared_env.borrow().contains_key(name))
+                    owned_frame_tracks_name || tracks_name_in_frame
                 };
                 tracks_name.then(|| (shared_env.clone(), frame.shared_env_owned_by_scope))
             });

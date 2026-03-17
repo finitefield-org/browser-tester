@@ -2261,10 +2261,16 @@ impl Harness {
         event_param: &Option<String>,
         event: &mut EventState,
         env: &mut HashMap<String, Value>,
-        _inherit_outer_pending: bool,
+        inherit_outer_pending: bool,
     ) -> Result<ExecFlow> {
         let saved_expression_env_overrides =
             std::mem::take(&mut self.script_runtime.expression_env_overrides);
+        let previous_pending_scope_start = (!inherit_outer_pending).then(|| {
+            env.insert(
+                INTERNAL_PENDING_SCOPE_START_KEY.to_string(),
+                Value::Number(self.script_runtime.listener_capture_env_stack.len() as i64),
+            )
+        });
         let pending = Self::collect_function_decls(stmts);
         let pending_scope_start = self.push_pending_function_decl_scope(pending);
         let scope_depth = Self::env_scope_depth(env);
@@ -2851,11 +2857,12 @@ impl Harness {
                                                         ),
                                                     );
                                                 }
-                                                match self.execute_stmts(
+                                                match self.execute_stmts_with_pending_scope(
                                                     &handler.stmts,
                                                     event_param,
                                                     event,
                                                     &mut block_env,
+                                                    false,
                                                 )? {
                                                     ExecFlow::Continue => {}
                                                     ExecFlow::Break(_)
@@ -2923,11 +2930,12 @@ impl Harness {
                             declaration,
                             bindings,
                         } => {
-                            match self.execute_stmts(
+                            match self.execute_stmts_with_pending_scope(
                                 std::slice::from_ref(declaration.as_ref()),
                                 event_param,
                                 event,
                                 env,
+                                false,
                             )? {
                                 ExecFlow::Continue => {}
                                 flow => return Ok(flow),
@@ -2946,7 +2954,14 @@ impl Harness {
                         }
                         Stmt::Block { stmts } => {
                             let previous = self.collect_direct_block_lexical_bindings(stmts, env);
-                            let flow = self.execute_stmts(stmts, event_param, event, env);
+                            let flow =
+                                self.execute_stmts_with_pending_scope(
+                                    stmts,
+                                    event_param,
+                                    event,
+                                    env,
+                                    false,
+                                );
                             self.restore_block_lexical_bindings(previous, env);
                             match flow? {
                                 ExecFlow::Continue => {}
@@ -2967,21 +2982,23 @@ impl Harness {
 
                             if Self::is_iteration_stmt(target) {
                                 self.script_runtime.pending_loop_labels.push(labels);
-                                match self.execute_stmts(
+                                match self.execute_stmts_with_pending_scope(
                                     std::slice::from_ref(target),
                                     event_param,
                                     event,
                                     env,
+                                    false,
                                 )? {
                                     ExecFlow::Continue => {}
                                     flow => return Ok(flow),
                                 }
                             } else {
-                                match self.execute_stmts(
+                                match self.execute_stmts_with_pending_scope(
                                     std::slice::from_ref(target),
                                     event_param,
                                     event,
                                     env,
+                                    false,
                                 )? {
                                     ExecFlow::Continue => {}
                                     ExecFlow::Break(Some(label))
@@ -5021,7 +5038,13 @@ impl Harness {
                                             &index_value,
                                         );
                                     }
-                                    match self.execute_stmts(body, event_param, event, env)? {
+                                    match self.execute_stmts_with_pending_scope(
+                                        body,
+                                        event_param,
+                                        event,
+                                        env,
+                                        false,
+                                    )? {
                                         ExecFlow::Continue => {}
                                         ExecFlow::Break(None) => break,
                                         ExecFlow::Break(label) => {
@@ -5423,7 +5446,13 @@ impl Harness {
                                             &index_value,
                                         );
                                     }
-                                    match self.execute_stmts(body, event_param, event, env)? {
+                                    match self.execute_stmts_with_pending_scope(
+                                        body,
+                                        event_param,
+                                        event,
+                                        env,
+                                        false,
+                                    )? {
                                         ExecFlow::Continue => {}
                                         ExecFlow::Break(None) => break,
                                         ExecFlow::Break(label) => {
@@ -5502,7 +5531,13 @@ impl Harness {
                             self.push_loop_label_scope(loop_labels);
                             let for_result = (|| -> Result<ExecFlow> {
                                 if !init.is_empty() {
-                                    match self.execute_stmts(init, event_param, event, env)? {
+                                    match self.execute_stmts_with_pending_scope(
+                                        init,
+                                        event_param,
+                                        event,
+                                        env,
+                                        false,
+                                    )? {
                                         ExecFlow::Continue => {}
                                         ExecFlow::Return => return Ok(ExecFlow::Return),
                                         ExecFlow::Break(label) => {
@@ -5524,16 +5559,23 @@ impl Harness {
                                         break;
                                     }
 
-                                    match self.execute_stmts(body, event_param, event, env)? {
+                                    match self.execute_stmts_with_pending_scope(
+                                        body,
+                                        event_param,
+                                        event,
+                                        env,
+                                        false,
+                                    )? {
                                         ExecFlow::Continue => {}
                                         ExecFlow::ContinueLoop(label) => {
                                             if self.loop_should_consume_continue(&label) {
                                                 if !post.is_empty() {
-                                                    match self.execute_stmts(
+                                                    match self.execute_stmts_with_pending_scope(
                                                         post,
                                                         event_param,
                                                         event,
                                                         env,
+                                                        false,
                                                     )? {
                                                         ExecFlow::Continue => {}
                                                         ExecFlow::Return => {
@@ -5561,7 +5603,13 @@ impl Harness {
                                         ExecFlow::Return => return Ok(ExecFlow::Return),
                                     }
                                     if !post.is_empty() {
-                                        match self.execute_stmts(post, event_param, event, env)? {
+                                        match self.execute_stmts_with_pending_scope(
+                                            post,
+                                            event_param,
+                                            event,
+                                            env,
+                                            false,
+                                        )? {
                                             ExecFlow::Continue => {}
                                             ExecFlow::Return => return Ok(ExecFlow::Return),
                                             ExecFlow::Break(_) | ExecFlow::ContinueLoop(_) => {
@@ -5618,7 +5666,13 @@ impl Harness {
                                 for item_value in items {
                                     env.insert(item_var.clone(), item_value.clone());
                                     self.sync_global_binding_if_needed(env, item_var, &item_value);
-                                    match self.execute_stmts(body, event_param, event, env)? {
+                                    match self.execute_stmts_with_pending_scope(
+                                        body,
+                                        event_param,
+                                        event,
+                                        env,
+                                        false,
+                                    )? {
                                         ExecFlow::Continue => {}
                                         ExecFlow::ContinueLoop(label) => {
                                             if self.loop_should_consume_continue(&label) {
@@ -5785,11 +5839,12 @@ impl Harness {
                                                         )),
                                                         true,
                                                     );
-                                                let flow = self.execute_stmts(
+                                                let flow = self.execute_stmts_with_pending_scope(
                                                     body,
                                                     event_param,
                                                     event,
                                                     env,
+                                                    false,
                                                 );
                                                 self.restore_listener_capture_env_stack(
                                                     shared_env_frame_start,
@@ -5834,11 +5889,12 @@ impl Harness {
                                                         )),
                                                         true,
                                                     );
-                                                let flow = match self.execute_stmts(
+                                                let flow = match self.execute_stmts_with_pending_scope(
                                                     body,
                                                     event_param,
                                                     event,
                                                     env,
+                                                    false,
                                                 ) {
                                                     Ok(flow) => flow,
                                                     Err(err) => {
@@ -5905,11 +5961,12 @@ impl Harness {
                                                         )),
                                                         true,
                                                     );
-                                                let flow = match self.execute_stmts(
+                                                let flow = match self.execute_stmts_with_pending_scope(
                                                     body,
                                                     event_param,
                                                     event,
                                                     env,
+                                                    false,
                                                 ) {
                                                     Ok(flow) => flow,
                                                     Err(err) => {
@@ -6096,7 +6153,13 @@ impl Harness {
                                     let item = self.await_value_in_for_await(value)?;
                                     env.insert(item_var.clone(), item.clone());
                                     self.sync_global_binding_if_needed(env, item_var, &item);
-                                    match self.execute_stmts(body, event_param, event, env)? {
+                                    match self.execute_stmts_with_pending_scope(
+                                        body,
+                                        event_param,
+                                        event,
+                                        env,
+                                        false,
+                                    )? {
                                         ExecFlow::Continue => {}
                                         ExecFlow::ContinueLoop(label) => {
                                             if self.loop_should_consume_continue(&label) {
@@ -6132,7 +6195,13 @@ impl Harness {
                             self.push_loop_label_scope(loop_labels);
                             let while_result = (|| -> Result<ExecFlow> {
                                 while self.eval_expr(cond, env, event_param, event)?.truthy() {
-                                    match self.execute_stmts(body, event_param, event, env)? {
+                                    match self.execute_stmts_with_pending_scope(
+                                        body,
+                                        event_param,
+                                        event,
+                                        env,
+                                        false,
+                                    )? {
                                         ExecFlow::Continue => {}
                                         ExecFlow::ContinueLoop(label) => {
                                             if self.loop_should_consume_continue(&label) {
@@ -6162,7 +6231,13 @@ impl Harness {
                             self.push_loop_label_scope(loop_labels);
                             let do_while_result = (|| -> Result<ExecFlow> {
                                 loop {
-                                    match self.execute_stmts(body, event_param, event, env)? {
+                                    match self.execute_stmts_with_pending_scope(
+                                        body,
+                                        event_param,
+                                        event,
+                                        env,
+                                        false,
+                                    )? {
                                         ExecFlow::Continue => {}
                                         ExecFlow::ContinueLoop(label) => {
                                             if self.loop_should_consume_continue(&label) {
@@ -6226,11 +6301,12 @@ impl Harness {
                                     for clause in clauses.iter().skip(start_index) {
                                         selected_stmts.extend(clause.stmts.iter().cloned());
                                     }
-                                    match self.execute_stmts(
+                                    match self.execute_stmts_with_pending_scope(
                                         &selected_stmts,
                                         event_param,
                                         event,
                                         env,
+                                        false,
                                     )? {
                                         ExecFlow::Continue => {}
                                         ExecFlow::Break(label) => {
@@ -6261,12 +6337,24 @@ impl Harness {
                         } => {
                             let cond = self.eval_expr(cond, env, event_param, event)?;
                             if cond.truthy() {
-                                match self.execute_stmts(then_stmts, event_param, event, env)? {
+                                match self.execute_stmts_with_pending_scope(
+                                    then_stmts,
+                                    event_param,
+                                    event,
+                                    env,
+                                    false,
+                                )? {
                                     ExecFlow::Continue => {}
                                     flow => return Ok(flow),
                                 }
                             } else {
-                                match self.execute_stmts(else_stmts, event_param, event, env)? {
+                                match self.execute_stmts_with_pending_scope(
+                                    else_stmts,
+                                    event_param,
+                                    event,
+                                    env,
+                                    false,
+                                )? {
                                     ExecFlow::Continue => {}
                                     flow => return Ok(flow),
                                 }
@@ -6278,8 +6366,13 @@ impl Harness {
                             catch_stmts,
                             finally_stmts,
                         } => {
-                            let mut completion =
-                                self.execute_stmts(try_stmts, event_param, event, env);
+                            let mut completion = self.execute_stmts_with_pending_scope(
+                                try_stmts,
+                                event_param,
+                                event,
+                                env,
+                                false,
+                            );
 
                             if let Err(err) = completion {
                                 if let Some(catch_stmts) = catch_stmts {
@@ -6304,7 +6397,13 @@ impl Harness {
                             };
 
                             if let Some(finally_stmts) = finally_stmts {
-                                match self.execute_stmts(finally_stmts, event_param, event, env) {
+                                match self.execute_stmts_with_pending_scope(
+                                    finally_stmts,
+                                    event_param,
+                                    event,
+                                    env,
+                                    false,
+                                ) {
                                     Ok(ExecFlow::Continue) => {}
                                     Ok(flow) => return Ok(flow),
                                     Err(err) => return Err(err),
@@ -6464,6 +6563,16 @@ impl Harness {
                 }
                 None => {
                     env.remove(INTERNAL_TOP_LEVEL_LEXICAL_BINDINGS_KEY);
+                }
+            }
+        }
+        if let Some(previous_pending_scope_start) = previous_pending_scope_start {
+            match previous_pending_scope_start {
+                Some(value) => {
+                    env.insert(INTERNAL_PENDING_SCOPE_START_KEY.to_string(), value);
+                }
+                None => {
+                    env.remove(INTERNAL_PENDING_SCOPE_START_KEY);
                 }
             }
         }

@@ -18,6 +18,16 @@ enum TopLevelAwaitOutcome {
 }
 
 impl Harness {
+    fn isolate_execution_const_bindings(env: &mut HashMap<String, Value>) {
+        let Some(Value::Object(bindings)) = env.get(INTERNAL_CONST_BINDINGS_KEY).cloned() else {
+            return;
+        };
+        env.insert(
+            INTERNAL_CONST_BINDINGS_KEY.to_string(),
+            Value::Object(Rc::new(RefCell::new(bindings.borrow().clone()))),
+        );
+    }
+
     fn discard_pending_listener_updates_from_frames(
         &mut self,
         start: usize,
@@ -7857,6 +7867,7 @@ impl Harness {
                             .cloned()
                             .unwrap_or_default()
                     };
+                    Self::isolate_execution_const_bindings(&mut call_env);
                     for name in &function.local_bindings {
                         call_env.remove(name);
                     }
@@ -7897,16 +7908,17 @@ impl Harness {
                         }
                     }
                     if let Some(caller_view) = caller_view {
-                        let mut lexical_names =
-                            Self::env_top_level_lexical_binding_names(&call_env);
-                        lexical_names
-                            .extend(Self::env_top_level_lexical_binding_names(caller_view));
+                        let lexical_names = Self::env_top_level_lexical_binding_names(&call_env);
                         for name in lexical_names {
                             if Self::is_internal_env_key(&name)
                                 || function.local_bindings.contains(name.as_str())
                                 || matches!(name.as_str(), "this" | "arguments")
                                 || Self::env_has_local_binding(caller_view, &name)
                             {
+                                continue;
+                            }
+                            if let Some(value) = caller_view.get(&name).cloned() {
+                                call_env.insert(name, value);
                                 continue;
                             }
                             if let Some(caller_scope_start) = caller_scope_start {
@@ -7923,9 +7935,6 @@ impl Harness {
                                     }
                                     continue;
                                 }
-                            }
-                            if let Some(value) = caller_view.get(&name).cloned() {
-                                call_env.insert(name, value);
                             }
                         }
                     }
@@ -8329,66 +8338,6 @@ impl Harness {
                             }
                             if let Some(value) = this.script_runtime.env.get(name).cloned() {
                                 this.sync_scheduled_task_captures_for_binding(name, &value);
-                            }
-                        }
-                    }
-                    if let Some(caller_view) = caller_view {
-                        let mut caller_visible_names = caller_view
-                            .keys()
-                            .filter(|name| !Self::is_internal_env_key(name))
-                            .cloned()
-                            .collect::<Vec<_>>();
-                        caller_visible_names.sort();
-                        caller_visible_names.dedup();
-                        for name in caller_visible_names {
-                            if function.local_bindings.contains(name.as_str())
-                                || matches!(name.as_str(), "this" | "arguments")
-                                || global_sync_keys.contains(&name)
-                                || function.captured_names.contains(&name)
-                                || !Self::env_has_explicit_binding(caller_view, &name)
-                            {
-                                continue;
-                            }
-                            let before = caller_view.get(&name);
-                            let explicit_call_after = this
-                                .resolve_listener_capture_pending_value_from(
-                                    Self::pending_listener_capture_scope_start(&call_env),
-                                    &name,
-                                )
-                                .or_else(|| call_env.get(&name).cloned().map(Some));
-                            let Some(call_after) = explicit_call_after else {
-                                continue;
-                            };
-                            let after = call_after.as_ref();
-                            let changed = match (before, after) {
-                                (Some(prev), Some(next)) => !this.strict_equal(prev, next),
-                                (None, Some(_)) => true,
-                                (Some(_), None) => true,
-                                (None, None) => false,
-                            };
-                            if !changed {
-                                continue;
-                            }
-                            if caller_has_explicit_binding(&name) {
-                                if let Some(parent_index) =
-                                    shared_env_frame_start.and_then(|start| start.checked_sub(1))
-                                {
-                                    if let Some(parent_frame) = this
-                                        .script_runtime
-                                        .listener_capture_env_stack
-                                        .get_mut(parent_index)
-                                    {
-                                        parent_frame
-                                            .pending_env_updates
-                                            .insert(name.clone(), call_after.clone());
-                                    }
-                                }
-                            }
-                            this.script_runtime
-                                .expression_env_overrides
-                                .insert(name.clone(), call_after.clone());
-                            if let Some(value) = call_after {
-                                this.sync_scheduled_task_captures_for_binding(&name, &value);
                             }
                         }
                     }
