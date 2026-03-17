@@ -798,7 +798,7 @@ impl Harness {
     }
 
     pub(crate) fn is_internal_env_key(name: &str) -> bool {
-        name.starts_with("\u{0}\u{0}bt_")
+        name == INTERNAL_RETURN_SLOT || name.starts_with("\u{0}\u{0}bt_")
     }
 
     pub(crate) fn env_scope_depth(env: &HashMap<String, Value>) -> i64 {
