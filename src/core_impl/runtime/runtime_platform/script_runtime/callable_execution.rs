@@ -8264,6 +8264,7 @@ impl Harness {
                     if yield_collector.is_some() {
                         let _ = this.script_runtime.generator_yield_stack.pop();
                     }
+                    let mut deferred_error = None;
                     let flow = match flow_result {
                         Ok(flow) => flow,
                         Err(Error::ScriptRuntime(msg))
@@ -8272,7 +8273,10 @@ impl Harness {
                         {
                             ExecFlow::Continue
                         }
-                        Err(err) => return Err(err),
+                        Err(err) => {
+                            deferred_error = Some(err);
+                            ExecFlow::Continue
+                        }
                     };
                     let current_scope_pending_updates_after = this
                         .listener_capture_pending_updates_snapshot_from(
@@ -8520,6 +8524,9 @@ impl Harness {
                     }
                     for (name, value) in scheduled_capture_updates {
                         this.sync_scheduled_task_captures_for_binding(&name, &value);
+                    }
+                    if let Some(err) = deferred_error {
+                        return Err(err);
                     }
                     if let Some(suspend) = pending_async_suspend {
                         this.script_runtime.pending_async_function_suspend = Some(suspend);
