@@ -12,6 +12,7 @@ enum LegacyInputActivationState {
     },
 }
 
+/// User-action APIs for driving a [`Harness`] with selectors.
 impl Harness {
     fn dispatch_text_selectionchange_if_needed_with_env(
         &mut self,
@@ -136,6 +137,7 @@ impl Harness {
             .any(|(node, checked, _)| self.dom.checked(*node).unwrap_or(*checked) != *checked)
     }
 
+    /// Replace the value of an input-like control and dispatch browser-like events.
     pub fn type_text(&mut self, selector: &str, text: &str) -> Result<()> {
         let target = self.select_one(selector)?;
         if self.is_effectively_disabled(target) {
@@ -222,6 +224,7 @@ impl Harness {
         })
     }
 
+    /// Select an option in a `<select>` by its value.
     pub fn set_select_value(&mut self, selector: &str, value: &str) -> Result<()> {
         let target = self.select_one(selector)?;
         if self.is_effectively_disabled(target) {
@@ -258,6 +261,7 @@ impl Harness {
         })
     }
 
+    /// Seed deterministic file input state for `input[type="file"]`.
     pub fn set_input_files(&mut self, selector: &str, files: &[MockFile]) -> Result<()> {
         let target = self.select_one(selector)?;
         let files = files.to_vec();
@@ -320,6 +324,7 @@ impl Harness {
         Ok(())
     }
 
+    /// Set the checked state of a checkbox or radio-like control.
     pub fn set_checked(&mut self, selector: &str, checked: bool) -> Result<()> {
         let target = self.select_one(selector)?;
         if self.is_effectively_disabled(target) {
@@ -365,6 +370,7 @@ impl Harness {
         })
     }
 
+    /// Dispatch a trusted click-like path and apply default actions when allowed.
     pub fn click(&mut self, selector: &str) -> Result<()> {
         let target = self.select_one(selector)?;
         self.click_node(target)
@@ -703,16 +709,19 @@ impl Harness {
         self.with_script_env_always(|this, env| this.click_dom_method_with_env(target, env))
     }
 
+    /// Move focus to the selected element.
     pub fn focus(&mut self, selector: &str) -> Result<()> {
         let target = self.select_one(selector)?;
         stacker::grow(32 * 1024 * 1024, || self.focus_node(target))
     }
 
+    /// Blur the selected element.
     pub fn blur(&mut self, selector: &str) -> Result<()> {
         let target = self.select_one(selector)?;
         stacker::grow(32 * 1024 * 1024, || self.blur_node(target))
     }
 
+    /// Simulate pressing Enter on the selected element.
     pub fn press_enter(&mut self, selector: &str) -> Result<()> {
         let target = self.select_one(selector)?;
         stacker::grow(32 * 1024 * 1024, || {
@@ -720,6 +729,7 @@ impl Harness {
         })
     }
 
+    /// Simulate a trusted copy action from the selected element.
     pub fn copy(&mut self, selector: &str) -> Result<()> {
         let target = self.select_one(selector)?;
         stacker::grow(32 * 1024 * 1024, || {
@@ -727,6 +737,7 @@ impl Harness {
         })
     }
 
+    /// Simulate a trusted paste action into the selected element.
     pub fn paste(&mut self, selector: &str) -> Result<()> {
         let target = self.select_one(selector)?;
         stacker::grow(32 * 1024 * 1024, || {
@@ -734,6 +745,7 @@ impl Harness {
         })
     }
 
+    /// Simulate a trusted cut action from the selected element.
     pub fn cut(&mut self, selector: &str) -> Result<()> {
         let target = self.select_one(selector)?;
         stacker::grow(32 * 1024 * 1024, || {
@@ -966,6 +978,7 @@ impl Harness {
         Ok(())
     }
 
+    /// Submit a form through a user-like submission path.
     pub fn submit(&mut self, selector: &str) -> Result<()> {
         let target = self.select_one(selector)?;
         stacker::grow(32 * 1024 * 1024, || {
@@ -1169,6 +1182,7 @@ impl Harness {
         Ok(())
     }
 
+    /// Dispatch a named event on the selected element.
     pub fn dispatch(&mut self, selector: &str, event: &str) -> Result<()> {
         if let Some(target_object) = self.resolve_dispatch_event_target_object(selector) {
             let event_payload = Value::String(event.to_string());
@@ -1192,6 +1206,7 @@ impl Harness {
         })
     }
 
+    /// Dispatch a keyboard event with the provided initialization values.
     pub fn dispatch_keyboard(
         &mut self,
         selector: &str,

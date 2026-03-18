@@ -477,10 +477,12 @@ impl Harness {
         self.dom.set_attr(node, "href", &parts.href())
     }
 
+    /// Enable or disable in-memory trace collection for the harness.
     pub fn enable_trace(&mut self, enabled: bool) {
         self.trace_state.enabled = enabled;
     }
 
+    /// Drain and return collected trace log lines.
     pub fn take_trace_logs(&mut self) -> Vec<String> {
         self.trace_state.logs.drain(..).collect()
     }

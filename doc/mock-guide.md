@@ -7,6 +7,19 @@ The goal is to let tests control browser-like behavior deterministically without
 
 This document groups the main mock families and shows representative usage.
 
+## Mock Maintenance Rule
+
+When adding a new test-only mock capability, keep the mock public surface and its documentation in sync.
+
+Required checklist:
+
+- add or update the public API
+- add a minimal usage example
+- add tests, including failure-path coverage when relevant
+- document any call capture or artifact capture behavior
+- update `README.md`
+- update this file
+
 ## Common Pattern
 
 Most mock-backed tests follow the same shape:

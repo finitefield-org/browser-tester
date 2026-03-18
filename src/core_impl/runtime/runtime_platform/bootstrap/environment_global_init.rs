@@ -1,16 +1,20 @@
 use super::*;
 
+/// Constructors for creating a [`Harness`] from HTML input.
 impl Harness {
     const FROM_HTML_STACK_SIZE: usize = 32 * 1024 * 1024;
 
+    /// Build a harness from HTML using `about:blank` as the document URL.
     pub fn from_html(html: &str) -> Result<Self> {
         Self::from_html_impl("about:blank", html, &[])
     }
 
+    /// Build a harness from HTML with an explicit document URL.
     pub fn from_html_with_url(url: &str, html: &str) -> Result<Self> {
         Self::from_html_impl(url, html, &[])
     }
 
+    /// Build a harness from HTML and seed `localStorage` deterministically.
     pub fn from_html_with_local_storage(
         html: &str,
         initial_local_storage: &[(&str, &str)],
@@ -18,6 +22,7 @@ impl Harness {
         Self::from_html_impl("about:blank", html, initial_local_storage)
     }
 
+    /// Build a harness from HTML with an explicit URL and seeded `localStorage`.
     pub fn from_html_with_url_and_local_storage(
         url: &str,
         html: &str,

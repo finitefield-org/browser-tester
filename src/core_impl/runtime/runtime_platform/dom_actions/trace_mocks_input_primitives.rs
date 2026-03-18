@@ -1,6 +1,7 @@
 use super::*;
 use crate::core_dom_utils::{decode_base64_to_binary_string, decode_uri_like};
 
+/// Determinism, mock, and trace APIs for a [`Harness`].
 impl Harness {
     pub(crate) fn default_fetch_status_text(status: i64) -> String {
         match status {
@@ -43,18 +44,22 @@ impl Harness {
         .to_string()
     }
 
+    /// Enable or disable trace log emission to stderr.
     pub fn set_trace_stderr(&mut self, enabled: bool) {
         self.trace_state.to_stderr = enabled;
     }
 
+    /// Enable or disable event trace collection.
     pub fn set_trace_events(&mut self, enabled: bool) {
         self.trace_state.events = enabled;
     }
 
+    /// Enable or disable timer trace collection.
     pub fn set_trace_timers(&mut self, enabled: bool) {
         self.trace_state.timers = enabled;
     }
 
+    /// Set the maximum number of retained trace log entries.
     pub fn set_trace_log_limit(&mut self, max_entries: usize) -> Result<()> {
         if max_entries == 0 {
             return Err(Error::ScriptRuntime(
@@ -68,6 +73,7 @@ impl Harness {
         Ok(())
     }
 
+    /// Seed the deterministic random number generator.
     pub fn set_random_seed(&mut self, seed: u64) {
         self.rng_state = if seed == 0 {
             0xA5A5_A5A5_A5A5_A5A5
@@ -76,6 +82,7 @@ impl Harness {
         };
     }
 
+    /// Mock a successful text response for `fetch(url)`.
     pub fn set_fetch_mock(&mut self, url: &str, body: &str) {
         self.platform_mocks.fetch_mocks.insert(
             url.to_string(),
@@ -87,6 +94,7 @@ impl Harness {
         );
     }
 
+    /// Mock a `fetch(url)` response with an explicit status code and body.
     pub fn set_fetch_mock_response(&mut self, url: &str, status: i64, body: &str) {
         self.platform_mocks.fetch_mocks.insert(
             url.to_string(),
@@ -98,27 +106,33 @@ impl Harness {
         );
     }
 
+    /// Seed deterministic clipboard text for subsequent reads or user actions.
     pub fn set_clipboard_text(&mut self, text: &str) {
         self.platform_mocks.clipboard_text = text.to_string();
     }
 
+    /// Return the currently seeded clipboard text.
     pub fn clipboard_text(&self) -> String {
         self.platform_mocks.clipboard_text.clone()
     }
 
+    /// Inject a deterministic clipboard read rejection by error name.
     pub fn set_clipboard_read_error(&mut self, error: Option<&str>) {
         self.platform_mocks.clipboard_read_error = error.map(std::string::ToString::to_string);
     }
 
+    /// Inject a deterministic clipboard write rejection by error name.
     pub fn set_clipboard_write_error(&mut self, error: Option<&str>) {
         self.platform_mocks.clipboard_write_error = error.map(std::string::ToString::to_string);
     }
 
+    /// Clear injected clipboard read and write errors.
     pub fn clear_clipboard_errors(&mut self) {
         self.platform_mocks.clipboard_read_error = None;
         self.platform_mocks.clipboard_write_error = None;
     }
 
+    /// Register deterministic HTML to load when navigating to `url`.
     pub fn set_location_mock_page(&mut self, url: &str, html: &str) {
         let normalized = self.resolve_location_target_url(url);
         self.location_history
@@ -126,78 +140,96 @@ impl Harness {
             .insert(normalized, html.to_string());
     }
 
+    /// Remove all registered location mock pages.
     pub fn clear_location_mock_pages(&mut self) {
         self.location_history.location_mock_pages.clear();
     }
 
+    /// Drain and return captured location navigation records.
     pub fn take_location_navigations(&mut self) -> Vec<LocationNavigation> {
         std::mem::take(&mut self.location_history.location_navigations)
     }
 
+    /// Drain and return captured download artifacts.
     pub fn take_downloads(&mut self) -> Vec<DownloadArtifact> {
         std::mem::take(&mut self.browser_apis.downloads)
     }
 
+    /// Drain and return captured clipboard write artifacts.
     pub fn take_clipboard_writes(&mut self) -> Vec<ClipboardWriteArtifact> {
         std::mem::take(&mut self.browser_apis.clipboard_writes)
     }
 
+    /// Return the number of deterministic reloads performed through location APIs.
     pub fn location_reload_count(&self) -> usize {
         self.location_history.location_reload_count
     }
 
+    /// Remove all registered fetch mocks.
     pub fn clear_fetch_mocks(&mut self) {
         self.platform_mocks.fetch_mocks.clear();
     }
 
+    /// Drain and return captured fetch call URLs.
     pub fn take_fetch_calls(&mut self) -> Vec<String> {
         std::mem::take(&mut self.platform_mocks.fetch_calls)
     }
 
+    /// Override `matchMedia(query).matches` for a specific query.
     pub fn set_match_media_mock(&mut self, query: &str, matches: bool) {
         self.platform_mocks
             .match_media_mocks
             .insert(query.to_string(), matches);
     }
 
+    /// Remove all query-specific `matchMedia` overrides.
     pub fn clear_match_media_mocks(&mut self) {
         self.platform_mocks.match_media_mocks.clear();
     }
 
+    /// Set the fallback `matchMedia(...).matches` value when no query-specific mock exists.
     pub fn set_default_match_media_matches(&mut self, matches: bool) {
         self.platform_mocks.default_match_media_matches = matches;
     }
 
+    /// Drain and return captured `matchMedia` query strings.
     pub fn take_match_media_calls(&mut self) -> Vec<String> {
         std::mem::take(&mut self.platform_mocks.match_media_calls)
     }
 
+    /// Queue one deterministic `confirm()` response.
     pub fn enqueue_confirm_response(&mut self, accepted: bool) {
         self.platform_mocks.confirm_responses.push_back(accepted);
     }
 
+    /// Set the default `confirm()` response when the queue is empty.
     pub fn set_default_confirm_response(&mut self, accepted: bool) {
         self.platform_mocks.default_confirm_response = accepted;
     }
 
+    /// Queue one deterministic `prompt()` response.
     pub fn enqueue_prompt_response(&mut self, value: Option<&str>) {
         self.platform_mocks
             .prompt_responses
             .push_back(value.map(std::string::ToString::to_string));
     }
 
+    /// Set the default `prompt()` response when the queue is empty.
     pub fn set_default_prompt_response(&mut self, value: Option<&str>) {
         self.platform_mocks.default_prompt_response = value.map(std::string::ToString::to_string);
     }
 
+    /// Drain and return captured `alert()` messages.
     pub fn take_alert_messages(&mut self) -> Vec<String> {
         std::mem::take(&mut self.platform_mocks.alert_messages)
     }
 
+    /// Drain and return the captured `window.print()` call count.
     pub fn take_print_call_count(&mut self) -> usize {
         std::mem::take(&mut self.platform_mocks.print_call_count)
     }
 
+    /// Set the scheduler safety limit used by timer-draining APIs.
     pub fn set_timer_step_limit(&mut self, max_steps: usize) -> Result<()> {
         if max_steps == 0 {
             return Err(Error::ScriptRuntime(

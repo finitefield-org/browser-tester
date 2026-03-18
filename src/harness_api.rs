@@ -1,5 +1,40 @@
 use super::*;
 
+/// Deterministic browser-like test harness.
+///
+/// `Harness` is the main public entry point of the crate. It lets tests load
+/// HTML, drive user-like interactions, control fake time, seed deterministic
+/// mocks, and assert DOM state from Rust.
+///
+/// Public API categories:
+///
+/// - Constructors: [`from_html`](Self::from_html),
+///   [`from_html_with_url`](Self::from_html_with_url),
+///   [`from_html_with_local_storage`](Self::from_html_with_local_storage),
+///   [`from_html_with_url_and_local_storage`](Self::from_html_with_url_and_local_storage)
+/// - Actions: [`type_text`](Self::type_text), [`set_select_value`](Self::set_select_value),
+///   [`set_input_files`](Self::set_input_files), [`set_checked`](Self::set_checked),
+///   [`click`](Self::click), [`focus`](Self::focus), [`blur`](Self::blur),
+///   [`press_enter`](Self::press_enter), [`copy`](Self::copy), [`paste`](Self::paste),
+///   [`cut`](Self::cut), [`submit`](Self::submit), [`dispatch`](Self::dispatch),
+///   [`dispatch_keyboard`](Self::dispatch_keyboard)
+/// - Assertions and inspection: [`assert_text`](Self::assert_text),
+///   [`assert_value`](Self::assert_value), [`assert_checked`](Self::assert_checked),
+///   [`assert_exists`](Self::assert_exists), [`dump_dom`](Self::dump_dom)
+/// - Time and scheduler controls: [`now_ms`](Self::now_ms),
+///   [`advance_time`](Self::advance_time), [`advance_time_to`](Self::advance_time_to),
+///   [`run_due_timers`](Self::run_due_timers), [`run_next_timer`](Self::run_next_timer),
+///   [`run_next_due_timer`](Self::run_next_due_timer), [`flush`](Self::flush),
+///   [`pending_timers`](Self::pending_timers), [`clear_timer`](Self::clear_timer),
+///   [`clear_all_timers`](Self::clear_all_timers)
+/// - Determinism, mocks, and trace: [`set_random_seed`](Self::set_random_seed),
+///   [`set_fetch_mock`](Self::set_fetch_mock), [`set_clipboard_text`](Self::set_clipboard_text),
+///   [`set_location_mock_page`](Self::set_location_mock_page),
+///   [`enable_trace`](Self::enable_trace), [`take_trace_logs`](Self::take_trace_logs)
+///
+/// See the crate README for the quick-start flow, `doc/mock-guide.md` for mock
+/// examples, and `doc/capability-matrix.md` for the current support-level
+/// classification.
 #[derive(Debug)]
 pub struct Harness {
     pub(crate) dom: Dom,
@@ -18,17 +53,23 @@ pub struct Harness {
 }
 
 #[derive(Debug)]
+/// Deterministic multi-page convenience wrapper around [`Harness`].
+///
+/// Use `MockWindow` when a test needs to manage more than one document while
+/// still delegating actions and assertions to the current page's `Harness`.
 pub struct MockWindow {
     pub(crate) pages: Vec<MockPage>,
     pub(crate) current: usize,
 }
 
 #[derive(Debug)]
+/// A single page stored inside [`MockWindow`].
 pub struct MockPage {
     pub(crate) harness: Harness,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// Extra fields for [`Harness::dispatch_keyboard`].
 pub struct KeyboardEventInit {
     pub key: String,
     pub code: Option<String>,
@@ -41,6 +82,7 @@ pub struct KeyboardEventInit {
     pub is_composing: bool,
 }
 
+/// `MockWindow` constructors, page switching, actions, and assertions.
 impl MockWindow {
     pub(crate) fn with_current_harness_mut<R>(
         &mut self,
@@ -53,6 +95,7 @@ impl MockWindow {
         f(&mut page.harness)
     }
 
+    /// Create an empty mock window.
     pub fn new() -> Self {
         Self {
             pages: Vec::new(),
@@ -60,6 +103,7 @@ impl MockWindow {
         }
     }
 
+    /// Open or replace a page and make it the current page.
     pub fn open_page(&mut self, url: &str, html: &str) -> Result<usize> {
         let harness = Harness::from_html_with_url(url, html)?;
         if let Some(index) = self
@@ -77,10 +121,12 @@ impl MockWindow {
         }
     }
 
+    /// Return the number of pages currently stored in the window.
     pub fn page_count(&self) -> usize {
         self.pages.len()
     }
 
+    /// Switch the current page by URL.
     pub fn switch_to(&mut self, url: &str) -> Result<()> {
         let index = self
             .pages
@@ -91,6 +137,7 @@ impl MockWindow {
         Ok(())
     }
 
+    /// Switch the current page by index.
     pub fn switch_to_index(&mut self, index: usize) -> Result<()> {
         if index >= self.pages.len() {
             return Err(Error::ScriptRuntime(format!(
@@ -101,6 +148,7 @@ impl MockWindow {
         Ok(())
     }
 
+    /// Return the current page URL.
     pub fn current_url(&self) -> Result<&str> {
         self.pages
             .get(self.current)
@@ -108,6 +156,7 @@ impl MockWindow {
             .ok_or_else(|| Error::ScriptRuntime("window has no pages".into()))
     }
 
+    /// Borrow the current page harness mutably.
     pub fn current_document_mut(&mut self) -> Result<&mut Harness> {
         self.pages
             .get_mut(self.current)
@@ -115,6 +164,7 @@ impl MockWindow {
             .ok_or_else(|| Error::ScriptRuntime("window has no pages".into()))
     }
 
+    /// Borrow the current page harness immutably.
     pub fn current_document(&self) -> Result<&Harness> {
         self.pages
             .get(self.current)
@@ -122,6 +172,7 @@ impl MockWindow {
             .ok_or_else(|| Error::ScriptRuntime("window has no pages".into()))
     }
 
+    /// Run a closure against the current page harness.
     pub fn with_current_document<R>(
         &mut self,
         f: impl FnOnce(&mut Harness) -> Result<R>,
@@ -211,6 +262,7 @@ impl MockWindow {
     }
 }
 
+/// Accessors for a page stored inside [`MockWindow`].
 impl MockPage {
     pub fn url(&self) -> &str {
         self.harness.document_url.as_str()

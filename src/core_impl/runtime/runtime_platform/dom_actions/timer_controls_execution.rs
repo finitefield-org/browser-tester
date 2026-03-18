@@ -1,10 +1,13 @@
 use super::*;
 
+/// Time and scheduler control APIs for a [`Harness`].
 impl Harness {
+    /// Return the current fake clock time in milliseconds.
     pub fn now_ms(&self) -> i64 {
         self.scheduler.now_ms
     }
 
+    /// Clear a timer by ID and report whether it previously existed.
     pub fn clear_timer(&mut self, timer_id: i64) -> bool {
         let existed = self.scheduler.running_timer_id == Some(timer_id)
             || self
@@ -16,6 +19,7 @@ impl Harness {
         existed
     }
 
+    /// Clear every queued timer and return the number removed.
     pub fn clear_all_timers(&mut self) -> usize {
         let cleared = self.scheduler.task_queue.len();
         self.scheduler.task_queue.clear();
@@ -26,6 +30,7 @@ impl Harness {
         cleared
     }
 
+    /// Return queued timers sorted by due time and insertion order.
     pub fn pending_timers(&self) -> Vec<PendingTimer> {
         let mut timers = self
             .scheduler
@@ -42,6 +47,7 @@ impl Harness {
         timers
     }
 
+    /// Advance the fake clock by a delta and run newly due timers.
     pub fn advance_time(&mut self, delta_ms: i64) -> Result<()> {
         if delta_ms < 0 {
             return Err(Error::ScriptRuntime(
@@ -58,6 +64,7 @@ impl Harness {
         Ok(())
     }
 
+    /// Advance the fake clock to an absolute target and run newly due timers.
     pub fn advance_time_to(&mut self, target_ms: i64) -> Result<()> {
         if target_ms < self.scheduler.now_ms {
             return Err(Error::ScriptRuntime(format!(
@@ -75,6 +82,7 @@ impl Harness {
         Ok(())
     }
 
+    /// Run timers and microtasks until the scheduler is empty.
     pub fn flush(&mut self) -> Result<()> {
         let from = self.scheduler.now_ms;
         let ran = self.run_timer_queue(None, true)?;
@@ -85,6 +93,7 @@ impl Harness {
         Ok(())
     }
 
+    /// Run exactly one next timer, advancing the fake clock if needed.
     pub fn run_next_timer(&mut self) -> Result<bool> {
         let Some(next_idx) = self.next_task_index(None) else {
             self.trace_timer_line("[timer] run_next none".into());
@@ -99,6 +108,7 @@ impl Harness {
         Ok(true)
     }
 
+    /// Run exactly one timer that is already due at the current fake time.
     pub fn run_next_due_timer(&mut self) -> Result<bool> {
         let Some(next_idx) = self.next_task_index(Some(self.scheduler.now_ms)) else {
             self.trace_timer_line("[timer] run_next_due none".into());
@@ -110,6 +120,7 @@ impl Harness {
         Ok(true)
     }
 
+    /// Run all timers that are due at the current fake time.
     pub fn run_due_timers(&mut self) -> Result<usize> {
         let ran = self.run_due_timers_internal()?;
         self.trace_timer_line(format!(

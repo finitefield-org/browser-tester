@@ -1,6 +1,8 @@
 use super::*;
 
+/// Assertion and DOM-inspection APIs for a [`Harness`].
 impl Harness {
+    /// Assert the rendered text content of the selected node.
     pub fn assert_text(&self, selector: &str, expected: &str) -> Result<()> {
         let target = self.select_one(selector)?;
         let actual = render_js_string_for_display(&self.dom.text_content(target));
@@ -15,6 +17,7 @@ impl Harness {
         Ok(())
     }
 
+    /// Assert the current value of the selected form control.
     pub fn assert_value(&self, selector: &str, expected: &str) -> Result<()> {
         let target = self.select_one(selector)?;
         let actual = self.dom.value(target)?;
@@ -29,6 +32,7 @@ impl Harness {
         Ok(())
     }
 
+    /// Assert the checked state of the selected form control.
     pub fn assert_checked(&self, selector: &str, expected: bool) -> Result<()> {
         let target = self.select_one(selector)?;
         let actual = self.dom.checked(target)?;
@@ -43,11 +47,13 @@ impl Harness {
         Ok(())
     }
 
+    /// Assert that at least one element matches the selector.
     pub fn assert_exists(&self, selector: &str) -> Result<()> {
         let _ = self.select_one(selector)?;
         Ok(())
     }
 
+    /// Dump the selected subtree as a string for debugging.
     pub fn dump_dom(&self, selector: &str) -> Result<String> {
         let target = self.select_one(selector)?;
         Ok(render_js_string_for_display(&self.dom.dump_node(target)))
