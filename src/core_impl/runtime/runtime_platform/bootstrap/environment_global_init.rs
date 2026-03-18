@@ -1,6 +1,8 @@
 use super::*;
 
 impl Harness {
+    const FROM_HTML_STACK_SIZE: usize = 32 * 1024 * 1024;
+
     pub fn from_html(html: &str) -> Result<Self> {
         Self::from_html_impl("about:blank", html, &[])
     }
@@ -25,6 +27,16 @@ impl Harness {
     }
 
     pub(crate) fn from_html_impl(
+        url: &str,
+        html: &str,
+        initial_local_storage: &[(&str, &str)],
+    ) -> Result<Self> {
+        stacker::grow(Self::FROM_HTML_STACK_SIZE, || {
+            Self::from_html_impl_on_grown_stack(url, html, initial_local_storage)
+        })
+    }
+
+    fn from_html_impl_on_grown_stack(
         url: &str,
         html: &str,
         initial_local_storage: &[(&str, &str)],
