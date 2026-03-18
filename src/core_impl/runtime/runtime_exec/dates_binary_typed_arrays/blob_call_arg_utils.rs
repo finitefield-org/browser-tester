@@ -288,6 +288,8 @@ impl Harness {
         array: &Rc<RefCell<TypedArrayValue>>,
         member: &str,
         args: &[Value],
+        event: &EventState,
+        caller_env: Option<&HashMap<String, Value>>,
     ) -> Result<Option<Value>> {
         match member {
             "at" => {
@@ -371,6 +373,293 @@ impl Harness {
                     .collect::<Vec<_>>()
                     .join(&separator);
                 Ok(Some(Value::String(joined)))
+            }
+            "forEach" => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.forEach requires exactly one callback argument".into(),
+                    ));
+                }
+                if array.borrow().buffer.borrow().detached {
+                    return Err(Error::ScriptRuntime(
+                        "Cannot perform TypedArray method on a detached ArrayBuffer".into(),
+                    ));
+                }
+                let callback = args[0].clone();
+                let snapshot = self.typed_array_snapshot(array)?;
+                for (index, value) in snapshot.into_iter().enumerate() {
+                    let _ = self.execute_callback_value_with_env(
+                        &callback,
+                        &[
+                            value,
+                            Value::Number(index as i64),
+                            Value::TypedArray(array.clone()),
+                        ],
+                        event,
+                        caller_env,
+                    )?;
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "map" => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.map requires exactly one callback argument".into(),
+                    ));
+                }
+                if array.borrow().buffer.borrow().detached {
+                    return Err(Error::ScriptRuntime(
+                        "Cannot perform TypedArray method on a detached ArrayBuffer".into(),
+                    ));
+                }
+                let callback = args[0].clone();
+                let kind = array.borrow().kind;
+                let snapshot = self.typed_array_snapshot(array)?;
+                let mut out = Vec::with_capacity(snapshot.len());
+                for (index, value) in snapshot.into_iter().enumerate() {
+                    out.push(self.execute_callback_value_with_env(
+                        &callback,
+                        &[
+                            value,
+                            Value::Number(index as i64),
+                            Value::TypedArray(array.clone()),
+                        ],
+                        event,
+                        caller_env,
+                    )?);
+                }
+                Ok(Some(self.new_typed_array_from_values(kind, &out)?))
+            }
+            "filter" => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.filter requires exactly one callback argument".into(),
+                    ));
+                }
+                if array.borrow().buffer.borrow().detached {
+                    return Err(Error::ScriptRuntime(
+                        "Cannot perform TypedArray method on a detached ArrayBuffer".into(),
+                    ));
+                }
+                let callback = args[0].clone();
+                let kind = array.borrow().kind;
+                let snapshot = self.typed_array_snapshot(array)?;
+                let mut out = Vec::new();
+                for (index, value) in snapshot.into_iter().enumerate() {
+                    let keep = self.execute_callback_value_with_env(
+                        &callback,
+                        &[
+                            value.clone(),
+                            Value::Number(index as i64),
+                            Value::TypedArray(array.clone()),
+                        ],
+                        event,
+                        caller_env,
+                    )?;
+                    if keep.truthy() {
+                        out.push(value);
+                    }
+                }
+                Ok(Some(self.new_typed_array_from_values(kind, &out)?))
+            }
+            "reduce" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.reduce requires callback and optional initial value".into(),
+                    ));
+                }
+                if array.borrow().buffer.borrow().detached {
+                    return Err(Error::ScriptRuntime(
+                        "Cannot perform TypedArray method on a detached ArrayBuffer".into(),
+                    ));
+                }
+                let callback = args[0].clone();
+                let snapshot = self.typed_array_snapshot(array)?;
+                let mut iter = snapshot.into_iter().enumerate();
+                let mut acc = if let Some(initial) = args.get(1) {
+                    initial.clone()
+                } else {
+                    let Some((_, first)) = iter.next() else {
+                        return Err(Error::ScriptRuntime(
+                            "reduce of empty array with no initial value".into(),
+                        ));
+                    };
+                    first
+                };
+                for (index, value) in iter {
+                    acc = self.execute_callback_value_with_env(
+                        &callback,
+                        &[
+                            acc,
+                            value,
+                            Value::Number(index as i64),
+                            Value::TypedArray(array.clone()),
+                        ],
+                        event,
+                        caller_env,
+                    )?;
+                }
+                Ok(Some(acc))
+            }
+            "reduceRight" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.reduceRight requires callback and optional initial value"
+                            .into(),
+                    ));
+                }
+                if array.borrow().buffer.borrow().detached {
+                    return Err(Error::ScriptRuntime(
+                        "Cannot perform TypedArray method on a detached ArrayBuffer".into(),
+                    ));
+                }
+                let callback = args[0].clone();
+                let snapshot = self.typed_array_snapshot(array)?;
+                let mut iter = snapshot.into_iter().enumerate().rev();
+                let mut acc = if let Some(initial) = args.get(1) {
+                    initial.clone()
+                } else {
+                    let Some((_, first)) = iter.next() else {
+                        return Err(Error::ScriptRuntime(
+                            "reduce of empty array with no initial value".into(),
+                        ));
+                    };
+                    first
+                };
+                for (index, value) in iter {
+                    acc = self.execute_callback_value_with_env(
+                        &callback,
+                        &[
+                            acc,
+                            value,
+                            Value::Number(index as i64),
+                            Value::TypedArray(array.clone()),
+                        ],
+                        event,
+                        caller_env,
+                    )?;
+                }
+                Ok(Some(acc))
+            }
+            "find" => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.find requires exactly one callback argument".into(),
+                    ));
+                }
+                if array.borrow().buffer.borrow().detached {
+                    return Err(Error::ScriptRuntime(
+                        "Cannot perform TypedArray method on a detached ArrayBuffer".into(),
+                    ));
+                }
+                let callback = args[0].clone();
+                let snapshot = self.typed_array_snapshot(array)?;
+                for (index, value) in snapshot.into_iter().enumerate() {
+                    let matched = self.execute_callback_value_with_env(
+                        &callback,
+                        &[
+                            value.clone(),
+                            Value::Number(index as i64),
+                            Value::TypedArray(array.clone()),
+                        ],
+                        event,
+                        caller_env,
+                    )?;
+                    if matched.truthy() {
+                        return Ok(Some(value));
+                    }
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "findIndex" => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.findIndex requires exactly one callback argument".into(),
+                    ));
+                }
+                if array.borrow().buffer.borrow().detached {
+                    return Err(Error::ScriptRuntime(
+                        "Cannot perform TypedArray method on a detached ArrayBuffer".into(),
+                    ));
+                }
+                let callback = args[0].clone();
+                let snapshot = self.typed_array_snapshot(array)?;
+                for (index, value) in snapshot.into_iter().enumerate() {
+                    let matched = self.execute_callback_value_with_env(
+                        &callback,
+                        &[
+                            value,
+                            Value::Number(index as i64),
+                            Value::TypedArray(array.clone()),
+                        ],
+                        event,
+                        caller_env,
+                    )?;
+                    if matched.truthy() {
+                        return Ok(Some(Value::Number(index as i64)));
+                    }
+                }
+                Ok(Some(Value::Number(-1)))
+            }
+            "findLast" => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.findLast requires exactly one callback argument".into(),
+                    ));
+                }
+                if array.borrow().buffer.borrow().detached {
+                    return Err(Error::ScriptRuntime(
+                        "Cannot perform TypedArray method on a detached ArrayBuffer".into(),
+                    ));
+                }
+                let callback = args[0].clone();
+                let snapshot = self.typed_array_snapshot(array)?;
+                for (index, value) in snapshot.into_iter().enumerate().rev() {
+                    let matched = self.execute_callback_value_with_env(
+                        &callback,
+                        &[
+                            value.clone(),
+                            Value::Number(index as i64),
+                            Value::TypedArray(array.clone()),
+                        ],
+                        event,
+                        caller_env,
+                    )?;
+                    if matched.truthy() {
+                        return Ok(Some(value));
+                    }
+                }
+                Ok(Some(Value::Undefined))
+            }
+            "findLastIndex" => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.findLastIndex requires exactly one callback argument".into(),
+                    ));
+                }
+                if array.borrow().buffer.borrow().detached {
+                    return Err(Error::ScriptRuntime(
+                        "Cannot perform TypedArray method on a detached ArrayBuffer".into(),
+                    ));
+                }
+                let callback = args[0].clone();
+                let snapshot = self.typed_array_snapshot(array)?;
+                for (index, value) in snapshot.into_iter().enumerate().rev() {
+                    let matched = self.execute_callback_value_with_env(
+                        &callback,
+                        &[
+                            value,
+                            Value::Number(index as i64),
+                            Value::TypedArray(array.clone()),
+                        ],
+                        event,
+                        caller_env,
+                    )?;
+                    if matched.truthy() {
+                        return Ok(Some(Value::Number(index as i64)));
+                    }
+                }
+                Ok(Some(Value::Number(-1)))
             }
             "indexOf" => {
                 if args.is_empty() || args.len() > 2 {
@@ -536,6 +825,66 @@ impl Harness {
                 Ok(Some(self.new_iterator_value(
                     (0..len).map(|index| Value::Number(index as i64)).collect(),
                 )))
+            }
+            "some" => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.some requires exactly one callback argument".into(),
+                    ));
+                }
+                if array.borrow().buffer.borrow().detached {
+                    return Err(Error::ScriptRuntime(
+                        "Cannot perform TypedArray method on a detached ArrayBuffer".into(),
+                    ));
+                }
+                let callback = args[0].clone();
+                let snapshot = self.typed_array_snapshot(array)?;
+                for (index, value) in snapshot.into_iter().enumerate() {
+                    let matched = self.execute_callback_value_with_env(
+                        &callback,
+                        &[
+                            value,
+                            Value::Number(index as i64),
+                            Value::TypedArray(array.clone()),
+                        ],
+                        event,
+                        caller_env,
+                    )?;
+                    if matched.truthy() {
+                        return Ok(Some(Value::Bool(true)));
+                    }
+                }
+                Ok(Some(Value::Bool(false)))
+            }
+            "every" => {
+                if args.len() != 1 {
+                    return Err(Error::ScriptRuntime(
+                        "TypedArray.every requires exactly one callback argument".into(),
+                    ));
+                }
+                if array.borrow().buffer.borrow().detached {
+                    return Err(Error::ScriptRuntime(
+                        "Cannot perform TypedArray method on a detached ArrayBuffer".into(),
+                    ));
+                }
+                let callback = args[0].clone();
+                let snapshot = self.typed_array_snapshot(array)?;
+                for (index, value) in snapshot.into_iter().enumerate() {
+                    let matched = self.execute_callback_value_with_env(
+                        &callback,
+                        &[
+                            value,
+                            Value::Number(index as i64),
+                            Value::TypedArray(array.clone()),
+                        ],
+                        event,
+                        caller_env,
+                    )?;
+                    if !matched.truthy() {
+                        return Ok(Some(Value::Bool(false)));
+                    }
+                }
+                Ok(Some(Value::Bool(true)))
             }
             "values" => {
                 if !args.is_empty() {

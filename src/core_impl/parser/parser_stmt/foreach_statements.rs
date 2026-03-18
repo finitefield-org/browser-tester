@@ -86,108 +86,16 @@ pub(crate) fn parse_array_for_each_stmt(stmt: &str) -> Result<Option<Stmt>> {
     let stmt = stmt.trim();
     let stmt_no_semi = stmt.strip_suffix(';').map(str::trim_end).unwrap_or(stmt);
 
-    let mut cursor = Cursor::new(stmt_no_semi);
-    cursor.skip_ws();
-    if let Some(target) = cursor.parse_identifier() {
-        cursor.skip_ws();
-        if cursor.consume_byte(b'.') {
-            cursor.skip_ws();
-            if cursor.consume_ascii("forEach") {
-                if let Some(next) = cursor.peek() {
-                    if is_ident_char(next) {
-                        return Ok(None);
-                    }
-                }
-                cursor.skip_ws();
-
-                let args_src = cursor.read_balanced_block(b'(', b')')?;
-                let args = split_top_level_by_char(&args_src, b',');
-                if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
-                    return Err(Error::ScriptParse(
-                        "forEach requires a callback and optional thisArg".into(),
-                    ));
-                }
-                if args.len() == 2 && args[1].trim().is_empty() {
-                    return Err(Error::ScriptParse("forEach thisArg cannot be empty".into()));
-                }
-                let callback = match parse_array_for_each_callback_arg(
-                    args[0],
-                    3,
-                    "array callback parameters",
-                ) {
-                    Ok(callback) => callback,
-                    Err(_) => return Ok(Some(Stmt::Expr(parse_expr(stmt_no_semi)?))),
-                };
-                if args.len() == 2 {
-                    let _ = parse_expr(args[1].trim())?;
-                }
-
-                cursor.skip_ws();
-                if !cursor.eof() {
-                    return Err(Error::ScriptParse(format!(
-                        "unsupported forEach statement tail: {stmt}"
-                    )));
-                }
-                return Ok(Some(Stmt::ArrayForEach { target, callback }));
-            }
-        }
-    }
-
     if !stmt_no_semi.contains(".forEach(") {
         return Ok(None);
     }
     if stmt_no_semi.contains(".classList.forEach(") {
         return Ok(None);
     }
-    let Some(for_each_dot_pos) = find_top_level_for_each_call(stmt_no_semi) else {
-        return Ok(None);
-    };
-
-    let target_src = stmt_no_semi[..for_each_dot_pos].trim();
-    if target_src.is_empty() {
+    if find_top_level_for_each_call(stmt_no_semi).is_none() {
         return Ok(None);
     }
-
-    let call_src = stmt_no_semi
-        .get(for_each_dot_pos + 1..)
-        .ok_or_else(|| Error::ScriptParse(format!("invalid forEach statement: {stmt}")))?;
-    let mut cursor = Cursor::new(call_src);
-    if !cursor.consume_ascii("forEach") {
-        return Ok(None);
-    }
-    cursor.skip_ws();
-    let args_src = cursor.read_balanced_block(b'(', b')')?;
-    cursor.skip_ws();
-    if !cursor.eof() {
-        return Ok(None);
-    }
-
-    let args = split_top_level_by_char(&args_src, b',');
-    if args.is_empty() || args.len() > 2 {
-        return Err(Error::ScriptParse(
-            "forEach requires a callback and optional thisArg".into(),
-        ));
-    }
-    if args[0].trim().is_empty() {
-        return Err(Error::ScriptParse(
-            "forEach requires a callback and optional thisArg".into(),
-        ));
-    }
-    if args.len() == 2 && args[1].trim().is_empty() {
-        return Err(Error::ScriptParse("forEach thisArg cannot be empty".into()));
-    }
-
-    let target = parse_expr(target_src)?;
-    let callback = match parse_array_for_each_callback_arg(args[0], 3, "array callback parameters")
-    {
-        Ok(callback) => callback,
-        Err(_) => return Ok(Some(Stmt::Expr(parse_expr(stmt_no_semi)?))),
-    };
-    if args.len() == 2 {
-        let _ = parse_expr(args[1].trim())?;
-    }
-
-    Ok(Some(Stmt::ArrayForEachExpr { target, callback }))
+    Ok(Some(Stmt::Expr(parse_expr(stmt_no_semi)?)))
 }
 
 pub(crate) fn parse_array_for_each_callback_arg(

@@ -801,6 +801,43 @@ impl Harness {
         name == INTERNAL_RETURN_SLOT || name.starts_with("\u{0}\u{0}bt_")
     }
 
+    pub(crate) fn event_sync_pending_marker_key(name: &str) -> String {
+        format!("\u{0}\u{0}bt_evt_sync:{name}")
+    }
+
+    pub(crate) fn event_sync_pending_marker_name(name: &str) -> Option<&str> {
+        name.strip_prefix("\u{0}\u{0}bt_evt_sync:")
+    }
+
+    pub(crate) fn queue_event_sync_pending_update(
+        &mut self,
+        _env: &HashMap<String, Value>,
+        name: &str,
+        value: Option<Value>,
+    ) {
+        if let Some(frame) = self
+            .script_runtime
+            .listener_capture_env_stack
+            .iter_mut()
+            .rev()
+            .find(|frame| frame.shared_env.is_some() && !frame.shared_env_owned_by_scope)
+        {
+            frame.pending_env_updates
+                .insert(Self::event_sync_pending_marker_key(name), value);
+            return;
+        }
+        if let Some(frame) = self
+            .script_runtime
+            .listener_capture_env_stack
+            .iter_mut()
+            .rev()
+            .find(|frame| frame.shared_env.is_some())
+        {
+            frame.pending_env_updates
+                .insert(Self::event_sync_pending_marker_key(name), value);
+        }
+    }
+
     pub(crate) fn env_scope_depth(env: &HashMap<String, Value>) -> i64 {
         match env.get(INTERNAL_SCOPE_DEPTH_KEY) {
             Some(Value::Number(depth)) if *depth >= 0 => *depth,
@@ -888,6 +925,31 @@ impl Harness {
             if frame.shared_env.is_none() {
                 frame.shared_env = Some(Rc::new(RefCell::new(ScriptEnv::default())));
                 frame.shared_env_owned_by_scope = true;
+            } else if !frame.shared_env_owned_by_scope {
+                let mut seeded_env = frame
+                    .shared_env
+                    .as_ref()
+                    .map(|shared_env| shared_env.borrow().clone())
+                    .unwrap_or_default();
+                for (name, value) in &frame.pending_env_updates {
+                    if Self::is_internal_env_key(name) {
+                        continue;
+                    }
+                    if let Some(value) = value {
+                        seeded_env.insert(name.clone(), value.clone());
+                    } else {
+                        seeded_env.remove(name);
+                    }
+                }
+                let shared_env = Rc::new(RefCell::new(seeded_env));
+                self.script_runtime
+                    .listener_capture_env_stack
+                    .push(ListenerCaptureFrame {
+                        shared_env: Some(shared_env.clone()),
+                        shared_env_owned_by_scope: true,
+                        ..ListenerCaptureFrame::default()
+                    });
+                return shared_env;
             }
             frame
                 .shared_env
@@ -1013,7 +1075,9 @@ impl Harness {
         }
         self.apply_listener_capture_pending_updates_map(env, updates, true);
         for frame in &mut self.script_runtime.listener_capture_env_stack[drain_start..] {
-            frame.pending_env_updates.clear();
+            frame.pending_env_updates.retain(|name, _| {
+                Self::event_sync_pending_marker_name(name).is_some()
+            });
         }
     }
 
@@ -1098,31 +1162,41 @@ impl Harness {
             || (lexical_binding
                 && Self::env_scope_depth(env) > 0
                 && !captured_in_current_function_scope);
-        let active_shared_env = self
-            .script_runtime
-            .listener_capture_env_stack
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(frame_index, frame)| {
-                let shared_env = frame.shared_env.as_ref()?;
-                let tracks_name_in_frame = frame.pending_env_updates.contains_key(name)
-                    || frame
-                        .tracked_names
-                        .as_ref()
-                        .is_some_and(|tracked_names| tracked_names.contains(name))
-                    || shared_env.borrow().contains_key(name);
-                let owned_frame_tracks_name = frame.shared_env_owned_by_scope
-                    && (frame_index >= local_scope_start || tracks_name_in_frame);
-                let tracks_name = if scope_local_binding && !owned_frame_tracks_name {
-                    false
-                } else {
-                    owned_frame_tracks_name || tracks_name_in_frame
-                };
-                tracks_name.then(|| (shared_env.clone(), frame.shared_env_owned_by_scope))
-            });
+        let active_shared_env = if scope_local_binding {
+            self.script_runtime
+                .listener_capture_env_stack
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(frame_index, frame)| {
+                    if frame_index < local_scope_start || !frame.shared_env_owned_by_scope {
+                        return None;
+                    }
+                    frame.shared_env.as_ref().map(|shared_env| (shared_env.clone(), true))
+                })
+        } else {
+            self.script_runtime
+                .listener_capture_env_stack
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(frame_index, frame)| {
+                    let shared_env = frame.shared_env.as_ref()?;
+                    let tracks_name_in_frame = frame.pending_env_updates.contains_key(name)
+                        || frame
+                            .tracked_names
+                            .as_ref()
+                            .is_some_and(|tracked_names| tracked_names.contains(name))
+                        || shared_env.borrow().contains_key(name);
+                    let owned_frame_tracks_name = frame.shared_env_owned_by_scope
+                        && (frame_index >= local_scope_start || tracks_name_in_frame);
+                    (owned_frame_tracks_name || tracks_name_in_frame)
+                        .then(|| (shared_env.clone(), frame.shared_env_owned_by_scope))
+                })
+        };
         let shared_frame_tracks_name = active_shared_env.is_some();
-        if scope_local_binding && !shared_frame_tracks_name {
+        if local_binding && !shared_frame_tracks_name {
+            self.sync_active_function_captures_in_env_for_binding(env, name, value);
             return;
         }
 
@@ -1148,6 +1222,9 @@ impl Harness {
             );
         }
         self.sync_function_captures_in_env_for_binding(env, name, value);
+        if lexical_binding && !local_binding {
+            self.sync_runtime_function_captures_for_binding(name, value);
+        }
         if !scope_local_binding {
             self.sync_scheduled_task_captures_for_binding(name, value);
         }
@@ -1182,6 +1259,78 @@ impl Harness {
                 name.to_string(),
                 Some(value.clone()),
             );
+        }
+    }
+
+    fn sync_active_function_captures_in_env_for_binding(
+        &mut self,
+        env: &HashMap<String, Value>,
+        name: &str,
+        value: &Value,
+    ) {
+        let mut seen_function_ids = HashSet::new();
+        for entry in env.values() {
+            let Value::Function(function) = entry else {
+                continue;
+            };
+            if !seen_function_ids.insert(function.function_id) {
+                continue;
+            }
+            if function.global_scope || function.local_bindings.contains(name) {
+                continue;
+            }
+            if !function.captured_names.contains(name) {
+                continue;
+            }
+            let has_active_shared_env = self
+                .script_runtime
+                .listener_capture_env_stack
+                .iter()
+                .any(|frame| {
+                    frame.shared_env.as_ref().is_some_and(|shared_env| {
+                        Rc::ptr_eq(shared_env, &function.captured_env)
+                    })
+                });
+            if !has_active_shared_env {
+                continue;
+            }
+            function
+                .captured_env
+                .borrow_mut()
+                .insert(name.to_string(), value.clone());
+            self.queue_listener_capture_env_update_for_shared_env(
+                &function.captured_env,
+                name.to_string(),
+                Some(value.clone()),
+            );
+        }
+    }
+
+    fn sync_runtime_function_captures_for_binding(&mut self, name: &str, value: &Value) {
+        let runtime_values = self
+            .script_runtime
+            .env
+            .to_map()
+            .into_values()
+            .collect::<Vec<_>>();
+        let mut seen_function_ids = HashSet::new();
+        for entry in runtime_values {
+            let Value::Function(function) = entry else {
+                continue;
+            };
+            if !seen_function_ids.insert(function.function_id) {
+                continue;
+            }
+            if function.global_scope || function.local_bindings.contains(name) {
+                continue;
+            }
+            if !function.captured_names.contains(name) {
+                continue;
+            }
+            function
+                .captured_env
+                .borrow_mut()
+                .insert(name.to_string(), value.clone());
         }
     }
 }

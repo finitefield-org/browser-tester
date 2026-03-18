@@ -1055,6 +1055,7 @@ impl Harness {
         member: &str,
         evaluated_args: &[Value],
         event: &EventState,
+        caller_env: Option<&HashMap<String, Value>>,
     ) -> Result<Option<Value>> {
         {
             let values_ref = values.borrow();
@@ -1094,7 +1095,7 @@ impl Harness {
                 let callback = evaluated_args[0].clone();
                 let snapshot = values.borrow().clone();
                 for (idx, item) in snapshot.into_iter().enumerate() {
-                    let _ = self.execute_callback_value(
+                    let _ = self.execute_callback_value_with_env(
                         &callback,
                         &[
                             item,
@@ -1102,6 +1103,7 @@ impl Harness {
                             Value::Array(values.clone()),
                         ],
                         event,
+                        caller_env,
                     )?;
                 }
                 Value::Undefined
@@ -1116,7 +1118,7 @@ impl Harness {
                 let snapshot = values.borrow().clone();
                 let mut out = Vec::with_capacity(snapshot.len());
                 for (idx, item) in snapshot.into_iter().enumerate() {
-                    out.push(self.execute_callback_value(
+                    out.push(self.execute_callback_value_with_env(
                         &callback,
                         &[
                             item,
@@ -1124,6 +1126,7 @@ impl Harness {
                             Value::Array(values.clone()),
                         ],
                         event,
+                        caller_env,
                     )?);
                 }
                 Self::new_array_value(out)
@@ -1161,7 +1164,7 @@ impl Harness {
                 let snapshot = values.borrow().clone();
                 let mut out = Vec::new();
                 for (idx, item) in snapshot.into_iter().enumerate() {
-                    let mapped = self.execute_callback_value(
+                    let mapped = self.execute_callback_value_with_env(
                         &callback,
                         &[
                             item,
@@ -1169,6 +1172,7 @@ impl Harness {
                             Value::Array(values.clone()),
                         ],
                         event,
+                        caller_env,
                     )?;
                     match mapped {
                         Value::Array(mapped_values) => {
@@ -1195,7 +1199,7 @@ impl Harness {
                 let snapshot = values.borrow().clone();
                 let mut out = Vec::new();
                 for (idx, item) in snapshot.into_iter().enumerate() {
-                    let keep = self.execute_callback_value(
+                    let keep = self.execute_callback_value_with_env(
                         &callback,
                         &[
                             item.clone(),
@@ -1203,6 +1207,7 @@ impl Harness {
                             Value::Array(values.clone()),
                         ],
                         event,
+                        caller_env,
                     )?;
                     if keep.truthy() {
                         out.push(item);
@@ -1231,7 +1236,7 @@ impl Harness {
                     first
                 };
                 for (idx, item) in snapshot.into_iter().enumerate().skip(start_index) {
-                    acc = self.execute_callback_value(
+                    acc = self.execute_callback_value_with_env(
                         &callback,
                         &[
                             acc,
@@ -1240,6 +1245,7 @@ impl Harness {
                             Value::Array(values.clone()),
                         ],
                         event,
+                        caller_env,
                     )?;
                 }
                 acc
@@ -1254,7 +1260,7 @@ impl Harness {
                 let snapshot = values.borrow().clone();
                 let mut found = Value::Undefined;
                 for (idx, item) in snapshot.into_iter().enumerate() {
-                    let matched = self.execute_callback_value(
+                    let matched = self.execute_callback_value_with_env(
                         &callback,
                         &[
                             item.clone(),
@@ -1262,6 +1268,7 @@ impl Harness {
                             Value::Array(values.clone()),
                         ],
                         event,
+                        caller_env,
                     )?;
                     if matched.truthy() {
                         found = item;
@@ -1280,7 +1287,7 @@ impl Harness {
                 let snapshot = values.borrow().clone();
                 let mut found = -1i64;
                 for (idx, item) in snapshot.into_iter().enumerate() {
-                    let matched = self.execute_callback_value(
+                    let matched = self.execute_callback_value_with_env(
                         &callback,
                         &[
                             item,
@@ -1288,6 +1295,7 @@ impl Harness {
                             Value::Array(values.clone()),
                         ],
                         event,
+                        caller_env,
                     )?;
                     if matched.truthy() {
                         found = idx as i64;
@@ -1306,7 +1314,7 @@ impl Harness {
                 let snapshot = values.borrow().clone();
                 let mut matched = false;
                 for (idx, item) in snapshot.into_iter().enumerate() {
-                    let keep = self.execute_callback_value(
+                    let keep = self.execute_callback_value_with_env(
                         &callback,
                         &[
                             item,
@@ -1314,6 +1322,7 @@ impl Harness {
                             Value::Array(values.clone()),
                         ],
                         event,
+                        caller_env,
                     )?;
                     if keep.truthy() {
                         matched = true;
@@ -1332,7 +1341,7 @@ impl Harness {
                 let snapshot = values.borrow().clone();
                 let mut all = true;
                 for (idx, item) in snapshot.into_iter().enumerate() {
-                    let keep = self.execute_callback_value(
+                    let keep = self.execute_callback_value_with_env(
                         &callback,
                         &[
                             item,
@@ -1340,6 +1349,7 @@ impl Harness {
                             Value::Array(values.clone()),
                         ],
                         event,
+                        caller_env,
                     )?;
                     if !keep.truthy() {
                         all = false;

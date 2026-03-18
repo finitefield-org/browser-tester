@@ -141,6 +141,7 @@ impl Harness {
                     } else {
                         env.remove(key);
                     }
+                    self.queue_event_sync_pending_update(env, key, after.cloned());
                 }
                 listener_env = env.clone();
             }

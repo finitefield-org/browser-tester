@@ -10,6 +10,23 @@ impl Harness {
         self.execute_callable_value(callback, args, event)
     }
 
+    pub(crate) fn execute_callback_value_with_env(
+        &mut self,
+        callback: &Value,
+        args: &[Value],
+        event: &EventState,
+        caller_env: Option<&HashMap<String, Value>>,
+    ) -> Result<Value> {
+        if let Some(env) = caller_env {
+            self.sync_listener_capture_env_if_shared(env);
+            let result = self.execute_callable_value_with_env(callback, args, event, Some(env));
+            self.sync_listener_capture_env_if_shared(env);
+            result
+        } else {
+            self.execute_callback_value(callback, args, event)
+        }
+    }
+
     pub(crate) fn eval_typed_array_method(
         &mut self,
         target: &str,

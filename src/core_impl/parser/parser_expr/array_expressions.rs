@@ -243,12 +243,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "map requires exactly one callback argument".into(),
                 ));
             }
-            if let Ok(callback) = parse_array_callback_arg(args[0], 3, "array callback parameters")
-            {
-                Expr::ArrayMap { target, callback }
-            } else {
-                parse_identifier_target_member_call(target, method, &args)?
-            }
+            parse_identifier_target_member_call(target, method, &args)?
         }
         "filter" => {
             if args.len() != 1 || args[0].trim().is_empty() {
@@ -256,12 +251,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "filter requires exactly one callback argument".into(),
                 ));
             }
-            if let Ok(callback) = parse_array_callback_arg(args[0], 3, "array callback parameters")
-            {
-                Expr::ArrayFilter { target, callback }
-            } else {
-                parse_identifier_target_member_call(target, method, &args)?
-            }
+            parse_identifier_target_member_call(target, method, &args)?
         }
         "reduce" => {
             if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {
@@ -269,26 +259,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "reduce requires callback and optional initial value".into(),
                 ));
             }
-            if let Ok(callback) = parse_array_callback_arg(args[0], 4, "array callback parameters")
-            {
-                let initial = if args.len() == 2 {
-                    if args[1].trim().is_empty() {
-                        return Err(Error::ScriptParse(
-                            "reduce initial value cannot be empty".into(),
-                        ));
-                    }
-                    Some(Box::new(parse_expr(args[1].trim())?))
-                } else {
-                    None
-                };
-                Expr::ArrayReduce {
-                    target,
-                    callback,
-                    initial,
-                }
-            } else {
-                parse_identifier_target_member_call(target, method, &args)?
-            }
+            parse_identifier_target_member_call(target, method, &args)?
         }
         "forEach" => {
             if args.len() != 1 || args[0].trim().is_empty() {
@@ -296,12 +267,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "forEach requires exactly one callback argument".into(),
                 ));
             }
-            if let Ok(callback) = parse_array_callback_arg(args[0], 3, "array callback parameters")
-            {
-                Expr::ArrayForEach { target, callback }
-            } else {
-                parse_identifier_target_member_call(target, method, &args)?
-            }
+            parse_identifier_target_member_call(target, method, &args)?
         }
         "find" => {
             if args.len() != 1 || args[0].trim().is_empty() {
@@ -309,12 +275,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "find requires exactly one callback argument".into(),
                 ));
             }
-            if let Ok(callback) = parse_array_callback_arg(args[0], 3, "array callback parameters")
-            {
-                Expr::ArrayFind { target, callback }
-            } else {
-                parse_identifier_target_member_call(target, method, &args)?
-            }
+            parse_identifier_target_member_call(target, method, &args)?
         }
         "findIndex" => {
             if args.len() != 1 || args[0].trim().is_empty() {
@@ -322,12 +283,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "findIndex requires exactly one callback argument".into(),
                 ));
             }
-            if let Ok(callback) = parse_array_callback_arg(args[0], 3, "array callback parameters")
-            {
-                Expr::ArrayFindIndex { target, callback }
-            } else {
-                parse_identifier_target_member_call(target, method, &args)?
-            }
+            parse_identifier_target_member_call(target, method, &args)?
         }
         "some" => {
             if args.len() != 1 || args[0].trim().is_empty() {
@@ -335,12 +291,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "some requires exactly one callback argument".into(),
                 ));
             }
-            if let Ok(callback) = parse_array_callback_arg(args[0], 3, "array callback parameters")
-            {
-                Expr::ArraySome { target, callback }
-            } else {
-                parse_identifier_target_member_call(target, method, &args)?
-            }
+            parse_identifier_target_member_call(target, method, &args)?
         }
         "every" => {
             if args.len() != 1 || args[0].trim().is_empty() {
@@ -348,12 +299,7 @@ pub(crate) fn parse_array_access_expr(src: &str) -> Result<Option<Expr>> {
                     "every requires exactly one callback argument".into(),
                 ));
             }
-            if let Ok(callback) = parse_array_callback_arg(args[0], 3, "array callback parameters")
-            {
-                Expr::ArrayEvery { target, callback }
-            } else {
-                parse_identifier_target_member_call(target, method, &args)?
-            }
+            parse_identifier_target_member_call(target, method, &args)?
         }
         "includes" => {
             if args.is_empty() || args.len() > 2 || args[0].trim().is_empty() {

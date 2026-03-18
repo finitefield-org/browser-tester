@@ -46,6 +46,9 @@ impl Harness {
             if local_bindings.contains(name.as_str()) {
                 continue;
             }
+            if preserve_before.is_none() && value.is_none() && env.contains_key(&name) {
+                continue;
+            }
             if let Some(before) = preserve_before {
                 let changed_since_before = match (before.get(&name), env.get(&name)) {
                     (Some(prev), Some(current)) => !self.strict_equal(prev, current),

@@ -1,7 +1,7 @@
 use super::*;
 
 impl Harness {
-    fn dispatch_event_target_with_expr_env_sync(
+    pub(crate) fn dispatch_event_target_with_expr_env_sync(
         &mut self,
         target_object: Rc<RefCell<ObjectValue>>,
         event_payload: Value,
@@ -37,10 +37,8 @@ impl Harness {
                 changed.push((name, after.cloned()));
             }
         }
-        if let Some(frame) = self.script_runtime.listener_capture_env_stack.last_mut() {
-            for (name, value) in changed {
-                frame.pending_env_updates.insert(name, value);
-            }
+        for (name, value) in changed {
+            self.queue_event_sync_pending_update(env, &name, value);
         }
 
         Ok(dispatched)
@@ -1086,7 +1084,13 @@ impl Harness {
 
                     if let Value::Array(values) = &receiver {
                         if let Some(value) =
-                            self.eval_array_member_call(values, member, &evaluated_args, event)?
+                            self.eval_array_member_call(
+                                values,
+                                member,
+                                &evaluated_args,
+                                event,
+                                Some(env),
+                            )?
                         {
                             return Ok(value);
                         }
@@ -1126,7 +1130,13 @@ impl Harness {
 
                     if let Value::TypedArray(array) = &receiver {
                         if let Some(value) =
-                            self.eval_typed_array_member_call(array, member, &evaluated_args)?
+                            self.eval_typed_array_member_call(
+                                array,
+                                member,
+                                &evaluated_args,
+                                event,
+                                Some(env),
+                            )?
                         {
                             return Ok(value);
                         }

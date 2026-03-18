@@ -44,6 +44,17 @@ impl Harness {
         }
     }
 
+    fn discard_event_sync_pending_updates_from_frames(&mut self, start: usize) {
+        if start >= self.script_runtime.listener_capture_env_stack.len() {
+            return;
+        }
+        for frame in &mut self.script_runtime.listener_capture_env_stack[start..] {
+            frame.pending_env_updates.retain(|name, _| {
+                Self::event_sync_pending_marker_name(name).is_none()
+            });
+        }
+    }
+
     fn css_escape_identifier(input: &str) -> String {
         let chars: Vec<char> = input.chars().collect();
         let mut out = String::new();
@@ -953,7 +964,7 @@ impl Harness {
                 let Value::Array(values) = receiver else {
                     return Err(Self::incompatible_receiver_error(&family));
                 };
-                self.eval_array_member_call(&values, &member, args, event)?
+                self.eval_array_member_call(&values, &member, args, event, caller_env)?
                     .ok_or_else(|| {
                         Error::ScriptRuntime(format!("unsupported Array method: {member}"))
                     })
@@ -1658,7 +1669,7 @@ impl Harness {
                 let Value::TypedArray(array) = receiver else {
                     return Err(Self::incompatible_receiver_error(&family));
                 };
-                self.eval_typed_array_member_call(&array, &member, args)?
+                self.eval_typed_array_member_call(&array, &member, args, event, caller_env)?
                     .ok_or_else(|| {
                         Error::ScriptRuntime(format!("unsupported TypedArray method: {member}"))
                     })
@@ -2294,7 +2305,7 @@ impl Harness {
                 if !Self::is_data_transfer_item_list_value(&values.borrow()) {
                     return Err(Self::incompatible_receiver_error(&family));
                 }
-                self.eval_array_member_call(&values, &member, args, event)?
+                self.eval_array_member_call(&values, &member, args, event, caller_env)?
                     .ok_or_else(|| {
                         Error::ScriptRuntime(format!(
                             "unsupported DataTransferItemList method: {member}"
@@ -2315,11 +2326,10 @@ impl Harness {
                         ));
                     }
                     let dispatched = if let Some(caller_env) = caller_env {
-                        let mut dispatch_env = caller_env.clone();
-                        self.dispatch_event_target_with_env(
+                        self.dispatch_event_target_with_expr_env_sync(
                             object.clone(),
                             args[0].clone(),
-                            &mut dispatch_env,
+                            caller_env,
                         )?
                     } else {
                         self.dispatch_event_target(object.clone(), args[0].clone())?
@@ -2345,11 +2355,10 @@ impl Harness {
                         ));
                     }
                     let dispatched = if let Some(caller_env) = caller_env {
-                        let mut dispatch_env = caller_env.clone();
-                        self.dispatch_event_target_with_env(
+                        self.dispatch_event_target_with_expr_env_sync(
                             object.clone(),
                             args[0].clone(),
-                            &mut dispatch_env,
+                            caller_env,
                         )?
                     } else {
                         self.dispatch_event_target(object.clone(), args[0].clone())?
@@ -7878,7 +7887,7 @@ impl Harness {
                     let caller_scope_start =
                         caller_view.map(Self::pending_listener_capture_scope_start);
                     for name in &function.captured_names {
-                        if Self::is_internal_env_key(name)
+                        if Self::is_internal_env_key(&name)
                             || function.local_bindings.contains(name.as_str())
                             || matches!(name.as_str(), "this" | "arguments")
                             || call_env.contains_key(name)
@@ -7912,6 +7921,7 @@ impl Harness {
                         for name in lexical_names {
                             if Self::is_internal_env_key(&name)
                                 || function.local_bindings.contains(name.as_str())
+                                || function.captured_names.contains(&name)
                                 || matches!(name.as_str(), "this" | "arguments")
                                 || Self::env_has_local_binding(caller_view, &name)
                             {
@@ -8031,7 +8041,7 @@ impl Harness {
                         }
                     }
                     for name in &function.captured_global_names {
-                        if Self::is_internal_env_key(name)
+                        if Self::is_internal_env_key(&name)
                             || function.local_bindings.contains(name)
                             || name == "this"
                             || name == "arguments"
@@ -8147,6 +8157,10 @@ impl Harness {
                             pending: HashSet::new(),
                         });
                     }
+                    let current_scope_pending_updates_before = this
+                        .listener_capture_pending_updates_snapshot_from(
+                            Self::pending_listener_capture_scope_start(&call_env),
+                        );
                     let mut pending_async_suspend = None;
                     let flow_result = if function.is_async && !function.is_generator {
                         if let Some((await_index, await_expr, resume_kind)) =
@@ -8260,6 +8274,10 @@ impl Harness {
                         }
                         Err(err) => return Err(err),
                     };
+                    let current_scope_pending_updates_after = this
+                        .listener_capture_pending_updates_snapshot_from(
+                            Self::pending_listener_capture_scope_start(&call_env),
+                        );
                     this.apply_pending_listener_capture_env_updates(&mut call_env);
                     let generator_yields = yield_collector
                         .as_ref()
@@ -8437,6 +8455,69 @@ impl Harness {
                             }
                         }
                     }
+                    let mut caller_visible_names = current_scope_pending_updates_before
+                        .keys()
+                        .chain(current_scope_pending_updates_after.keys())
+                        .filter_map(|name| Self::event_sync_pending_marker_name(name))
+                        .map(str::to_string)
+                        .collect::<Vec<_>>();
+                    caller_visible_names.sort();
+                    caller_visible_names.dedup();
+                    for name in caller_visible_names {
+                        let marker_key = Self::event_sync_pending_marker_key(&name);
+                        let pending_before = current_scope_pending_updates_before.get(&marker_key);
+                        let pending_after = current_scope_pending_updates_after.get(&marker_key);
+                        let pending_changed = match (pending_before, pending_after) {
+                            (Some(Some(prev)), Some(Some(next))) => !this.strict_equal(prev, next),
+                            (Some(None), Some(None)) | (None, None) => false,
+                            (Some(_), Some(_)) | (Some(_), None) | (None, Some(_)) => true,
+                        };
+                        if !pending_changed
+                            || Self::is_internal_env_key(&name)
+                            || function.local_bindings.contains(&name)
+                            || matches!(name.as_str(), "this" | "arguments")
+                            || global_sync_keys.contains(&name)
+                            || function.captured_names.contains(&name)
+                            || !caller_has_explicit_binding(&name)
+                        {
+                            continue;
+                        }
+                        let before = caller_view.and_then(|env| env.get(&name));
+                        let call_after = pending_after.cloned().unwrap_or_else(|| {
+                            effective_call_binding(this, &name)
+                        });
+                        let after = call_after.as_ref();
+                        let changed = match (before, after) {
+                            (Some(prev), Some(next)) => !this.strict_equal(prev, next),
+                            (None, Some(_)) => true,
+                            (Some(_), None) => true,
+                            (None, None) => false,
+                        };
+                        if !changed {
+                            continue;
+                        }
+                        if let Some(parent_index) =
+                            shared_env_frame_start.and_then(|start| start.checked_sub(1))
+                        {
+                            if let Some(parent_frame) = this
+                                .script_runtime
+                                .listener_capture_env_stack
+                                .get_mut(parent_index)
+                            {
+                                parent_frame
+                                    .pending_env_updates
+                                    .insert(name.clone(), call_after.clone());
+                            }
+                        }
+                        if caller_view.is_some() {
+                            this.script_runtime
+                                .expression_env_overrides
+                                .insert(name.clone(), call_after.clone());
+                        }
+                        if let Some(value) = call_after {
+                            this.sync_scheduled_task_captures_for_binding(&name, &value);
+                        }
+                    }
                     for (name, value) in scheduled_capture_updates {
                         this.sync_scheduled_task_captures_for_binding(&name, &value);
                     }
@@ -8465,6 +8546,7 @@ impl Harness {
                 })()
             });
             if let Some(start) = shared_env_frame_start {
+                this.discard_event_sync_pending_updates_from_frames(start);
                 this.discard_pending_listener_updates_from_frames(start, &function.local_bindings);
                 this.restore_listener_capture_env_stack(start);
             }
