@@ -45,6 +45,9 @@ Main public categories:
 - mocks
 - trace and debug helpers
 
+The current public support levels are tracked separately in
+[capability-matrix.md](capability-matrix.md).
+
 ## Current Crate Structure
 
 The project is currently implemented as a single crate with internal module layering.
@@ -275,6 +278,7 @@ That separation lowers the maintenance cost of both the public README and the in
 
 ## Related Documents
 
+- Capability classification: [capability-matrix.md](capability-matrix.md)
 - Mock APIs and examples: [mock-guide.md](mock-guide.md)
 - HTML conformance roadmap: [html-spec-conformance-roadmap.md](html-spec-conformance-roadmap.md)
 - WPT audit inventory: [p3-wpt-audit-inventory.md](p3-wpt-audit-inventory.md)

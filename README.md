@@ -4,6 +4,7 @@ A deterministic browser-like testing crate implemented entirely in Rust.
 
 - Japanese README: [translations/ja/README.md](translations/ja/README.md)
 - Architecture: [doc/architecture.md](doc/architecture.md)
+- Capability matrix: [doc/capability-matrix.md](doc/capability-matrix.md)
 - Mock guide: [doc/mock-guide.md](doc/mock-guide.md)
 - HTML spec conformance roadmap: [doc/html-spec-conformance-roadmap.md](doc/html-spec-conformance-roadmap.md)
 - Developed by [Finite Field, K.K.](https://finitefield.org)
@@ -200,6 +201,7 @@ cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
 ## Documentation
 
 - Architecture and subsystem overview: [doc/architecture.md](doc/architecture.md)
+- Capability classification: [doc/capability-matrix.md](doc/capability-matrix.md)
 - Mock APIs and examples: [doc/mock-guide.md](doc/mock-guide.md)
 - HTML conformance roadmap: [doc/html-spec-conformance-roadmap.md](doc/html-spec-conformance-roadmap.md)
 - WPT audit inventory: [doc/p3-wpt-audit-inventory.md](doc/p3-wpt-audit-inventory.md)
