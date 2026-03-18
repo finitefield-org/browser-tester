@@ -47,6 +47,13 @@ Run tests:
 cargo test
 ```
 
+Regular integration tests are grouped under a single `integration_suite` target to avoid
+Cargo's per-file test crate/link overhead. Run a filtered subset with:
+
+```bash
+cargo test --test integration_suite issue_174_175
+```
+
 Property/fuzz tests for parser/runtime:
 
 ```bash

@@ -46,6 +46,13 @@ fn main() -> browser_tester::Result<()> {
 cargo test
 ```
 
+通常の integration test は、Cargo のテストターゲットごとのコンパイル・リンク負荷を減らすため
+`integration_suite` に集約しています。特定ケースだけ回す場合は次のように絞れます。
+
+```bash
+cargo test --test integration_suite issue_174_175
+```
+
 ## ランタイム方針
 
 - セキュリティと決定論を維持するため、`eval` は意図的に実装していません。

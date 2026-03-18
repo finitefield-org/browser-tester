@@ -395,7 +395,7 @@ fn expression_foreach_listener_keeps_item_variable_scope() -> browser_tester::Re
 
 #[test]
 fn real_world_picking_breakdown_smoke() -> browser_tester::Result<()> {
-    let html = include_str!("fixtures/picking-breakdown-minimal.html");
+    let html = include_str!("../fixtures/picking-breakdown-minimal.html");
     let harness = Harness::from_html(html)?;
     harness.assert_text("#result", "ja|true|true|2")?;
     Ok(())

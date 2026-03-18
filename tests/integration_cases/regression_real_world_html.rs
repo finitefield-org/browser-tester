@@ -152,7 +152,7 @@ fn nested_object_path_access_on_runtime_objects_is_supported() -> browser_tester
 #[test]
 fn csv_deduplicator_inline_script_does_not_fail_with_unclosed_block() -> browser_tester::Result<()>
 {
-    let html = include_str!("fixtures/csv-deduplicator-inline-script.html");
+    let html = include_str!("../fixtures/csv-deduplicator-inline-script.html");
     let _ = Harness::from_html(html)?;
     Ok(())
 }
@@ -180,7 +180,7 @@ fn malformed_escaped_empty_string_literals_are_normalized_before_parse()
 #[test]
 fn cron_descriptor_inline_script_does_not_fail_with_unsupported_expression()
 -> browser_tester::Result<()> {
-    let html = include_str!("fixtures/cron-descriptor-inline-script.html");
+    let html = include_str!("../fixtures/cron-descriptor-inline-script.html");
     let _ = Harness::from_html(html)?;
     Ok(())
 }
