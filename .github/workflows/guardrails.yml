@@ -1,0 +1,16 @@
+name: guardrails
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  file-size-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check file-size guard
+        run: bash scripts/check-file-size-guard.sh

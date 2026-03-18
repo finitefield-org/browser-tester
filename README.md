@@ -168,11 +168,38 @@ Run the main test suite:
 cargo test
 ```
 
+Run by test layer:
+
+```bash
+scripts/run-test-layer.sh contract
+scripts/run-test-layer.sh subsystem dom_navigation_dialog
+scripts/run-test-layer.sh integration issue_174_175
+scripts/run-test-layer.sh fuzz
+```
+
+Run repository maintenance guardrails:
+
+```bash
+scripts/check-file-size-guard.sh
+```
+
 Regular integration tests are grouped under a single `integration_suite` target to reduce
 Cargo's per-file test crate and link overhead:
 
 ```bash
 cargo test --test integration_suite issue_174_175
+```
+
+Minimal public contract coverage for stable `Harness` APIs:
+
+```bash
+cargo test --test contract_harness_core
+```
+
+If you only want to confirm the contract target still builds:
+
+```bash
+scripts/run-test-layer.sh contract-build
 ```
 
 Property and fuzz tests for parser and runtime:
@@ -202,6 +229,10 @@ cargo test --test parser_property_fuzz_test --test runtime_property_fuzz_test
 
 - Architecture and subsystem overview: [doc/architecture.md](doc/architecture.md)
 - Capability classification: [doc/capability-matrix.md](doc/capability-matrix.md)
+- File-size guard and allowlist policy: [doc/file-size-guard.md](doc/file-size-guard.md)
+- Public API checklist: [doc/public-api-checklist.md](doc/public-api-checklist.md)
+- Subsystem ownership map: [doc/subsystem-map.md](doc/subsystem-map.md)
+- Test taxonomy and placement rules: [doc/test-taxonomy.md](doc/test-taxonomy.md)
 - Mock APIs and examples: [doc/mock-guide.md](doc/mock-guide.md)
 - HTML conformance roadmap: [doc/html-spec-conformance-roadmap.md](doc/html-spec-conformance-roadmap.md)
 - WPT audit inventory: [doc/p3-wpt-audit-inventory.md](doc/p3-wpt-audit-inventory.md)

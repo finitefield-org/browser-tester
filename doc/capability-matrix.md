@@ -252,12 +252,14 @@ Stable Core:
 - direct contract tests
 - regression tests when bugs are found
 - README examples should remain valid
+- the current minimal contract suite lives in `tests/contract_harness_core.rs`
 
 Stable Test Mocks:
 
 - direct contract tests for each mock family
 - example-based tests where practical
 - regression tests for failure injection and artifact capture
+- the current minimal contract suite lives in `tests/contract_harness_core.rs`
 
 Extended Browser-Like Surface:
 
@@ -277,7 +279,8 @@ Public API entry points are mainly defined across:
 - `src/harness_api.rs`
 - `src/core_impl/runtime/runtime_platform/bootstrap/environment_global_init.rs`
 - `src/core_impl/runtime/runtime_platform/dom_actions/user_actions_forms.rs`
-- `src/core_impl/runtime/runtime_platform/dom_actions/trace_mocks_input_primitives.rs`
+- `src/core_impl/runtime/runtime_platform/dom_actions/platform_mock_controls.rs`
+- `src/core_impl/runtime/runtime_platform/dom_actions/trace_determinism_controls.rs`
 - `src/core_impl/runtime/runtime_platform/dom_actions/timer_controls_execution.rs`
 - `src/core_impl/runtime/runtime_platform/dom_actions/assertions_form_helpers.rs`
 - `src/core_impl/runtime/runtime_platform/bootstrap/anchor_url_properties.rs`
@@ -289,8 +292,11 @@ These are the first files to revisit whenever the public surface changes.
 When adding a new public capability:
 
 1. Decide which support level it belongs to before implementing it.
-2. Update this matrix in the same change.
-3. Add or update the corresponding tests.
-4. Update the README if the capability belongs in `Stable Core` or `Stable Test Mocks`.
+2. Decide which subsystem owns it before implementing it.
+3. Update this matrix in the same change.
+4. Add or update the corresponding tests.
+5. Update the README if the capability belongs in `Stable Core` or `Stable Test Mocks`.
+
+For subsystem placement, use `doc/subsystem-map.md`.
 
 This is meant to keep the crate's public contract intentional instead of incidental.

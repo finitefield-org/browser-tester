@@ -1,5 +1,11 @@
 use super::*;
 
+// Internal subsystem and regression-oriented tests.
+//
+// Public contract coverage lives under `tests/contract_harness_core.rs`.
+// Grouped multi-subsystem regressions live under `tests/integration_suite.rs`.
+// Property and fuzz coverage lives under `tests/*_fuzz_test.rs`.
+
 mod async_generator_function_helpers;
 mod async_generator_helpers;
 mod async_iterator_helpers;
@@ -227,6 +233,7 @@ mod issue_166_parser_regression;
 mod issue_185_parser_regression;
 mod issue_204_runtime_regression;
 mod issue_210_global_resolution_regression;
+mod issue_211_dispatch_split_regression;
 mod issue_70_window_open_fallback;
 mod issue_72_intl_format_hijack;
 mod issue_74_download_artifacts;

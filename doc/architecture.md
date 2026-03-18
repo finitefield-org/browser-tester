@@ -235,10 +235,16 @@ Debugging support includes:
 
 The repository currently relies on multiple layers of testing:
 
+- minimal public contract suite under `tests/contract_harness_core.rs`
 - unit-style DOM and runtime tests under `src/tests`
 - integration cases under `tests/integration_cases`
 - grouped integration entrypoint under `tests/integration_suite.rs`
 - property and fuzz tests for parser and runtime behavior
+
+See `doc/test-taxonomy.md` for the intended placement rules and role boundaries.
+See `doc/file-size-guard.md` for the current oversized-file guardrail and exception policy.
+See `doc/public-api-checklist.md` for the required steps when the public surface changes.
+See `doc/subsystem-map.md` for the current ownership-oriented placement guide.
 
 This provides strong coverage, but it also means test role separation needs active maintenance.
 

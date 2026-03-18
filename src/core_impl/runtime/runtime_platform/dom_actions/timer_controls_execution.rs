@@ -2,6 +2,17 @@ use super::*;
 
 /// Time and scheduler control APIs for a [`Harness`].
 impl Harness {
+    /// Set the scheduler safety limit used by timer-draining APIs.
+    pub fn set_timer_step_limit(&mut self, max_steps: usize) -> Result<()> {
+        if max_steps == 0 {
+            return Err(Error::ScriptRuntime(
+                "set_timer_step_limit requires at least 1 step".into(),
+            ));
+        }
+        self.scheduler.timer_step_limit = max_steps;
+        Ok(())
+    }
+
     /// Return the current fake clock time in milliseconds.
     pub fn now_ms(&self) -> i64 {
         self.scheduler.now_ms

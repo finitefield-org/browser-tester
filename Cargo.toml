@@ -19,6 +19,8 @@ include = [
     "src/**/*.rs",
     "tests/**/*.rs",
     "doc/**/*.md",
+    "doc/**/*.txt",
+    "scripts/*.sh",
     "translations/ja/**/*.md",
 ]
 
