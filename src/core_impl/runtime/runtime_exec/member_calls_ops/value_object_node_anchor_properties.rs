@@ -1,6 +1,27 @@
 use super::*;
 
 impl Harness {
+    pub(crate) fn is_node_anchor_property_key(key: &str) -> bool {
+        matches!(
+            key,
+            "target"
+                | "href"
+                | "download"
+                | "hreflang"
+                | "ping"
+                | "referrerPolicy"
+                | "referrerpolicy"
+                | "rel"
+                | "alt"
+                | "charset"
+                | "coords"
+                | "rev"
+                | "shape"
+                | "noHref"
+                | "nohref"
+        )
+    }
+
     pub(crate) fn node_anchor_property_value(
         &mut self,
         node: NodeId,
