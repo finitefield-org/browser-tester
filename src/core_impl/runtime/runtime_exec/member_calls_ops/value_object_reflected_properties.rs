@@ -27,20 +27,12 @@ impl Harness {
 
     pub(crate) fn parse_non_negative_int(raw: &str) -> Option<i64> {
         let value = raw.trim().parse::<i64>().ok()?;
-        if value < 0 {
-            None
-        } else {
-            Some(value)
-        }
+        if value < 0 { None } else { Some(value) }
     }
 
     pub(crate) fn parse_positive_int(raw: &str) -> Option<i64> {
         let value = raw.trim().parse::<i64>().ok()?;
-        if value <= 0 {
-            None
-        } else {
-            Some(value)
-        }
+        if value <= 0 { None } else { Some(value) }
     }
 
     pub(crate) fn reflected_i64_attribute_or_default(

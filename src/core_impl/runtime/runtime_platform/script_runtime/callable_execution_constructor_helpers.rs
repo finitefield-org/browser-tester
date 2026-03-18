@@ -163,11 +163,14 @@ impl Harness {
         let mut bytes = Vec::new();
         if let Some(parts_value) = args.first() {
             if !matches!(parts_value, Value::Undefined | Value::Null) {
-                let items = self.array_like_values_from_value(parts_value).map_err(|_| {
-                    Error::ScriptRuntime(
-                        "Blob constructor first argument must be an array-like or iterable".into(),
-                    )
-                })?;
+                let items = self
+                    .array_like_values_from_value(parts_value)
+                    .map_err(|_| {
+                        Error::ScriptRuntime(
+                            "Blob constructor first argument must be an array-like or iterable"
+                                .into(),
+                        )
+                    })?;
                 for item in items {
                     bytes.extend(self.blob_part_bytes(&item));
                 }

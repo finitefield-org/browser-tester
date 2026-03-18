@@ -1,8 +1,8 @@
 use browser_tester::Harness;
 
 #[test]
-fn issue_214_array_map_callback_mutations_update_outer_let_bindings()
--> browser_tester::Result<()> {
+fn issue_214_array_map_callback_mutations_update_outer_let_bindings() -> browser_tester::Result<()>
+{
     let html = r#"
       <div id="calculated">0</div>
       <div id="errors">0</div>

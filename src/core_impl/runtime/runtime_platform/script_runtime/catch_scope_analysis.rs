@@ -189,13 +189,8 @@ impl Harness {
                 }
             }
         }
-        let result = self.execute_stmts_with_pending_scope(
-            catch_stmts,
-            event_param,
-            event,
-            env,
-            false,
-        );
+        let result =
+            self.execute_stmts_with_pending_scope(catch_stmts, event_param, event, env, false);
         self.restore_catch_binding(previous, env);
         result
     }

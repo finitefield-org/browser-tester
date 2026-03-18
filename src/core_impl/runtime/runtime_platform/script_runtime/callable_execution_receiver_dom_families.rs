@@ -323,9 +323,9 @@ impl Harness {
                         let value = args.first().cloned().unwrap_or(Value::Undefined);
                         let playback_rate = match value {
                             Value::Number(_) | Value::Float(_) => value,
-                            _ => Self::number_value(
-                                Self::coerce_number_for_number_constructor(&value),
-                            ),
+                            _ => Self::number_value(Self::coerce_number_for_number_constructor(
+                                &value,
+                            )),
                         };
                         Self::object_set_entry(
                             &mut entries,
@@ -464,8 +464,7 @@ impl Harness {
                         if !args.is_empty() {
                             return Err(Error::ScriptRuntime("play takes no arguments".into()));
                         }
-                        let was_paused =
-                            media_boolean_state(self, INTERNAL_MEDIA_PAUSED_KEY, true);
+                        let was_paused = media_boolean_state(self, INTERNAL_MEDIA_PAUSED_KEY, true);
                         self.set_media_boolean_state_value(*node, INTERNAL_MEDIA_PAUSED_KEY, false);
                         if was_paused {
                             self.with_script_env(|this, env| {
@@ -478,16 +477,13 @@ impl Harness {
                                 Ok(())
                             })?;
                         }
-                        Value::Promise(
-                            self.promise_resolve_value_as_promise(Value::Undefined)?,
-                        )
+                        Value::Promise(self.promise_resolve_value_as_promise(Value::Undefined)?)
                     }
                     "pause" => {
                         if !args.is_empty() {
                             return Err(Error::ScriptRuntime("pause takes no arguments".into()));
                         }
-                        let was_paused =
-                            media_boolean_state(self, INTERNAL_MEDIA_PAUSED_KEY, true);
+                        let was_paused = media_boolean_state(self, INTERNAL_MEDIA_PAUSED_KEY, true);
                         self.set_media_boolean_state_value(*node, INTERNAL_MEDIA_PAUSED_KEY, true);
                         if !was_paused {
                             self.with_script_env(|this, env| {
@@ -539,7 +535,8 @@ impl Harness {
                                     "canplaythrough",
                                 ] {
                                     let _ = this.dispatch_event_with_options(
-                                        *node, event_type, env, true, false, false, None, None, None,
+                                        *node, event_type, env, true, false, false, None, None,
+                                        None,
                                     )?;
                                 }
                             }

@@ -1,8 +1,8 @@
 use browser_tester::Harness;
 
 #[test]
-fn nested_helper_call_in_return_expression_keeps_outer_return_value()
--> browser_tester::Result<()> {
+fn nested_helper_call_in_return_expression_keeps_outer_return_value() -> browser_tester::Result<()>
+{
     let html = r##"
       <div id="out"></div>
       <script>

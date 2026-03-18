@@ -143,10 +143,7 @@ impl Harness {
         ]))
     }
 
-    pub(crate) fn new_image_data_from_constructor_args(
-        &mut self,
-        args: &[Value],
-    ) -> Result<Value> {
+    pub(crate) fn new_image_data_from_constructor_args(&mut self, args: &[Value]) -> Result<Value> {
         if args.len() < 2 || args.len() > 4 {
             return Err(Error::ScriptRuntime(
                 "ImageData constructor supports two to four arguments".into(),

@@ -609,9 +609,7 @@ impl Harness {
         )
     }
 
-    pub(crate) fn cached_html_options_collection_constructor_prototype_value(
-        &mut self,
-    ) -> Value {
+    pub(crate) fn cached_html_options_collection_constructor_prototype_value(&mut self) -> Value {
         if let Some(prototype) = self
             .script_runtime
             .builtin_constructor_prototypes

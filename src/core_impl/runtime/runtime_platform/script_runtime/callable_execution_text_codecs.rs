@@ -204,9 +204,7 @@ impl Harness {
         Ok((encoding, fatal, ignore_bom))
     }
 
-    pub(crate) fn text_decoder_options_from_value(
-        options: Option<&Value>,
-    ) -> Result<(bool, bool)> {
+    pub(crate) fn text_decoder_options_from_value(options: Option<&Value>) -> Result<(bool, bool)> {
         let Some(options) = options else {
             return Ok((false, false));
         };
@@ -253,11 +251,7 @@ impl Harness {
         }
     }
 
-    pub(crate) fn decode_utf8_bytes(
-        bytes: &[u8],
-        fatal: bool,
-        ignore_bom: bool,
-    ) -> Result<String> {
+    pub(crate) fn decode_utf8_bytes(bytes: &[u8], fatal: bool, ignore_bom: bool) -> Result<String> {
         let mut text = if fatal {
             std::str::from_utf8(bytes)
                 .map_err(|_| Error::ScriptRuntime("TextDecoder.decode invalid UTF-8 input".into()))?

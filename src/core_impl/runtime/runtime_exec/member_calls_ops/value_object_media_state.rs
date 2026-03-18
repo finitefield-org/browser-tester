@@ -1,12 +1,7 @@
 use super::*;
 
 impl Harness {
-    pub(crate) fn media_numeric_state_value(
-        &self,
-        node: NodeId,
-        key: &str,
-        default: f64,
-    ) -> Value {
+    pub(crate) fn media_numeric_state_value(&self, node: NodeId, key: &str, default: f64) -> Value {
         self.dom_runtime
             .node_expando_props
             .get(&(node, key.to_string()))
@@ -44,12 +39,7 @@ impl Harness {
         }
     }
 
-    pub(crate) fn set_media_numeric_state_value(
-        &mut self,
-        node: NodeId,
-        key: &str,
-        value: &Value,
-    ) {
+    pub(crate) fn set_media_numeric_state_value(&mut self, node: NodeId, key: &str, value: &Value) {
         let next = Self::coerce_number_for_number_constructor(value);
         self.dom_runtime
             .node_expando_props

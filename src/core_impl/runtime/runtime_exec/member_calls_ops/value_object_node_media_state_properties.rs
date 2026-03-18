@@ -61,14 +61,18 @@ impl Harness {
             }
             "srclang" | "srcLang" => {
                 if is_track {
-                    Ok(Value::String(self.dom.attr(node, "srclang").unwrap_or_default()))
+                    Ok(Value::String(
+                        self.dom.attr(node, "srclang").unwrap_or_default(),
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }
             }
             "label" => {
                 if is_track {
-                    Ok(Value::String(self.dom.attr(node, "label").unwrap_or_default()))
+                    Ok(Value::String(
+                        self.dom.attr(node, "label").unwrap_or_default(),
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }
@@ -178,11 +182,7 @@ impl Harness {
             }
             "playbackRate" => {
                 if is_audio_or_video {
-                    Ok(self.media_numeric_state_value(
-                        node,
-                        INTERNAL_MEDIA_PLAYBACK_RATE_KEY,
-                        1.0,
-                    ))
+                    Ok(self.media_numeric_state_value(node, INTERNAL_MEDIA_PLAYBACK_RATE_KEY, 1.0))
                 } else {
                     Ok(Value::Undefined)
                 }

@@ -822,7 +822,8 @@ impl Harness {
             .rev()
             .find(|frame| frame.shared_env.is_some() && !frame.shared_env_owned_by_scope)
         {
-            frame.pending_env_updates
+            frame
+                .pending_env_updates
                 .insert(Self::event_sync_pending_marker_key(name), value);
             return;
         }
@@ -833,7 +834,8 @@ impl Harness {
             .rev()
             .find(|frame| frame.shared_env.is_some())
         {
-            frame.pending_env_updates
+            frame
+                .pending_env_updates
                 .insert(Self::event_sync_pending_marker_key(name), value);
         }
     }
@@ -1075,9 +1077,9 @@ impl Harness {
         }
         self.apply_listener_capture_pending_updates_map(env, updates, true);
         for frame in &mut self.script_runtime.listener_capture_env_stack[drain_start..] {
-            frame.pending_env_updates.retain(|name, _| {
-                Self::event_sync_pending_marker_name(name).is_some()
-            });
+            frame
+                .pending_env_updates
+                .retain(|name, _| Self::event_sync_pending_marker_name(name).is_some());
         }
     }
 
@@ -1172,7 +1174,10 @@ impl Harness {
                     if frame_index < local_scope_start || !frame.shared_env_owned_by_scope {
                         return None;
                     }
-                    frame.shared_env.as_ref().map(|shared_env| (shared_env.clone(), true))
+                    frame
+                        .shared_env
+                        .as_ref()
+                        .map(|shared_env| (shared_env.clone(), true))
                 })
         } else {
             self.script_runtime
@@ -1282,15 +1287,15 @@ impl Harness {
             if !function.captured_names.contains(name) {
                 continue;
             }
-            let has_active_shared_env = self
-                .script_runtime
-                .listener_capture_env_stack
-                .iter()
-                .any(|frame| {
-                    frame.shared_env.as_ref().is_some_and(|shared_env| {
-                        Rc::ptr_eq(shared_env, &function.captured_env)
-                    })
-                });
+            let has_active_shared_env =
+                self.script_runtime
+                    .listener_capture_env_stack
+                    .iter()
+                    .any(|frame| {
+                        frame.shared_env.as_ref().is_some_and(|shared_env| {
+                            Rc::ptr_eq(shared_env, &function.captured_env)
+                        })
+                    });
             if !has_active_shared_env {
                 continue;
             }

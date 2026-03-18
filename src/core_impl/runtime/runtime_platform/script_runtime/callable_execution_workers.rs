@@ -212,10 +212,7 @@ impl Harness {
         self.execute_worker_stmts(&stmts, worker, worker_global)
     }
 
-    pub(crate) fn new_worker_instance_from_script_source(
-        &mut self,
-        source: &str,
-    ) -> Result<Value> {
+    pub(crate) fn new_worker_instance_from_script_source(&mut self, source: &str) -> Result<Value> {
         let worker = Self::new_object_value(vec![
             (INTERNAL_WORKER_OBJECT_KEY.to_string(), Value::Bool(true)),
             (

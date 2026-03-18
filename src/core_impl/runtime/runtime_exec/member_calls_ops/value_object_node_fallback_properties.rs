@@ -29,8 +29,10 @@ impl Harness {
                         Self::is_body_window_event_handler_alias(event_type.as_str())
                     });
             return if is_body_window_alias {
-                Ok(Self::object_get_entry(&self.dom_runtime.window_object.borrow(), key)
-                    .unwrap_or(Value::Null))
+                Ok(
+                    Self::object_get_entry(&self.dom_runtime.window_object.borrow(), key)
+                        .unwrap_or(Value::Null),
+                )
             } else {
                 Ok(self
                     .dom_runtime

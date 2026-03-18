@@ -21,9 +21,17 @@ impl Harness {
     fn set_window_inner_outer_size(&mut self, width: i64, height: i64) {
         let mut window = self.dom_runtime.window_object.borrow_mut();
         Self::object_set_entry(&mut window, "innerWidth".to_string(), Value::Number(width));
-        Self::object_set_entry(&mut window, "innerHeight".to_string(), Value::Number(height));
+        Self::object_set_entry(
+            &mut window,
+            "innerHeight".to_string(),
+            Value::Number(height),
+        );
         Self::object_set_entry(&mut window, "outerWidth".to_string(), Value::Number(width));
-        Self::object_set_entry(&mut window, "outerHeight".to_string(), Value::Number(height));
+        Self::object_set_entry(
+            &mut window,
+            "outerHeight".to_string(),
+            Value::Number(height),
+        );
     }
 
     fn timer_callback_from_args(
@@ -92,7 +100,9 @@ impl Harness {
                 Some(self.new_popup_window_value(&url, &target, &features))
             }
             "window_stop_function" | "window_focus_function" => Some(Value::Undefined),
-            "window_scroll_function" | "window_scroll_by_function" | "window_scroll_to_function" => {
+            "window_scroll_function"
+            | "window_scroll_by_function"
+            | "window_scroll_to_function" => {
                 if args.len() > 2 {
                     let name = match kind {
                         "window_scroll_function" => "scroll",
@@ -147,9 +157,12 @@ impl Harness {
                 }
                 let current_width = self.current_window_dimension("innerWidth", 1024.0);
                 let current_height = self.current_window_dimension("innerHeight", 768.0);
-                let next_width = current_width.saturating_add(Self::value_to_i64(&args[0])).max(0);
-                let next_height =
-                    current_height.saturating_add(Self::value_to_i64(&args[1])).max(0);
+                let next_width = current_width
+                    .saturating_add(Self::value_to_i64(&args[0]))
+                    .max(0);
+                let next_height = current_height
+                    .saturating_add(Self::value_to_i64(&args[1]))
+                    .max(0);
                 self.set_window_inner_outer_size(next_width, next_height);
                 Some(Value::Undefined)
             }
@@ -186,7 +199,8 @@ impl Harness {
 
                 let mut array_stack = Vec::new();
                 let mut object_stack = Vec::new();
-                let data = Self::structured_clone_value(&args[0], &mut array_stack, &mut object_stack)?;
+                let data =
+                    Self::structured_clone_value(&args[0], &mut array_stack, &mut object_stack)?;
                 let event_payload = Self::new_object_value(vec![
                     (INTERNAL_EVENT_OBJECT_KEY.to_string(), Value::Bool(true)),
                     ("type".to_string(), Value::String("message".to_string())),
@@ -352,7 +366,10 @@ impl Harness {
                     ("defaultPrevented".to_string(), Value::Bool(false)),
                     ("isTrusted".to_string(), Value::Bool(false)),
                     ("eventPhase".to_string(), Value::Number(0)),
-                    ("timeStamp".to_string(), Value::Number(self.scheduler.now_ms)),
+                    (
+                        "timeStamp".to_string(),
+                        Value::Number(self.scheduler.now_ms),
+                    ),
                     ("target".to_string(), Value::Null),
                     ("currentTarget".to_string(), Value::Null),
                     (
@@ -368,7 +385,8 @@ impl Harness {
                         Self::new_builtin_placeholder_function(),
                     ),
                 ]);
-                let _ = self.dispatch_event_target(self.dom_runtime.window_object.clone(), event_payload);
+                let _ = self
+                    .dispatch_event_target(self.dom_runtime.window_object.clone(), event_payload);
                 Some(Value::Undefined)
             }
             "global_decode_uri" => {
@@ -421,7 +439,9 @@ impl Harness {
                         "CSS.escape requires exactly one argument".into(),
                     ));
                 }
-                Some(Value::String(Self::css_escape_identifier(&args[0].as_string())))
+                Some(Value::String(Self::css_escape_identifier(
+                    &args[0].as_string(),
+                )))
             }
             "global_request_animation_frame" => {
                 if args.is_empty() {
@@ -443,10 +463,8 @@ impl Harness {
                     self.script_runtime.allocate_function_id()
                 );
                 timer_env.insert(callback_name.clone(), callback);
-                let timer_id = self.schedule_animation_frame(
-                    TimerCallback::Reference(callback_name),
-                    &timer_env,
-                );
+                let timer_id = self
+                    .schedule_animation_frame(TimerCallback::Reference(callback_name), &timer_env);
                 Some(Value::Number(timer_id))
             }
             "global_set_timeout" => {
@@ -455,7 +473,8 @@ impl Harness {
                         "setTimeout requires at least one argument".into(),
                     ));
                 }
-                let (callback, timer_env) = self.timer_callback_from_args("setTimeout", args, caller_env)?;
+                let (callback, timer_env) =
+                    self.timer_callback_from_args("setTimeout", args, caller_env)?;
                 let delay = args.get(1).map(Self::value_to_i64).unwrap_or(0);
                 let callback_args = args.iter().skip(2).cloned().collect::<Vec<_>>();
                 let timer_id = self.schedule_timeout(callback, delay, callback_args, &timer_env);
@@ -467,7 +486,8 @@ impl Harness {
                         "setInterval requires at least one argument".into(),
                     ));
                 }
-                let (callback, timer_env) = self.timer_callback_from_args("setInterval", args, caller_env)?;
+                let (callback, timer_env) =
+                    self.timer_callback_from_args("setInterval", args, caller_env)?;
                 let delay = args.get(1).map(Self::value_to_i64).unwrap_or(0);
                 let callback_args = args.iter().skip(2).cloned().collect::<Vec<_>>();
                 let timer_id = self.schedule_interval(callback, delay, callback_args, &timer_env);

@@ -1,12 +1,12 @@
 use super::*;
 
-mod callable_execution_bound_helpers;
 mod callable_execution;
+mod callable_execution_bound_helpers;
 mod callable_execution_clipboard;
 mod callable_execution_constructor_helpers;
 mod callable_execution_dom_receivers;
-mod callable_execution_event_objects;
 mod callable_execution_event_image_data;
+mod callable_execution_event_objects;
 mod callable_execution_function_values;
 mod callable_execution_image_bitmap;
 mod callable_execution_receiver_dom_families;
@@ -20,3 +20,4 @@ mod catch_scope_analysis;
 mod listener_trace;
 mod microtask_task_context;
 mod statement_execution;
+mod statement_execution_declarations;

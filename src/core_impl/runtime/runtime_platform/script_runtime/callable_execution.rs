@@ -1,7 +1,7 @@
-use super::*;
 use super::callable_execution_runtime_helpers::{
-    TopLevelAwaitOutcome, TopLevelAwaitResumeKind, INTERNAL_ASYNC_FUNCTION_SUSPENDED,
+    INTERNAL_ASYNC_FUNCTION_SUSPENDED, TopLevelAwaitOutcome, TopLevelAwaitResumeKind,
 };
+use super::*;
 
 impl Harness {
     pub(crate) fn window_open_target_url(&self, args: &[Value]) -> String {
@@ -3222,9 +3222,9 @@ impl Harness {
                             continue;
                         }
                         let before = caller_view.and_then(|env| env.get(&name));
-                        let call_after = pending_after.cloned().unwrap_or_else(|| {
-                            effective_call_binding(this, &name)
-                        });
+                        let call_after = pending_after
+                            .cloned()
+                            .unwrap_or_else(|| effective_call_binding(this, &name));
                         let after = call_after.as_ref();
                         let changed = match (before, after) {
                             (Some(prev), Some(next)) => !this.strict_equal(prev, next),

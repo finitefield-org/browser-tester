@@ -35,19 +35,28 @@ impl Harness {
         key == "content"
     }
 
-    pub(crate) fn node_tree_property_value(
-        &mut self,
-        node: NodeId,
-        key: &str,
-    ) -> Result<Value> {
+    pub(crate) fn node_tree_property_value(&mut self, node: NodeId, key: &str) -> Result<Value> {
         match key {
             "nodeType" => Ok(Value::Number(self.node_type_number(node))),
             "nodeName" => Ok(Value::String(self.node_name(node))),
             "nodeValue" => Ok(self.node_value(node)),
-            "ownerDocument" => Ok(self.node_owner_document(node).map(Value::Node).unwrap_or(Value::Null)),
-            "parentNode" => Ok(self.dom.parent(node).map(Value::Node).unwrap_or(Value::Null)),
-            "parentElement" => Ok(self.node_parent_element(node).map(Value::Node).unwrap_or(Value::Null)),
-            "nextSibling" => Ok(self.node_next_sibling(node).map(Value::Node).unwrap_or(Value::Null)),
+            "ownerDocument" => Ok(self
+                .node_owner_document(node)
+                .map(Value::Node)
+                .unwrap_or(Value::Null)),
+            "parentNode" => Ok(self
+                .dom
+                .parent(node)
+                .map(Value::Node)
+                .unwrap_or(Value::Null)),
+            "parentElement" => Ok(self
+                .node_parent_element(node)
+                .map(Value::Node)
+                .unwrap_or(Value::Null)),
+            "nextSibling" => Ok(self
+                .node_next_sibling(node)
+                .map(Value::Node)
+                .unwrap_or(Value::Null)),
             "previousSibling" => Ok(self
                 .node_previous_sibling(node)
                 .map(Value::Node)

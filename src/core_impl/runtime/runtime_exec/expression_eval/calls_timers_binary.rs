@@ -1083,15 +1083,13 @@ impl Harness {
                     }
 
                     if let Value::Array(values) = &receiver {
-                        if let Some(value) =
-                            self.eval_array_member_call(
-                                values,
-                                member,
-                                &evaluated_args,
-                                event,
-                                Some(env),
-                            )?
-                        {
+                        if let Some(value) = self.eval_array_member_call(
+                            values,
+                            member,
+                            &evaluated_args,
+                            event,
+                            Some(env),
+                        )? {
                             return Ok(value);
                         }
                     }
@@ -1129,15 +1127,13 @@ impl Harness {
                     }
 
                     if let Value::TypedArray(array) = &receiver {
-                        if let Some(value) =
-                            self.eval_typed_array_member_call(
-                                array,
-                                member,
-                                &evaluated_args,
-                                event,
-                                Some(env),
-                            )?
-                        {
+                        if let Some(value) = self.eval_typed_array_member_call(
+                            array,
+                            member,
+                            &evaluated_args,
+                            event,
+                            Some(env),
+                        )? {
                             return Ok(value);
                         }
                     }

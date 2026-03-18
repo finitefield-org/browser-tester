@@ -76,7 +76,10 @@ impl Harness {
             )),
             "form" => {
                 if is_form_associated_control {
-                    Ok(self.resolve_form_for_submit(node).map(Value::Node).unwrap_or(Value::Null))
+                    Ok(self
+                        .resolve_form_for_submit(node)
+                        .map(Value::Node)
+                        .unwrap_or(Value::Null))
                 } else {
                     Ok(Value::Undefined)
                 }
@@ -90,21 +93,27 @@ impl Harness {
             }
             "action" => {
                 if is_form {
-                    Ok(Value::String(self.form_action_property_value_for_node(node)))
+                    Ok(Value::String(
+                        self.form_action_property_value_for_node(node),
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }
             }
             "method" => {
                 if is_form {
-                    Ok(Value::String(self.dom.attr(node, "method").unwrap_or_default()))
+                    Ok(Value::String(
+                        self.dom.attr(node, "method").unwrap_or_default(),
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }
             }
             "enctype" | "encoding" => {
                 if is_form {
-                    Ok(Value::String(self.dom.attr(node, "enctype").unwrap_or_default()))
+                    Ok(Value::String(
+                        self.dom.attr(node, "enctype").unwrap_or_default(),
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }
@@ -127,7 +136,9 @@ impl Harness {
             }
             "command" => {
                 if is_button {
-                    Ok(Value::String(self.dom.attr(node, "command").unwrap_or_default()))
+                    Ok(Value::String(
+                        self.dom.attr(node, "command").unwrap_or_default(),
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }
@@ -156,14 +167,18 @@ impl Harness {
             }
             "formEnctype" => {
                 if is_button {
-                    Ok(Value::String(self.dom.attr(node, "formenctype").unwrap_or_default()))
+                    Ok(Value::String(
+                        self.dom.attr(node, "formenctype").unwrap_or_default(),
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }
             }
             "formMethod" => {
                 if is_button {
-                    Ok(Value::String(self.dom.attr(node, "formmethod").unwrap_or_default()))
+                    Ok(Value::String(
+                        self.dom.attr(node, "formmethod").unwrap_or_default(),
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }
@@ -177,7 +192,9 @@ impl Harness {
             }
             "formTarget" => {
                 if is_button {
-                    Ok(Value::String(self.dom.attr(node, "formtarget").unwrap_or_default()))
+                    Ok(Value::String(
+                        self.dom.attr(node, "formtarget").unwrap_or_default(),
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }

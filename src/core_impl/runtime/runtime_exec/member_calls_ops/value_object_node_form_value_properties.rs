@@ -191,14 +191,18 @@ impl Harness {
             }
             "rows" => {
                 if is_textarea {
-                    Ok(Value::Number(self.textarea_rows_property_value_for_node(node)))
+                    Ok(Value::Number(
+                        self.textarea_rows_property_value_for_node(node),
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }
             }
             "cols" => {
                 if is_textarea {
-                    Ok(Value::Number(self.textarea_cols_property_value_for_node(node)))
+                    Ok(Value::Number(
+                        self.textarea_cols_property_value_for_node(node),
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }

@@ -4,8 +4,7 @@ impl Harness {
     pub(crate) fn is_node_element_reflected_property_key(key: &str) -> bool {
         matches!(
             key,
-            "id"
-                | "name"
+            "id" | "name"
                 | "lang"
                 | "dir"
                 | "accessKey"
@@ -92,31 +91,39 @@ impl Harness {
 
         match key {
             "id" => Ok(Value::String(self.dom.attr(node, "id").unwrap_or_default())),
-            "name" => Ok(Value::String(self.dom.attr(node, "name").unwrap_or_default())),
-            "lang" => Ok(Value::String(self.dom.attr(node, "lang").unwrap_or_default())),
+            "name" => Ok(Value::String(
+                self.dom.attr(node, "name").unwrap_or_default(),
+            )),
+            "lang" => Ok(Value::String(
+                self.dom.attr(node, "lang").unwrap_or_default(),
+            )),
             "dir" => Ok(Value::String(self.resolved_dir_for_node(node))),
-            "accessKey" | "accesskey" => {
-                Ok(Value::String(self.dom.attr(node, "accesskey").unwrap_or_default()))
-            }
+            "accessKey" | "accesskey" => Ok(Value::String(
+                self.dom.attr(node, "accesskey").unwrap_or_default(),
+            )),
             "autocapitalize" => Ok(Value::String(
                 self.dom.attr(node, "autocapitalize").unwrap_or_default(),
             )),
             "autocorrect" => Ok(Value::String(
                 self.dom.attr(node, "autocorrect").unwrap_or_default(),
             )),
-            "contentEditable" | "contenteditable" => {
-                Ok(Value::String(self.content_editable_property_value_for_node(node)))
-            }
+            "contentEditable" | "contenteditable" => Ok(Value::String(
+                self.content_editable_property_value_for_node(node),
+            )),
             "draggable" => Ok(Value::Bool(self.draggable_property_value_for_node(node))),
-            "enterKeyHint" | "enterkeyhint" => {
-                Ok(Value::String(self.dom.attr(node, "enterkeyhint").unwrap_or_default()))
-            }
+            "enterKeyHint" | "enterkeyhint" => Ok(Value::String(
+                self.dom.attr(node, "enterkeyhint").unwrap_or_default(),
+            )),
             "inert" => Ok(Value::Bool(self.dom.has_attr(node, "inert")?)),
-            "inputMode" | "inputmode" => {
-                Ok(Value::String(self.dom.attr(node, "inputmode").unwrap_or_default()))
-            }
-            "nonce" => Ok(Value::String(self.dom.attr(node, "nonce").unwrap_or_default())),
-            "popover" => Ok(Value::String(self.dom.attr(node, "popover").unwrap_or_default())),
+            "inputMode" | "inputmode" => Ok(Value::String(
+                self.dom.attr(node, "inputmode").unwrap_or_default(),
+            )),
+            "nonce" => Ok(Value::String(
+                self.dom.attr(node, "nonce").unwrap_or_default(),
+            )),
+            "popover" => Ok(Value::String(
+                self.dom.attr(node, "popover").unwrap_or_default(),
+            )),
             "spellcheck" => Ok(Value::Bool(self.spellcheck_property_value_for_node(node))),
             "tabIndex" | "tabindex" => Ok(Value::Number(
                 self.reflected_i64_attribute_or_default(node, "tabindex", -1),
@@ -125,12 +132,18 @@ impl Harness {
             "cite" => Ok(Value::String(
                 self.reflected_url_attribute_or_empty(node, "cite"),
             )),
-            "dateTime" | "datetime" => {
-                Ok(Value::String(self.dom.attr(node, "datetime").unwrap_or_default()))
-            }
-            "clear" => Ok(Value::String(self.dom.attr(node, "clear").unwrap_or_default())),
-            "align" => Ok(Value::String(self.dom.attr(node, "align").unwrap_or_default())),
-            "aLink" | "alink" => Ok(Value::String(self.dom.attr(node, "alink").unwrap_or_default())),
+            "dateTime" | "datetime" => Ok(Value::String(
+                self.dom.attr(node, "datetime").unwrap_or_default(),
+            )),
+            "clear" => Ok(Value::String(
+                self.dom.attr(node, "clear").unwrap_or_default(),
+            )),
+            "align" => Ok(Value::String(
+                self.dom.attr(node, "align").unwrap_or_default(),
+            )),
+            "aLink" | "alink" => Ok(Value::String(
+                self.dom.attr(node, "alink").unwrap_or_default(),
+            )),
             "background" => Ok(Value::String(
                 self.dom.attr(node, "background").unwrap_or_default(),
             )),
@@ -143,7 +156,9 @@ impl Harness {
             "leftMargin" | "leftmargin" => Ok(Value::String(
                 self.dom.attr(node, "leftmargin").unwrap_or_default(),
             )),
-            "link" => Ok(Value::String(self.dom.attr(node, "link").unwrap_or_default())),
+            "link" => Ok(Value::String(
+                self.dom.attr(node, "link").unwrap_or_default(),
+            )),
             "rightMargin" | "rightmargin" => Ok(Value::String(
                 self.dom.attr(node, "rightmargin").unwrap_or_default(),
             )),
@@ -161,8 +176,12 @@ impl Harness {
             "topMargin" | "topmargin" => Ok(Value::String(
                 self.dom.attr(node, "topmargin").unwrap_or_default(),
             )),
-            "vLink" | "vlink" => Ok(Value::String(self.dom.attr(node, "vlink").unwrap_or_default())),
-            "title" => Ok(Value::String(self.dom.attr(node, "title").unwrap_or_default())),
+            "vLink" | "vlink" => Ok(Value::String(
+                self.dom.attr(node, "vlink").unwrap_or_default(),
+            )),
+            "title" => Ok(Value::String(
+                self.dom.attr(node, "title").unwrap_or_default(),
+            )),
             "colSpan" | "colspan" => {
                 if is_table_cell {
                     Ok(Value::Number(self.table_cell_col_span_value(node)))
@@ -205,14 +224,18 @@ impl Harness {
                         .unwrap_or_else(|| "submit".to_string());
                     Ok(Value::String(normalized))
                 } else {
-                    Ok(Value::String(self.dom.attr(node, "type").unwrap_or_default()))
+                    Ok(Value::String(
+                        self.dom.attr(node, "type").unwrap_or_default(),
+                    ))
                 }
             }
             "open" => Ok(Value::Bool(self.dom.has_attr(node, "open")?)),
-            "closedBy" | "closedby" => {
-                Ok(Value::String(self.dom.attr(node, "closedby").unwrap_or_default()))
-            }
-            "htmlFor" => Ok(Value::String(self.dom.attr(node, "for").unwrap_or_default())),
+            "closedBy" | "closedby" => Ok(Value::String(
+                self.dom.attr(node, "closedby").unwrap_or_default(),
+            )),
+            "htmlFor" => Ok(Value::String(
+                self.dom.attr(node, "for").unwrap_or_default(),
+            )),
             "elementTiming" | "elementtiming" => Ok(Value::String(
                 self.dom.attr(node, "elementtiming").unwrap_or_default(),
             )),

@@ -68,8 +68,8 @@ fn issue_218_bulk_mapping_and_summary_callbacks_keep_outer_bindings_isolated_and
 }
 
 #[test]
-fn issue_218_bulk_result_map_accumulates_mixed_price_and_target_rows()
--> browser_tester::Result<()> {
+fn issue_218_bulk_result_map_accumulates_mixed_price_and_target_rows() -> browser_tester::Result<()>
+{
     let html = r#"
       <div id="summary"></div>
       <div id="preview"></div>
@@ -268,10 +268,7 @@ fn issue_218_nested_bulk_parser_helpers_keep_outer_rows_and_cells_live()
     "#;
 
     let harness = Harness::from_html(html)?;
-    harness.assert_text(
-        "#out",
-        "商品名|原価|売価 / 定番A|1200|1980 / SKU-C|600|990",
-    )?;
+    harness.assert_text("#out", "商品名|原価|売価 / 定番A|1200|1980 / SKU-C|600|990")?;
     Ok(())
 }
 
@@ -313,8 +310,7 @@ fn issue_218_nested_helper_updates_stay_visible_after_direct_helper_call()
 }
 
 #[test]
-fn issue_218_array_callback_counter_survives_plain_helper_calls()
--> browser_tester::Result<()> {
+fn issue_218_array_callback_counter_survives_plain_helper_calls() -> browser_tester::Result<()> {
     let html = r#"
       <div id="out"></div>
       <script>
@@ -408,8 +404,7 @@ fn issue_218_helper_updates_are_visible_to_later_array_map_in_same_function()
 }
 
 #[test]
-fn issue_218_repeated_push_cell_updates_feed_parser_style_push_row()
--> browser_tester::Result<()> {
+fn issue_218_repeated_push_cell_updates_feed_parser_style_push_row() -> browser_tester::Result<()> {
     let html = r#"
       <div id="out"></div>
       <script>
@@ -455,8 +450,8 @@ fn issue_218_repeated_push_cell_updates_feed_parser_style_push_row()
 }
 
 #[test]
-fn issue_218_simple_loop_parser_keeps_push_cell_and_push_row_updates()
--> browser_tester::Result<()> {
+fn issue_218_simple_loop_parser_keeps_push_cell_and_push_row_updates() -> browser_tester::Result<()>
+{
     let html = r#"
       <div id="out"></div>
       <script>

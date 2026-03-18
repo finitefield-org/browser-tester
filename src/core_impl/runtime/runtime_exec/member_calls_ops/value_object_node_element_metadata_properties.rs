@@ -53,9 +53,13 @@ impl Harness {
                 .and_then(|name| name.split_once(':').map(|(prefix, _)| prefix))
                 .map(|prefix| Value::String(prefix.to_string()))
                 .unwrap_or(Value::Null)),
-            "className" => Ok(Value::String(self.dom.attr(node, "class").unwrap_or_default())),
+            "className" => Ok(Value::String(
+                self.dom.attr(node, "class").unwrap_or_default(),
+            )),
             "classList" => Ok(self.class_list_live_value(node)),
-            "slot" => Ok(Value::String(self.dom.attr(node, "slot").unwrap_or_default())),
+            "slot" => Ok(Value::String(
+                self.dom.attr(node, "slot").unwrap_or_default(),
+            )),
             "role" => {
                 let role = self.resolved_role_for_node(node);
                 if role.is_empty() {

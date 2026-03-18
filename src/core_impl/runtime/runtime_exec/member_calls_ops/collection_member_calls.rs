@@ -1477,7 +1477,10 @@ impl Harness {
                 let search = evaluated_args[0].clone();
                 let values_ref = values.borrow();
                 let len = values_ref.len() as i64;
-                let from = evaluated_args.get(1).map(Self::value_to_i64).unwrap_or(len - 1);
+                let from = evaluated_args
+                    .get(1)
+                    .map(Self::value_to_i64)
+                    .unwrap_or(len - 1);
                 let from = if from < 0 {
                     (len + from).max(-1)
                 } else {

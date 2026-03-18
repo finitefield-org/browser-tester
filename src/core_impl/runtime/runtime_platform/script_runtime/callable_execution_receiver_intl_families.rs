@@ -86,7 +86,9 @@ impl Harness {
                             .cloned()
                             .unwrap_or(Value::Undefined)
                             .as_string();
-                        return self.intl_display_names_of(&locale, &options, &code).map(Some);
+                        return self
+                            .intl_display_names_of(&locale, &options, &code)
+                            .map(Some);
                     }
                     "resolvedOptions" => {
                         self.intl_display_names_resolved_options_value(locale, &options)
@@ -174,12 +176,8 @@ impl Harness {
                             .collect::<Vec<_>>(),
                     ),
                     "getWeekInfo" => self.intl_locale_get_week_info(&data),
-                    "maximize" => {
-                        self.new_intl_locale_value(self.intl_locale_maximize_data(&data))
-                    }
-                    "minimize" => {
-                        self.new_intl_locale_value(self.intl_locale_minimize_data(&data))
-                    }
+                    "maximize" => self.new_intl_locale_value(self.intl_locale_maximize_data(&data)),
+                    "minimize" => self.new_intl_locale_value(self.intl_locale_minimize_data(&data)),
                     "toString" => Value::String(Self::intl_locale_data_to_string(&data)),
                     _ => {
                         return Err(Error::ScriptRuntime(format!(
@@ -220,9 +218,7 @@ impl Harness {
                         );
                         self.intl_date_time_parts_to_value(&parts, Some(&sources))
                     }
-                    "resolvedOptions" => {
-                        self.intl_number_resolved_options_value(locale, &options)
-                    }
+                    "resolvedOptions" => self.intl_number_resolved_options_value(locale, &options),
                     _ => {
                         return Err(Error::ScriptRuntime(format!(
                             "unsupported Intl.NumberFormat method: {member}"
@@ -264,16 +260,15 @@ impl Harness {
                     "format" => {
                         let value = args.first().cloned().unwrap_or(Value::Undefined);
                         let unit = args.get(1).cloned().unwrap_or(Value::Undefined);
-                        Value::String(self.intl_format_relative_time(
-                            &locale, &options, &value, &unit,
-                        )?)
+                        Value::String(
+                            self.intl_format_relative_time(&locale, &options, &value, &unit)?,
+                        )
                     }
                     "formatToParts" => {
                         let value = args.first().cloned().unwrap_or(Value::Undefined);
                         let unit = args.get(1).cloned().unwrap_or(Value::Undefined);
-                        let parts = self.intl_format_relative_time_to_parts(
-                            &locale, &options, &value, &unit,
-                        )?;
+                        let parts = self
+                            .intl_format_relative_time_to_parts(&locale, &options, &value, &unit)?;
                         self.intl_relative_time_parts_to_value(&parts)
                     }
                     "resolvedOptions" => {

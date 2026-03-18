@@ -32,7 +32,8 @@ impl Harness {
         start: usize,
         local_bindings: &HashSet<String>,
     ) {
-        if local_bindings.is_empty() || start >= self.script_runtime.listener_capture_env_stack.len()
+        if local_bindings.is_empty()
+            || start >= self.script_runtime.listener_capture_env_stack.len()
         {
             return;
         }
@@ -48,9 +49,9 @@ impl Harness {
             return;
         }
         for frame in &mut self.script_runtime.listener_capture_env_stack[start..] {
-            frame.pending_env_updates.retain(|name, _| {
-                Self::event_sync_pending_marker_name(name).is_none()
-            });
+            frame
+                .pending_env_updates
+                .retain(|name, _| Self::event_sync_pending_marker_name(name).is_none());
         }
     }
 

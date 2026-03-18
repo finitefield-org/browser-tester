@@ -91,7 +91,9 @@ impl Harness {
             "disablePictureInPicture" | "disablepictureinpicture" => Ok(Value::Bool(
                 self.dom.attr(node, "disablepictureinpicture").is_some(),
             )),
-            "media" => Ok(Value::String(self.dom.attr(node, "media").unwrap_or_default())),
+            "media" => Ok(Value::String(
+                self.dom.attr(node, "media").unwrap_or_default(),
+            )),
             "playsInline" | "playsinline" => {
                 Ok(Value::Bool(self.dom.attr(node, "playsinline").is_some()))
             }
@@ -125,26 +127,36 @@ impl Harness {
             )),
             "data" => {
                 if is_object {
-                    Ok(Value::String(self.reflected_url_attribute_or_empty(node, "data")))
+                    Ok(Value::String(
+                        self.reflected_url_attribute_or_empty(node, "data"),
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }
             }
             "srcdoc" | "srcDoc" => {
                 if is_iframe {
-                    Ok(Value::String(self.dom.attr(node, "srcdoc").unwrap_or_default()))
+                    Ok(Value::String(
+                        self.dom.attr(node, "srcdoc").unwrap_or_default(),
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }
             }
-            "preload" => Ok(Value::String(self.dom.attr(node, "preload").unwrap_or_default())),
-            "sizes" => Ok(Value::String(self.dom.attr(node, "sizes").unwrap_or_default())),
+            "preload" => Ok(Value::String(
+                self.dom.attr(node, "preload").unwrap_or_default(),
+            )),
+            "sizes" => Ok(Value::String(
+                self.dom.attr(node, "sizes").unwrap_or_default(),
+            )),
             "srcset" | "srcSet" => Ok(Value::String(
                 self.dom.attr(node, "srcset").unwrap_or_default(),
             )),
             "useMap" | "usemap" => {
                 if is_img || is_object {
-                    Ok(Value::String(self.dom.attr(node, "usemap").unwrap_or_default()))
+                    Ok(Value::String(
+                        self.dom.attr(node, "usemap").unwrap_or_default(),
+                    ))
                 } else {
                     Ok(Value::Undefined)
                 }

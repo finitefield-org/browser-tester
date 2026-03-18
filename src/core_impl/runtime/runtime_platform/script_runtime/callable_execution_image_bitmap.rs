@@ -153,13 +153,17 @@ impl Harness {
                 }
 
                 if !Self::is_mock_file_object(&entries) {
-                    return Err("createImageBitmap requires an image Blob or File source".to_string());
+                    return Err(
+                        "createImageBitmap requires an image Blob or File source".to_string()
+                    );
                 }
 
                 let blob = match Self::object_get_entry(&entries, INTERNAL_MOCK_FILE_BLOB_KEY) {
                     Some(Value::Blob(blob)) => blob,
                     _ => {
-                        return Err("createImageBitmap could not access mock file bytes".to_string());
+                        return Err(
+                            "createImageBitmap could not access mock file bytes".to_string()
+                        );
                     }
                 };
                 let (bytes, mime_type) = {
@@ -194,7 +198,9 @@ impl Harness {
                     _ => None,
                 };
                 let Some((width, height)) = dimensions else {
-                    return Err("createImageBitmap requires an image Blob or File source".to_string());
+                    return Err(
+                        "createImageBitmap requires an image Blob or File source".to_string()
+                    );
                 };
                 if width <= 0 || height <= 0 {
                     return Err("createImageBitmap could not decode image source".to_string());
