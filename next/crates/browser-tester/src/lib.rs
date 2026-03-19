@@ -6,8 +6,9 @@ pub use bt_dom::{DomStore, NodeId};
 use bt_runtime::SessionError;
 pub use bt_runtime::{
     ClipboardMocks, DebugState, DialogMocks, DownloadCapture, DownloadMocks, FetchCall,
-    FetchErrorRule, FetchMocks, FetchResponseRule, FileInputMocks, FileInputSelection,
-    LocationMocks, MockRegistry, ScheduledTimer, Scheduler, Session, SessionConfig, StorageSeeds,
+    FetchErrorRule, FetchMocks, FetchResponse, FetchResponseRule, FileInputMocks,
+    FileInputSelection, LocationMocks, MockRegistry, ScheduledTimer, Scheduler, Session,
+    SessionConfig, StorageSeeds,
 };
 pub use bt_script::{HostBindings, ScriptError, ScriptRuntime};
 
@@ -112,6 +113,7 @@ fn map_session_error(error: SessionError) -> Error {
         SessionError::Selector(message) => Error::Selector(SelectorError::new(message)),
         SessionError::Dom(message) => Error::Dom(DomError::new(message)),
         SessionError::Event(message) => Error::Event(EventError::new(message)),
+        SessionError::Mock(message) => Error::Mock(MockError::new(message)),
     }
 }
 
@@ -273,6 +275,47 @@ impl Harness {
     pub fn submit(&mut self, selector: &str) -> Result<()> {
         let node_id = self.resolve_action_target(selector)?;
         self.session.submit_node(node_id).map_err(map_session_error)
+    }
+
+    pub fn alert(&mut self, message: &str) -> Result<()> {
+        self.session.alert(message);
+        Ok(())
+    }
+
+    pub fn confirm(&mut self, message: &str) -> Result<bool> {
+        self.session.confirm(message).map_err(map_session_error)
+    }
+
+    pub fn prompt(&mut self, message: &str) -> Result<Option<String>> {
+        self.session.prompt(message).map_err(map_session_error)
+    }
+
+    pub fn read_clipboard(&self) -> Result<String> {
+        self.session.read_clipboard().map_err(map_session_error)
+    }
+
+    pub fn write_clipboard(&mut self, text: &str) -> Result<()> {
+        self.session.write_clipboard(text);
+        Ok(())
+    }
+
+    pub fn fetch(&mut self, url: &str) -> Result<FetchResponse> {
+        self.session.fetch(url).map_err(map_session_error)
+    }
+
+    pub fn navigate(&mut self, url: &str) -> Result<()> {
+        self.session.navigate(url).map_err(map_session_error)
+    }
+
+    pub fn set_files<I, K>(&mut self, selector: &str, files: I) -> Result<()>
+    where
+        I: IntoIterator<Item = K>,
+        K: Into<String>,
+    {
+        let node_id = self.resolve_action_target(selector)?;
+        self.session
+            .set_files_node(node_id, selector, files)
+            .map_err(map_session_error)
     }
 
     pub fn assert_text(&self, selector: &str, expected: &str) -> Result<()> {
@@ -450,7 +493,11 @@ pub struct DebugView<'a> {
 
 impl<'a> DebugView<'a> {
     pub fn url(&self) -> &str {
-        &self.session.config().url
+        self.session
+            .mocks()
+            .location()
+            .current_url()
+            .unwrap_or(self.session.config().url.as_str())
     }
 
     pub fn source_html(&self) -> Option<&str> {

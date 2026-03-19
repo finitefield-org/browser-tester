@@ -16,7 +16,7 @@ Current status:
 - Phase 1 DOM parsing, selector subset support, `assert_exists`, and debug DOM dumps are implemented
 - Phase 2 inline script bootstrapping, `document.getElementById(...).textContent = ...`, and listener registration are implemented
 - Phase 3 event dispatch, ancestor bubbling, cancelable click default actions, form controls, `click`, `type_text`, `set_checked`, `set_select_value`, `focus`, `blur`, `submit`, `dispatch`, `assert_value`, and `assert_checked` are implemented
-- event propagation now reaches ancestor, `document`, and `window` listeners, and the remaining Phase 4 work is fake clock hardening, microtask semantics, and runtime mock wiring
+- Phase 4 fake clock hardening, microtask semantics, and runtime mock wiring for fetch, dialogs, clipboard, location, and file input are implemented
 
 Workspace layout:
 
@@ -60,6 +60,32 @@ fn main() -> browser_tester_next::Result<()> {
     harness.click("#submit")?;
     harness.assert_checked("#agree", true)?;
     harness.assert_text("#out", "Alice:true")?;
+    Ok(())
+}
+```
+
+Minimal Phase 4 mock example:
+
+```rust
+use browser_tester_next::Harness;
+
+fn main() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::from_html("<input id='upload' type='file'>")?;
+
+    harness
+        .mocks_mut()
+        .fetch()
+        .respond_text("https://app.local/api/message", 200, "ok");
+    harness.mocks_mut().dialogs().push_confirm(true);
+    harness.mocks_mut().clipboard().seed_text("seeded");
+
+    let response = harness.fetch("https://app.local/api/message")?;
+    assert_eq!(response.body, "ok");
+    assert!(harness.confirm("Continue?")?);
+    assert_eq!(harness.read_clipboard()?, "seeded");
+
+    harness.set_files("#upload", ["report.csv"])?;
+    harness.navigate("https://app.local/next")?;
     Ok(())
 }
 ```

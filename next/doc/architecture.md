@@ -117,4 +117,4 @@ State lives in `Session`, and subsystem crates own their internal data.
 ## Current Implementation Notes
 
 The workspace now includes Phase 1 DOM parsing, selector support, `assert_exists`, and debug DOM dumps, plus Phase 2 inline script bootstrapping with minimal host bindings and listener capture, and Phase 3 event dispatch with ancestor bubbling, cancelable default actions, form controls, and the `focus`/`blur`/`set_select_value` public actions.
-Phase 4 remains reserved for fake clock hardening, microtask semantics, and deterministic mock wiring.
+Phase 4 fake clock hardening, microtask semantics, and deterministic mock wiring are implemented in `next/`; download capture remains registry-only for now.

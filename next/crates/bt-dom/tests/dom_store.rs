@@ -10,6 +10,7 @@ fn phase_zero_store_exposes_document_root() {
     assert_eq!(store.nodes()[0].kind, NodeKind::Document);
     assert!(store.indexes().id_index.is_empty());
     assert!(store.side_tables().form_controls.is_empty());
+    assert!(store.side_tables().file_inputs.is_empty());
     assert_eq!(store.document_state().title, "");
 }
 
@@ -136,6 +137,45 @@ fn select_controls_are_seeded_and_mutable() {
 
     assert_eq!(store.value_for_node(mode_id), "a");
     assert_eq!(store.select("[selected]").unwrap(), vec![option_ids[0]]);
+}
+
+#[test]
+fn file_input_selections_are_seeded_and_mutable() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html("<input id='upload' type='file'>")
+        .expect("HTML should parse");
+
+    let upload_id = store.select("#upload").unwrap()[0];
+    assert_eq!(store.value_for_node(upload_id), "");
+
+    store
+        .set_file_input_files(upload_id, ["report.csv"])
+        .expect("file input should accept file selections");
+
+    assert_eq!(store.value_for_node(upload_id), "report.csv");
+    assert_eq!(
+        store
+            .side_tables()
+            .file_inputs
+            .get(&upload_id)
+            .unwrap()
+            .files,
+        vec!["report.csv".to_string()]
+    );
+}
+
+#[test]
+fn non_file_inputs_reject_file_selection_mutation() {
+    let mut store = DomStore::new_empty();
+    store.bootstrap_html("<input id='name'>").unwrap();
+
+    let name_id = store.select("#name").unwrap()[0];
+    let error = store
+        .set_file_input_files(name_id, ["report.csv"])
+        .expect_err("non-file inputs should reject file selections");
+
+    assert!(error.contains("file input control"));
 }
 
 #[test]

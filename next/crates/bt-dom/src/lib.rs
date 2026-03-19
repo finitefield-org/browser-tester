@@ -65,6 +65,11 @@ pub struct SelectionState {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FileInputState {
+    pub files: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DialogState {
     pub open: bool,
 }
@@ -87,6 +92,7 @@ pub struct DomIndexes {
 pub struct DomSideTables {
     pub form_controls: BTreeMap<NodeId, FormControlState>,
     pub selection: BTreeMap<NodeId, SelectionState>,
+    pub file_inputs: BTreeMap<NodeId, FileInputState>,
     pub dialogs: BTreeMap<NodeId, DialogState>,
     pub layout_stub: BTreeMap<NodeId, LayoutStubState>,
 }

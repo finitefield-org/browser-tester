@@ -59,10 +59,12 @@ impl Scheduler {
 
     pub fn advance_time(&mut self, delta_ms: i64) {
         self.now_ms += delta_ms;
+        let _ = self.run_due_timers();
     }
 
     pub fn advance_time_to(&mut self, target_ms: i64) {
-        self.now_ms = target_ms;
+        self.now_ms = self.now_ms.max(target_ms);
+        let _ = self.run_due_timers();
     }
 
     pub fn queue_timer(&mut self, at_ms: i64) -> u64 {
@@ -95,6 +97,10 @@ impl Scheduler {
     }
 
     pub fn flush(&mut self) {
+        while let Some(next_due) = self.timers.first().map(|timer| timer.at_ms) {
+            self.now_ms = self.now_ms.max(next_due);
+            let _ = self.run_due_timers();
+        }
         self.microtasks = 0;
     }
 
@@ -119,6 +125,13 @@ pub struct FetchErrorRule {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FetchCall {
     pub url: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FetchResponse {
+    pub url: String,
+    pub status: u16,
+    pub body: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -172,6 +185,8 @@ pub struct DialogMocks {
     confirm_queue: Vec<bool>,
     prompt_queue: Vec<Option<String>>,
     alert_messages: Vec<String>,
+    confirm_messages: Vec<String>,
+    prompt_messages: Vec<String>,
 }
 
 impl DialogMocks {
@@ -187,6 +202,14 @@ impl DialogMocks {
         self.alert_messages.push(message.into());
     }
 
+    pub fn record_confirm(&mut self, message: impl Into<String>) {
+        self.confirm_messages.push(message.into());
+    }
+
+    pub fn record_prompt(&mut self, message: impl Into<String>) {
+        self.prompt_messages.push(message.into());
+    }
+
     pub fn confirm_queue(&self) -> &[bool] {
         &self.confirm_queue
     }
@@ -199,10 +222,20 @@ impl DialogMocks {
         &self.alert_messages
     }
 
+    pub fn confirm_messages(&self) -> &[String] {
+        &self.confirm_messages
+    }
+
+    pub fn prompt_messages(&self) -> &[String] {
+        &self.prompt_messages
+    }
+
     pub fn reset(&mut self) {
         self.confirm_queue.clear();
         self.prompt_queue.clear();
         self.alert_messages.clear();
+        self.confirm_messages.clear();
+        self.prompt_messages.clear();
     }
 }
 
@@ -360,6 +393,7 @@ pub enum SessionError {
     Selector(String),
     Dom(String),
     Event(String),
+    Mock(String),
 }
 
 impl fmt::Display for SessionError {
@@ -370,6 +404,7 @@ impl fmt::Display for SessionError {
             Self::Selector(message) => write!(f, "Selector error: {message}"),
             Self::Dom(message) => write!(f, "DOM error: {message}"),
             Self::Event(message) => write!(f, "Event error: {message}"),
+            Self::Mock(message) => write!(f, "Mock error: {message}"),
         }
     }
 }
@@ -379,7 +414,7 @@ impl StdError for SessionError {
         match self {
             Self::HtmlParse(_) => None,
             Self::Script(err) => Some(err),
-            Self::Selector(_) | Self::Dom(_) | Self::Event(_) => None,
+            Self::Selector(_) | Self::Dom(_) | Self::Event(_) | Self::Mock(_) => None,
         }
     }
 }
@@ -549,6 +584,7 @@ impl Session {
         for (key, value) in &config.local_storage {
             mocks.storage_mut().seed_local(key.clone(), value.clone());
         }
+        mocks.location_mut().set_current(config.url.clone());
 
         let mut session = Self {
             dom,
@@ -723,6 +759,120 @@ impl Session {
 
     pub fn checked_for_node(&self, node_id: NodeId) -> Option<bool> {
         self.dom.checked_for_node(node_id)
+    }
+
+    pub fn alert(&mut self, message: &str) {
+        self.mocks.dialogs_mut().record_alert(message.to_string());
+    }
+
+    pub fn confirm(&mut self, message: &str) -> Result<bool, SessionError> {
+        let dialogs = self.mocks.dialogs_mut();
+        dialogs.record_confirm(message.to_string());
+        if dialogs.confirm_queue.is_empty() {
+            return Err(SessionError::Mock(
+                "confirm() requires a queued response".to_string(),
+            ));
+        }
+        Ok(dialogs.confirm_queue.remove(0))
+    }
+
+    pub fn prompt(&mut self, message: &str) -> Result<Option<String>, SessionError> {
+        let dialogs = self.mocks.dialogs_mut();
+        dialogs.record_prompt(message.to_string());
+        if dialogs.prompt_queue.is_empty() {
+            return Err(SessionError::Mock(
+                "prompt() requires a queued response".to_string(),
+            ));
+        }
+        Ok(dialogs.prompt_queue.remove(0))
+    }
+
+    pub fn read_clipboard(&self) -> Result<String, SessionError> {
+        self.mocks
+            .clipboard()
+            .seeded_text()
+            .map(ToString::to_string)
+            .ok_or_else(|| SessionError::Mock("clipboard text has not been seeded".to_string()))
+    }
+
+    pub fn write_clipboard(&mut self, text: &str) {
+        let clipboard = self.mocks.clipboard_mut();
+        clipboard.record_write(text.to_string());
+        clipboard.seed_text(text.to_string());
+    }
+
+    pub fn fetch(&mut self, url: &str) -> Result<FetchResponse, SessionError> {
+        let url = url.trim();
+        if url.is_empty() {
+            return Err(SessionError::Mock(
+                "fetch() requires a non-empty URL".to_string(),
+            ));
+        }
+
+        self.mocks.fetch_mut().record_call(url.to_string());
+
+        if let Some(error) = self
+            .mocks
+            .fetch()
+            .errors()
+            .iter()
+            .rev()
+            .find(|rule| rule.url == url)
+        {
+            return Err(SessionError::Mock(error.message.clone()));
+        }
+
+        if let Some(response) = self
+            .mocks
+            .fetch()
+            .responses()
+            .iter()
+            .rev()
+            .find(|rule| rule.url == url)
+        {
+            return Ok(FetchResponse {
+                url: url.to_string(),
+                status: response.status,
+                body: response.body.clone(),
+            });
+        }
+
+        Err(SessionError::Mock(format!(
+            "no fetch mock configured for `{url}`"
+        )))
+    }
+
+    pub fn navigate(&mut self, url: &str) -> Result<(), SessionError> {
+        let url = url.trim();
+        if url.is_empty() {
+            return Err(SessionError::Mock(
+                "navigate() requires a non-empty URL".to_string(),
+            ));
+        }
+
+        let location = self.mocks.location_mut();
+        location.set_current(url.to_string());
+        location.record_navigation(url.to_string());
+        Ok(())
+    }
+
+    pub fn set_files_node(
+        &mut self,
+        node_id: NodeId,
+        selector: &str,
+        files: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Result<(), SessionError> {
+        self.ensure_element_node(node_id)?;
+        let files: Vec<String> = files.into_iter().map(Into::into).collect();
+        self.dom
+            .set_file_input_files(node_id, files.clone())
+            .map_err(SessionError::Dom)?;
+        self.mocks
+            .file_input_mut()
+            .set_files(selector.to_string(), files);
+        self.dispatch_dom_event(node_id, "input", true, false)?;
+        self.dispatch_dom_event(node_id, "change", true, false)?;
+        Ok(())
     }
 
     fn ensure_element_node(&self, node_id: NodeId) -> Result<(), SessionError> {
@@ -1298,7 +1448,9 @@ mod tests {
         let child_id = session.dom().select("#child").unwrap()[0];
         let out_id = session.dom().select("#out").unwrap()[0];
 
-        session.click_node(child_id).expect("click should still succeed");
+        session
+            .click_node(child_id)
+            .expect("click should still succeed");
 
         assert_eq!(session.dom().text_content_for_node(out_id), "target");
     }

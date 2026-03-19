@@ -7,6 +7,7 @@ mod document_replace_location_property;
 mod environment_global_init;
 mod location_history_navigation_sync;
 mod navigation_history_management;
+mod object_type_assignment_stmt_execution;
 mod object_type_event_handler_setters;
 mod object_type_global_property_setters;
 mod object_type_node_assignment_setters;

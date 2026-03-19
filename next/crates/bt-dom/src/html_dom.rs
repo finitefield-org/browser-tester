@@ -73,6 +73,7 @@ impl DomStore {
             }
             self.side_tables.form_controls.remove(&removed_id);
             self.side_tables.selection.remove(&removed_id);
+            self.side_tables.file_inputs.remove(&removed_id);
             self.side_tables.dialogs.remove(&removed_id);
             self.side_tables.layout_stub.remove(&removed_id);
         }
@@ -119,6 +120,12 @@ impl DomStore {
             }
             NodeKind::Element(element) if element.tag_name == "option" => {
                 self.option_value_for_node(node_id)
+            }
+            NodeKind::Element(element)
+                if element.tag_name == "input"
+                    && is_file_input_type(element.attributes.get("type").map(String::as_str)) =>
+            {
+                self.file_input_value_for_node(node_id)
             }
             NodeKind::Element(element) => element
                 .attributes
@@ -319,6 +326,35 @@ impl DomStore {
         }
     }
 
+    pub fn set_file_input_files(
+        &mut self,
+        node_id: NodeId,
+        files: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Result<(), String> {
+        let node_index = node_id.index() as usize;
+        let Some(node) = self.nodes.get(node_index) else {
+            return Err(format!("invalid node id: {:?}", node_id));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(format!("node {:?} is not a file input control", node_id));
+        };
+
+        if element.tag_name != "input"
+            || !is_file_input_type(element.attributes.get("type").map(String::as_str))
+        {
+            return Err(format!("node {:?} is not a file input control", node_id));
+        }
+
+        self.side_tables.file_inputs.insert(
+            node_id,
+            super::FileInputState {
+                files: files.into_iter().map(Into::into).collect(),
+            },
+        );
+        Ok(())
+    }
+
     fn add_node(&mut self, parent: NodeId, kind: NodeKind) -> NodeId {
         let id = NodeId::new(self.nodes.len() as u32, 0);
         self.nodes.push(NodeRecord {
@@ -410,6 +446,14 @@ impl DomStore {
             .get("value")
             .cloned()
             .unwrap_or_else(|| self.text_content_for_node(node_id))
+    }
+
+    fn file_input_value_for_node(&self, node_id: NodeId) -> String {
+        self.side_tables
+            .file_inputs
+            .get(&node_id)
+            .map(|state| state.files.join(", "))
+            .unwrap_or_default()
     }
 
     fn set_option_selected(&mut self, node_id: NodeId, selected: bool) -> Result<(), String> {
@@ -1101,4 +1145,8 @@ fn is_text_input_type(input_type: Option<&str>) -> bool {
 
 fn is_checkable_input_type(input_type: Option<&str>) -> bool {
     matches!(input_type.unwrap_or("text"), "checkbox" | "radio")
+}
+
+fn is_file_input_type(input_type: Option<&str>) -> bool {
+    matches!(input_type.unwrap_or("text"), "file")
 }

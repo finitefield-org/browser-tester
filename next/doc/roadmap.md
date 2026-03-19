@@ -68,7 +68,7 @@ Exit criteria:
 
 ## Phase 4: Determinism and Mocks
 
-Planned work:
+Delivered in this workspace:
 
 - fake clock hardening
 - microtask queue semantics

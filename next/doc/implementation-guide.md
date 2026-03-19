@@ -36,7 +36,7 @@ The safest way to turn the Phase 0 skeleton into a usable runtime is:
 
 This order keeps the public facade thin and avoids implementing user actions before the DOM and selector layers are trustworthy.
 
-Slices 1 through 6 are already implemented in this workspace; use the same vertical-slice pattern for later phases.
+Slices 1 through 7 are already implemented in this workspace, with download capture still registry-only; use the same vertical-slice pattern for later phases.
 
 ## First Vertical Slices
 

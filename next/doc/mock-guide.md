@@ -15,7 +15,58 @@ Even in Phase 0, the workspace already reserves explicit families so runtime beh
 
 They are exposed from the public facade through `Harness::mocks_mut()`.
 
-## Phase 0 Example
+## Public Mock Actions
+
+Phase 4 adds thin public actions on `Harness` for the mock families that need to behave like browser services:
+
+- `fetch(url)`
+- `alert(message)`
+- `confirm(message)`
+- `prompt(message)`
+- `read_clipboard()`
+- `write_clipboard(text)`
+- `navigate(url)`
+- `set_files(selector, files)`
+
+The typed registry is still the source of truth for seeds and capture.
+Use `Harness::mocks_mut()` to configure the family, then call the matching action on `Harness`.
+
+## Minimal Example
+
+```rust
+use browser_tester_next::Harness;
+
+fn main() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::from_html("<input id='upload' type='file'>")?;
+
+    harness
+        .mocks_mut()
+        .fetch()
+        .respond_text("https://app.local/api/message", 200, "ok");
+    harness.mocks_mut().dialogs().push_confirm(true);
+    harness.mocks_mut().clipboard().seed_text("copied text");
+
+    let response = harness.fetch("https://app.local/api/message")?;
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body, "ok");
+    harness.alert("Notice")?;
+    assert!(harness.confirm("Continue?")?);
+    assert_eq!(harness.read_clipboard()?, "copied text");
+    harness.write_clipboard("copied text")?;
+    harness.set_files("#upload", ["report.csv"])?;
+    harness.navigate("https://app.local/next")?;
+
+    assert_eq!(harness.mocks_mut().fetch().calls().len(), 1);
+    assert_eq!(harness.mocks_mut().dialogs().alert_messages().len(), 1);
+    assert_eq!(harness.mocks_mut().dialogs().confirm_messages().len(), 1);
+    assert_eq!(harness.mocks_mut().clipboard().writes().len(), 1);
+    assert_eq!(harness.mocks_mut().location().navigations().len(), 1);
+    assert_eq!(harness.mocks_mut().file_input().selections().len(), 1);
+    Ok(())
+}
+```
+
+## Failure Example
 
 ```rust
 use browser_tester_next::Harness;
@@ -23,27 +74,25 @@ use browser_tester_next::Harness;
 fn main() -> browser_tester_next::Result<()> {
     let mut harness = Harness::builder().build()?;
 
-    harness
-        .mocks_mut()
-        .fetch()
-        .respond_text("https://app.local/api/message", 200, "ok");
-    harness
-        .mocks_mut()
-        .fetch()
-        .fail("https://app.local/api/error", "network disabled");
-    harness.mocks_mut().dialogs().push_confirm(true);
-    harness.mocks_mut().clipboard().seed_text("copied text");
-    harness
-        .mocks_mut()
-        .file_input()
-        .set_files("#upload", ["report.csv"]);
-    harness
-        .mocks_mut()
-        .downloads()
-        .capture("report.csv", b"id,name\n1,Alice\n".to_vec());
+    let fetch_error = harness
+        .fetch("https://app.local/api/missing")
+        .expect_err("missing fetch mock should fail");
+    assert!(fetch_error.to_string().contains("no fetch mock configured"));
 
-    assert_eq!(harness.mocks_mut().fetch().responses().len(), 1);
-    assert_eq!(harness.mocks_mut().fetch().errors().len(), 1);
+    let confirm_error = harness
+        .confirm("Continue?")
+        .expect_err("confirm should require a queued response");
+    assert!(confirm_error
+        .to_string()
+        .contains("confirm() requires a queued response"));
+
+    let clipboard_error = harness
+        .read_clipboard()
+        .expect_err("clipboard reads should require a seed");
+    assert!(clipboard_error
+        .to_string()
+        .contains("clipboard text has not been seeded"));
+
     Ok(())
 }
 ```
@@ -60,10 +109,10 @@ Each family is expected to support:
 Examples:
 
 - `fetch`: response rules, error rules, request call capture
-- `dialogs`: queued confirm/prompt answers, alert capture
+- `dialogs`: queued confirm/prompt answers, alert capture, and call-message capture
 - `clipboard`: seeded read state and write capture
 - `location`: current URL seed and navigation capture
-- `downloads`: artifact capture
+- `downloads`: artifact capture through the registry
 - `file_input`: file selection seed and capture
 
 ## Why the Registry Shape Matters
@@ -81,4 +130,3 @@ Whenever a new test-only mock becomes public, its docs should ship with:
 - an explanation of call capture or artifact capture
 - README updates
 - this guide updated in the same change
-
