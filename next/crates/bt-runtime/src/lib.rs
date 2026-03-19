@@ -4,7 +4,8 @@ use std::fmt;
 
 use bt_dom::{DomStore, NodeId, NodeKind};
 use bt_script::{
-    ElementHandle, HostBindings, ListenerTarget, ScriptError, ScriptFunction, ScriptRuntime,
+    ElementHandle, EventPhase, HostBindings, ListenerTarget, ScriptError, ScriptEventHandle,
+    ScriptFunction, ScriptRuntime, ScriptValue,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -393,10 +394,11 @@ impl From<ScriptError> for SessionError {
 struct ScriptListenerRecord {
     target: SessionEventTarget,
     event_type: String,
+    capture: bool,
     handler: ScriptFunction,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SessionEventTarget {
     Window,
     Document,
@@ -407,6 +409,11 @@ enum SessionEventTarget {
 enum DefaultActionKind {
     CheckboxToggle,
     SubmitButton,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct DispatchOutcome {
+    default_prevented: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -527,6 +534,7 @@ pub struct Session {
     debug: DebugState,
     script_event_listeners: Vec<ScriptListenerRecord>,
     default_actions: Vec<DefaultActionKind>,
+    focused_node: Option<NodeId>,
 }
 
 impl Session {
@@ -554,6 +562,7 @@ impl Session {
                 DefaultActionKind::CheckboxToggle,
                 DefaultActionKind::SubmitButton,
             ],
+            focused_node: None,
         };
         session.bootstrap_inline_scripts()?;
         Ok(session)
@@ -611,15 +620,17 @@ impl Session {
             ));
         }
 
-        self.ensure_element_node(node_id)?;
-        self.dispatch_listeners(SessionEventTarget::Element(node_id), event_type)?;
+        self.dispatch_dom_event(node_id, event_type, true, true)?;
         Ok(())
     }
 
     pub fn click_node(&mut self, node_id: NodeId) -> Result<(), SessionError> {
         self.ensure_element_node(node_id)?;
-        self.dispatch_node(node_id, "click")?;
-        self.run_click_default_actions(node_id)
+        let outcome = self.dispatch_dom_event(node_id, "click", true, true)?;
+        if !outcome.default_prevented {
+            self.run_click_default_actions(node_id)?;
+        }
+        Ok(())
     }
 
     pub fn type_text_node(&mut self, node_id: NodeId, text: &str) -> Result<(), SessionError> {
@@ -627,7 +638,8 @@ impl Session {
         self.dom
             .set_form_control_value(node_id, text)
             .map_err(SessionError::Dom)?;
-        self.dispatch_node(node_id, "input")
+        self.dispatch_dom_event(node_id, "input", true, false)?;
+        Ok(())
     }
 
     pub fn set_checked_node(&mut self, node_id: NodeId, checked: bool) -> Result<(), SessionError> {
@@ -635,8 +647,49 @@ impl Session {
         self.dom
             .set_form_control_checked(node_id, checked)
             .map_err(SessionError::Dom)?;
-        self.dispatch_node(node_id, "input")?;
-        self.dispatch_node(node_id, "change")
+        self.dispatch_dom_event(node_id, "input", true, false)?;
+        self.dispatch_dom_event(node_id, "change", true, false)?;
+        Ok(())
+    }
+
+    pub fn set_select_value_node(
+        &mut self,
+        node_id: NodeId,
+        value: &str,
+    ) -> Result<(), SessionError> {
+        self.ensure_element_node(node_id)?;
+        self.dom
+            .set_select_value(node_id, value)
+            .map_err(SessionError::Dom)?;
+        self.dispatch_dom_event(node_id, "input", true, false)?;
+        self.dispatch_dom_event(node_id, "change", true, false)?;
+        Ok(())
+    }
+
+    pub fn focus_node(&mut self, node_id: NodeId) -> Result<(), SessionError> {
+        self.ensure_element_node(node_id)?;
+        if self.focused_node == Some(node_id) {
+            return Ok(());
+        }
+
+        if let Some(previous) = self.focused_node.take() {
+            self.dispatch_dom_event(previous, "blur", false, false)?;
+        }
+
+        self.focused_node = Some(node_id);
+        self.dispatch_dom_event(node_id, "focus", false, false)?;
+        Ok(())
+    }
+
+    pub fn blur_node(&mut self, node_id: NodeId) -> Result<(), SessionError> {
+        self.ensure_element_node(node_id)?;
+        if self.focused_node != Some(node_id) {
+            return Ok(());
+        }
+
+        self.focused_node = None;
+        self.dispatch_dom_event(node_id, "blur", false, false)?;
+        Ok(())
     }
 
     pub fn submit_node(&mut self, node_id: NodeId) -> Result<(), SessionError> {
@@ -645,7 +698,8 @@ impl Session {
             return Err(SessionError::Dom(format!("invalid node id: {:?}", node_id)));
         };
         if matches!(&node.kind, NodeKind::Element(element) if element.tag_name == "form") {
-            return self.dispatch_node(node_id, "submit");
+            self.dispatch_dom_event(node_id, "submit", true, true)?;
+            return Ok(());
         }
 
         let Some(form_id) = self.find_associated_form(node_id) else {
@@ -655,7 +709,8 @@ impl Session {
             )));
         };
 
-        self.dispatch_node(form_id, "submit")
+        self.dispatch_dom_event(form_id, "submit", true, true)?;
+        Ok(())
     }
 
     pub fn text_content_for_node(&self, node_id: NodeId) -> String {
@@ -684,34 +739,131 @@ impl Session {
         }
     }
 
-    fn dispatch_listeners(
+    fn dispatch_dom_event(
+        &mut self,
+        node_id: NodeId,
+        event_type: &str,
+        bubbles: bool,
+        cancelable: bool,
+    ) -> Result<DispatchOutcome, SessionError> {
+        self.ensure_element_node(node_id)?;
+
+        let event = ScriptEventHandle::new(
+            event_type.to_string(),
+            Self::script_listener_target(SessionEventTarget::Element(node_id)),
+            bubbles,
+            cancelable,
+        );
+        let ancestors = self.event_ancestor_targets(node_id);
+
+        for target in ancestors.iter().rev() {
+            self.run_event_listeners(*target, event_type, true, EventPhase::Capturing, &event)?;
+            if event.immediate_propagation_stopped() || event.propagation_stopped() {
+                event.set_current_target(None);
+                event.set_phase(EventPhase::None);
+                return Ok(DispatchOutcome {
+                    default_prevented: event.default_prevented(),
+                });
+            }
+        }
+
+        self.run_event_listeners(
+            SessionEventTarget::Element(node_id),
+            event_type,
+            true,
+            EventPhase::AtTarget,
+            &event,
+        )?;
+        if event.immediate_propagation_stopped() {
+            event.set_current_target(None);
+            event.set_phase(EventPhase::None);
+            return Ok(DispatchOutcome {
+                default_prevented: event.default_prevented(),
+            });
+        }
+
+        self.run_event_listeners(
+            SessionEventTarget::Element(node_id),
+            event_type,
+            false,
+            EventPhase::AtTarget,
+            &event,
+        )?;
+        if event.immediate_propagation_stopped() || event.propagation_stopped() {
+            event.set_current_target(None);
+            event.set_phase(EventPhase::None);
+            return Ok(DispatchOutcome {
+                default_prevented: event.default_prevented(),
+            });
+        }
+
+        if bubbles {
+            for target in &ancestors {
+                self.run_event_listeners(*target, event_type, false, EventPhase::Bubbling, &event)?;
+                if event.immediate_propagation_stopped() || event.propagation_stopped() {
+                    break;
+                }
+            }
+        }
+
+        event.set_current_target(None);
+        event.set_phase(EventPhase::None);
+        Ok(DispatchOutcome {
+            default_prevented: event.default_prevented(),
+        })
+    }
+
+    fn run_event_listeners(
         &mut self,
         target: SessionEventTarget,
         event_type: &str,
+        capture: bool,
+        phase: EventPhase,
+        event: &ScriptEventHandle,
     ) -> Result<(), SessionError> {
         let listeners: Vec<ScriptListenerRecord> = self
             .script_event_listeners
             .iter()
-            .filter(|listener| listener.target == target && listener.event_type == event_type)
+            .filter(|listener| {
+                listener.target == target
+                    && listener.event_type == event_type
+                    && listener.capture == capture
+            })
             .cloned()
             .collect();
 
         for (index, listener) in listeners.iter().enumerate() {
-            let source_name = format!("event:{event_type}:{index}");
-            self.eval_script_source(&listener.handler.body_source, &source_name)?;
+            if event.immediate_propagation_stopped() {
+                break;
+            }
+
+            event.set_current_target(Some(Self::script_listener_target(target)));
+            event.set_phase(phase);
+            let source_name = format!("event:{event_type}:{}:{index}", Self::phase_label(phase));
+            let bindings = Self::listener_bindings(&listener.handler, event);
+            self.eval_script_source_with_bindings(
+                &listener.handler.body_source,
+                &source_name,
+                bindings,
+            )?;
         }
 
         Ok(())
     }
 
-    fn eval_script_source(
+    fn eval_script_source(&mut self, source: &str, source_name: &str) -> Result<(), SessionError> {
+        self.eval_script_source_with_bindings(source, source_name, BTreeMap::new())
+    }
+
+    fn eval_script_source_with_bindings(
         &mut self,
         source: &str,
         source_name: &str,
+        initial_bindings: BTreeMap<String, ScriptValue>,
     ) -> Result<(), SessionError> {
         let mut script = std::mem::take(&mut self.script);
         let result = script
-            .eval_program(source, source_name, self)
+            .eval_program_with_bindings(source, source_name, self, initial_bindings)
             .map_err(SessionError::Script);
         self.script = script;
         result
@@ -741,14 +893,14 @@ impl Session {
                     self.dom
                         .set_form_control_checked(node_id, !checked)
                         .map_err(SessionError::Dom)?;
-                    self.dispatch_node(node_id, "input")?;
-                    self.dispatch_node(node_id, "change")?;
+                    self.dispatch_dom_event(node_id, "input", true, false)?;
+                    self.dispatch_dom_event(node_id, "change", true, false)?;
                 }
                 DefaultActionKind::SubmitButton
                     if is_submit_control(tag_name.as_str(), input_type.as_deref()) =>
                 {
                     if let Some(form_id) = self.find_associated_form(node_id) {
-                        self.dispatch_node(form_id, "submit")?;
+                        self.dispatch_dom_event(form_id, "submit", true, true)?;
                     }
                 }
                 _ => {}
@@ -768,6 +920,72 @@ impl Session {
                 }
                 NodeKind::Document => return None,
             }
+        }
+    }
+
+    fn event_ancestor_targets(&self, node_id: NodeId) -> Vec<SessionEventTarget> {
+        let mut targets = Vec::new();
+        let mut current = self
+            .dom
+            .nodes()
+            .get(node_id.index() as usize)
+            .and_then(|node| node.parent);
+
+        while let Some(parent_id) = current {
+            let Some(parent) = self.dom.nodes().get(parent_id.index() as usize) else {
+                break;
+            };
+
+            match &parent.kind {
+                NodeKind::Document => {
+                    targets.push(SessionEventTarget::Document);
+                    break;
+                }
+                NodeKind::Element(_) | NodeKind::Text(_) | NodeKind::Comment(_) => {
+                    targets.push(SessionEventTarget::Element(parent_id));
+                    current = parent.parent;
+                }
+            }
+        }
+
+        targets.push(SessionEventTarget::Window);
+        targets
+    }
+
+    fn listener_bindings(
+        handler: &ScriptFunction,
+        event: &ScriptEventHandle,
+    ) -> BTreeMap<String, ScriptValue> {
+        let mut bindings = BTreeMap::new();
+        bindings.insert("event".to_string(), ScriptValue::Event(event.clone()));
+
+        for (index, param) in handler.params.iter().enumerate() {
+            if index == 0 {
+                bindings.insert(param.clone(), ScriptValue::Event(event.clone()));
+            } else {
+                bindings.insert(param.clone(), ScriptValue::Undefined);
+            }
+        }
+
+        bindings
+    }
+
+    fn script_listener_target(target: SessionEventTarget) -> ListenerTarget {
+        match target {
+            SessionEventTarget::Window => ListenerTarget::Window,
+            SessionEventTarget::Document => ListenerTarget::Document,
+            SessionEventTarget::Element(node_id) => {
+                ListenerTarget::Element(Self::node_id_to_handle(node_id))
+            }
+        }
+    }
+
+    fn phase_label(phase: EventPhase) -> &'static str {
+        match phase {
+            EventPhase::None => "none",
+            EventPhase::Capturing => "capture",
+            EventPhase::AtTarget => "target",
+            EventPhase::Bubbling => "bubble",
         }
     }
 
@@ -835,11 +1053,13 @@ impl Session {
         &mut self,
         target: SessionEventTarget,
         event_type: String,
+        capture: bool,
         handler: ScriptFunction,
     ) {
         self.script_event_listeners.push(ScriptListenerRecord {
             target,
             event_type,
+            capture,
             handler,
         });
     }
@@ -861,9 +1081,10 @@ impl HostBindings for Session {
         };
 
         match &node.kind {
-            NodeKind::Element(_) | NodeKind::Document | NodeKind::Text(_) | NodeKind::Comment(_) => {
-                Ok(self.dom.text_content_for_node(node_id))
-            }
+            NodeKind::Element(_)
+            | NodeKind::Document
+            | NodeKind::Text(_)
+            | NodeKind::Comment(_) => Ok(self.dom.text_content_for_node(node_id)),
         }
     }
 
@@ -884,17 +1105,14 @@ impl HostBindings for Session {
             return Err(ScriptError::new("invalid element handle"));
         };
         match &node.kind {
-            NodeKind::Element(_) | NodeKind::Document | NodeKind::Text(_) | NodeKind::Comment(_) => {
-                Ok(self.dom.value_for_node(node_id))
-            }
+            NodeKind::Element(_)
+            | NodeKind::Document
+            | NodeKind::Text(_)
+            | NodeKind::Comment(_) => Ok(self.dom.value_for_node(node_id)),
         }
     }
 
-    fn element_set_value(
-        &mut self,
-        element: ElementHandle,
-        value: &str,
-    ) -> bt_script::Result<()> {
+    fn element_set_value(&mut self, element: ElementHandle, value: &str) -> bt_script::Result<()> {
         let node_id = self.node_id_for_handle(element)?;
         self.dom
             .set_form_control_value(node_id, value)
@@ -917,10 +1135,11 @@ impl HostBindings for Session {
             .map_err(ScriptError::new)
     }
 
-    fn register_event_listener(
+    fn register_event_listener_with_capture(
         &mut self,
         target: ListenerTarget,
         event_type: &str,
+        capture: bool,
         handler: ScriptFunction,
     ) -> bt_script::Result<()> {
         let target = match target {
@@ -935,7 +1154,7 @@ impl HostBindings for Session {
             }
         };
 
-        self.register_script_listener(target, event_type.to_string(), handler);
+        self.register_script_listener(target, event_type.to_string(), capture, handler);
         Ok(())
     }
 }
@@ -1027,18 +1246,137 @@ mod tests {
 
         let session = Session::new(config).expect("session should register listeners");
         assert_eq!(session.script_event_listeners.len(), 1);
-        assert_eq!(
-            session.script_event_listeners[0].event_type,
-            "click"
-        );
+        assert_eq!(session.script_event_listeners[0].event_type, "click");
+        assert!(!session.script_event_listeners[0].capture);
         match &session.script_event_listeners[0].target {
             SessionEventTarget::Element(node_id) => assert_eq!(node_id.index(), 1),
             other => panic!("unexpected listener target: {:?}", other),
         }
-        assert!(session.script_event_listeners[0]
-            .handler
-            .body_source
-            .contains("textContent = 'clicked'"));
+        assert!(
+            session.script_event_listeners[0]
+                .handler
+                .body_source
+                .contains("textContent = 'clicked'")
+        );
+    }
+
+    #[test]
+    fn session_bubbles_click_events_beyond_target_phase() {
+        let config = SessionConfig {
+            url: "https://app.local/".to_string(),
+            html: Some(
+                "<div id='parent'><div id='child'></div></div><div id='out'></div><script>document.getElementById('child').addEventListener('click', () => { document.getElementById('out').textContent = 'target'; }); document.getElementById('parent').addEventListener('click', () => { document.getElementById('out').textContent += ':parent'; }); document.addEventListener('click', () => { document.getElementById('out').textContent += ':document'; }); window.addEventListener('click', () => { document.getElementById('out').textContent += ':window'; });</script>"
+                    .to_string(),
+            ),
+            local_storage: BTreeMap::new(),
+        };
+
+        let mut session = Session::new(config).expect("session should register listeners");
+        let child_id = session.dom().select("#child").unwrap()[0];
+        let out_id = session.dom().select("#out").unwrap()[0];
+
+        session.click_node(child_id).expect("click should bubble");
+
+        assert_eq!(
+            session.dom().text_content_for_node(out_id),
+            "target:parent:document:window"
+        );
+    }
+
+    #[test]
+    fn session_stop_propagation_blocks_ancestor_listeners() {
+        let config = SessionConfig {
+            url: "https://app.local/".to_string(),
+            html: Some(
+                "<div id='parent'><div id='child'></div></div><div id='out'></div><script>document.getElementById('child').addEventListener('click', (event) => { event.stopPropagation(); document.getElementById('out').textContent = 'target'; }); document.getElementById('parent').addEventListener('click', () => { document.getElementById('out').textContent += ':parent'; }); document.addEventListener('click', () => { document.getElementById('out').textContent += ':document'; });</script>"
+                    .to_string(),
+            ),
+            local_storage: BTreeMap::new(),
+        };
+
+        let mut session = Session::new(config).expect("session should register listeners");
+        let child_id = session.dom().select("#child").unwrap()[0];
+        let out_id = session.dom().select("#out").unwrap()[0];
+
+        session.click_node(child_id).expect("click should still succeed");
+
+        assert_eq!(session.dom().text_content_for_node(out_id), "target");
+    }
+
+    #[test]
+    fn session_click_default_action_is_cancelable() {
+        let config = SessionConfig {
+            url: "https://app.local/".to_string(),
+            html: Some(
+                "<input id='agree' type='checkbox'><div id='out'></div><script>document.getElementById('agree').addEventListener('click', (event) => { event.preventDefault(); }); document.getElementById('agree').addEventListener('change', () => { document.getElementById('out').textContent = String(document.getElementById('agree').checked); });</script>"
+                    .to_string(),
+            ),
+            local_storage: BTreeMap::new(),
+        };
+
+        let mut session = Session::new(config).expect("session should register listeners");
+        let agree_id = session.dom().select("#agree").unwrap()[0];
+        let out_id = session.dom().select("#out").unwrap()[0];
+
+        session
+            .click_node(agree_id)
+            .expect("canceling click should still succeed");
+
+        assert_eq!(session.dom().checked_for_node(agree_id), Some(false));
+        assert_eq!(session.dom().text_content_for_node(out_id), "");
+    }
+
+    #[test]
+    fn session_focus_and_blur_dispatch_in_order() {
+        let config = SessionConfig {
+            url: "https://app.local/".to_string(),
+            html: Some(
+                "<input id='first'><input id='second'><div id='out'></div><script>document.getElementById('first').addEventListener('blur', () => { document.getElementById('second').textContent = 'after-blur'; }); document.getElementById('second').addEventListener('focus', () => { document.getElementById('out').textContent = document.getElementById('second').textContent; });</script>"
+                    .to_string(),
+            ),
+            local_storage: BTreeMap::new(),
+        };
+
+        let mut session = Session::new(config).expect("session should register listeners");
+        let first_id = session.dom().select("#first").unwrap()[0];
+        let second_id = session.dom().select("#second").unwrap()[0];
+        let out_id = session.dom().select("#out").unwrap()[0];
+
+        session.focus_node(first_id).expect("focus should work");
+        session
+            .focus_node(second_id)
+            .expect("focus should blur the previous element");
+
+        assert_eq!(session.dom().text_content_for_node(second_id), "after-blur");
+        assert_eq!(session.dom().text_content_for_node(out_id), "after-blur");
+    }
+
+    #[test]
+    fn session_set_select_value_updates_option_state_and_dispatches_change() {
+        let config = SessionConfig {
+            url: "https://app.local/".to_string(),
+            html: Some(
+                "<select id='mode'><option value='a'>A</option><option value='b'>B</option></select><div id='out'></div><script>document.getElementById('mode').addEventListener('change', () => { document.getElementById('out').textContent = document.getElementById('mode').value; });</script>"
+                    .to_string(),
+            ),
+            local_storage: BTreeMap::new(),
+        };
+
+        let mut session = Session::new(config).expect("session should register listeners");
+        let mode_id = session.dom().select("#mode").unwrap()[0];
+        let option_ids = session.dom().select("option").unwrap();
+        let out_id = session.dom().select("#out").unwrap()[0];
+
+        session
+            .set_select_value_node(mode_id, "b")
+            .expect("select should accept a matching value");
+
+        assert_eq!(session.dom().value_for_node(mode_id), "b");
+        assert_eq!(
+            session.dom().select("[selected]").unwrap(),
+            vec![option_ids[1]]
+        );
+        assert_eq!(session.dom().text_content_for_node(out_id), "b");
     }
 
     #[test]
@@ -1077,7 +1415,9 @@ mod tests {
         let agree_id = session.dom().select("#agree").unwrap()[0];
         let out_id = session.dom().select("#out").unwrap()[0];
 
-        session.click_node(agree_id).expect("click should toggle checkbox");
+        session
+            .click_node(agree_id)
+            .expect("click should toggle checkbox");
 
         assert_eq!(session.dom().checked_for_node(agree_id), Some(true));
         assert_eq!(session.dom().text_content_for_node(out_id), "true");

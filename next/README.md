@@ -15,8 +15,8 @@ Current status:
 - `HarnessBuilder`, `Session`, `DomStore`, scheduler, mock registry, and error taxonomy are in place
 - Phase 1 DOM parsing, selector subset support, `assert_exists`, and debug DOM dumps are implemented
 - Phase 2 inline script bootstrapping, `document.getElementById(...).textContent = ...`, and listener registration are implemented
-- Phase 3 event dispatch, form controls, `click`, `type_text`, `set_checked`, `submit`, `dispatch`, `assert_value`, and `assert_checked` are implemented
-- `focus`, `blur`, and `set_select_value` are still gated, and event propagation is still target-phase only
+- Phase 3 event dispatch, ancestor bubbling, cancelable click default actions, form controls, `click`, `type_text`, `set_checked`, `set_select_value`, `focus`, `blur`, `submit`, `dispatch`, `assert_value`, and `assert_checked` are implemented
+- event propagation now reaches ancestor, `document`, and `window` listeners, and the remaining Phase 4 work is fake clock hardening, microtask semantics, and runtime mock wiring
 
 Workspace layout:
 

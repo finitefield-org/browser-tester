@@ -116,6 +116,29 @@ fn form_controls_are_seeded_and_mutable() {
 }
 
 #[test]
+fn select_controls_are_seeded_and_mutable() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<select id='mode'><option value='a'>A</option><option value='b' selected>B</option></select>",
+        )
+        .expect("HTML should parse");
+
+    let mode_id = store.select("#mode").unwrap()[0];
+    let option_ids = store.select("option").unwrap();
+
+    assert_eq!(store.value_for_node(mode_id), "b");
+    assert_eq!(store.select("[selected]").unwrap(), vec![option_ids[1]]);
+
+    store
+        .set_select_value(mode_id, "a")
+        .expect("select should accept a matching value");
+
+    assert_eq!(store.value_for_node(mode_id), "a");
+    assert_eq!(store.select("[selected]").unwrap(), vec![option_ids[0]]);
+}
+
+#[test]
 fn non_form_controls_reject_form_state_mutation() {
     let mut store = DomStore::new_empty();
     store.bootstrap_html("<div id='out'></div>").unwrap();

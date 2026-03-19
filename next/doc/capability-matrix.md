@@ -15,7 +15,7 @@ This matrix defines what `next/` already exposes, what is only scaffolded, and w
 | Script lexer / parser / evaluator | Stable Core | 2 | Available | Minimal statement/expression support powers inline DOM mutation and listener registration. |
 | Window/document/Element host bindings | Stable Core | 2 | Available | `document.getElementById`, `textContent` mutation, and listener registration are wired through `Session`. |
 | Inline script execution | Stable Core | 2 | Available | Inline `<script>` blocks execute during session bootstrap in document order. |
-| Event dispatch and default actions | Stable Core | 3 | Available | Target-phase dispatch, checkbox toggles, submit-button default actions, and form actions (`click`, `type_text`, `set_checked`, `submit`, `dispatch`) are available; `focus`, `blur`, and `set_select_value` remain gated. |
+| Event dispatch and default actions | Stable Core | 3 | Available | Target-phase dispatch, ancestor bubbling, capture listeners, checkbox toggles, cancelable submit/click default actions, and form actions (`click`, `type_text`, `set_checked`, `set_select_value`, `focus`, `blur`, `submit`, `dispatch`) are available. |
 | Fetch mock response and failure injection | Stable Test Mocks | 4 | Skeleton | Response rules, error rules, and call capture structs exist. |
 | Clipboard, dialog, location, download, and file-input capture | Stable Test Mocks | 4 | Skeleton | Families are present; runtime integration is still pending. |
 | Debug view | Experimental Browser Facades | 1 | Available | Limited to URL, source HTML, node count, DOM dump, trace flag, and seeded storage. |

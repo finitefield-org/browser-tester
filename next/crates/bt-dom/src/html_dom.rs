@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use super::DomStore;
 use super::DomIndexes;
+use super::DomStore;
 use super::ElementData;
 use super::NodeId;
 use super::NodeKind;
@@ -114,6 +114,12 @@ impl DomStore {
         };
 
         match &node.kind {
+            NodeKind::Element(element) if element.tag_name == "select" => {
+                self.select_value_for_node(node_id)
+            }
+            NodeKind::Element(element) if element.tag_name == "option" => {
+                self.option_value_for_node(node_id)
+            }
             NodeKind::Element(element) => element
                 .attributes
                 .get("value")
@@ -200,6 +206,62 @@ impl DomStore {
         }
     }
 
+    pub fn set_select_value(
+        &mut self,
+        node_id: NodeId,
+        value: impl Into<String>,
+    ) -> Result<(), String> {
+        let value = value.into();
+        let node_index = node_id.index() as usize;
+        let Some(node) = self.nodes.get(node_index) else {
+            return Err(format!("invalid node id: {:?}", node_id));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(format!("node {:?} is not a select control", node_id));
+        };
+
+        if element.tag_name != "select" {
+            return Err(format!("node {:?} is not a select control", node_id));
+        }
+
+        let option_ids = self.collect_subtree_nodes(node.children.iter().copied());
+        let options: Vec<NodeId> = option_ids
+            .into_iter()
+            .filter(|option_id| self.is_option_node(*option_id))
+            .collect();
+
+        if options.is_empty() {
+            return Err(format!(
+                "select node {:?} does not contain any options",
+                node_id
+            ));
+        }
+
+        let mut found = false;
+        for option_id in &options {
+            let option_value = self.option_value_for_node(*option_id);
+            if option_value == value {
+                found = true;
+                break;
+            }
+        }
+
+        if !found {
+            return Err(format!(
+                "select node {:?} does not contain an option with value `{}`",
+                node_id, value
+            ));
+        }
+
+        for option_id in options {
+            let selected = self.option_value_for_node(option_id) == value;
+            self.set_option_selected(option_id, selected)?;
+        }
+
+        Ok(())
+    }
+
     pub fn set_form_control_checked(
         &mut self,
         node_id: NodeId,
@@ -218,7 +280,9 @@ impl DomStore {
         };
 
         match element.tag_name.as_str() {
-            "input" if is_checkable_input_type(element.attributes.get("type").map(String::as_str)) => {
+            "input"
+                if is_checkable_input_type(element.attributes.get("type").map(String::as_str)) =>
+            {
                 {
                     let Some(node) = self.nodes.get_mut(node_index) else {
                         return Err(format!("invalid node id: {:?}", node_id));
@@ -325,6 +389,99 @@ impl DomStore {
         self.add_node(parent, NodeKind::Comment(value))
     }
 
+    fn is_option_node(&self, node_id: NodeId) -> bool {
+        matches!(
+            self.nodes.get(node_id.index() as usize).map(|node| &node.kind),
+            Some(NodeKind::Element(element)) if element.tag_name == "option"
+        )
+    }
+
+    fn option_value_for_node(&self, node_id: NodeId) -> String {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return String::new();
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return String::new();
+        };
+
+        element
+            .attributes
+            .get("value")
+            .cloned()
+            .unwrap_or_else(|| self.text_content_for_node(node_id))
+    }
+
+    fn set_option_selected(&mut self, node_id: NodeId, selected: bool) -> Result<(), String> {
+        let node_index = node_id.index() as usize;
+        let Some(node) = self.nodes.get_mut(node_index) else {
+            return Err(format!("invalid node id: {:?}", node_id));
+        };
+
+        let NodeKind::Element(element) = &mut node.kind else {
+            return Err(format!("node {:?} is not an option element", node_id));
+        };
+
+        if element.tag_name != "option" {
+            return Err(format!("node {:?} is not an option element", node_id));
+        }
+
+        if selected {
+            element
+                .attributes
+                .insert("selected".to_string(), String::new());
+        } else {
+            element.attributes.remove("selected");
+        }
+
+        Ok(())
+    }
+
+    fn select_value_for_node(&self, node_id: NodeId) -> String {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return String::new();
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return String::new();
+        };
+
+        if element.tag_name != "select" {
+            return String::new();
+        }
+
+        let descendants = self.collect_subtree_nodes(node.children.iter().copied());
+        let mut first_option_value: Option<String> = None;
+        for descendant_id in descendants {
+            if !self.is_option_node(descendant_id) {
+                continue;
+            }
+
+            let option_value = self.option_value_for_node(descendant_id);
+            if first_option_value.is_none() {
+                first_option_value = Some(option_value.clone());
+            }
+
+            if self.is_option_selected(descendant_id) {
+                return option_value;
+            }
+        }
+
+        first_option_value.unwrap_or_default()
+    }
+
+    fn is_option_selected(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        element.attributes.contains_key("selected")
+    }
+
     fn collect_subtree_nodes<I>(&self, roots: I) -> Vec<NodeId>
     where
         I: IntoIterator<Item = NodeId>,
@@ -373,17 +530,15 @@ impl DomStore {
                     self.side_tables.form_controls.insert(
                         node_id,
                         super::FormControlState {
-                            value: element
-                                .attributes
-                                .get("value")
-                                .cloned()
-                                .unwrap_or_default(),
+                            value: element.attributes.get("value").cloned().unwrap_or_default(),
                             checked: false,
                         },
                     );
                 }
                 "input"
-                    if is_checkable_input_type(element.attributes.get("type").map(String::as_str)) =>
+                    if is_checkable_input_type(
+                        element.attributes.get("type").map(String::as_str),
+                    ) =>
                 {
                     self.side_tables.form_controls.insert(
                         node_id,

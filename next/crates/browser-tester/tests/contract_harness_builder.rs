@@ -95,14 +95,3 @@ fn storage_seed_registry_is_available_through_the_mock_view() {
     assert!(harness.mocks_mut().storage().local().is_empty());
     assert!(harness.mocks_mut().storage().session().is_empty());
 }
-
-#[test]
-fn unsupported_focus_still_fails_explicitly() {
-    let mut harness = Harness::builder().build().expect("builder should succeed");
-    let error = harness.focus("#submit").expect_err("focus should still be gated");
-    assert!(
-        error
-            .to_string()
-            .contains("focus is planned for a later phase after focus management lands")
-    );
-}

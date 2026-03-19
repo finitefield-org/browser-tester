@@ -1,0 +1,255 @@
+use super::*;
+
+impl Harness {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn initialize_global_script_env(
+        &mut self,
+        window: &Value,
+        document: &Value,
+        navigator: &Value,
+        css: &Value,
+        intl: &Value,
+        core_constructor_bindings: &[(String, Value)],
+        function_family_constructor_bindings: &[(String, Value)],
+        document_constructor: &Value,
+        event_target_constructor: &Value,
+        event_constructor: &Value,
+        custom_event_constructor: &Value,
+        mouse_event_constructor: &Value,
+        keyboard_event_constructor: &Value,
+        wheel_event_constructor: &Value,
+        navigate_event_constructor: &Value,
+        pointer_event_constructor: &Value,
+        hash_change_event_constructor: &Value,
+        error_event_constructor: &Value,
+        before_unload_event_constructor: &Value,
+        image_data_constructor: &Value,
+        iterator_constructor: &Value,
+        cookie_store: &Value,
+        caches: &Value,
+        fetch_callable: &Value,
+        match_media_callable: &Value,
+        close_callable: &Value,
+        open_callable: &Value,
+        stop_callable: &Value,
+        focus_callable: &Value,
+        scroll_callable: &Value,
+        scroll_by_callable: &Value,
+        scroll_to_callable: &Value,
+        move_by_callable: &Value,
+        move_to_callable: &Value,
+        resize_by_callable: &Value,
+        resize_to_callable: &Value,
+        post_message_callable: &Value,
+        get_computed_style_callable: &Value,
+        alert_callable: &Value,
+        confirm_callable: &Value,
+        prompt_callable: &Value,
+        print_callable: &Value,
+        report_error_callable: &Value,
+        atob_callable: &Value,
+        btoa_callable: &Value,
+        structured_clone_callable: &Value,
+        request_animation_frame_callable: &Value,
+        set_timeout_callable: &Value,
+        set_interval_callable: &Value,
+        cancel_animation_frame_callable: &Value,
+        clear_interval_callable: &Value,
+        clear_timeout_callable: &Value,
+        queue_microtask_callable: &Value,
+        worker_constructor: &Value,
+        data_transfer_constructor: &Value,
+        option_constructor: &Value,
+        image_bitmap_constructor: &Value,
+        storage_constructor: &Value,
+        cookie_store_constructor: &Value,
+        cache_storage_constructor: &Value,
+        cache_constructor: &Value,
+        node_list_constructor: &Value,
+        text_track_constructor: &Value,
+        text_track_list_constructor: &Value,
+        time_ranges_constructor: &Value,
+        radio_node_list_constructor: &Value,
+        html_collection_constructor: &Value,
+        html_form_controls_collection_constructor: &Value,
+        html_options_collection_constructor: &Value,
+        text_encoder_constructor: &Value,
+        text_decoder_constructor: &Value,
+        text_encoder_stream_constructor: &Value,
+        text_decoder_stream_constructor: &Value,
+        css_style_sheet_constructor: &Value,
+        decode_uri_callable: &Value,
+        decode_uri_component_callable: &Value,
+        create_image_bitmap_callable: &Value,
+        request_constructor: &Value,
+        file_constructor: &Value,
+        clipboard_item_constructor: &Value,
+        headers_constructor: &Value,
+        audio_constructor: &Value,
+        element_constructor: &Value,
+        html_element_constructor: &Value,
+        html_anchor_element_constructor: &Value,
+        html_area_element_constructor: &Value,
+        html_body_element_constructor: &Value,
+        html_br_element_constructor: &Value,
+        html_base_element_constructor: &Value,
+        html_audio_element_constructor: &Value,
+        html_button_element_constructor: &Value,
+        html_canvas_element_constructor: &Value,
+        html_data_element_constructor: &Value,
+        html_datalist_element_constructor: &Value,
+        html_input_element_constructor: &Value,
+        html_option_element_constructor: &Value,
+        html_select_element_constructor: &Value,
+        dom_parser_constructor: &Value,
+        xml_serializer_constructor: &Value,
+        node_constants: &Value,
+        node_filter_constants: &Value,
+        location: &Value,
+        history: &Value,
+        navigation: &Value,
+        local_storage: &Value,
+    ) {
+        self.script_runtime
+            .env
+            .insert("document".to_string(), document.clone());
+        self.script_runtime
+            .env
+            .insert("Document".to_string(), document_constructor.clone());
+        self.script_runtime
+            .env
+            .insert("navigator".to_string(), navigator.clone());
+        self.script_runtime
+            .env
+            .insert("clientInformation".to_string(), navigator.clone());
+        self.script_runtime
+            .env
+            .insert("CSS".to_string(), css.clone());
+        self.script_runtime
+            .env
+            .insert("Intl".to_string(), intl.clone());
+        for (name, value) in core_constructor_bindings {
+            self.script_runtime.env.insert(name.clone(), value.clone());
+        }
+        for (name, value) in function_family_constructor_bindings {
+            self.script_runtime.env.insert(name.clone(), value.clone());
+        }
+        for (name, value) in [
+            ("EventTarget", event_target_constructor),
+            ("Event", event_constructor),
+            ("CustomEvent", custom_event_constructor),
+            ("MouseEvent", mouse_event_constructor),
+            ("KeyboardEvent", keyboard_event_constructor),
+            ("WheelEvent", wheel_event_constructor),
+            ("NavigateEvent", navigate_event_constructor),
+            ("PointerEvent", pointer_event_constructor),
+            ("HashChangeEvent", hash_change_event_constructor),
+            ("ErrorEvent", error_event_constructor),
+            ("BeforeUnloadEvent", before_unload_event_constructor),
+            ("ImageData", image_data_constructor),
+            ("Iterator", iterator_constructor),
+            ("cookieStore", cookie_store),
+            ("caches", caches),
+            ("fetch", fetch_callable),
+            ("matchMedia", match_media_callable),
+            ("close", close_callable),
+            ("open", open_callable),
+            ("stop", stop_callable),
+            ("focus", focus_callable),
+            ("scroll", scroll_callable),
+            ("scrollBy", scroll_by_callable),
+            ("scrollTo", scroll_to_callable),
+            ("moveBy", move_by_callable),
+            ("moveTo", move_to_callable),
+            ("resizeBy", resize_by_callable),
+            ("resizeTo", resize_to_callable),
+            ("postMessage", post_message_callable),
+            ("getComputedStyle", get_computed_style_callable),
+            ("alert", alert_callable),
+            ("confirm", confirm_callable),
+            ("prompt", prompt_callable),
+            ("print", print_callable),
+            ("reportError", report_error_callable),
+            ("atob", atob_callable),
+            ("btoa", btoa_callable),
+            ("structuredClone", structured_clone_callable),
+            ("requestAnimationFrame", request_animation_frame_callable),
+            ("setTimeout", set_timeout_callable),
+            ("setInterval", set_interval_callable),
+            ("cancelAnimationFrame", cancel_animation_frame_callable),
+            ("clearInterval", clear_interval_callable),
+            ("clearTimeout", clear_timeout_callable),
+            ("queueMicrotask", queue_microtask_callable),
+            ("Worker", worker_constructor),
+            ("DataTransfer", data_transfer_constructor),
+            ("Option", option_constructor),
+            ("ImageBitmap", image_bitmap_constructor),
+            ("Storage", storage_constructor),
+            ("CookieStore", cookie_store_constructor),
+            ("CacheStorage", cache_storage_constructor),
+            ("Cache", cache_constructor),
+            ("NodeList", node_list_constructor),
+            ("TextTrack", text_track_constructor),
+            ("TextTrackList", text_track_list_constructor),
+            ("TimeRanges", time_ranges_constructor),
+            ("RadioNodeList", radio_node_list_constructor),
+            ("HTMLCollection", html_collection_constructor),
+            (
+                "HTMLFormControlsCollection",
+                html_form_controls_collection_constructor,
+            ),
+            ("HTMLOptionsCollection", html_options_collection_constructor),
+            ("TextEncoder", text_encoder_constructor),
+            ("TextDecoder", text_decoder_constructor),
+            ("TextEncoderStream", text_encoder_stream_constructor),
+            ("TextDecoderStream", text_decoder_stream_constructor),
+            ("CSSStyleSheet", css_style_sheet_constructor),
+            ("decodeURI", decode_uri_callable),
+            ("decodeURIComponent", decode_uri_component_callable),
+            ("createImageBitmap", create_image_bitmap_callable),
+            ("Request", request_constructor),
+            ("File", file_constructor),
+            ("ClipboardItem", clipboard_item_constructor),
+            ("Headers", headers_constructor),
+            ("Audio", audio_constructor),
+            ("Element", element_constructor),
+            ("HTMLElement", html_element_constructor),
+            ("HTMLAnchorElement", html_anchor_element_constructor),
+            ("HTMLAreaElement", html_area_element_constructor),
+            ("HTMLBodyElement", html_body_element_constructor),
+            ("HTMLBRElement", html_br_element_constructor),
+            ("HTMLBaseElement", html_base_element_constructor),
+            ("HTMLAudioElement", html_audio_element_constructor),
+            ("HTMLButtonElement", html_button_element_constructor),
+            ("HTMLCanvasElement", html_canvas_element_constructor),
+            ("HTMLDataElement", html_data_element_constructor),
+            ("HTMLDataListElement", html_datalist_element_constructor),
+            ("HTMLInputElement", html_input_element_constructor),
+            ("HTMLOptionElement", html_option_element_constructor),
+            ("HTMLSelectElement", html_select_element_constructor),
+            ("DOMParser", dom_parser_constructor),
+            ("XMLSerializer", xml_serializer_constructor),
+            ("Node", node_constants),
+            ("NodeFilter", node_filter_constants),
+            ("location", location),
+            ("history", history),
+            ("navigation", navigation),
+            ("localStorage", local_storage),
+        ] {
+            self.script_runtime
+                .env
+                .insert(name.to_string(), value.clone());
+        }
+        for name in ["window", "globalThis", "this", "self", "top", "parent"] {
+            self.script_runtime
+                .env
+                .insert(name.to_string(), window.clone());
+        }
+        self.script_runtime
+            .env
+            .insert("frames".to_string(), window.clone());
+        self.script_runtime
+            .env
+            .insert(INTERNAL_SCOPE_DEPTH_KEY.to_string(), Value::Number(0));
+    }
+}

@@ -1,11 +1,17 @@
 use std::collections::BTreeMap;
 
 use crate::syntax::{AssignTarget, Expr, Program, Statement};
-use crate::{ElementHandle, HostBindings, ListenerTarget, Result, ScriptError, ScriptFunction};
+use crate::{HostBindings, ListenerTarget, Result, ScriptError, ScriptValue as Value};
 
 pub(crate) fn eval_program<H: HostBindings>(program: &Program, host: &mut H) -> Result<()> {
-    let mut env = BTreeMap::<String, Value>::new();
+    eval_program_with_bindings(program, host, BTreeMap::new())
+}
 
+pub(crate) fn eval_program_with_bindings<H: HostBindings>(
+    program: &Program,
+    host: &mut H,
+    mut env: BTreeMap<String, Value>,
+) -> Result<()> {
     for statement in &program.statements {
         eval_statement(statement, &mut env, host)?;
     }
@@ -13,38 +19,32 @@ pub(crate) fn eval_program<H: HostBindings>(program: &Program, host: &mut H) -> 
     Ok(())
 }
 
-#[derive(Clone, Debug)]
-enum Value {
-    Undefined,
-    Null,
-    Boolean(bool),
-    Number(f64),
-    String(String),
-    Element(ElementHandle),
-    Document,
-    Window,
-    Function(ScriptFunction),
+fn as_string(value: &Value) -> String {
+    match value {
+        Value::Undefined => "undefined".to_string(),
+        Value::Null => "null".to_string(),
+        Value::Boolean(value) => value.to_string(),
+        Value::Number(value) => {
+            if value.fract() == 0.0 {
+                (*value as i64).to_string()
+            } else {
+                value.to_string()
+            }
+        }
+        Value::String(value) => value.clone(),
+        Value::Element(_) => "[object Element]".to_string(),
+        Value::Document => "[object Document]".to_string(),
+        Value::Window => "[object Window]".to_string(),
+        Value::Event(_) => "[object Event]".to_string(),
+        Value::Function(_) => "[function]".to_string(),
+    }
 }
 
-impl Value {
-    fn as_string(&self) -> String {
-        match self {
-            Self::Undefined => "undefined".to_string(),
-            Self::Null => "null".to_string(),
-            Self::Boolean(value) => value.to_string(),
-            Self::Number(value) => {
-                if value.fract() == 0.0 {
-                    (*value as i64).to_string()
-                } else {
-                    value.to_string()
-                }
-            }
-            Self::String(value) => value.clone(),
-            Self::Element(_) => "[object Element]".to_string(),
-            Self::Document => "[object Document]".to_string(),
-            Self::Window => "[object Window]".to_string(),
-            Self::Function(_) => "[function]".to_string(),
-        }
+fn value_for_listener_target(target: ListenerTarget) -> Value {
+    match target {
+        ListenerTarget::Window => Value::Window,
+        ListenerTarget::Document => Value::Document,
+        ListenerTarget::Element(element) => Value::Element(element),
     }
 }
 
@@ -81,10 +81,10 @@ fn eval_assignment<H: HostBindings>(
             let object = eval_expr(object, env, host)?;
             match (object, property.as_str()) {
                 (Value::Element(element), "textContent") => {
-                    host.element_set_text_content(element, &value.as_string())
+                    host.element_set_text_content(element, &as_string(&value))
                 }
                 (Value::Element(element), "value") => {
-                    host.element_set_value(element, &value.as_string())
+                    host.element_set_value(element, &as_string(&value))
                 }
                 (Value::Element(element), "checked") => {
                     host.element_set_checked(element, is_truthy(&value))
@@ -111,6 +111,9 @@ fn eval_assignment<H: HostBindings>(
                 )),
                 (Value::Function(_), property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on function value"
+                ))),
+                (Value::Event(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on event value"
                 ))),
             }
         }
@@ -146,6 +149,10 @@ fn eval_expr<H: HostBindings>(
 }
 
 fn eval_identifier(name: &str, env: &BTreeMap<String, Value>) -> Result<Value> {
+    if let Some(value) = env.get(name) {
+        return Ok(value.clone());
+    }
+
     match name {
         "document" => Ok(Value::Document),
         "window" => Ok(Value::Window),
@@ -153,10 +160,7 @@ fn eval_identifier(name: &str, env: &BTreeMap<String, Value>) -> Result<Value> {
         "null" => Ok(Value::Null),
         "true" => Ok(Value::Boolean(true)),
         "false" => Ok(Value::Boolean(false)),
-        other => env
-            .get(other)
-            .cloned()
-            .ok_or_else(|| ScriptError::new(format!("unknown variable: {other}"))),
+        other => Err(ScriptError::new(format!("unknown variable: {other}"))),
     }
 }
 
@@ -179,6 +183,22 @@ fn eval_member<H: HostBindings>(
         Value::Element(element) if property == "checked" => {
             Ok(Value::Boolean(host.element_checked(element)?))
         }
+        Value::Event(event) if property == "type" => Ok(Value::String(event.event_type())),
+        Value::Event(event) if property == "target" => {
+            Ok(value_for_listener_target(event.target()))
+        }
+        Value::Event(event) if property == "currentTarget" => Ok(event
+            .current_target()
+            .map(value_for_listener_target)
+            .unwrap_or(Value::Undefined)),
+        Value::Event(event) if property == "defaultPrevented" => {
+            Ok(Value::Boolean(event.default_prevented()))
+        }
+        Value::Event(event) if property == "cancelable" => Ok(Value::Boolean(event.cancelable())),
+        Value::Event(event) if property == "bubbles" => Ok(Value::Boolean(event.bubbles())),
+        Value::Event(event) if property == "eventPhase" => {
+            Ok(Value::Number(event.event_phase() as u8 as f64))
+        }
         Value::Element(_) => Err(unsupported_member_access(property, "element")),
         Value::Document => Err(unsupported_member_access(property, "document")),
         Value::Window => Err(unsupported_member_access(property, "window")),
@@ -186,6 +206,7 @@ fn eval_member<H: HostBindings>(
         Value::Number(_) => Err(unsupported_member_access(property, "number")),
         Value::Boolean(_) => Err(unsupported_member_access(property, "boolean")),
         Value::Null | Value::Undefined => Err(unsupported_member_access(property, "nullish")),
+        Value::Event(_) => Err(unsupported_member_access(property, "event")),
         Value::Function(_) => Err(unsupported_member_access(property, "function")),
     }
 }
@@ -203,7 +224,7 @@ fn eval_call<H: HostBindings>(
                 1 => eval_expr(&args[0], env, host)?,
                 _ => return Err(ScriptError::new("String() accepts at most one argument")),
             };
-            Ok(Value::String(value.as_string()))
+            Ok(Value::String(as_string(&value)))
         }
         Expr::Identifier(name) if name == "Boolean" => {
             let value = match args.len() {
@@ -243,7 +264,7 @@ fn eval_method_call<H: HostBindings>(
                         "document.getElementById() expects exactly one argument",
                     ));
                 };
-                let id = eval_expr(id_expr, env, host)?.as_string();
+                let id = as_string(&eval_expr(id_expr, env, host)?);
                 let Some(element) = host.document_get_element_by_id(&id)? else {
                     return Err(ScriptError::new(format!(
                         "document.getElementById(\"{id}\") returned no element"
@@ -271,6 +292,23 @@ fn eval_method_call<H: HostBindings>(
                 "unsupported Element method: {other}"
             ))),
         },
+        Value::Event(event) => match method {
+            "preventDefault" => {
+                event.prevent_default();
+                Ok(Value::Undefined)
+            }
+            "stopPropagation" => {
+                event.stop_propagation();
+                Ok(Value::Undefined)
+            }
+            "stopImmediatePropagation" => {
+                event.stop_immediate_propagation();
+                Ok(Value::Undefined)
+            }
+            other => Err(ScriptError::new(format!(
+                "unsupported Event method: {other}"
+            ))),
+        },
         Value::String(_) => Err(ScriptError::new(format!(
             "unsupported method call on string value: {method}"
         ))),
@@ -295,13 +333,14 @@ fn register_listener<H: HostBindings>(
     env: &mut BTreeMap<String, Value>,
     host: &mut H,
 ) -> Result<Value> {
-    let [event_expr, handler_expr] = args else {
+    if !(2..=3).contains(&args.len()) {
         return Err(ScriptError::new(
-            "addEventListener() expects exactly two arguments",
+            "addEventListener() expects two or three arguments",
         ));
-    };
-    let event = eval_expr(event_expr, env, host)?.as_string();
-    let handler = match eval_expr(handler_expr, env, host)? {
+    }
+
+    let event = as_string(&eval_expr(&args[0], env, host)?);
+    let handler = match eval_expr(&args[1], env, host)? {
         Value::Function(function) => function,
         _ => {
             return Err(ScriptError::new(
@@ -309,14 +348,18 @@ fn register_listener<H: HostBindings>(
             ));
         }
     };
-    host.register_event_listener(target, &event, handler)?;
+    let capture = match args.get(2) {
+        Some(capture_expr) => is_truthy(&eval_expr(capture_expr, env, host)?),
+        None => false,
+    };
+    host.register_event_listener_with_capture(target, &event, capture, handler)?;
     Ok(Value::Undefined)
 }
 
 fn eval_add(left: Value, right: Value) -> Value {
     match (left, right) {
         (Value::Number(lhs), Value::Number(rhs)) => Value::Number(lhs + rhs),
-        (left, right) => Value::String(format!("{}{}", left.as_string(), right.as_string())),
+        (left, right) => Value::String(format!("{}{}", as_string(&left), as_string(&right))),
     }
 }
 
@@ -326,7 +369,11 @@ fn is_truthy(value: &Value) -> bool {
         Value::Boolean(value) => *value,
         Value::Number(value) => *value != 0.0,
         Value::String(value) => !value.is_empty(),
-        Value::Element(_) | Value::Document | Value::Window | Value::Function(_) => true,
+        Value::Element(_)
+        | Value::Document
+        | Value::Window
+        | Value::Function(_)
+        | Value::Event(_) => true,
     }
 }
 

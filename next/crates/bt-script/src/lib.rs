@@ -1,5 +1,8 @@
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::fmt;
+use std::rc::Rc;
 
 mod evaluator;
 mod parser;
@@ -30,11 +33,132 @@ impl ElementHandle {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ListenerTarget {
     Window,
     Document,
     Element(ElementHandle),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum EventPhase {
+    None = 0,
+    Capturing = 1,
+    AtTarget = 2,
+    Bubbling = 3,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ScriptEventState {
+    event_type: String,
+    target: ListenerTarget,
+    current_target: Option<ListenerTarget>,
+    bubbles: bool,
+    cancelable: bool,
+    default_prevented: bool,
+    propagation_stopped: bool,
+    immediate_propagation_stopped: bool,
+    phase: EventPhase,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScriptEventHandle(Rc<RefCell<ScriptEventState>>);
+
+impl ScriptEventHandle {
+    pub fn new(
+        event_type: impl Into<String>,
+        target: ListenerTarget,
+        bubbles: bool,
+        cancelable: bool,
+    ) -> Self {
+        Self(Rc::new(RefCell::new(ScriptEventState {
+            event_type: event_type.into(),
+            target,
+            current_target: None,
+            bubbles,
+            cancelable,
+            default_prevented: false,
+            propagation_stopped: false,
+            immediate_propagation_stopped: false,
+            phase: EventPhase::None,
+        })))
+    }
+
+    pub fn event_type(&self) -> String {
+        self.0.borrow().event_type.clone()
+    }
+
+    pub fn target(&self) -> ListenerTarget {
+        self.0.borrow().target
+    }
+
+    pub fn current_target(&self) -> Option<ListenerTarget> {
+        self.0.borrow().current_target
+    }
+
+    pub fn set_current_target(&self, target: Option<ListenerTarget>) {
+        self.0.borrow_mut().current_target = target;
+    }
+
+    pub fn bubbles(&self) -> bool {
+        self.0.borrow().bubbles
+    }
+
+    pub fn cancelable(&self) -> bool {
+        self.0.borrow().cancelable
+    }
+
+    pub fn default_prevented(&self) -> bool {
+        self.0.borrow().default_prevented
+    }
+
+    pub fn propagation_stopped(&self) -> bool {
+        self.0.borrow().propagation_stopped
+    }
+
+    pub fn immediate_propagation_stopped(&self) -> bool {
+        self.0.borrow().immediate_propagation_stopped
+    }
+
+    pub fn event_phase(&self) -> EventPhase {
+        self.0.borrow().phase
+    }
+
+    pub fn set_phase(&self, phase: EventPhase) {
+        self.0.borrow_mut().phase = phase;
+    }
+
+    pub fn prevent_default(&self) {
+        let mut state = self.0.borrow_mut();
+        if state.cancelable {
+            state.default_prevented = true;
+        }
+    }
+
+    pub fn stop_propagation(&self) {
+        self.0.borrow_mut().propagation_stopped = true;
+    }
+
+    pub fn stop_immediate_propagation(&self) {
+        let mut state = self.0.borrow_mut();
+        state.propagation_stopped = true;
+        state.immediate_propagation_stopped = true;
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ScriptValue {
+    Undefined,
+    Null,
+    Boolean(bool),
+    Number(f64),
+    String(String),
+    Element(ElementHandle),
+    Document,
+    Window,
+    Event(ScriptEventHandle),
+    Function(ScriptFunction),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -103,7 +227,9 @@ pub trait HostBindings {
     }
 
     fn element_set_text_content(&mut self, _element: ElementHandle, _value: &str) -> Result<()> {
-        Err(ScriptError::phase_not_ready("element.textContent assignment"))
+        Err(ScriptError::phase_not_ready(
+            "element.textContent assignment",
+        ))
     }
 
     fn element_value(&mut self, _element: ElementHandle) -> Result<String> {
@@ -126,6 +252,16 @@ pub trait HostBindings {
         &mut self,
         _target: ListenerTarget,
         _event_type: &str,
+        _handler: ScriptFunction,
+    ) -> Result<()> {
+        self.register_event_listener_with_capture(_target, _event_type, false, _handler)
+    }
+
+    fn register_event_listener_with_capture(
+        &mut self,
+        _target: ListenerTarget,
+        _event_type: &str,
+        _capture: bool,
         _handler: ScriptFunction,
     ) -> Result<()> {
         Err(ScriptError::phase_not_ready("addEventListener"))
@@ -173,6 +309,19 @@ impl ScriptRuntime {
         self.evaluator.eval_program(&program, host)
     }
 
+    pub fn eval_program_with_bindings<H: HostBindings>(
+        &mut self,
+        code: &str,
+        source_name: &str,
+        host: &mut H,
+        initial_bindings: BTreeMap<String, ScriptValue>,
+    ) -> Result<()> {
+        host.on_eval(code, source_name)?;
+        let program = self.parser.parse_program(code)?;
+        self.evaluator
+            .eval_program_with_bindings(&program, host, initial_bindings)
+    }
+
     pub fn queue_microtask(&mut self) {
         self.queued_microtasks += 1;
     }
@@ -203,6 +352,15 @@ impl Evaluator {
         host: &mut H,
     ) -> Result<()> {
         evaluator::eval_program(program, host)
+    }
+
+    pub(crate) fn eval_program_with_bindings<H: HostBindings>(
+        &self,
+        program: &syntax::Program,
+        host: &mut H,
+        initial_bindings: BTreeMap<String, ScriptValue>,
+    ) -> Result<()> {
+        evaluator::eval_program_with_bindings(program, host, initial_bindings)
     }
 }
 

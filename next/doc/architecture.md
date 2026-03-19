@@ -96,9 +96,9 @@ State lives in `Session`, and subsystem crates own their internal data.
 
 ### Phase 3
 
-- event dispatch
-- default action registry
-- form controls
+- event dispatch with ancestor bubbling and capture listeners
+- cancelable default actions
+- form controls, including select state
 - user-facing `Harness` actions
 
 ### Phase 4
@@ -116,5 +116,5 @@ State lives in `Session`, and subsystem crates own their internal data.
 
 ## Current Implementation Notes
 
-The workspace now includes Phase 1 DOM parsing, selector support, `assert_exists`, and debug DOM dumps, plus Phase 2 inline script bootstrapping with minimal host bindings and listener capture, and Phase 3 target-phase event dispatch and form controls.
-Unimplemented public actions still fail explicitly so later phases do not inherit silent fallback semantics.
+The workspace now includes Phase 1 DOM parsing, selector support, `assert_exists`, and debug DOM dumps, plus Phase 2 inline script bootstrapping with minimal host bindings and listener capture, and Phase 3 event dispatch with ancestor bubbling, cancelable default actions, form controls, and the `focus`/`blur`/`set_select_value` public actions.
+Phase 4 remains reserved for fake clock hardening, microtask semantics, and deterministic mock wiring.

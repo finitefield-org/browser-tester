@@ -56,10 +56,10 @@ Exit criteria:
 
 Delivered in this workspace:
 
-- target-phase event dispatch
+- event dispatch with ancestor bubbling and capture listeners
 - default action registry for checkbox toggles and submit buttons
-- form controls for text input, textarea, and checkbox state
-- `click`, `type_text`, `set_checked`, `submit`, `dispatch`
+- form controls for text input, textarea, checkbox, and select state
+- `click`, `type_text`, `set_checked`, `set_select_value`, `focus`, `blur`, `submit`, `dispatch`
 - `assert_value` and `assert_checked`
 
 Exit criteria:

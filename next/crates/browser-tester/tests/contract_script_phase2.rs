@@ -23,9 +23,7 @@ fn missing_element_access_reports_a_script_error() {
 
     let message = error.to_string();
     assert!(message.contains("Script error"));
-    assert!(message.contains(
-        "document.getElementById(\"missing\") returned no element"
-    ));
+    assert!(message.contains("document.getElementById(\"missing\") returned no element"));
 }
 
 #[test]

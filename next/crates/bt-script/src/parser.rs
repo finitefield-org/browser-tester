@@ -33,7 +33,9 @@ impl<'a> Parser<'a> {
 
     fn parse_statement(&mut self) -> Result<Statement> {
         self.skip_ws_and_comments();
-        if self.consume_keyword("const") || self.consume_keyword("let") || self.consume_keyword("var")
+        if self.consume_keyword("const")
+            || self.consume_keyword("let")
+            || self.consume_keyword("var")
         {
             self.skip_ws_and_comments();
             let name = self.parse_identifier()?;
@@ -45,6 +47,24 @@ impl<'a> Parser<'a> {
 
         let expr = self.parse_expression()?;
         self.skip_ws_and_comments();
+        if self.consume_str("+=") {
+            let value = self.parse_expression()?;
+            let target = match &expr {
+                Expr::Member { object, property } => AssignTarget::Property {
+                    object: (*object.clone()),
+                    property: property.clone(),
+                },
+                _ => {
+                    return Err(self.error("unsupported assignment target"));
+                }
+            };
+
+            let value = Expr::BinaryAdd {
+                left: Box::new(expr),
+                right: Box::new(value),
+            };
+            return Ok(Statement::Assignment { target, value });
+        }
         if self.consume_char('=') {
             let value = self.parse_expression()?;
             let target = match expr {
@@ -70,7 +90,7 @@ impl<'a> Parser<'a> {
         let mut expr = self.parse_postfix()?;
         loop {
             self.skip_ws_and_comments();
-            if self.peek_char() == Some('+') {
+            if self.peek_char() == Some('+') && self.peek_next_char() != Some('=') {
                 self.pos += 1;
                 let rhs = self.parse_postfix()?;
                 expr = Expr::BinaryAdd {
@@ -138,10 +158,7 @@ impl<'a> Parser<'a> {
                 })
             }
             Some(c) if c.is_ascii_digit() => Ok(Expr::Number(self.parse_number()?)),
-            Some(_) => Err(self.error(format!(
-                "unsupported syntax near byte {}",
-                self.pos
-            ))),
+            Some(_) => Err(self.error(format!("unsupported syntax near byte {}", self.pos))),
             None => Err(self.error("unexpected end of input")),
         }
     }
@@ -415,8 +432,7 @@ impl<'a> Parser<'a> {
 
         let end = start + keyword.len();
         let before_ok = start == 0
-            || !self
-                .input[..start]
+            || !self.input[..start]
                 .chars()
                 .rev()
                 .next()

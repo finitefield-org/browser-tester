@@ -151,7 +151,7 @@ Tests to add first:
 
 Goal:
 
-- register a listener and dispatch a simple event to the target node
+- register a listener and dispatch a simple event through target and ancestor listeners
 
 Primary owner:
 
@@ -161,13 +161,9 @@ Primary owner:
 Suggested scope:
 
 - listener registration
-- target-phase dispatch
+- capture/target/bubble dispatch
 - deterministic callback order
-
-Delay until later:
-
-- full capture/bubble behavior
-- complex default actions
+- cancelable default actions
 
 ### Slice 6: Forms and User Actions
 
@@ -181,8 +177,11 @@ Recommended order:
 2. `type_text`
 3. checkbox state
 4. `set_checked`
-5. button click default behavior
-6. submit behavior
+5. select value state
+6. `set_select_value`
+7. button click default behavior
+8. focus/blur behavior
+9. submit behavior
 
 Primary owners:
 

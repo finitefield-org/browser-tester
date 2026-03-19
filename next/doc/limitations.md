@@ -18,15 +18,13 @@ What exists today:
 
 What does not exist yet:
 
-- event propagation beyond target phase
-- cancelable default actions and richer event lifecycle semantics
 - realistic timer and microtask execution
+- runtime wiring for the mock families in Phase 4
 - broader selector support beyond the Phase 1 subset
 
 ## Important Consequence
 
-Public methods such as `focus`, `blur`, and `set_select_value` are still explicit placeholders.
-They return a clear "planned for a later phase" error instead of pretending to work partially.
+Public methods such as `focus`, `blur`, and `set_select_value` are now supported and dispatch their corresponding lifecycle events through the same deterministic runtime.
 
 ## Still Out of Scope
 

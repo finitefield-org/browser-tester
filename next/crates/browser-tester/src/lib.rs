@@ -3,12 +3,12 @@ use std::error::Error as StdError;
 use std::fmt;
 
 pub use bt_dom::{DomStore, NodeId};
+use bt_runtime::SessionError;
 pub use bt_runtime::{
     ClipboardMocks, DebugState, DialogMocks, DownloadCapture, DownloadMocks, FetchCall,
     FetchErrorRule, FetchMocks, FetchResponseRule, FileInputMocks, FileInputSelection,
     LocationMocks, MockRegistry, ScheduledTimer, Scheduler, Session, SessionConfig, StorageSeeds,
 };
-use bt_runtime::SessionError;
 pub use bt_script::{HostBindings, ScriptError, ScriptRuntime};
 
 macro_rules! message_error {
@@ -246,22 +246,21 @@ impl Harness {
             .map_err(map_session_error)
     }
 
-    pub fn set_select_value(&mut self, _selector: &str, _value: &str) -> Result<()> {
-        Err(Error::Unsupported(
-            "set_select_value is planned for a later phase after select-control support lands",
-        ))
+    pub fn set_select_value(&mut self, selector: &str, value: &str) -> Result<()> {
+        let node_id = self.resolve_action_target(selector)?;
+        self.session
+            .set_select_value_node(node_id, value)
+            .map_err(map_session_error)
     }
 
-    pub fn focus(&mut self, _selector: &str) -> Result<()> {
-        Err(Error::Unsupported(
-            "focus is planned for a later phase after focus management lands",
-        ))
+    pub fn focus(&mut self, selector: &str) -> Result<()> {
+        let node_id = self.resolve_action_target(selector)?;
+        self.session.focus_node(node_id).map_err(map_session_error)
     }
 
-    pub fn blur(&mut self, _selector: &str) -> Result<()> {
-        Err(Error::Unsupported(
-            "blur is planned for a later phase after focus management lands",
-        ))
+    pub fn blur(&mut self, selector: &str) -> Result<()> {
+        let node_id = self.resolve_action_target(selector)?;
+        self.session.blur_node(node_id).map_err(map_session_error)
     }
 
     pub fn dispatch(&mut self, selector: &str, event: &str) -> Result<()> {

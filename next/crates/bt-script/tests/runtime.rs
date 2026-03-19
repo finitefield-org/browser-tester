@@ -20,7 +20,7 @@ struct RecordingHost {
     text_content: BTreeMap<ElementHandle, String>,
     values: BTreeMap<ElementHandle, String>,
     checked: BTreeMap<ElementHandle, bool>,
-    listeners: Vec<(ListenerTarget, String, ScriptFunction)>,
+    listeners: Vec<(ListenerTarget, String, bool, ScriptFunction)>,
 }
 
 impl RecordingHost {
@@ -71,11 +71,7 @@ impl HostBindings for RecordingHost {
             .unwrap_or_default())
     }
 
-    fn element_set_value(
-        &mut self,
-        element: ElementHandle,
-        value: &str,
-    ) -> bt_script::Result<()> {
+    fn element_set_value(&mut self, element: ElementHandle, value: &str) -> bt_script::Result<()> {
         self.values.insert(element, value.to_string());
         Ok(())
     }
@@ -93,14 +89,15 @@ impl HostBindings for RecordingHost {
         Ok(())
     }
 
-    fn register_event_listener(
+    fn register_event_listener_with_capture(
         &mut self,
         target: ListenerTarget,
         event_type: &str,
+        capture: bool,
         handler: ScriptFunction,
     ) -> bt_script::Result<()> {
         self.listeners
-            .push((target, event_type.to_string(), handler));
+            .push((target, event_type.to_string(), capture, handler));
         Ok(())
     }
 }
@@ -133,7 +130,9 @@ fn runtime_mutates_dom_through_host_bindings() {
         .expect("script should mutate text content");
 
     assert_eq!(
-        host.text_content.get(&ElementHandle::new(1)).map(String::as_str),
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
         Some("Hello")
     );
     assert!(host.listeners.is_empty());
@@ -160,7 +159,37 @@ fn runtime_registers_event_handlers() {
         ListenerTarget::Element(ElementHandle::new(1))
     );
     assert_eq!(host.listeners[0].1, "click");
-    assert!(host.listeners[0].2.body_source.contains("textContent = 'clicked'"));
+    assert!(!host.listeners[0].2);
+    assert!(
+        host.listeners[0]
+            .3
+            .body_source
+            .contains("textContent = 'clicked'")
+    );
+}
+
+#[test]
+fn runtime_registers_capturing_event_handlers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("run", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "document.getElementById('run').addEventListener('click', (event) => { event.preventDefault(); }, true);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("script should register listeners");
+
+    assert_eq!(host.listeners.len(), 1);
+    assert_eq!(
+        host.listeners[0].0,
+        ListenerTarget::Element(ElementHandle::new(1))
+    );
+    assert_eq!(host.listeners[0].1, "click");
+    assert!(host.listeners[0].2);
+    assert_eq!(host.listeners[0].3.params, vec!["event".to_string()]);
 }
 
 #[test]
@@ -190,7 +219,9 @@ fn runtime_reads_and_writes_form_control_state() {
         Some(true)
     );
     assert_eq!(
-        host.text_content.get(&ElementHandle::new(3)).map(String::as_str),
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
         Some("Alice:true")
     );
 }
@@ -208,9 +239,11 @@ fn runtime_reports_missing_element_access() {
         )
         .expect_err("missing elements should fail");
 
-    assert!(error
-        .to_string()
-        .contains("document.getElementById(\"missing\") returned no element"));
+    assert!(
+        error
+            .to_string()
+            .contains("document.getElementById(\"missing\") returned no element")
+    );
 }
 
 #[test]
@@ -227,5 +260,9 @@ fn runtime_reports_unsupported_syntax_explicitly() {
         )
         .expect_err("querySelector should not be supported yet");
 
-    assert!(error.to_string().contains("unsupported Document method: querySelector"));
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported Document method: querySelector")
+    );
 }
