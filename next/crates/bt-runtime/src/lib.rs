@@ -467,10 +467,10 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(config: SessionConfig) -> Self {
+    pub fn new(config: SessionConfig) -> Result<Self, String> {
         let mut dom = DomStore::new_empty();
-        if let Some(html) = config.html.clone() {
-            dom.bootstrap_html(html);
+        if let Some(html) = &config.html {
+            dom.bootstrap_html(html.clone())?;
         }
 
         let mut mocks = MockRegistry::default();
@@ -478,14 +478,14 @@ impl Session {
             mocks.storage_mut().seed_local(key.clone(), value.clone());
         }
 
-        Self {
+        Ok(Self {
             dom,
             scheduler: Scheduler::default(),
             mocks,
             script: ScriptRuntime::default(),
             config,
             debug: DebugState::default(),
-        }
+        })
     }
 
     pub fn dom(&self) -> &DomStore {
@@ -550,8 +550,9 @@ mod tests {
             local_storage,
         };
 
-        let session = Session::new(config);
+        let session = Session::new(config).expect("session should parse HTML");
         assert_eq!(session.dom().source_html(), Some("<main id='app'></main>"));
+        assert_eq!(session.dom().node_count(), 2);
         assert_eq!(
             session
                 .mocks()
@@ -561,5 +562,17 @@ mod tests {
                 .map(String::as_str),
             Some("abc")
         );
+    }
+
+    #[test]
+    fn session_rejects_malformed_html() {
+        let config = SessionConfig {
+            url: "https://app.local/".to_string(),
+            html: Some("<main><span></main>".to_string()),
+            local_storage: BTreeMap::new(),
+        };
+
+        let error = Session::new(config).expect_err("malformed HTML should fail");
+        assert!(error.contains("mismatched closing tag"));
     }
 }

@@ -126,10 +126,6 @@ impl DomStore {
         }
     }
 
-    pub fn bootstrap_html(&mut self, html: impl Into<String>) {
-        self.source_html = Some(html.into());
-    }
-
     pub fn source_html(&self) -> Option<&str> {
         self.source_html.as_deref()
     }
@@ -159,9 +155,11 @@ impl DomStore {
     }
 }
 
+mod html_dom;
+
 #[cfg(test)]
 mod tests {
-    use super::{DomStore, NodeKind};
+    use super::{DomStore, NodeId, NodeKind};
 
     #[test]
     fn empty_store_has_document_root() {
@@ -174,7 +172,12 @@ mod tests {
     #[test]
     fn bootstrap_html_is_recorded_for_phase_zero() {
         let mut store = DomStore::new_empty();
-        store.bootstrap_html("<p>Hello</p>");
+        store
+            .bootstrap_html("<p>Hello</p>")
+            .expect("HTML should parse");
         assert_eq!(store.source_html(), Some("<p>Hello</p>"));
+        assert_eq!(store.node_count(), 3);
+        assert_eq!(store.select("#missing").unwrap(), Vec::<NodeId>::new());
+        assert_eq!(store.dump_dom(), "#document\n  <p>\n    \"Hello\"\n  </p>");
     }
 }

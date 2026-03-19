@@ -145,9 +145,9 @@ impl HarnessBuilder {
             html: self.html,
             local_storage: self.local_storage,
         };
-        Ok(Harness {
-            session: Session::new(config),
-        })
+        let session = Session::new(config)
+            .map_err(|message| Error::HtmlParse(HtmlParseError::new(message)))?;
+        Ok(Harness { session })
     }
 }
 
@@ -261,7 +261,7 @@ impl Harness {
 
     pub fn assert_text(&self, _selector: &str, _expected: &str) -> Result<()> {
         Err(Error::Unsupported(
-            "assert_text is planned for Phase 1 after selector support lands",
+            "assert_text is planned for a later phase after text inspection lands",
         ))
     }
 
@@ -277,10 +277,22 @@ impl Harness {
         ))
     }
 
-    pub fn assert_exists(&self, _selector: &str) -> Result<()> {
-        Err(Error::Unsupported(
-            "assert_exists is planned for Phase 1 after selector support lands",
-        ))
+    pub fn assert_exists(&self, selector: &str) -> Result<()> {
+        let matches = self
+            .session
+            .dom()
+            .select(selector)
+            .map_err(|message| Error::Selector(SelectorError::new(message)))?;
+
+        if matches.is_empty() {
+            return Err(Error::Assertion(AssertionError::new(format!(
+                "expected selector `{}` to match at least one node\nDOM:\n{}",
+                selector,
+                self.session.dom().dump_dom()
+            ))));
+        }
+
+        Ok(())
     }
 
     pub fn mocks_mut(&mut self) -> MockRegistryView<'_> {
@@ -357,5 +369,9 @@ impl<'a> DebugView<'a> {
 
     pub fn local_storage(&self) -> &BTreeMap<String, String> {
         self.session.mocks().storage().local()
+    }
+
+    pub fn dump_dom(&self) -> String {
+        self.session.dom().dump_dom()
     }
 }

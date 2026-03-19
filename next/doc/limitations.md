@@ -1,28 +1,30 @@
 # Limitations
 
-The `next/` workspace is intentionally at Phase 0.
+The `next/` workspace has reached Phase 1 for DOM core.
 
 What exists today:
 
 - a compilable crate graph
 - public and internal type skeletons
 - deterministic session bootstrap
+- real HTML parsing and DOM tree construction for the Phase 1 subset
+- selector matching for `#id`, tag, and `[attr]`
+- `assert_exists` and DOM dump helpers
 - explicit mock families and debug hooks
 
 What does not exist yet:
 
-- HTML parsing
-- selector matching
-- script evaluation semantics
 - inline script bootstrapping
+- script evaluation semantics
 - event propagation
 - default actions
 - form-control behavior
 - realistic timer and microtask execution
+- broader selector support beyond the Phase 1 subset
 
 ## Important Consequence
 
-Public methods such as `click`, `type_text`, `focus`, `dispatch`, and assertion helpers are present only as explicit placeholders.
+Public methods such as `click`, `type_text`, `focus`, `dispatch`, `assert_text`, `assert_value`, `assert_checked`, and `set_select_value` are present only as explicit placeholders.
 They return a clear "planned for later phase" error instead of pretending to work partially.
 
 ## Still Out of Scope
@@ -35,4 +37,3 @@ Even after later phases, this rewrite does not aim to provide:
 - real network access
 - service worker support
 - exhaustive Web API coverage
-

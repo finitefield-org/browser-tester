@@ -39,10 +39,10 @@ next/
   doc/
 ```
 
-Current Phase 0 status:
+Current implementation status:
 
-- `browser-tester-next` exposes `Harness`, `HarnessBuilder`, and the planned error taxonomy
-- `bt-dom` owns `DomStore`, generational `NodeId`, indexes, and side-table skeletons
+- `browser-tester-next` exposes `Harness`, `HarnessBuilder`, the planned error taxonomy, `assert_exists`, and the debug DOM dump view
+- `bt-dom` owns `DomStore`, generational `NodeId`, tree construction, selector subset support, indexes, and side-table skeletons
 - `bt-runtime` owns `Session`, scheduler, deterministic mock registry, and debug state
 - `bt-script` owns `ScriptRuntime` and the host-binding seam
 
@@ -116,6 +116,5 @@ State lives in `Session`, and subsystem crates own their internal data.
 
 ## Current Implementation Notes
 
-The Phase 0 workspace compiles and exposes the intended seams, but it does not attempt partial behavior yet.
-Unimplemented public actions fail explicitly so later phases do not inherit silent fallback semantics.
-
+The workspace now includes Phase 1 DOM parsing, selector support, `assert_exists`, and debug DOM dumps.
+Unimplemented public actions still fail explicitly so later phases do not inherit silent fallback semantics.

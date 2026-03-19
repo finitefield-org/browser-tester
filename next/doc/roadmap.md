@@ -2,6 +2,8 @@
 
 This roadmap mirrors the staged plan from [`next.md`](../../next.md) and turns it into the working order for `next/`.
 
+For day-to-day implementation sequencing inside each phase, also see [implementation-guide.md](implementation-guide.md).
+
 ## Phase 0: Skeleton
 
 Delivered in this workspace:
@@ -22,7 +24,7 @@ Exit criteria:
 
 ## Phase 1: DOM Core
 
-Planned work:
+Delivered in this workspace:
 
 - HTML parser
 - DOM tree construction
@@ -94,4 +96,3 @@ Exit criteria:
 
 - docs and code agree
 - quick and hardening test profiles both exist
-

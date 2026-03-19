@@ -3,8 +3,6 @@
 # file drops back to the configured limit.
 
 src/core_dom_utils.rs
-src/core_impl/runtime/runtime_exec/expression_eval/calls_timers_binary.rs
-src/core_impl/runtime/runtime_exec/expression_eval/string_webapi.rs
 src/core_impl/runtime/runtime_exec/json_regex_number/number_format_float16.rs
 src/core_impl/runtime/runtime_platform/script_runtime/catch_scope_analysis.rs
 src/js_regex.rs

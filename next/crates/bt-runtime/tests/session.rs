@@ -11,10 +11,12 @@ fn session_keeps_builder_configuration() {
         url: "https://example.test/app".to_string(),
         html: Some("<div id='app'></div>".to_string()),
         local_storage,
-    });
+    })
+    .expect("session should parse HTML");
 
     assert_eq!(session.config().url, "https://example.test/app");
     assert_eq!(session.dom().source_html(), Some("<div id='app'></div>"));
+    assert_eq!(session.dom().node_count(), 2);
     assert_eq!(
         session
             .mocks()
@@ -24,4 +26,29 @@ fn session_keeps_builder_configuration() {
             .map(String::as_str),
         Some("light")
     );
+    assert!(session.mocks().storage().session().is_empty());
+    assert_eq!(session.scheduler().now_ms(), 0);
+    assert!(!session.debug().trace_enabled());
+}
+
+#[test]
+fn session_starts_with_empty_storage_seed_registry() {
+    let session = Session::new(SessionConfig::default()).expect("session should build");
+
+    assert_eq!(session.config().url, "https://app.local/");
+    assert!(session.mocks().storage().local().is_empty());
+    assert!(session.mocks().storage().session().is_empty());
+    assert_eq!(session.dom().node_count(), 1);
+}
+
+#[test]
+fn session_rejects_malformed_html() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<div><span></div>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("malformed HTML should fail");
+
+    assert!(error.contains("mismatched closing tag"));
 }
