@@ -1,6 +1,6 @@
 # Limitations
 
-The `next/` workspace has reached Phase 4 for DOM, script, events, forms, fake time, and deterministic mock wiring.
+The `next/` workspace has reached Phase 4 for DOM, script, events, forms, fake time, and deterministic mock wiring, and Phase 5 for hardening and publication checks.
 
 What exists today:
 
@@ -14,16 +14,17 @@ What exists today:
 - listener registration through the script host seam
 - target-phase event dispatch and form-control state updates
 - `click`, `type_text`, `set_checked`, `submit`, `dispatch`, `assert_value`, and `assert_checked`
-- explicit mock families, debug hooks, and public mock actions for `fetch`, dialogs, clipboard, location, and file input
+- explicit mock families, debug hooks, and public mock actions for `fetch`, dialogs, clipboard, location, file input, and download capture
+- contract, regression, and property test suites
+- quick and hardening test profiles plus a publication checklist
 
 What does not exist yet:
 
 - broader selector support beyond the Phase 1 subset
-- download capture as a public action; it remains registry-only for now
 
 ## Important Consequence
 
-Public methods such as `focus`, `blur`, `set_select_value`, `fetch`, `confirm`, `prompt`, `read_clipboard`, `write_clipboard`, `navigate`, and `set_files` are now supported and dispatch or capture through the same deterministic runtime.
+Public methods such as `focus`, `blur`, `set_select_value`, `fetch`, `confirm`, `prompt`, `read_clipboard`, `write_clipboard`, `navigate`, `set_files`, and `capture_download` are now supported and dispatch or capture through the same deterministic runtime.
 
 ## Still Out of Scope
 

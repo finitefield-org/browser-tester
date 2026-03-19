@@ -161,6 +161,37 @@ fn dialogs_and_clipboard_reads_require_seeded_values() -> browser_tester_next::R
 }
 
 #[test]
+fn download_capture_is_publicly_wired() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::builder().build()?;
+
+    harness.capture_download("report.csv", b"downloaded bytes".to_vec())?;
+
+    {
+        let mut mocks = harness.mocks_mut();
+        let downloads = mocks.downloads();
+        assert_eq!(downloads.artifacts().len(), 1);
+        assert_eq!(downloads.artifacts()[0].file_name, "report.csv");
+        assert_eq!(downloads.artifacts()[0].bytes, b"downloaded bytes".to_vec());
+    }
+    Ok(())
+}
+
+#[test]
+fn capture_download_rejects_blank_file_names() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::builder().build()?;
+
+    let error = harness
+        .capture_download("   ", b"downloaded bytes".to_vec())
+        .expect_err("blank download names should fail");
+    assert!(
+        error
+            .to_string()
+            .contains("capture_download() requires a non-empty file name")
+    );
+    Ok(())
+}
+
+#[test]
 fn file_input_selection_updates_dom_and_capture() -> browser_tester_next::Result<()> {
     let mut harness = Harness::from_html(
         "<input id='upload' type='file'><div id='out'></div><script>document.getElementById('upload').addEventListener('change', () => { document.getElementById('out').textContent = document.getElementById('upload').value; });</script>",

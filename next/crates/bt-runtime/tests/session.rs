@@ -179,6 +179,39 @@ fn session_fetch_uses_mock_registry_and_reports_missing_rules() {
 }
 
 #[test]
+fn session_capture_download_records_artifacts() {
+    let mut session = Session::new(SessionConfig::default()).expect("session should build");
+
+    session
+        .capture_download("report.csv", b"downloaded bytes".to_vec())
+        .expect("download capture should succeed");
+
+    assert_eq!(session.mocks().downloads().artifacts().len(), 1);
+    assert_eq!(
+        session.mocks().downloads().artifacts()[0].file_name,
+        "report.csv"
+    );
+    assert_eq!(
+        session.mocks().downloads().artifacts()[0].bytes,
+        b"downloaded bytes".to_vec()
+    );
+}
+
+#[test]
+fn session_rejects_blank_download_names() {
+    let mut session = Session::new(SessionConfig::default()).expect("session should build");
+
+    let error = session
+        .capture_download(" ", b"downloaded bytes".to_vec())
+        .expect_err("blank download names should fail");
+    assert!(
+        error
+            .to_string()
+            .contains("capture_download() requires a non-empty file name")
+    );
+}
+
+#[test]
 fn session_rejects_unseeded_mock_dialogs_and_clipboard_reads() {
     let mut session = Session::new(SessionConfig::default()).expect("session should build");
 

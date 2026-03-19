@@ -27,9 +27,11 @@ Phase 4 adds thin public actions on `Harness` for the mock families that need to
 - `write_clipboard(text)`
 - `navigate(url)`
 - `set_files(selector, files)`
+- `capture_download(file_name, bytes)`
 
 The typed registry is still the source of truth for seeds and capture.
 Use `Harness::mocks_mut()` to configure the family, then call the matching action on `Harness`.
+Download capture records `DownloadCapture` artifacts in the registry and exposes them through `downloads().artifacts()`.
 
 ## Minimal Example
 
@@ -54,6 +56,7 @@ fn main() -> browser_tester_next::Result<()> {
     assert_eq!(harness.read_clipboard()?, "copied text");
     harness.write_clipboard("copied text")?;
     harness.set_files("#upload", ["report.csv"])?;
+    harness.capture_download("report.csv", b"downloaded bytes".to_vec())?;
     harness.navigate("https://app.local/next")?;
 
     assert_eq!(harness.mocks_mut().fetch().calls().len(), 1);
@@ -62,6 +65,11 @@ fn main() -> browser_tester_next::Result<()> {
     assert_eq!(harness.mocks_mut().clipboard().writes().len(), 1);
     assert_eq!(harness.mocks_mut().location().navigations().len(), 1);
     assert_eq!(harness.mocks_mut().file_input().selections().len(), 1);
+    {
+        let downloads = harness.mocks_mut().downloads();
+        assert_eq!(downloads.artifacts().len(), 1);
+        assert_eq!(downloads.artifacts()[0].bytes, b"downloaded bytes".to_vec());
+    }
     Ok(())
 }
 ```
@@ -93,6 +101,13 @@ fn main() -> browser_tester_next::Result<()> {
         .to_string()
         .contains("clipboard text has not been seeded"));
 
+    let download_error = harness
+        .capture_download(" ", b"downloaded bytes".to_vec())
+        .expect_err("blank download names should fail");
+    assert!(download_error
+        .to_string()
+        .contains("capture_download() requires a non-empty file name"));
+
     Ok(())
 }
 ```
@@ -112,7 +127,7 @@ Examples:
 - `dialogs`: queued confirm/prompt answers, alert capture, and call-message capture
 - `clipboard`: seeded read state and write capture
 - `location`: current URL seed and navigation capture
-- `downloads`: artifact capture through the registry
+- `downloads`: artifact capture through the registry and `Harness::capture_download(...)`
 - `file_input`: file selection seed and capture
 
 ## Why the Registry Shape Matters

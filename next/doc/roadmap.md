@@ -77,6 +77,7 @@ Delivered in this workspace:
 - clipboard
 - location mock
 - file input mock
+- download capture
 
 Exit criteria:
 
@@ -84,7 +85,7 @@ Exit criteria:
 
 ## Phase 5: Hardening
 
-Planned work:
+Delivered in this workspace:
 
 - public contract tests
 - subsystem tests
@@ -92,6 +93,7 @@ Planned work:
 - property tests
 - documentation polish
 - publish checklist
+- quick and hardening test profiles
 
 Exit criteria:
 

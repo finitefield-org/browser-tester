@@ -16,7 +16,8 @@ Current status:
 - Phase 1 DOM parsing, selector subset support, `assert_exists`, and debug DOM dumps are implemented
 - Phase 2 inline script bootstrapping, `document.getElementById(...).textContent = ...`, and listener registration are implemented
 - Phase 3 event dispatch, ancestor bubbling, cancelable click default actions, form controls, `click`, `type_text`, `set_checked`, `set_select_value`, `focus`, `blur`, `submit`, `dispatch`, `assert_value`, and `assert_checked` are implemented
-- Phase 4 fake clock hardening, microtask semantics, and runtime mock wiring for fetch, dialogs, clipboard, location, and file input are implemented
+- Phase 4 fake clock hardening, microtask semantics, and runtime mock wiring for fetch, dialogs, clipboard, location, file input, and download capture are implemented
+- Phase 5 hardening adds contract tests, subsystem tests, regression coverage, property tests, and a publication checklist
 
 Workspace layout:
 
@@ -85,7 +86,14 @@ fn main() -> browser_tester_next::Result<()> {
     assert_eq!(harness.read_clipboard()?, "seeded");
 
     harness.set_files("#upload", ["report.csv"])?;
+    harness.capture_download("report.csv", b"downloaded bytes".to_vec())?;
     harness.navigate("https://app.local/next")?;
+    {
+        let downloads = harness.mocks_mut().downloads();
+        assert_eq!(downloads.artifacts().len(), 1);
+        assert_eq!(downloads.artifacts()[0].file_name, "report.csv");
+        assert_eq!(downloads.artifacts()[0].bytes, b"downloaded bytes".to_vec());
+    }
     Ok(())
 }
 ```
@@ -96,6 +104,7 @@ Design docs:
 - [Capability Matrix](doc/capability-matrix.md)
 - [Implementation Guide](doc/implementation-guide.md)
 - [Mock Guide](doc/mock-guide.md)
+- [Publication Checklist](doc/publish-checklist.md)
 - [Limitations](doc/limitations.md)
 - [Subsystem Map](doc/subsystem-map.md)
 - [Roadmap](doc/roadmap.md)

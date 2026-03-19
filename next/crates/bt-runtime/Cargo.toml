@@ -13,3 +13,5 @@ path = "src/lib.rs"
 bt-dom = { path = "../bt-dom" }
 bt-script = { path = "../bt-script" }
 
+[dev-dependencies]
+proptest = "1"

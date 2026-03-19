@@ -106,6 +106,7 @@ State lives in `Session`, and subsystem crates own their internal data.
 - fake clock hardening
 - microtask semantics
 - fetch, clipboard, dialog, location, and file-input mocks
+- download capture
 
 ### Phase 5
 
@@ -113,8 +114,10 @@ State lives in `Session`, and subsystem crates own their internal data.
 - regression suite
 - property tests
 - publication checklist
+- quick and hardening test profiles
 
 ## Current Implementation Notes
 
 The workspace now includes Phase 1 DOM parsing, selector support, `assert_exists`, and debug DOM dumps, plus Phase 2 inline script bootstrapping with minimal host bindings and listener capture, and Phase 3 event dispatch with ancestor bubbling, cancelable default actions, form controls, and the `focus`/`blur`/`set_select_value` public actions.
-Phase 4 fake clock hardening, microtask semantics, and deterministic mock wiring are implemented in `next/`; download capture remains registry-only for now.
+Phase 4 fake clock hardening, microtask semantics, and deterministic mock wiring are implemented in `next/`, including public download capture.
+Phase 5 hardening adds contract coverage, subsystem coverage, regression tests, property tests, quick and hardening test profiles, and a publication checklist.

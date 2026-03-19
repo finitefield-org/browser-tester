@@ -77,6 +77,9 @@ fn storage_seed_registry_is_available_through_the_mock_view() {
 
     {
         let mut mocks = harness.mocks_mut();
+        mocks
+            .downloads()
+            .capture("report.csv", b"downloaded bytes".to_vec());
         let storage = mocks.storage();
         storage.seed_local("token", "abc");
         storage.seed_session("session-token", "xyz");
@@ -94,4 +97,5 @@ fn storage_seed_registry_is_available_through_the_mock_view() {
     harness.mocks_mut().reset_all();
     assert!(harness.mocks_mut().storage().local().is_empty());
     assert!(harness.mocks_mut().storage().session().is_empty());
+    assert!(harness.mocks_mut().downloads().artifacts().is_empty());
 }

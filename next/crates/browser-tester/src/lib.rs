@@ -299,6 +299,12 @@ impl Harness {
         Ok(())
     }
 
+    pub fn capture_download(&mut self, file_name: &str, bytes: impl Into<Vec<u8>>) -> Result<()> {
+        self.session
+            .capture_download(file_name, bytes)
+            .map_err(map_session_error)
+    }
+
     pub fn fetch(&mut self, url: &str) -> Result<FetchResponse> {
         self.session.fetch(url).map_err(map_session_error)
     }

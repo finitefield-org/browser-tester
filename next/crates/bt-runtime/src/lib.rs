@@ -801,6 +801,23 @@ impl Session {
         clipboard.seed_text(text.to_string());
     }
 
+    pub fn capture_download(
+        &mut self,
+        file_name: &str,
+        bytes: impl Into<Vec<u8>>,
+    ) -> Result<(), SessionError> {
+        if file_name.trim().is_empty() {
+            return Err(SessionError::Mock(
+                "capture_download() requires a non-empty file name".to_string(),
+            ));
+        }
+
+        self.mocks
+            .downloads_mut()
+            .capture(file_name.to_string(), bytes);
+        Ok(())
+    }
+
     pub fn fetch(&mut self, url: &str) -> Result<FetchResponse, SessionError> {
         let url = url.trim();
         if url.is_empty() {
