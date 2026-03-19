@@ -56,17 +56,29 @@ fn adjacent_sibling_combinators_work_end_to_end() -> browser_tester_next::Result
 }
 
 #[test]
-fn sibling_combinators_still_fail_explicitly() -> browser_tester_next::Result<()> {
+fn general_sibling_combinators_work_end_to_end() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::from_html(
+        "<main><button id='first' class='primary'>First</button>text<button id='second' class='primary'>Second</button>text<button id='third' class='primary'>Third</button><div id='out'></div><script>document.getElementById('second').addEventListener('click', () => { document.getElementById('out').textContent = 'clicked'; });</script></main>",
+    )?;
+
+    harness.assert_exists("#first ~ .primary")?;
+    harness.click("#first ~ .primary")?;
+    harness.assert_text("#out", "clicked")?;
+    Ok(())
+}
+
+#[test]
+fn pseudo_class_selectors_still_fail_explicitly() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html("<main><span class='primary'></span></main>")?;
 
     let error = harness
-        .assert_exists("main ~ .primary")
-        .expect_err("general sibling combinators are not part of the selector slices");
+        .assert_exists("main:first-child")
+        .expect_err("pseudo-class selectors are not part of the selector slices");
 
     let message = error.to_string();
     assert!(message.contains("Selector error"));
     assert!(
-        message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, and child combinators like `A > B`")
+        message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`")
     );
     Ok(())
 }

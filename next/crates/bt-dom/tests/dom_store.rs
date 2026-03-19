@@ -51,15 +51,15 @@ fn malformed_html_is_reported_explicitly() {
 }
 
 #[test]
-fn unsupported_combinator_syntax_fails_explicitly() {
+fn unsupported_pseudo_class_syntax_fails_explicitly() {
     let mut store = DomStore::new_empty();
     store.bootstrap_html("<main class='app'></main>").unwrap();
 
     let error = store
-        .select("main ~ .app")
-        .expect_err("general sibling combinators are not supported yet");
+        .select("main:first-child")
+        .expect_err("pseudo-classes are not supported yet");
     assert!(
-        error.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, and child combinators like `A > B`")
+        error.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`")
     );
 }
 
@@ -83,6 +83,28 @@ fn adjacent_sibling_combinators_match_immediate_previous_element_siblings() {
 }
 
 #[test]
+fn general_sibling_combinators_match_later_element_siblings() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main><button id='first' class='primary'>First</button>text<button id='second' class='primary'>Second</button>text<button id='third' class='primary'>Third</button></main>",
+        )
+        .expect("HTML should parse");
+
+    let second_id = store.select("#second").unwrap()[0];
+    let third_id = store.select("#third").unwrap()[0];
+
+    assert_eq!(
+        store.select("#first ~ .primary").unwrap(),
+        vec![second_id, third_id]
+    );
+    assert_eq!(
+        store.select(".primary ~ .primary").unwrap(),
+        vec![second_id, third_id]
+    );
+}
+
+#[test]
 fn class_and_compound_selectors_match_in_document_order() {
     let mut store = DomStore::new_empty();
     store
@@ -100,6 +122,28 @@ fn class_and_compound_selectors_match_in_document_order() {
         vec![save_id, cancel_id]
     );
     assert_eq!(store.select("#save.primary").unwrap(), vec![save_id]);
+}
+
+#[test]
+fn selector_lists_match_in_document_order_and_deduplicate() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root' class='primary'>root</main><div id='secondary' class='primary'>secondary</div>",
+        )
+        .expect("HTML should parse");
+
+    let root_id = store.select("#root").unwrap()[0];
+    let secondary_id = store.select("#secondary").unwrap()[0];
+
+    assert_eq!(
+        store.select("main, .primary").unwrap(),
+        vec![root_id, secondary_id]
+    );
+    assert_eq!(
+        store.select(".primary, main").unwrap(),
+        vec![root_id, secondary_id]
+    );
 }
 
 #[test]

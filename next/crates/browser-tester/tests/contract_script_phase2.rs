@@ -29,11 +29,11 @@ fn missing_element_access_reports_a_script_error() {
 #[test]
 fn unsupported_script_syntax_reports_explicitly() {
     let error = Harness::from_html(
-        "<main id='out'></main><script>document.querySelectorAll('#out').textContent = 'Hello';</script>",
+        "<main id='out'></main><script>document.querySelectorAll('#out').forEach(() => {});</script>",
     )
     .expect_err("unsupported syntax should fail");
 
     let message = error.to_string();
     assert!(message.contains("Script error"));
-    assert!(message.contains("unsupported Document method: querySelectorAll"));
+    assert!(message.contains("unsupported NodeList method: forEach"));
 }

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use super::DomIndexes;
@@ -28,6 +29,7 @@ enum SelectorCombinator {
     Descendant,
     Child,
     AdjacentSibling,
+    GeneralSibling,
 }
 
 impl DomStore {
@@ -48,8 +50,8 @@ impl DomStore {
             return Err("selector must not be empty".to_string());
         }
 
-        let chain = Self::parse_selector_chain(selector)?;
-        Ok(self.select_by_chain(&chain))
+        let chains = Self::parse_selector_list(selector)?;
+        Ok(self.select_by_selector_chains(&chains))
     }
 
     pub fn dump_dom(&self) -> String {
@@ -683,6 +685,27 @@ impl DomStore {
         results
     }
 
+    fn select_by_selector_chains(&self, chains: &[SelectorChain]) -> Vec<NodeId> {
+        match chains {
+            [] => Vec::new(),
+            [single] => self.select_by_chain(single),
+            _ => {
+                let mut matched = BTreeSet::new();
+                for chain in chains {
+                    matched.extend(self.select_by_chain(chain));
+                }
+
+                self.nodes
+                    .iter()
+                    .filter_map(|node| match &node.kind {
+                        NodeKind::Element(_) if matched.contains(&node.id) => Some(node.id),
+                        _ => None,
+                    })
+                    .collect()
+            }
+        }
+    }
+
     fn selector_candidates(&self, query: &SelectorQuery) -> Vec<NodeId> {
         if let Some(id) = query.id.as_ref() {
             return self.indexes.id_index.get(id).copied().into_iter().collect();
@@ -756,6 +779,21 @@ impl DomStore {
                     return false;
                 };
                 self.matches_selector_chain_part(previous_sibling, parts, relations, index - 1)
+            }
+            SelectorCombinator::GeneralSibling => {
+                let mut sibling = self.previous_element_sibling_of(node_id);
+                while let Some(previous_sibling) = sibling {
+                    if self.matches_selector_chain_part(
+                        previous_sibling,
+                        parts,
+                        relations,
+                        index - 1,
+                    ) {
+                        return true;
+                    }
+                    sibling = self.previous_element_sibling_of(previous_sibling);
+                }
+                false
             }
             SelectorCombinator::Descendant => {
                 let mut ancestor = self.parent_of(node_id);
@@ -838,6 +876,10 @@ impl DomStore {
                     pos += 1;
                     SelectorCombinator::AdjacentSibling
                 }
+                b'~' => {
+                    pos += 1;
+                    SelectorCombinator::GeneralSibling
+                }
                 byte if is_selector_combinator_byte(byte) => {
                     return Err(selector_not_supported(selector));
                 }
@@ -860,6 +902,25 @@ impl DomStore {
         }
 
         Ok(SelectorChain { parts, relations })
+    }
+
+    fn parse_selector_list(selector: &str) -> Result<Vec<SelectorChain>, String> {
+        let mut chains = Vec::new();
+
+        for item in selector.split(',') {
+            let item = item.trim();
+            if item.is_empty() {
+                return Err(selector_not_supported(selector));
+            }
+
+            chains.push(Self::parse_selector_chain(item)?);
+        }
+
+        if chains.is_empty() {
+            return Err(selector_not_supported(selector));
+        }
+
+        Ok(chains)
     }
 
     fn parse_selector_compound(selector: &str, pos: &mut usize) -> Result<SelectorQuery, String> {
@@ -1026,7 +1087,7 @@ impl DomStore {
 
 fn selector_not_supported(selector: &str) -> String {
     format!(
-        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, and child combinators like `A > B`"
+        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`"
     )
 }
 

@@ -33,6 +33,7 @@ fn as_string(value: &Value) -> String {
         }
         Value::String(value) => value.clone(),
         Value::Element(_) => "[object Element]".to_string(),
+        Value::NodeList(_) => "[object NodeList]".to_string(),
         Value::Document => "[object Document]".to_string(),
         Value::Window => "[object Window]".to_string(),
         Value::Event(_) => "[object Event]".to_string(),
@@ -91,6 +92,9 @@ fn eval_assignment<H: HostBindings>(
                 }
                 (Value::Element(_), _) => Err(ScriptError::new(format!(
                     "unsupported assignment target on element: {property}"
+                ))),
+                (Value::NodeList(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on node list value"
                 ))),
                 (Value::Document, "title") => Err(ScriptError::phase_not_ready("document.title")),
                 (Value::Window, "title") => Err(ScriptError::phase_not_ready("window.title")),
@@ -199,6 +203,7 @@ fn eval_member<H: HostBindings>(
         Value::Event(event) if property == "eventPhase" => {
             Ok(Value::Number(event.event_phase() as u8 as f64))
         }
+        Value::NodeList(nodes) if property == "length" => Ok(Value::Number(nodes.len() as f64)),
         Value::Element(_) => Err(unsupported_member_access(property, "element")),
         Value::Document => Err(unsupported_member_access(property, "document")),
         Value::Window => Err(unsupported_member_access(property, "window")),
@@ -207,6 +212,7 @@ fn eval_member<H: HostBindings>(
         Value::Boolean(_) => Err(unsupported_member_access(property, "boolean")),
         Value::Null | Value::Undefined => Err(unsupported_member_access(property, "nullish")),
         Value::Event(_) => Err(unsupported_member_access(property, "event")),
+        Value::NodeList(_) => Err(unsupported_member_access(property, "node list")),
         Value::Function(_) => Err(unsupported_member_access(property, "function")),
     }
 }
@@ -273,6 +279,9 @@ fn eval_method_call<H: HostBindings>(
                 Ok(Value::Element(element))
             }
             "querySelector" => query_selector(QuerySelectorTarget::Document, args, env, host),
+            "querySelectorAll" => {
+                query_selector_all(QuerySelectorTarget::Document, args, env, host)
+            }
             "addEventListener" => register_listener(ListenerTarget::Document, args, env, host),
             other => Err(ScriptError::new(format!(
                 "unsupported Document method: {other}"
@@ -288,6 +297,9 @@ fn eval_method_call<H: HostBindings>(
         Value::Element(element) => match method {
             "querySelector" => {
                 query_selector(QuerySelectorTarget::Element(element), args, env, host)
+            }
+            "querySelectorAll" => {
+                query_selector_all(QuerySelectorTarget::Element(element), args, env, host)
             }
             "matches" => element_matches(element, args, env, host),
             "closest" => element_closest(element, args, env, host),
@@ -313,6 +325,12 @@ fn eval_method_call<H: HostBindings>(
             }
             other => Err(ScriptError::new(format!(
                 "unsupported Event method: {other}"
+            ))),
+        },
+        Value::NodeList(nodes) => match method {
+            "item" => node_list_item(&nodes, args, env, host),
+            other => Err(ScriptError::new(format!(
+                "unsupported NodeList method: {other}"
             ))),
         },
         Value::String(_) => Err(ScriptError::new(format!(
@@ -389,6 +407,29 @@ fn query_selector<H: HostBindings>(
     Ok(match_handle.map(Value::Element).unwrap_or(Value::Null))
 }
 
+fn query_selector_all<H: HostBindings>(
+    target: QuerySelectorTarget,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [selector_expr] = args else {
+        return Err(ScriptError::new(
+            "querySelectorAll() expects exactly one argument",
+        ));
+    };
+
+    let selector = as_string(&eval_expr(selector_expr, env, host)?);
+    let matches = match target {
+        QuerySelectorTarget::Document => host.document_query_selector_all(&selector)?,
+        QuerySelectorTarget::Element(element) => {
+            host.element_query_selector_all(element, &selector)?
+        }
+    };
+
+    Ok(Value::NodeList(matches))
+}
+
 fn element_matches<H: HostBindings>(
     element: crate::ElementHandle,
     args: &[Expr],
@@ -419,6 +460,30 @@ fn element_closest<H: HostBindings>(
     Ok(match_handle.map(Value::Element).unwrap_or(Value::Null))
 }
 
+fn node_list_item<H: HostBindings>(
+    nodes: &[crate::ElementHandle],
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [index_expr] = args else {
+        return Err(ScriptError::new(
+            "NodeList.item() expects exactly one argument",
+        ));
+    };
+
+    let index_value = eval_expr(index_expr, env, host)?;
+    let Some(index) = index_from_value(&index_value) else {
+        return Ok(Value::Null);
+    };
+
+    Ok(nodes
+        .get(index)
+        .copied()
+        .map(Value::Element)
+        .unwrap_or(Value::Null))
+}
+
 fn eval_add(left: Value, right: Value) -> Value {
     match (left, right) {
         (Value::Number(lhs), Value::Number(rhs)) => Value::Number(lhs + rhs),
@@ -433,10 +498,21 @@ fn is_truthy(value: &Value) -> bool {
         Value::Number(value) => *value != 0.0,
         Value::String(value) => !value.is_empty(),
         Value::Element(_)
+        | Value::NodeList(_)
         | Value::Document
         | Value::Window
         | Value::Function(_)
         | Value::Event(_) => true,
+    }
+}
+
+fn index_from_value(value: &Value) -> Option<usize> {
+    match value {
+        Value::Number(number) if number.is_finite() && *number >= 0.0 && number.fract() == 0.0 => {
+            Some(*number as usize)
+        }
+        Value::String(value) => value.parse::<usize>().ok(),
+        _ => None,
     }
 }
 

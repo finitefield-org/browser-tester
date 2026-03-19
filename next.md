@@ -1009,7 +1009,8 @@ README は次だけを書く。
 
 - この workspace では Phase 0 から Phase 6 まで完了済み
 - Phase 7 の script DOM query expansion は slice 1 の `querySelector`、slice 2 の `matches`、slice 3 の `closest`、slice 4 の selector hardening まで実装済み
-- 追加の selector backlog slice として adjacent sibling combinators (`A + B`) も実装済み
+- 追加の selector backlog slices として sibling combinators (`A + B`, `A ~ B`) も実装済み
+- 追加の selector / collection backlog slice として `querySelectorAll` と minimal `NodeList`、selector lists も実装済み
 
 ## Phase 6: Selector Expansion
 
@@ -1073,14 +1074,22 @@ README は次だけを書く。
    - miss は `null`
 4. selector hardening and regression coverage（完了）
    - unsupported selector syntax remains explicit
-   - `querySelectorAll` / NodeList / broader CSS parsing are out of scope for this phase
+5. `querySelectorAll(selector)` and minimal `NodeList`（post-Phase-7 backlog slice, 完了）
+   - document / element scoped collection lookup
+   - `length` と `item(index)`
+   - HTMLCollection は deferred
+6. selector lists (`A, B`)（post-Phase-7 selector slice, 完了）
+   - document / element scoped lookup accepts comma-separated selector lists
+   - results are document-order and deduplicated
+   - pseudo-classes and broader CSS parsing remain deferred
 
 完了条件:
 
-- inline scripts and listeners can use `document.querySelector(...)`, `element.querySelector(...)`, `Element.matches(...)`, and `Element.closest(...)` without a new public `Harness` method
+- inline scripts and listeners can use `document.querySelector(...)`, `element.querySelector(...)`, `Element.matches(...)`, `Element.closest(...)`, and `querySelectorAll(...)` without a new public `Harness` method
 - missing matches are `null`, not hard errors
 - selector grammar stays bounded and deterministic
 - unsupported syntax continues to fail explicitly
+- `querySelectorAll` returns a minimal `NodeList` snapshot with `length` and `item()`
 - docs, contract tests, and regression tests agree
 
 残り:
@@ -1097,7 +1106,7 @@ README は次だけを書く。
 4. 実装は owning subsystem に閉じる
 5. 既存 API で足りない場合だけ `Harness` に公開する
 6. 公開面が変わる変更では README / capability matrix / mock guide も同じ変更で更新する
-- adjacent sibling combinators (`A + B`) は既に実装済みで、general sibling combinators (`A ~ B`) は backlog のままにする
+- `querySelectorAll` と minimal `NodeList` は既に実装済みで、selector lists も実装済み、`HTMLCollection` は backlog のままにする
 
 新しい named phase を切る条件:
 

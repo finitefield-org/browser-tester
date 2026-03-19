@@ -1207,12 +1207,26 @@ impl Session {
         scope: Option<NodeId>,
         selector: &str,
     ) -> Result<Option<ElementHandle>, ScriptError> {
+        Ok(self
+            .query_selector_handles(scope, selector)?
+            .into_iter()
+            .next())
+    }
+
+    fn query_selector_handles(
+        &self,
+        scope: Option<NodeId>,
+        selector: &str,
+    ) -> Result<Vec<ElementHandle>, ScriptError> {
         let matches = self.dom.select(selector).map_err(ScriptError::new)?;
-        let selected = matches.into_iter().find(|node_id| match scope {
-            None => true,
-            Some(scope_id) => self.is_descendant_of(*node_id, scope_id),
-        });
-        Ok(selected.map(Self::node_id_to_handle))
+        Ok(matches
+            .into_iter()
+            .filter(|node_id| match scope {
+                None => true,
+                Some(scope_id) => self.is_descendant_of(*node_id, scope_id),
+            })
+            .map(Self::node_id_to_handle)
+            .collect())
     }
 
     fn element_matches_selector(
@@ -1315,6 +1329,13 @@ impl HostBindings for Session {
         self.query_selector_handle(None, selector)
     }
 
+    fn document_query_selector_all(
+        &mut self,
+        selector: &str,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.query_selector_handles(None, selector)
+    }
+
     fn element_text_content(&mut self, element: ElementHandle) -> bt_script::Result<String> {
         let node_id = self.node_id_for_handle(element)?;
         let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
@@ -1383,6 +1404,15 @@ impl HostBindings for Session {
     ) -> bt_script::Result<Option<ElementHandle>> {
         let node_id = self.node_id_for_handle(element)?;
         self.query_selector_handle(Some(node_id), selector)
+    }
+
+    fn element_query_selector_all(
+        &mut self,
+        element: ElementHandle,
+        selector: &str,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.query_selector_handles(Some(node_id), selector)
     }
 
     fn element_matches(

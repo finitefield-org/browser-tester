@@ -18,6 +18,17 @@ fn from_html_builds_dom_and_supports_phase_one_selectors() -> browser_tester_nex
 }
 
 #[test]
+fn selector_lists_work_with_public_assert_exists() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root' class='primary'>root</main><div class='primary'>inside</div>",
+    )?;
+
+    harness.assert_exists("main, .primary")?;
+    harness.assert_exists(".primary, main")?;
+    Ok(())
+}
+
+#[test]
 fn assert_exists_reports_missing_nodes_with_dom_dump() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html("<main id='app'></main>")?;
 
@@ -45,13 +56,13 @@ fn malformed_html_is_rejected_with_a_parse_error() {
 fn unsupported_selector_syntax_is_reported_explicitly() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html("<main><span class='app'></span></main>")?;
     let error = harness
-        .assert_exists("main ~ .app")
-        .expect_err("general sibling combinators are not part of the selector slices");
+        .assert_exists("main:first-child")
+        .expect_err("pseudo-classes are not part of the selector slices");
 
     let message = error.to_string();
     assert!(message.contains("Selector error"));
     assert!(
-        message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, and child combinators like `A > B`")
+        message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`")
     );
     Ok(())
 }

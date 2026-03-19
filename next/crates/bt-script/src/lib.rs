@@ -155,6 +155,7 @@ pub enum ScriptValue {
     Number(f64),
     String(String),
     Element(ElementHandle),
+    NodeList(Vec<ElementHandle>),
     Document,
     Window,
     Event(ScriptEventHandle),
@@ -226,6 +227,10 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("document.querySelector"))
     }
 
+    fn document_query_selector_all(&mut self, _selector: &str) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("document.querySelectorAll"))
+    }
+
     fn element_text_content(&mut self, _element: ElementHandle) -> Result<String> {
         Err(ScriptError::phase_not_ready("element.textContent"))
     }
@@ -258,6 +263,14 @@ pub trait HostBindings {
         _selector: &str,
     ) -> Result<Option<ElementHandle>> {
         Err(ScriptError::phase_not_ready("element.querySelector"))
+    }
+
+    fn element_query_selector_all(
+        &mut self,
+        _element: ElementHandle,
+        _selector: &str,
+    ) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("element.querySelectorAll"))
     }
 
     fn element_matches(&mut self, _element: ElementHandle, _selector: &str) -> Result<bool> {

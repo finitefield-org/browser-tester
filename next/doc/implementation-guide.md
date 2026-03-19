@@ -1,6 +1,6 @@
 # Implementation Guide
 
-This document explains how to actually build out the `next/` rewrite from its current Phase 6-complete baseline with Phase 7 slices 1 through 4 already delivered, plus an adjacent sibling selector backlog slice (`A + B`).
+This document explains how to actually build out the `next/` rewrite from its current Phase 6-complete baseline with Phase 7 slices 1 through 4 already delivered, plus sibling selector backlog slices (`A + B`, `A ~ B`), selector lists (`A, B`), and a post-Phase-7 collection slice for `querySelectorAll` / minimal `NodeList`.
 
 Use it together with:
 
@@ -36,7 +36,7 @@ The safest way to turn the Phase 0 skeleton into a usable runtime is:
 
 This order keeps the public facade thin and avoids implementing user actions before the DOM and selector layers are trustworthy.
 
-Slices 1 through 7 are already implemented in this workspace, including public download capture. Phase 6 selector expansion slices 1 through 4, covering class selectors, compound simple selectors, descendant combinators, child combinators, and selector hardening, are also implemented in this workspace. A post-Phase-7 selector slice adds adjacent sibling combinators (`A + B`) through the same bounded engine. Phase 7 script DOM query slices 1 through 4 (`document.querySelector`, `element.querySelector`, `Element.matches`, `Element.closest`, and selector hardening) are implemented as well; keep `querySelectorAll`, collection types, and general sibling combinators out of scope for this workspace.
+Slices 1 through 7 are already implemented in this workspace, including public download capture. Phase 6 selector expansion slices 1 through 4, covering class selectors, compound simple selectors, descendant combinators, child combinators, and selector hardening, are also implemented in this workspace. A post-Phase-7 selector slice adds sibling combinators (`A + B`, `A ~ B`) and selector lists (`A, B`) through the same bounded engine. Phase 7 script DOM query slices 1 through 4 (`document.querySelector`, `element.querySelector`, `Element.matches`, `Element.closest`, and selector hardening) are implemented as well. A post-Phase-7 collection slice adds `querySelectorAll` with minimal `NodeList` support; keep `HTMLCollection` and broader collection APIs out of scope for this workspace.
 
 ## First Vertical Slices
 
@@ -228,6 +228,8 @@ Suggested scope:
 - descendant combinators (`A B`)
 - child combinators (`A > B`)
 - adjacent sibling combinators (`A + B`)
+- general sibling combinators (`A ~ B`)
+- selector lists (`A, B`)
 - explicit failures for unsupported selector syntax
 
 Tests already in place:
@@ -236,15 +238,15 @@ Tests already in place:
 - descendant combinators resolve nested nodes
 - child combinators match only direct children
 - adjacent sibling combinators match the immediate previous element sibling
+- general sibling combinators match later element siblings in document order
+- selector lists preserve document order and deduplicate results
 - public `Harness` actions and assertions continue to resolve selectors deterministically
 - selector hardening remains explicit for unsupported syntax
 
 Do not add yet:
 
 - pseudo-classes
-- selector lists
 - attribute value operators beyond the bounded slice
-- general sibling combinators
 - general CSS parsing
 
 ### Slice 9: Script DOM Query Expansion
@@ -282,16 +284,50 @@ Tests already in place:
 - subtree-scoped lookup works in inline scripts
 - current-element selector checks work in inline scripts
 - ancestor-walk selector checks work in inline scripts
+- selector lists work in inline scripts
 - unsupported selector syntax remains explicit
 - null-on-miss behavior is preserved
 - invalid selector syntax fails explicitly
 
 Do not add yet:
 
-- `querySelectorAll`
-- NodeList / HTMLCollection
+- `HTMLCollection`
 - broad CSS parsing
 - unrelated DOM mutation APIs
+
+### Slice 10: Query Selector Collections
+
+Goal:
+
+- make `querySelectorAll` available in inline scripts through a minimal collection surface
+
+Primary owners:
+
+- `bt-script`
+- `bt-runtime`
+
+Delivered in this workspace:
+
+- `document.querySelectorAll(selector)`
+- `element.querySelectorAll(selector)`
+- `NodeList.length`
+- `NodeList.item(index)`
+- document-order snapshot results
+- subtree-scoped lookup
+- `null` on missing item
+
+Tests already in place:
+
+- document-scoped collection lookup works in inline scripts
+- subtree-scoped collection lookup works in inline scripts
+- selector list inputs work in inline scripts
+- NodeList length and item access work in inline scripts
+- unsupported NodeList methods fail explicitly
+
+Do not add yet:
+
+- `HTMLCollection`
+- broader collection APIs
 
 ## Decision Flow for Each Change
 

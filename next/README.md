@@ -13,12 +13,12 @@ Current status:
 
 - a compilable Rust workspace exists under `next/crates/`
 - `HarnessBuilder`, `Session`, `DomStore`, scheduler, mock registry, and error taxonomy are in place
-- Phase 1 DOM parsing, selector subset support, Phase 6 selector expansion slices 1 through 4, and adjacent sibling selectors (`A + B`) are implemented
+- Phase 1 DOM parsing, selector subset support, Phase 6 selector expansion slices 1 through 4, and sibling selectors (`A + B`, `A ~ B`) are implemented
 - Phase 2 inline script bootstrapping, `document.getElementById(...).textContent = ...`, and listener registration are implemented
 - Phase 3 event dispatch, ancestor bubbling, cancelable click default actions, form controls, `click`, `type_text`, `set_checked`, `set_select_value`, `focus`, `blur`, `submit`, `dispatch`, `assert_value`, and `assert_checked` are implemented
 - Phase 4 fake clock hardening, microtask semantics, and runtime mock wiring for fetch, dialogs, clipboard, location, file input, and download capture are implemented
 - Phase 5 hardening adds contract tests, subsystem tests, regression coverage, property tests, and a publication checklist
-- Phase 7 script DOM query slices 1 through 4, `document.querySelector(...)`, `element.querySelector(...)`, `Element.matches(...)`, `Element.closest(...)`, and selector hardening are implemented; `querySelectorAll` and general sibling selectors (`A ~ B`) are still deferred
+- Phase 7 script DOM query slices 1 through 4, selector lists, `document.querySelector(...)`, `element.querySelector(...)`, `Element.matches(...)`, `Element.closest(...)`, and selector hardening are implemented; `querySelectorAll` with minimal `NodeList` support is implemented, while `HTMLCollection` remains deferred
 
 Workspace layout:
 

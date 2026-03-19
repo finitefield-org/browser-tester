@@ -11,6 +11,36 @@ fn script_dom_query_selectors_work_end_to_end() -> browser_tester_next::Result<(
 }
 
 #[test]
+fn script_dom_query_selector_all_works_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root' class='primary'>root<section><div class='primary'>inside</div></section></main><div id='out'></div><script>const all = document.querySelectorAll('.primary'); const scoped = document.getElementById('root').querySelectorAll('.primary'); document.getElementById('out').textContent = String(all.length) + ':' + all.item(0).textContent + ':' + all.item(1).textContent + ':' + String(all.item(2)) + ':' + String(scoped.length) + ':' + scoped.item(0).textContent;</script>",
+    )?;
+
+    harness.assert_text("#out", "2:rootinside:inside:null:1:inside")?;
+    Ok(())
+}
+
+#[test]
+fn script_dom_selector_lists_work_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root' class='primary'>root</main><div class='primary'>inside</div><div id='out'></div><script>const first = document.querySelector('.primary, main'); const all = document.querySelectorAll('.primary, main'); document.getElementById('out').textContent = first.textContent + ':' + String(all.length) + ':' + all.item(0).textContent + ':' + all.item(1).textContent;</script>",
+    )?;
+
+    harness.assert_text("#out", "root:2:root:inside")?;
+    Ok(())
+}
+
+#[test]
+fn script_general_sibling_selectors_work_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main><button id='first' class='primary'>First</button>text<button id='second' class='primary'>Second</button><div id='out'></div><script>const sibling = document.querySelector('#first ~ .primary'); const second = document.getElementById('second'); document.getElementById('out').textContent = sibling.textContent + ':' + String(second.matches('#first ~ .primary'));</script></main>",
+    )?;
+
+    harness.assert_text("#out", "Second:true")?;
+    Ok(())
+}
+
+#[test]
 fn script_element_matches_works_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root' class='primary'><section><div id='child' class='child'></div></section></main><div id='out'></div><script>const root = document.getElementById('root'); const child = document.getElementById('child'); document.getElementById('out').textContent = String(root.matches('.primary')) + ':' + String(root.matches('.child')) + ':' + String(child.matches('.child'));</script>",
@@ -31,37 +61,37 @@ fn script_element_closest_works_end_to_end() -> browser_tester_next::Result<()> 
 }
 
 #[test]
-fn unsupported_script_selector_methods_fail_explicitly() {
+fn unsupported_node_list_methods_fail_explicitly() {
     let error = Harness::from_html(
-        "<main id='out'></main><script>document.querySelectorAll('#out').textContent = 'Hello';</script>",
+        "<main id='out'></main><script>document.querySelectorAll('#out').forEach(() => {});</script>",
     )
     .expect_err("unsupported selector methods should fail");
 
     let message = error.to_string();
     assert!(message.contains("Script error"));
-    assert!(message.contains("unsupported Document method: querySelectorAll"));
+    assert!(message.contains("unsupported NodeList method: forEach"));
 }
 
 #[test]
 fn unsupported_element_matches_selector_fails_explicitly() {
     let error = Harness::from_html(
-        "<main id='root' class='primary'></main><script>document.getElementById('root').matches('main ~ .primary');</script>",
+        "<main id='root' class='primary'></main><script>document.getElementById('root').matches('main:first-child');</script>",
     )
     .expect_err("unsupported selector syntax should fail");
 
     let message = error.to_string();
     assert!(message.contains("Script error"));
-    assert!(message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, and child combinators like `A > B`"));
+    assert!(message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`"));
 }
 
 #[test]
 fn unsupported_element_closest_selector_fails_explicitly() {
     let error = Harness::from_html(
-        "<main id='root' class='primary'></main><script>document.getElementById('root').closest('main ~ .primary');</script>",
+        "<main id='root' class='primary'></main><script>document.getElementById('root').closest('main:first-child');</script>",
     )
     .expect_err("unsupported selector syntax should fail");
 
     let message = error.to_string();
     assert!(message.contains("Script error"));
-    assert!(message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, and child combinators like `A > B`"));
+    assert!(message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`"));
 }

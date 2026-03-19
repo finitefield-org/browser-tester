@@ -7,7 +7,7 @@ For day-to-day implementation sequencing inside each phase, also see [implementa
 Status note:
 
 - Phases 0 through 6 are complete in this workspace.
-- Phase 7 is complete in this workspace; slices 1 through 4 are delivered, adjacent sibling selectors (`A + B`) are also delivered as a backlog slice, and future selector work should stay backlog-driven.
+- Phase 7 is complete in this workspace; slices 1 through 4 are delivered, sibling selectors (`A + B`, `A ~ B`) and selector lists (`A, B`) are also delivered as backlog slices, and a post-Phase-7 collection slice adds `querySelectorAll` with minimal `NodeList` support. Future selector work should stay backlog-driven.
 
 ## Phase 0: Skeleton
 
@@ -145,10 +145,15 @@ Delivered slices 1 through 4:
 - `Element.closest(...)`
   - self-inclusive ancestor walk, `null` on miss
 
-Planned slices:
+Post-Phase-7 slice:
 
-- selector hardening
-  - explicit failures for unsupported selector syntax, with `querySelectorAll` and collection types deferred
+- query selector collections
+  - `querySelectorAll` with minimal `NodeList` support
+  - `length` and `item()` only
+- selector lists
+  - comma-separated selector lists are available through the same bounded engine
+  - document-order union and deduplication
+  - `HTMLCollection` and broader collection APIs deferred
 
 Exit criteria:
 
@@ -162,7 +167,7 @@ Exit criteria:
 Operating rule:
 
 - future selector work should stay backlog-driven and narrow
-- `querySelectorAll` and collection types remain deferred
+- `querySelectorAll` with minimal `NodeList` support is available, selector lists are also available through the bounded engine, while `HTMLCollection` and broader collection APIs remain deferred
 
 ## After Phase 7: Rolling Capability Delivery
 

@@ -21,10 +21,14 @@ struct RecordingHost {
     values: BTreeMap<ElementHandle, String>,
     checked: BTreeMap<ElementHandle, bool>,
     document_query_selector_results: BTreeMap<String, Option<ElementHandle>>,
+    document_query_selector_all_results: BTreeMap<String, Vec<ElementHandle>>,
     element_query_selector_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
+    element_query_selector_all_results: BTreeMap<(ElementHandle, String), Vec<ElementHandle>>,
     element_closest_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
     document_query_selector_calls: Vec<String>,
+    document_query_selector_all_calls: Vec<String>,
     element_query_selector_calls: Vec<(ElementHandle, String)>,
+    element_query_selector_all_calls: Vec<(ElementHandle, String)>,
     element_closest_calls: Vec<(ElementHandle, String)>,
     element_matches_results: BTreeMap<(ElementHandle, String), bool>,
     element_matches_calls: Vec<(ElementHandle, String)>,
@@ -60,6 +64,15 @@ impl RecordingHost {
             .insert(selector.into(), result);
     }
 
+    fn seed_document_query_selector_all(
+        &mut self,
+        selector: impl Into<String>,
+        result: Vec<ElementHandle>,
+    ) {
+        self.document_query_selector_all_results
+            .insert(selector.into(), result);
+    }
+
     fn seed_element_query_selector(
         &mut self,
         element: ElementHandle,
@@ -67,6 +80,16 @@ impl RecordingHost {
         result: Option<ElementHandle>,
     ) {
         self.element_query_selector_results
+            .insert((element, selector.into()), result);
+    }
+
+    fn seed_element_query_selector_all(
+        &mut self,
+        element: ElementHandle,
+        selector: impl Into<String>,
+        result: Vec<ElementHandle>,
+    ) {
+        self.element_query_selector_all_results
             .insert((element, selector.into()), result);
     }
 
@@ -149,6 +172,19 @@ impl HostBindings for RecordingHost {
             .flatten())
     }
 
+    fn document_query_selector_all(
+        &mut self,
+        selector: &str,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.document_query_selector_all_calls
+            .push(selector.to_string());
+        Ok(self
+            .document_query_selector_all_results
+            .get(selector)
+            .cloned()
+            .unwrap_or_default())
+    }
+
     fn element_query_selector(
         &mut self,
         element: ElementHandle,
@@ -161,6 +197,20 @@ impl HostBindings for RecordingHost {
             .get(&(element, selector.to_string()))
             .copied()
             .flatten())
+    }
+
+    fn element_query_selector_all(
+        &mut self,
+        element: ElementHandle,
+        selector: &str,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.element_query_selector_all_calls
+            .push((element, selector.to_string()));
+        Ok(self
+            .element_query_selector_all_results
+            .get(&(element, selector.to_string()))
+            .cloned()
+            .unwrap_or_default())
     }
 
     fn element_matches(
@@ -371,6 +421,48 @@ fn runtime_resolves_query_selector_and_null_miss() {
 }
 
 #[test]
+fn runtime_resolves_query_selector_all_and_collection_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "root");
+    host.seed_element("first", ElementHandle::new(2), "first");
+    host.seed_element("out", ElementHandle::new(4), "");
+
+    host.seed_document_query_selector_all(
+        ".primary",
+        vec![ElementHandle::new(1), ElementHandle::new(2)],
+    );
+    host.seed_element_query_selector_all(
+        ElementHandle::new(1),
+        ".primary",
+        vec![ElementHandle::new(2)],
+    );
+
+    runtime
+        .eval_program(
+            "const all = document.querySelectorAll('.primary'); const scoped = document.getElementById('root').querySelectorAll('.primary'); document.getElementById('out').textContent = String(all.length) + ':' + all.item(0).textContent + ':' + all.item(1).textContent + ':' + String(all.item(2)) + ':' + String(scoped.length);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("querySelectorAll should resolve");
+
+    assert_eq!(
+        host.document_query_selector_all_calls,
+        vec![".primary".to_string()]
+    );
+    assert_eq!(
+        host.element_query_selector_all_calls,
+        vec![(ElementHandle::new(1), ".primary".to_string())]
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("2:root:first:null:1")
+    );
+}
+
+#[test]
 fn runtime_resolves_element_matches_for_current_element_only() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -479,15 +571,15 @@ fn runtime_reports_unsupported_syntax_explicitly() {
 
     let error = runtime
         .eval_program(
-            "document.querySelectorAll('#out').textContent = 'Hello';",
+            "document.querySelectorAll('#out').forEach(() => {});",
             "inline-script",
             &mut host,
         )
-        .expect_err("querySelectorAll should not be supported yet");
+        .expect_err("unsupported node list methods should fail");
 
     assert!(
         error
             .to_string()
-            .contains("unsupported Document method: querySelectorAll")
+            .contains("unsupported NodeList method: forEach")
     );
 }
