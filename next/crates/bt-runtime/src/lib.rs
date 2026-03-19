@@ -795,7 +795,7 @@ impl Session {
             if element.tag_name == "script" {
                 if element.attributes.contains_key("src") {
                     return Err(SessionError::Script(ScriptError::new(
-                        "external <script src=...> tags are not supported in Phase 2",
+                        "external <script src=...> tags are not supported in this workspace yet",
                     )));
                 }
 

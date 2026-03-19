@@ -2,6 +2,4 @@
 # Each entry should have an active split plan and should be removed once the
 # file drops back to the configured limit.
 
-src/core_impl/runtime/runtime_exec/json_regex_number/number_format_float16.rs
-src/core_impl/runtime/runtime_platform/script_runtime/catch_scope_analysis.rs
 src/js_regex.rs

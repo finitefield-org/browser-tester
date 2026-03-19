@@ -1,6 +1,6 @@
 # Limitations
 
-The `next/` workspace has reached Phase 2 for DOM and script core.
+The `next/` workspace has reached Phase 3 for DOM, script, events, and forms.
 
 What exists today:
 
@@ -12,20 +12,21 @@ What exists today:
 - `assert_exists` and DOM dump helpers
 - inline `<script>` bootstrapping with a minimal script parser/evaluator
 - listener registration through the script host seam
+- target-phase event dispatch and form-control state updates
+- `click`, `type_text`, `set_checked`, `submit`, `dispatch`, `assert_value`, and `assert_checked`
 - explicit mock families and debug hooks
 
 What does not exist yet:
 
-- event propagation
-- default actions
-- form-control behavior
+- event propagation beyond target phase
+- cancelable default actions and richer event lifecycle semantics
 - realistic timer and microtask execution
 - broader selector support beyond the Phase 1 subset
 
 ## Important Consequence
 
-Public methods such as `click`, `type_text`, `focus`, `dispatch`, `assert_text`, `assert_value`, `assert_checked`, and `set_select_value` are present only as explicit placeholders.
-They return a clear "planned for later phase" error instead of pretending to work partially.
+Public methods such as `focus`, `blur`, and `set_select_value` are still explicit placeholders.
+They return a clear "planned for a later phase" error instead of pretending to work partially.
 
 ## Still Out of Scope
 

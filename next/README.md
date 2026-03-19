@@ -15,7 +15,8 @@ Current status:
 - `HarnessBuilder`, `Session`, `DomStore`, scheduler, mock registry, and error taxonomy are in place
 - Phase 1 DOM parsing, selector subset support, `assert_exists`, and debug DOM dumps are implemented
 - Phase 2 inline script bootstrapping, `document.getElementById(...).textContent = ...`, and listener registration are implemented
-- event dispatch, forms, and the wider action surface are still gated for later phases
+- Phase 3 event dispatch, form controls, `click`, `type_text`, `set_checked`, `submit`, `dispatch`, `assert_value`, and `assert_checked` are implemented
+- `focus`, `blur`, and `set_select_value` are still gated, and event propagation is still target-phase only
 
 Workspace layout:
 
@@ -44,21 +45,21 @@ cd next
 cargo test
 ```
 
-Minimal Phase 2 example:
+Minimal Phase 3 example:
 
 ```rust
 use browser_tester_next::Harness;
 
 fn main() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
-        "<main id='app'></main><script>document.getElementById('app').textContent = 'Hello';</script>",
+        "<form id='profile'><input id='name'><input id='agree' type='checkbox'><button id='submit' type='submit'>Save</button></form><div id='out'></div><script>document.getElementById('profile').addEventListener('submit', () => { document.getElementById('out').textContent = document.getElementById('name').value + ':' + String(document.getElementById('agree').checked); });</script>",
     )?;
 
-    harness.assert_exists("#app")?;
-    assert_eq!(
-        harness.debug().dump_dom(),
-        "#document\n  <main id=\"app\">\n    \"Hello\"\n  </main>\n  <script>\n    \"document.getElementById('app').textContent = 'Hello';\"\n  </script>"
-    );
+    harness.type_text("#name", "Alice")?;
+    harness.click("#agree")?;
+    harness.click("#submit")?;
+    harness.assert_checked("#agree", true)?;
+    harness.assert_text("#out", "Alice:true")?;
     Ok(())
 }
 ```

@@ -1,6 +1,6 @@
 # Implementation Guide
 
-This document explains how to actually build out the `next/` rewrite from its current Phase 2 baseline.
+This document explains how to actually build out the `next/` rewrite from its current Phase 3 baseline.
 
 Use it together with:
 
@@ -36,7 +36,7 @@ The safest way to turn the Phase 0 skeleton into a usable runtime is:
 
 This order keeps the public facade thin and avoids implementing user actions before the DOM and selector layers are trustworthy.
 
-Slices 1 through 4 are already implemented in this workspace; use the same vertical-slice pattern for later phases.
+Slices 1 through 6 are already implemented in this workspace; use the same vertical-slice pattern for later phases.
 
 ## First Vertical Slices
 

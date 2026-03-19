@@ -54,12 +54,13 @@ Exit criteria:
 
 ## Phase 3: Events and Forms
 
-Planned work:
+Delivered in this workspace:
 
-- event dispatch
-- default action registry
-- form controls
-- `click`, `type_text`, `set_checked`, `submit`
+- target-phase event dispatch
+- default action registry for checkbox toggles and submit buttons
+- form controls for text input, textarea, and checkbox state
+- `click`, `type_text`, `set_checked`, `submit`, `dispatch`
+- `assert_value` and `assert_checked`
 
 Exit criteria:
 
