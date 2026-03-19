@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::fmt;
 
-use bt_dom::{DomStore, NodeId, NodeKind};
+use bt_dom::{DomStore, ElementData, NodeId, NodeKind};
 use bt_script::{
-    ElementHandle, EventPhase, HostBindings, ListenerTarget, ScriptError, ScriptEventHandle,
-    ScriptFunction, ScriptRuntime, ScriptValue,
+    ElementHandle, EventPhase, HostBindings, HtmlCollectionScope, HtmlCollectionTarget,
+    ListenerTarget, ScriptError, ScriptEventHandle, ScriptFunction, ScriptRuntime, ScriptValue,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1261,6 +1261,185 @@ impl Session {
         Ok(None)
     }
 
+    fn collection_root_for_scope(
+        &self,
+        scope: &HtmlCollectionScope,
+    ) -> Result<NodeId, ScriptError> {
+        match scope {
+            HtmlCollectionScope::Document => Ok(self.dom.document_id()),
+            HtmlCollectionScope::Element(element) => self.node_id_for_handle(*element),
+        }
+    }
+
+    fn collect_descendant_elements_matching<F>(
+        &self,
+        node_id: NodeId,
+        collected: &mut Vec<NodeId>,
+        matches: &F,
+    ) where
+        F: Fn(&ElementData) -> bool,
+    {
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return;
+        };
+
+        for child in &node.children {
+            self.collect_descendant_elements_matching_inner(*child, collected, matches);
+        }
+    }
+
+    fn collect_descendant_elements_matching_inner<F>(
+        &self,
+        node_id: NodeId,
+        collected: &mut Vec<NodeId>,
+        matches: &F,
+    ) where
+        F: Fn(&ElementData) -> bool,
+    {
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return;
+        };
+
+        if let NodeKind::Element(element) = &node.kind {
+            if matches(element) {
+                collected.push(node_id);
+            }
+        }
+
+        for child in &node.children {
+            self.collect_descendant_elements_matching_inner(*child, collected, matches);
+        }
+    }
+
+    fn elements_by_tag_name(
+        &self,
+        scope: &HtmlCollectionScope,
+        tag_name: &str,
+    ) -> Result<Vec<ElementHandle>, ScriptError> {
+        let root = self.collection_root_for_scope(scope)?;
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| tag_name == "*" || element.tag_name.eq_ignore_ascii_case(tag_name),
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn named_item_for_tag_name_collection(
+        &self,
+        scope: &HtmlCollectionScope,
+        tag_name: &str,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let root = self.collection_root_for_scope(scope)?;
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| tag_name == "*" || element.tag_name.eq_ignore_ascii_case(tag_name),
+        );
+        Ok(self.first_named_item_in_nodes(&collected, name))
+    }
+
+    fn elements_by_class_name(
+        &self,
+        scope: &HtmlCollectionScope,
+        class_names: &str,
+    ) -> Result<Vec<ElementHandle>, ScriptError> {
+        let class_tokens = Self::ordered_class_names(class_names);
+        if class_tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let root = self.collection_root_for_scope(scope)?;
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(root, &mut collected, &|element: &ElementData| {
+            let Some(value) = element.attributes.get("class") else {
+                return false;
+            };
+
+            class_tokens.iter().all(|class_name| {
+                value
+                    .split_ascii_whitespace()
+                    .any(|candidate| candidate == class_name)
+            })
+        });
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn named_item_for_class_name_collection(
+        &self,
+        scope: &HtmlCollectionScope,
+        class_names: &str,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let class_tokens = Self::ordered_class_names(class_names);
+        if class_tokens.is_empty() {
+            return Ok(None);
+        }
+
+        let root = self.collection_root_for_scope(scope)?;
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(root, &mut collected, &|element: &ElementData| {
+            let Some(value) = element.attributes.get("class") else {
+                return false;
+            };
+
+            class_tokens.iter().all(|class_name| {
+                value
+                    .split_ascii_whitespace()
+                    .any(|candidate| candidate == class_name)
+            })
+        });
+        Ok(self.first_named_item_in_nodes(&collected, name))
+    }
+
+    fn elements_by_name(&self, name: &str) -> Result<Vec<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(root, &mut collected, &|element: &ElementData| {
+            element
+                .attributes
+                .get("name")
+                .is_some_and(|value| value == name)
+        });
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn first_named_item_in_nodes(&self, collected: &[NodeId], name: &str) -> Option<ElementHandle> {
+        for node_id in collected {
+            let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+                continue;
+            };
+            let NodeKind::Element(element) = &node.kind else {
+                continue;
+            };
+
+            if element
+                .attributes
+                .get("id")
+                .is_some_and(|value| value == name)
+                || element
+                    .attributes
+                    .get("name")
+                    .is_some_and(|value| value == name)
+            {
+                return Some(Self::node_id_to_handle(*node_id));
+            }
+        }
+
+        None
+    }
+
+    fn ordered_class_names(class_names: &str) -> Vec<String> {
+        class_names
+            .split_ascii_whitespace()
+            .filter(|class_name| !class_name.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
     fn is_descendant_of(&self, node_id: NodeId, ancestor_id: NodeId) -> bool {
         let mut current = self
             .dom
@@ -1336,6 +1515,76 @@ impl HostBindings for Session {
         self.query_selector_handles(None, selector)
     }
 
+    fn document_get_elements_by_name(&mut self, name: &str) -> bt_script::Result<Vec<ElementHandle>> {
+        self.elements_by_name(name)
+    }
+
+    fn html_collection_tag_name_items(
+        &mut self,
+        collection: HtmlCollectionTarget,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        match collection {
+            HtmlCollectionTarget::Children(element) => self.element_children(element),
+            HtmlCollectionTarget::ByTagName { scope, tag_name } => {
+                self.elements_by_tag_name(&scope, &tag_name)
+            }
+            HtmlCollectionTarget::ByClassName { scope, class_names } => {
+                self.elements_by_class_name(&scope, &class_names)
+            }
+        }
+    }
+
+    fn html_collection_tag_name_named_item(
+        &mut self,
+        collection: HtmlCollectionTarget,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        match collection {
+            HtmlCollectionTarget::Children(element) => {
+                self.html_collection_named_item(element, name)
+            }
+            HtmlCollectionTarget::ByTagName { scope, tag_name } => {
+                self.named_item_for_tag_name_collection(&scope, &tag_name, name)
+            }
+            HtmlCollectionTarget::ByClassName { scope, class_names } => {
+                self.named_item_for_class_name_collection(&scope, &class_names, name)
+            }
+        }
+    }
+
+    fn html_collection_class_name_items(
+        &mut self,
+        collection: HtmlCollectionTarget,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        match collection {
+            HtmlCollectionTarget::Children(element) => self.element_children(element),
+            HtmlCollectionTarget::ByTagName { scope, tag_name } => {
+                self.elements_by_tag_name(&scope, &tag_name)
+            }
+            HtmlCollectionTarget::ByClassName { scope, class_names } => {
+                self.elements_by_class_name(&scope, &class_names)
+            }
+        }
+    }
+
+    fn html_collection_class_name_named_item(
+        &mut self,
+        collection: HtmlCollectionTarget,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        match collection {
+            HtmlCollectionTarget::Children(element) => {
+                self.html_collection_named_item(element, name)
+            }
+            HtmlCollectionTarget::ByTagName { scope, tag_name } => {
+                self.named_item_for_tag_name_collection(&scope, &tag_name, name)
+            }
+            HtmlCollectionTarget::ByClassName { scope, class_names } => {
+                self.named_item_for_class_name_collection(&scope, &class_names, name)
+            }
+        }
+    }
+
     fn element_text_content(&mut self, element: ElementHandle) -> bt_script::Result<String> {
         let node_id = self.node_id_for_handle(element)?;
         let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
@@ -1372,6 +1621,67 @@ impl HostBindings for Session {
             | NodeKind::Text(_)
             | NodeKind::Comment(_) => Ok(self.dom.value_for_node(node_id)),
         }
+    }
+
+    fn element_children(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        let node_id = self.node_id_for_handle(element)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let children = node
+            .children
+            .iter()
+            .copied()
+            .filter(|child_id| {
+                matches!(
+                    self.dom
+                        .nodes()
+                        .get(child_id.index() as usize)
+                        .map(|node| &node.kind),
+                    Some(NodeKind::Element(_))
+                )
+            })
+            .map(Self::node_id_to_handle)
+            .collect();
+
+        Ok(children)
+    }
+
+    fn html_collection_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        let node_id = self.node_id_for_handle(element)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        for child_id in &node.children {
+            let Some(child) = self.dom.nodes().get(child_id.index() as usize) else {
+                continue;
+            };
+            let NodeKind::Element(element) = &child.kind else {
+                continue;
+            };
+            if element
+                .attributes
+                .get("id")
+                .is_some_and(|value| value == name)
+                || element
+                    .attributes
+                    .get("name")
+                    .is_some_and(|value| value == name)
+            {
+                return Ok(Some(Self::node_id_to_handle(*child_id)));
+            }
+        }
+
+        Ok(None)
     }
 
     fn element_set_value(&mut self, element: ElementHandle, value: &str) -> bt_script::Result<()> {

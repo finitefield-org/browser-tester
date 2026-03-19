@@ -67,19 +67,13 @@ fn simple_pseudo_classes_match_state_and_structure() {
     let mode_id = store.select("#mode").unwrap()[0];
 
     assert_eq!(store.select("#first:first-child").unwrap(), vec![first_id]);
-    assert_eq!(
-        store.select("button:disabled").unwrap(),
-        vec![disabled_id]
-    );
+    assert_eq!(store.select("button:disabled").unwrap(), vec![disabled_id]);
     assert_eq!(
         store.select("button:enabled").unwrap(),
         vec![first_id, enabled_id]
     );
     assert_eq!(store.select("input:checked").unwrap(), vec![agree_id]);
-    assert_eq!(
-        store.select("option:checked").unwrap(),
-        vec![selected_id]
-    );
+    assert_eq!(store.select("option:checked").unwrap(), vec![selected_id]);
     assert_eq!(store.select("select:last-child").unwrap(), vec![mode_id]);
 }
 

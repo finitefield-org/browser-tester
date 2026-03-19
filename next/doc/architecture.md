@@ -44,7 +44,7 @@ Current implementation status:
 - `browser-tester-next` exposes `Harness`, `HarnessBuilder`, the planned error taxonomy, `assert_exists`, and the debug DOM dump view
 - `bt-dom` owns `DomStore`, generational `NodeId`, tree construction, selector subset support, indexes, and side-table skeletons
 - `bt-runtime` owns `Session`, scheduler, deterministic mock registry, and debug state
-- `bt-script` owns `ScriptRuntime` and the host-binding seam
+- `bt-script` owns `ScriptRuntime`, the host-binding seam, and script-visible collection wrappers such as `NodeList` and minimal `HTMLCollection`
 
 ## High-Level Runtime Shape
 
@@ -132,6 +132,7 @@ State lives in `Session`, and subsystem crates own their internal data.
 - `Element.matches`
 - `Element.closest`
 - `querySelectorAll` and minimal `NodeList` support in a post-Phase-7 collection slice
+- `Element.children`, `getElementsByTagName`, `getElementsByClassName`, and `getElementsByName` collection support in post-Phase-7 collection slices
 - selector lists (`A, B`) and simple pseudo-classes through the same bounded selector engine
 
 ## Current Implementation Notes
@@ -140,4 +141,4 @@ The workspace now includes Phase 1 DOM parsing, selector support, `assert_exists
 Phase 4 fake clock hardening, microtask semantics, and deterministic mock wiring are implemented in `next/`, including public download capture.
 Phase 5 hardening adds contract coverage, subsystem coverage, regression tests, property tests, quick and hardening test profiles, and a publication checklist.
 Phase 6 selector expansion is complete; slices 1 through 4 for class selectors, compound simple selectors, descendant combinators, child combinators, and selector hardening are delivered. A backlog slice adds sibling combinators (`A + B`, `A ~ B`) through the same bounded selector engine, and any future selector work should follow the post-Phase-6 backlog-driven slice mode.
-Phase 7 script DOM query expansion is complete for slices 1 through 4; `document.querySelector`, `element.querySelector`, `Element.matches`, `Element.closest`, and selector hardening are implemented. A post-Phase-7 collection slice adds `querySelectorAll` and minimal `NodeList` support, selector lists and simple pseudo-classes are also handled by the same bounded selector engine, and `HTMLCollection` remains out of scope.
+Phase 7 script DOM query expansion is complete for slices 1 through 4; `document.querySelector`, `element.querySelector`, `Element.matches`, `Element.closest`, and selector hardening are implemented. Post-Phase-7 collection slices add `querySelectorAll` and minimal `NodeList` support plus `Element.children`, `getElementsByTagName`, `getElementsByClassName`, and `getElementsByName` collection support, including `namedItem()` where applicable; selector lists and simple pseudo-classes are also handled by the same bounded selector engine, and broader collection APIs remain out of scope.

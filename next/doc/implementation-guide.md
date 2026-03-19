@@ -1,6 +1,6 @@
 # Implementation Guide
 
-This document explains how to actually build out the `next/` rewrite from its current Phase 6-complete baseline with Phase 7 slices 1 through 4 already delivered, plus sibling selector backlog slices (`A + B`, `A ~ B`), selector lists (`A, B`), simple pseudo-classes, and a post-Phase-7 collection slice for `querySelectorAll` / minimal `NodeList`.
+This document explains how to actually build out the `next/` rewrite from its current Phase 6-complete baseline with Phase 7 slices 1 through 4 already delivered, plus sibling selector backlog slices (`A + B`, `A ~ B`), selector lists (`A, B`), simple pseudo-classes, and post-Phase-7 collection slices for `querySelectorAll` / minimal `NodeList`, `Element.children` / minimal `HTMLCollection`, `getElementsByTagName` / live `HTMLCollection`, `getElementsByClassName` / live `HTMLCollection`, and `getElementsByName` / live `NodeList`.
 
 Use it together with:
 
@@ -36,7 +36,7 @@ The safest way to turn the Phase 0 skeleton into a usable runtime is:
 
 This order keeps the public facade thin and avoids implementing user actions before the DOM and selector layers are trustworthy.
 
-Slices 1 through 7 are already implemented in this workspace, including public download capture. Phase 6 selector expansion slices 1 through 4, covering class selectors, compound simple selectors, descendant combinators, child combinators, and selector hardening, are also implemented in this workspace. A post-Phase-7 selector slice adds sibling combinators (`A + B`, `A ~ B`), selector lists (`A, B`), and simple pseudo-classes through the same bounded engine. Phase 7 script DOM query slices 1 through 4 (`document.querySelector`, `element.querySelector`, `Element.matches`, `Element.closest`, and selector hardening) are implemented as well. A post-Phase-7 collection slice adds `querySelectorAll` with minimal `NodeList` support; keep `HTMLCollection` and broader collection APIs out of scope for this workspace.
+Slices 1 through 13 are already implemented in this workspace, including public download capture. Phase 6 selector expansion slices 1 through 4, covering class selectors, compound simple selectors, descendant combinators, child combinators, and selector hardening, are also implemented in this workspace. A post-Phase-7 selector slice adds sibling combinators (`A + B`, `A ~ B`), selector lists (`A, B`), and simple pseudo-classes through the same bounded engine. Phase 7 script DOM query slices 1 through 4 (`document.querySelector`, `element.querySelector`, `Element.matches`, `Element.closest`, and selector hardening) are implemented as well. Post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support, `Element.children` with minimal `HTMLCollection` support, `getElementsByTagName` with live `HTMLCollection` support, `getElementsByClassName` with live `HTMLCollection` support, and `getElementsByName` with live `NodeList` support; keep broader collection APIs out of scope for this workspace.
 
 ## First Vertical Slices
 
@@ -294,7 +294,6 @@ Tests already in place:
 
 Do not add yet:
 
-- `HTMLCollection`
 - broad CSS parsing
 - unrelated DOM mutation APIs
 
@@ -329,7 +328,103 @@ Tests already in place:
 
 Do not add yet:
 
-- `HTMLCollection`
+- broader collection APIs
+
+### Slice 11: Element Children Collections
+
+Goal:
+
+- make `Element.children` available in inline scripts through a minimal live HTMLCollection surface
+
+Primary owners:
+
+- `bt-script`
+- `bt-runtime`
+
+Delivered in this workspace:
+
+- `Element.children`
+- `HTMLCollection.length`
+- `HTMLCollection.item(index)`
+- live child-element collection semantics
+
+Tests already in place:
+
+- child collections reflect DOM mutations in inline scripts
+- `length` and `item()` work in inline scripts
+- `namedItem()` works in inline scripts
+- missing child items return `null`
+- unsupported `HTMLCollection` methods fail explicitly
+
+Do not add yet:
+
+- broader collection APIs
+
+### Slice 12: Tag-name Collections
+
+Goal:
+
+- make `getElementsByTagName` available in inline scripts through a live HTMLCollection surface
+
+Primary owners:
+
+- `bt-script`
+- `bt-runtime`
+
+Delivered in this workspace:
+
+- `document.getElementsByTagName(tagName)`
+- `element.getElementsByTagName(tagName)`
+- live descendant tag-name collection semantics
+- `HTMLCollection.length`
+- `HTMLCollection.item(index)`
+- `HTMLCollection.namedItem(name)`
+
+Tests already in place:
+
+- document-scoped tag-name lookup works in inline scripts
+- element-scoped tag-name lookup works in inline scripts
+- collections stay live after DOM mutations
+- unsupported `HTMLCollection` methods fail explicitly
+
+Do not add yet:
+
+- broader collection APIs
+
+### Slice 13: Class-Name and Name Collections
+
+Goal:
+
+- make `getElementsByClassName` and `getElementsByName` available in inline scripts through minimal live collection surfaces
+
+Primary owners:
+
+- `bt-script`
+- `bt-runtime`
+
+Delivered in this workspace:
+
+- `document.getElementsByClassName(classNames)`
+- `element.getElementsByClassName(classNames)`
+- `document.getElementsByName(name)`
+- live descendant class-name collection semantics
+- live name-based `NodeList` semantics
+- `HTMLCollection.length`
+- `HTMLCollection.item(index)`
+- `HTMLCollection.namedItem(name)`
+- `NodeList.length`
+- `NodeList.item(index)`
+
+Tests already in place:
+
+- class-name collections reflect DOM mutations in inline scripts
+- name-based node lists reflect DOM mutations in inline scripts
+- `length`, `item()`, and `namedItem()` work for class-name collections
+- `length` and `item()` work for name-based node lists
+- unsupported `Element.getElementsByName` fails explicitly
+
+Do not add yet:
+
 - broader collection APIs
 
 ## Decision Flow for Each Change

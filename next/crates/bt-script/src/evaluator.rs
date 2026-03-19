@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 
 use crate::syntax::{AssignTarget, Expr, Program, Statement};
-use crate::{HostBindings, ListenerTarget, Result, ScriptError, ScriptValue as Value};
+use crate::{
+    HostBindings, HtmlCollectionScope, HtmlCollectionTarget, ListenerTarget, NodeListTarget,
+    Result, ScriptError, ScriptValue as Value,
+};
 
 pub(crate) fn eval_program<H: HostBindings>(program: &Program, host: &mut H) -> Result<()> {
     eval_program_with_bindings(program, host, BTreeMap::new())
@@ -33,6 +36,7 @@ fn as_string(value: &Value) -> String {
         }
         Value::String(value) => value.clone(),
         Value::Element(_) => "[object Element]".to_string(),
+        Value::HtmlCollection(_) => "[object HTMLCollection]".to_string(),
         Value::NodeList(_) => "[object NodeList]".to_string(),
         Value::Document => "[object Document]".to_string(),
         Value::Window => "[object Window]".to_string(),
@@ -95,6 +99,9 @@ fn eval_assignment<H: HostBindings>(
                 ))),
                 (Value::NodeList(_), property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on node list value"
+                ))),
+                (Value::HtmlCollection(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on html collection value"
                 ))),
                 (Value::Document, "title") => Err(ScriptError::phase_not_ready("document.title")),
                 (Value::Window, "title") => Err(ScriptError::phase_not_ready("window.title")),
@@ -187,6 +194,9 @@ fn eval_member<H: HostBindings>(
         Value::Element(element) if property == "checked" => {
             Ok(Value::Boolean(host.element_checked(element)?))
         }
+        Value::Element(element) if property == "children" => Ok(Value::HtmlCollection(
+            HtmlCollectionTarget::Children(element),
+        )),
         Value::Event(event) if property == "type" => Ok(Value::String(event.event_type())),
         Value::Event(event) if property == "target" => {
             Ok(value_for_listener_target(event.target()))
@@ -203,7 +213,14 @@ fn eval_member<H: HostBindings>(
         Value::Event(event) if property == "eventPhase" => {
             Ok(Value::Number(event.event_phase() as u8 as f64))
         }
-        Value::NodeList(nodes) if property == "length" => Ok(Value::Number(nodes.len() as f64)),
+        Value::HtmlCollection(collection) if property == "length" => {
+            let length = html_collection_items(&collection, host)?.len();
+            Ok(Value::Number(length as f64))
+        }
+        Value::NodeList(target) if property == "length" => {
+            let length = node_list_items(&target, host)?.len();
+            Ok(Value::Number(length as f64))
+        }
         Value::Element(_) => Err(unsupported_member_access(property, "element")),
         Value::Document => Err(unsupported_member_access(property, "document")),
         Value::Window => Err(unsupported_member_access(property, "window")),
@@ -212,6 +229,7 @@ fn eval_member<H: HostBindings>(
         Value::Boolean(_) => Err(unsupported_member_access(property, "boolean")),
         Value::Null | Value::Undefined => Err(unsupported_member_access(property, "nullish")),
         Value::Event(_) => Err(unsupported_member_access(property, "event")),
+        Value::HtmlCollection(_) => Err(unsupported_member_access(property, "html collection")),
         Value::NodeList(_) => Err(unsupported_member_access(property, "node list")),
         Value::Function(_) => Err(unsupported_member_access(property, "function")),
     }
@@ -282,6 +300,13 @@ fn eval_method_call<H: HostBindings>(
             "querySelectorAll" => {
                 query_selector_all(QuerySelectorTarget::Document, args, env, host)
             }
+            "getElementsByTagName" => {
+                get_elements_by_tag_name(HtmlCollectionScope::Document, args, env, host)
+            }
+            "getElementsByClassName" => {
+                get_elements_by_class_name(HtmlCollectionScope::Document, args, env, host)
+            }
+            "getElementsByName" => get_elements_by_name(args, env, host),
             "addEventListener" => register_listener(ListenerTarget::Document, args, env, host),
             other => Err(ScriptError::new(format!(
                 "unsupported Document method: {other}"
@@ -300,6 +325,12 @@ fn eval_method_call<H: HostBindings>(
             }
             "querySelectorAll" => {
                 query_selector_all(QuerySelectorTarget::Element(element), args, env, host)
+            }
+            "getElementsByTagName" => {
+                get_elements_by_tag_name(HtmlCollectionScope::Element(element), args, env, host)
+            }
+            "getElementsByClassName" => {
+                get_elements_by_class_name(HtmlCollectionScope::Element(element), args, env, host)
             }
             "matches" => element_matches(element, args, env, host),
             "closest" => element_closest(element, args, env, host),
@@ -327,8 +358,15 @@ fn eval_method_call<H: HostBindings>(
                 "unsupported Event method: {other}"
             ))),
         },
-        Value::NodeList(nodes) => match method {
-            "item" => node_list_item(&nodes, args, env, host),
+        Value::HtmlCollection(collection) => match method {
+            "item" => html_collection_item(&collection, args, env, host),
+            "namedItem" => html_collection_named_item(&collection, args, env, host),
+            other => Err(ScriptError::new(format!(
+                "unsupported HTMLCollection method: {other}"
+            ))),
+        },
+        Value::NodeList(target) => match method {
+            "item" => node_list_item(&target, args, env, host),
             other => Err(ScriptError::new(format!(
                 "unsupported NodeList method: {other}"
             ))),
@@ -427,7 +465,60 @@ fn query_selector_all<H: HostBindings>(
         }
     };
 
-    Ok(Value::NodeList(matches))
+    Ok(Value::NodeList(NodeListTarget::Snapshot(matches)))
+}
+
+fn get_elements_by_tag_name<H: HostBindings>(
+    scope: HtmlCollectionScope,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [tag_expr] = args else {
+        return Err(ScriptError::new(
+            "getElementsByTagName() expects exactly one argument",
+        ));
+    };
+
+    let tag_name = as_string(&eval_expr(tag_expr, env, host)?);
+    Ok(Value::HtmlCollection(HtmlCollectionTarget::ByTagName {
+        scope,
+        tag_name,
+    }))
+}
+
+fn get_elements_by_class_name<H: HostBindings>(
+    scope: HtmlCollectionScope,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [class_expr] = args else {
+        return Err(ScriptError::new(
+            "getElementsByClassName() expects exactly one argument",
+        ));
+    };
+
+    let class_names = as_string(&eval_expr(class_expr, env, host)?);
+    Ok(Value::HtmlCollection(HtmlCollectionTarget::ByClassName {
+        scope,
+        class_names,
+    }))
+}
+
+fn get_elements_by_name<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [name_expr] = args else {
+        return Err(ScriptError::new(
+            "getElementsByName() expects exactly one argument",
+        ));
+    };
+
+    let name = as_string(&eval_expr(name_expr, env, host)?);
+    Ok(Value::NodeList(NodeListTarget::ByName(name)))
 }
 
 fn element_matches<H: HostBindings>(
@@ -461,7 +552,7 @@ fn element_closest<H: HostBindings>(
 }
 
 fn node_list_item<H: HostBindings>(
-    nodes: &[crate::ElementHandle],
+    target: &NodeListTarget,
     args: &[Expr],
     env: &mut BTreeMap<String, Value>,
     host: &mut H,
@@ -477,11 +568,96 @@ fn node_list_item<H: HostBindings>(
         return Ok(Value::Null);
     };
 
-    Ok(nodes
+    Ok(node_list_items(target, host)?
         .get(index)
         .copied()
         .map(Value::Element)
         .unwrap_or(Value::Null))
+}
+
+fn html_collection_item<H: HostBindings>(
+    collection: &HtmlCollectionTarget,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [index_expr] = args else {
+        return Err(ScriptError::new(
+            "HTMLCollection.item() expects exactly one argument",
+        ));
+    };
+
+    let index_value = eval_expr(index_expr, env, host)?;
+    let Some(index) = index_from_value(&index_value) else {
+        return Ok(Value::Null);
+    };
+
+    let items = html_collection_items(collection, host)?;
+
+    Ok(items
+        .get(index)
+        .copied()
+        .map(Value::Element)
+        .unwrap_or(Value::Null))
+}
+
+fn html_collection_named_item<H: HostBindings>(
+    collection: &HtmlCollectionTarget,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [name_expr] = args else {
+        return Err(ScriptError::new(
+            "HTMLCollection.namedItem() expects exactly one argument",
+        ));
+    };
+
+    let name = as_string(&eval_expr(name_expr, env, host)?);
+    let match_handle = html_collection_named_item_handle(collection, &name, host)?;
+
+    Ok(match_handle.map(Value::Element).unwrap_or(Value::Null))
+}
+
+fn html_collection_items<H: HostBindings>(
+    collection: &HtmlCollectionTarget,
+    host: &mut H,
+) -> Result<Vec<crate::ElementHandle>> {
+    match collection {
+        HtmlCollectionTarget::Children(element) => host.element_children(*element),
+        HtmlCollectionTarget::ByTagName { .. } => {
+            host.html_collection_tag_name_items(collection.clone())
+        }
+        HtmlCollectionTarget::ByClassName { .. } => {
+            host.html_collection_class_name_items(collection.clone())
+        }
+    }
+}
+
+fn html_collection_named_item_handle<H: HostBindings>(
+    collection: &HtmlCollectionTarget,
+    name: &str,
+    host: &mut H,
+) -> Result<Option<crate::ElementHandle>> {
+    match collection {
+        HtmlCollectionTarget::Children(element) => host.html_collection_named_item(*element, name),
+        HtmlCollectionTarget::ByTagName { .. } => {
+            host.html_collection_tag_name_named_item(collection.clone(), name)
+        }
+        HtmlCollectionTarget::ByClassName { .. } => {
+            host.html_collection_class_name_named_item(collection.clone(), name)
+        }
+    }
+}
+
+fn node_list_items<H: HostBindings>(
+    target: &NodeListTarget,
+    host: &mut H,
+) -> Result<Vec<crate::ElementHandle>> {
+    match target {
+        NodeListTarget::Snapshot(nodes) => Ok(nodes.clone()),
+        NodeListTarget::ByName(name) => host.document_get_elements_by_name(name),
+    }
 }
 
 fn eval_add(left: Value, right: Value) -> Value {
@@ -498,6 +674,7 @@ fn is_truthy(value: &Value) -> bool {
         Value::Number(value) => *value != 0.0,
         Value::String(value) => !value.is_empty(),
         Value::Element(_)
+        | Value::HtmlCollection(_)
         | Value::NodeList(_)
         | Value::Document
         | Value::Window

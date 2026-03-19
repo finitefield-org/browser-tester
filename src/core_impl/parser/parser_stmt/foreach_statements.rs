@@ -98,6 +98,7 @@ pub(crate) fn parse_array_for_each_stmt(stmt: &str) -> Result<Option<Stmt>> {
     Ok(Some(Stmt::Expr(parse_expr(stmt_no_semi)?)))
 }
 
+#[allow(dead_code)]
 pub(crate) fn parse_array_for_each_callback_arg(
     arg: &str,
     max_params: usize,

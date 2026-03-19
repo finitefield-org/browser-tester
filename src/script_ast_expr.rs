@@ -404,35 +404,43 @@ pub(crate) enum Expr {
         target: String,
         args: Vec<Expr>,
     },
+    #[allow(dead_code)]
     ArrayMap {
         target: String,
         callback: ScriptHandler,
     },
+    #[allow(dead_code)]
     ArrayFilter {
         target: String,
         callback: ScriptHandler,
     },
+    #[allow(dead_code)]
     ArrayReduce {
         target: String,
         callback: ScriptHandler,
         initial: Option<Box<Expr>>,
     },
+    #[allow(dead_code)]
     ArrayForEach {
         target: String,
         callback: ScriptHandler,
     },
+    #[allow(dead_code)]
     ArrayFind {
         target: String,
         callback: ScriptHandler,
     },
+    #[allow(dead_code)]
     ArrayFindIndex {
         target: String,
         callback: ScriptHandler,
     },
+    #[allow(dead_code)]
     ArraySome {
         target: String,
         callback: ScriptHandler,
     },
+    #[allow(dead_code)]
     ArrayEvery {
         target: String,
         callback: ScriptHandler,
@@ -532,6 +540,7 @@ pub(crate) enum Expr {
         value: Box<Expr>,
         index: Option<Box<Expr>>,
     },
+    #[allow(dead_code)]
     StringConcat {
         value: Box<Expr>,
         args: Vec<Expr>,

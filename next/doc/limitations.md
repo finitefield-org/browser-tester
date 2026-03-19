@@ -1,6 +1,6 @@
 # Limitations
 
-The `next/` workspace has reached Phase 4 for DOM, script, events, forms, fake time, and deterministic mock wiring, Phase 5 for hardening and publication checks, Phase 6 selector slices 1 through 4 plus sibling combinators, and Phase 7 script DOM query slices 1 through 4. A post-Phase-7 collection slice adds `querySelectorAll` with minimal `NodeList` support. Selector lists and a small pseudo-class slice are supported by the bounded selector engine; `HTMLCollection` remains pending by design.
+The `next/` workspace has reached Phase 4 for DOM, script, events, forms, fake time, and deterministic mock wiring, Phase 5 for hardening and publication checks, Phase 6 selector slices 1 through 4 plus sibling combinators, and Phase 7 script DOM query slices 1 through 4. Post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support, `Element.children` with minimal `HTMLCollection` support, including `namedItem()`, `getElementsByTagName` with live `HTMLCollection` support, `getElementsByClassName` with live `HTMLCollection` support, and `getElementsByName` with live `NodeList` support. Selector lists and a small pseudo-class slice are supported by the bounded selector engine; broader collection APIs remain deferred by design.
 
 What exists today:
 
@@ -19,13 +19,17 @@ What exists today:
 - quick and hardening test profiles plus a publication checklist
 - script-side `document.querySelector` and `element.querySelector` are available
 - script-side `querySelectorAll` is available with minimal `NodeList` support (`length`, `item`)
+- script-side `Element.children` is available with minimal `HTMLCollection` support (`length`, `item`, `namedItem`)
+- script-side `getElementsByTagName` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
+- script-side `getElementsByClassName` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
+- script-side `getElementsByName` is available with live `NodeList` support (`length`, `item`)
 - script-side `Element.matches` is available
 - script-side `Element.closest` is available
 - selector hardening and regression coverage are available
 
 What does not exist yet:
 
-- script-side selector collections such as `HTMLCollection` and broader collection APIs
+- broader collection APIs such as `getElementsBy*` families
 - broad pseudo-classes such as `:nth-child`, `:not`, and `:is`
 
 ## Important Consequence

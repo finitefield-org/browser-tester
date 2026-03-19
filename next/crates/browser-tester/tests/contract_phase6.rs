@@ -73,7 +73,7 @@ fn pseudo_class_selectors_still_fail_explicitly() -> browser_tester_next::Result
 
     let error = harness
         .assert_exists("main:nth-child(2)")
-        .expect_err("pseudo-class selectors are not part of the selector slices");
+        .expect_err("broad pseudo-class selectors are not part of the selector slices");
 
     let message = error.to_string();
     assert!(message.contains("Selector error"));

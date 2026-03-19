@@ -49,7 +49,6 @@ pub(crate) fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
                 | "charCodeAt"
                 | "codePointAt"
                 | "at"
-                | "concat"
                 | "trim"
                 | "trimStart"
                 | "trimEnd"
@@ -166,19 +165,6 @@ pub(crate) fn parse_string_method_expr(src: &str) -> Result<Option<Expr>> {
                         .map(|arg| parse_expr(arg.trim()))
                         .transpose()?
                         .map(Box::new),
-                }
-            }
-            "concat" => {
-                let mut parsed = Vec::with_capacity(args.len());
-                for arg in args {
-                    if arg.trim().is_empty() {
-                        return Err(Error::ScriptParse("concat argument cannot be empty".into()));
-                    }
-                    parsed.push(parse_expr(arg.trim())?);
-                }
-                Expr::StringConcat {
-                    value: base,
-                    args: parsed,
                 }
             }
             "trim" => {

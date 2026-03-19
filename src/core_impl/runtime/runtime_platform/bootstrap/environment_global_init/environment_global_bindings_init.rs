@@ -715,5 +715,6 @@ impl Harness {
             &navigation,
             &local_storage,
         );
+        let _ = self.cached_function_constructor_value();
     }
 }

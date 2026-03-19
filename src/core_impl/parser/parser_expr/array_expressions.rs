@@ -450,6 +450,7 @@ fn parse_identifier_target_member_call(
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn parse_array_callback_arg(
     arg: &str,
     max_params: usize,

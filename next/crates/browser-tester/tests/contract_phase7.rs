@@ -31,6 +31,56 @@ fn script_dom_selector_lists_work_end_to_end() -> browser_tester_next::Result<()
 }
 
 #[test]
+fn script_html_collection_children_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><span id='first'>First</span><span id='second'>Second</span></main><div id='out'></div><script>const children = document.getElementById('root').children; const before = children.length; document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(children.length) + ':' + String(children.item(0));</script>",
+    )?;
+
+    harness.assert_text("#out", "2:0:null")?;
+    Ok(())
+}
+
+#[test]
+fn script_html_collection_named_item_works_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><span name='alpha'>First</span><span id='second'>Second</span></main><div id='out'></div><script>const children = document.getElementById('root').children; const alpha = children.namedItem('alpha'); const second = children.namedItem('second'); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = alpha.textContent + ':' + second.textContent + ':' + String(children.namedItem('alpha'));</script>",
+    )?;
+
+    harness.assert_text("#out", "First:Second:null")?;
+    Ok(())
+}
+
+#[test]
+fn script_get_elements_by_tag_name_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><span name='alpha'>First</span><span id='second'>Second</span></main><div id='out'></div><script>const all = document.getElementsByTagName('span'); const scoped = document.getElementById('root').getElementsByTagName('span'); const alpha = all.namedItem('alpha'); const second = scoped.namedItem('second'); const before = all.length; const beforeScoped = scoped.length; document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(all.length) + ':' + String(beforeScoped) + ':' + String(scoped.length) + ':' + alpha.textContent + ':' + second.textContent + ':' + String(all.namedItem('alpha'));</script>",
+    )?;
+
+    harness.assert_text("#out", "2:0:2:0:First:Second:null")?;
+    Ok(())
+}
+
+#[test]
+fn script_get_elements_by_class_name_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root' class='alpha'><span name='alpha' class='alpha'>First</span><span id='second' class='alpha'>Second</span></main><div id='out'></div><script>const all = document.getElementsByClassName('alpha'); const scoped = document.getElementById('root').getElementsByClassName('alpha'); const named = all.namedItem('alpha'); const root = all.item(0); const before = all.length; const beforeScoped = scoped.length; document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(all.length) + ':' + String(beforeScoped) + ':' + String(scoped.length) + ':' + named.textContent + ':' + String(scoped.namedItem('alpha')) + ':' + root.textContent;</script>",
+    )?;
+
+    harness.assert_text("#out", "3:1:2:0:First:null:gone")?;
+    Ok(())
+}
+
+#[test]
+fn script_get_elements_by_name_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><span name='alpha'>First</span><span name='alpha'>Second</span></main><div id='out'></div><script>const nodes = document.getElementsByName('alpha'); const first = nodes.item(0); const before = nodes.length; document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(nodes.length) + ':' + first.textContent + ':' + String(nodes.item(1));</script>",
+    )?;
+
+    harness.assert_text("#out", "2:0:First:null")?;
+    Ok(())
+}
+
+#[test]
 fn script_simple_pseudo_classes_work_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main><button id='first' class='primary'>First</button><button id='disabled' class='primary' disabled>Disabled</button><button id='enabled' class='primary'>Enabled</button><input id='agree' type='checkbox' checked><select id='mode'><option value='a'>A</option><option id='selected' value='b' selected>B</option></select><div id='out'></div><script>const first = document.querySelector('#first:first-child'); const disabled = document.querySelector('button:disabled'); const enabled = document.querySelectorAll('button:enabled'); const checked = document.querySelector('input:checked'); const selected = document.querySelector('option:checked'); document.getElementById('out').textContent = first.textContent + ':' + disabled.textContent + ':' + String(enabled.length) + ':' + checked.checked + ':' + selected.textContent;</script></main>",
@@ -80,6 +130,30 @@ fn unsupported_node_list_methods_fail_explicitly() {
     let message = error.to_string();
     assert!(message.contains("Script error"));
     assert!(message.contains("unsupported NodeList method: forEach"));
+}
+
+#[test]
+fn unsupported_html_collection_methods_fail_explicitly() {
+    let error = Harness::from_html(
+        "<main id='root'><span>child</span></main><script>document.getElementById('root').children.forEach(() => {});</script>",
+    )
+    .expect_err("unsupported html collection methods should fail");
+
+    let message = error.to_string();
+    assert!(message.contains("Script error"));
+    assert!(message.contains("unsupported HTMLCollection method: forEach"));
+}
+
+#[test]
+fn unsupported_element_get_elements_by_name_fails_explicitly() {
+    let error = Harness::from_html(
+        "<main id='root'><span name='alpha'>First</span></main><script>document.getElementById('root').getElementsByName('alpha');</script>",
+    )
+    .expect_err("unsupported element method should fail");
+
+    let message = error.to_string();
+    assert!(message.contains("Script error"));
+    assert!(message.contains("unsupported Element method: getElementsByName"));
 }
 
 #[test]

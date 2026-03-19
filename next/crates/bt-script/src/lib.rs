@@ -40,6 +40,31 @@ pub enum ListenerTarget {
     Element(ElementHandle),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum HtmlCollectionScope {
+    Document,
+    Element(ElementHandle),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum HtmlCollectionTarget {
+    Children(ElementHandle),
+    ByTagName {
+        scope: HtmlCollectionScope,
+        tag_name: String,
+    },
+    ByClassName {
+        scope: HtmlCollectionScope,
+        class_names: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum NodeListTarget {
+    Snapshot(Vec<ElementHandle>),
+    ByName(String),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum EventPhase {
@@ -155,7 +180,8 @@ pub enum ScriptValue {
     Number(f64),
     String(String),
     Element(ElementHandle),
-    NodeList(Vec<ElementHandle>),
+    HtmlCollection(HtmlCollectionTarget),
+    NodeList(NodeListTarget),
     Document,
     Window,
     Event(ScriptEventHandle),
@@ -229,6 +255,60 @@ pub trait HostBindings {
 
     fn document_query_selector_all(&mut self, _selector: &str) -> Result<Vec<ElementHandle>> {
         Err(ScriptError::phase_not_ready("document.querySelectorAll"))
+    }
+
+    fn document_get_elements_by_name(&mut self, _name: &str) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("document.getElementsByName"))
+    }
+
+    fn element_children(&mut self, _element: ElementHandle) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("element.children"))
+    }
+
+    fn html_collection_named_item(
+        &mut self,
+        _element: ElementHandle,
+        _name: &str,
+    ) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("HTMLCollection.namedItem"))
+    }
+
+    fn html_collection_tag_name_items(
+        &mut self,
+        _collection: HtmlCollectionTarget,
+    ) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready(
+            "HTMLCollection.getElementsByTagName",
+        ))
+    }
+
+    fn html_collection_tag_name_named_item(
+        &mut self,
+        _collection: HtmlCollectionTarget,
+        _name: &str,
+    ) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready(
+            "HTMLCollection.getElementsByTagName",
+        ))
+    }
+
+    fn html_collection_class_name_items(
+        &mut self,
+        _collection: HtmlCollectionTarget,
+    ) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready(
+            "HTMLCollection.getElementsByClassName",
+        ))
+    }
+
+    fn html_collection_class_name_named_item(
+        &mut self,
+        _collection: HtmlCollectionTarget,
+        _name: &str,
+    ) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready(
+            "HTMLCollection.getElementsByClassName",
+        ))
     }
 
     fn element_text_content(&mut self, _element: ElementHandle) -> Result<String> {

@@ -241,10 +241,12 @@ pub(crate) enum Stmt {
         index_var: Option<String>,
         body: Vec<Stmt>,
     },
+    #[allow(dead_code)]
     ArrayForEach {
         target: String,
         callback: ScriptHandler,
     },
+    #[allow(dead_code)]
     ArrayForEachExpr {
         target: Expr,
         callback: ScriptHandler,
