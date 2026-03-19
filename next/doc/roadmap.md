@@ -4,6 +4,11 @@ This roadmap mirrors the staged plan from [`next.md`](../../next.md) and turns i
 
 For day-to-day implementation sequencing inside each phase, also see [implementation-guide.md](implementation-guide.md).
 
+Status note:
+
+- Phases 0 through 5 are complete in this workspace.
+- Phase 6 is reserved for selector expansion and should stay narrow and slice-based.
+
 ## Phase 0: Skeleton
 
 Delivered in this workspace:
@@ -99,3 +104,42 @@ Exit criteria:
 
 - docs and code agree
 - quick and hardening test profiles both exist
+
+## Phase 6: Selector Expansion
+
+Delivered slice 1:
+
+- class selectors and compound simple selectors
+  - `.class`, `tag.class`, `#id.class`
+  - `DomStore::select`, `assert_exists`, and action resolution now share the selector engine
+
+Planned work:
+
+- descendant combinators
+- child combinators
+- selector hardening and regression coverage
+
+Exit criteria:
+
+- `DomStore::select` resolves the bounded selector set deterministically
+- existing `Harness` assertions and actions work with the new selector forms
+- unsupported syntax still fails explicitly
+- quick and hardening profiles stay green
+
+## After Phase 6: Rolling Capability Delivery
+
+Operating rule:
+
+1. pick one user-visible gap or regression cluster
+2. decide the owning subsystem first
+3. lock the change in with public contract, subsystem, and failure-path tests
+4. implement inside the owning subsystem
+5. expose through `Harness` only if the scenario cannot already be expressed
+6. update public docs in the same change when the supported surface changes
+
+Open a new named phase only when:
+
+- multiple upcoming slices share one cross-cutting milestone
+- that milestone needs its own exit criteria and user-facing status boundary
+
+Until then, keep shipping backlog-driven capability slices under this post-Phase-6 mode.

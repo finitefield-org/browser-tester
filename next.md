@@ -1005,6 +1005,64 @@ README は次だけを書く。
 - README と docs が一致
 - quick CI と nightly hardening が回る
 
+注記:
+
+- この workspace では Phase 0 から Phase 5 まで完了済み
+- 次の named phase は selector expansion に限定した Phase 6
+
+## Phase 6: Selector Expansion
+
+目的:
+
+- Phase 1 subset を超える selector を、既存 `Harness` API から deterministic に使えるようにする
+- 既存の action / assertion / debug path が同じ selector resolver を使い続けられるようにする
+
+担当:
+
+- `bt-dom` が selector parsing / matching / indexes を所有する
+- `browser-tester` は public contract と regression だけを持つ
+
+スライス:
+
+1. class selectors and compound simple selectors（完了）
+   - `.class`, `tag.class`, `#id.class`
+   - tests: `DomStore::select`, `assert_exists`, action resolution
+2. descendant combinators（planned）
+   - `A B`
+   - tests: nested DOM matching and document-order behavior
+3. child combinators（planned）
+   - `A > B`
+   - tests: direct-child matching and false-positive avoidance
+4. selector hardening（planned）
+   - unsupported selector syntax remains explicit
+   - tests: `click`, `type_text`, `set_checked`, `set_select_value`, `focus`, `blur`, `submit`, and `dispatch` continue to resolve selectors deterministically
+   - keep quick / hardening profiles green
+
+完了条件:
+
+- `.class`, descendant, and child selectors work through `DomStore::select`
+- `Harness` assertions and actions can resolve them without new public API
+- unsupported syntax still fails explicitly
+- docs, contract tests, and regression tests agree
+
+## Phase 6 以後の進め方
+
+運用ルール:
+
+1. まず 1 つの user-visible gap または regression cluster を選ぶ
+2. owning subsystem を先に決める
+3. public contract test / subsystem test / failure-path test を先に決める
+4. 実装は owning subsystem に閉じる
+5. 既存 API で足りない場合だけ `Harness` に公開する
+6. 公開面が変わる変更では README / capability matrix / mock guide も同じ変更で更新する
+
+新しい named phase を切る条件:
+
+- 複数の今後の slice が 1 つの cross-cutting milestone に収束している
+- その milestone に独立した完了条件が必要
+
+それまでは、Phase 6 後モードとして backlog 駆動の小さい slice を継続する。
+
 ---
 
 ## 23. 採用しない案

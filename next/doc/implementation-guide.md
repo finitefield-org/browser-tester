@@ -36,7 +36,8 @@ The safest way to turn the Phase 0 skeleton into a usable runtime is:
 
 This order keeps the public facade thin and avoids implementing user actions before the DOM and selector layers are trustworthy.
 
-Slices 1 through 7 are already implemented in this workspace, including public download capture. Phase 5 hardening, regression coverage, property tests, and publication checklist work are also in place; use the same vertical-slice pattern for later phases.
+Slices 1 through 7 are already implemented in this workspace, including public download capture. The next named milestone is Phase 6 selector expansion; use the same vertical-slice pattern for later phases.
+Phase 6 selector expansion slice 1, covering class selectors and compound simple selectors, is also implemented in this workspace. Keep the remaining selector slices bounded to the same selector engine.
 
 ## First Vertical Slices
 
@@ -208,6 +209,40 @@ Why this order:
 
 - dialogs and clipboard are simpler than fetch/navigation
 - fetch and location tend to widen the service surface quickly
+
+### Slice 8: Selector Expansion
+
+Goal:
+
+- extend the selector engine beyond the Phase 1 subset without introducing a broad CSS parser
+
+Primary owner:
+
+- `bt-dom`
+
+Suggested scope:
+
+- `.class`
+- `tag.class`
+- `#id.class`
+- descendant combinators (`A B`)
+- child combinators (`A > B`)
+- explicit failures for unsupported selector syntax
+
+Tests to add first:
+
+- class selectors match nodes in document order
+- descendant combinators resolve nested nodes
+- child combinators match only direct children
+- public `Harness` actions and assertions continue to resolve selectors deterministically
+- unsupported syntax still fails explicitly
+
+Do not add yet:
+
+- pseudo-classes
+- selector lists
+- attribute value operators beyond the bounded slice
+- general CSS parsing
 
 ## Decision Flow for Each Change
 

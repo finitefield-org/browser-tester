@@ -11,6 +11,8 @@ This matrix defines what `next/` already exposes, what is only scaffolded, and w
 | Typed mock registry families | Stable Test Mocks | 0 | Available | Fetch, dialogs, clipboard, location, file input, downloads, and storage seeds are modeled, with public mock actions wired for the browser-service families, including download capture. |
 | HTML parser and DOM tree construction | Stable Core | 1 | Available | `html(...)` now builds a real tree and rejects malformed markup. |
 | Selector subset (`#id`, tag, attr, combinators) | Stable Core | 1 | Available | `#id`, tag, and `[attr]` are supported; combinators fail explicitly. |
+| Selector slice 1 (`.class`, `tag.class`, `#id.class`) | Stable Core | 6 | Available | The shared selector engine now resolves class selectors and compound simple selectors through existing `Harness` APIs. |
+| Remaining Phase 6 selector expansion | Stable Core | 6 | Planned | descendant combinators, child combinators, and selector hardening remain bounded and explicit. |
 | `assert_exists` and DOM assertions | Stable Core | 1 | Available | `assert_exists` queries the DOM and includes a dump in failure messages. |
 | Script lexer / parser / evaluator | Stable Core | 2 | Available | Minimal statement/expression support powers inline DOM mutation and listener registration. |
 | Window/document/Element host bindings | Stable Core | 2 | Available | `document.getElementById`, `textContent` mutation, and listener registration are wired through `Session`. |

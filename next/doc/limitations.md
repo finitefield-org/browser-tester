@@ -8,7 +8,7 @@ What exists today:
 - public and internal type skeletons
 - deterministic session bootstrap
 - real HTML parsing and DOM tree construction for the Phase 1 subset
-- selector matching for `#id`, tag, and `[attr]`
+- selector matching for `#id`, tag, `[attr]`, `.class`, `tag.class`, and `#id.class`
 - `assert_exists` and DOM dump helpers
 - inline `<script>` bootstrapping with a minimal script parser/evaluator
 - listener registration through the script host seam
@@ -20,7 +20,8 @@ What exists today:
 
 What does not exist yet:
 
-- broader selector support beyond the Phase 1 subset
+- descendant combinators and child combinators
+- selector hardening beyond the bounded Phase 6 slice set
 
 ## Important Consequence
 

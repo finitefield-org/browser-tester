@@ -9,6 +9,14 @@ use super::NodeKind;
 use super::NodeRecord;
 use super::TextData;
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct SelectorQuery {
+    tag: Option<String>,
+    id: Option<String>,
+    classes: Vec<String>,
+    attributes: Vec<String>,
+}
+
 impl DomStore {
     pub fn bootstrap_html(&mut self, html: impl Into<String>) -> Result<(), String> {
         let html = html.into();
@@ -27,15 +35,8 @@ impl DomStore {
             return Err("selector must not be empty".to_string());
         }
 
-        if let Some(id_selector) = selector.strip_prefix('#') {
-            return self.select_by_id(id_selector);
-        }
-
-        if selector.starts_with('[') {
-            return self.select_by_attribute(selector);
-        }
-
-        self.select_by_tag(selector)
+        let query = Self::parse_selector_query(selector)?;
+        Ok(self.select_by_query(&query))
     }
 
     pub fn dump_dom(&self) -> String {
@@ -655,68 +656,165 @@ impl DomStore {
         }
     }
 
-    fn select_by_id(&self, id_selector: &str) -> Result<Vec<NodeId>, String> {
-        let id_selector = id_selector.trim();
-        if !is_simple_selector_token(id_selector) {
-            return Err(format!(
-                "unsupported selector `{}`; supported forms are #id, tag, and [attr]",
-                format!("#{}", id_selector)
-            ));
-        }
-
-        Ok(self
-            .indexes
-            .id_index
-            .get(id_selector)
-            .copied()
+    fn select_by_query(&self, query: &SelectorQuery) -> Vec<NodeId> {
+        let candidates = self.selector_candidates(query);
+        let mut results: Vec<NodeId> = candidates
             .into_iter()
-            .collect())
+            .filter(|node_id| self.matches_selector_query(*node_id, query))
+            .collect();
+        results.dedup();
+        results
     }
 
-    fn select_by_tag(&self, tag_selector: &str) -> Result<Vec<NodeId>, String> {
-        if !is_simple_selector_token(tag_selector) {
-            return Err(format!(
-                "unsupported selector `{}`; supported forms are #id, tag, and [attr]",
-                tag_selector
-            ));
+    fn selector_candidates(&self, query: &SelectorQuery) -> Vec<NodeId> {
+        if let Some(id) = query.id.as_ref() {
+            return self.indexes.id_index.get(id).copied().into_iter().collect();
         }
 
-        let tag = tag_selector.to_ascii_lowercase();
-        Ok(self
-            .indexes
-            .tag_index
-            .get(&tag)
-            .cloned()
-            .unwrap_or_default())
+        let mut candidate_lists: Vec<&[NodeId]> = Vec::new();
+
+        if let Some(tag) = query.tag.as_ref() {
+            match self.indexes.tag_index.get(tag) {
+                Some(nodes) => candidate_lists.push(nodes),
+                None => return Vec::new(),
+            }
+        }
+
+        for class_name in &query.classes {
+            match self.indexes.class_index.get(class_name) {
+                Some(nodes) => candidate_lists.push(nodes),
+                None => return Vec::new(),
+            }
+        }
+
+        if candidate_lists.is_empty() {
+            return self
+                .nodes
+                .iter()
+                .filter_map(|node| match node.kind {
+                    NodeKind::Element(_) => Some(node.id),
+                    _ => None,
+                })
+                .collect();
+        }
+
+        candidate_lists
+            .into_iter()
+            .min_by_key(|nodes| nodes.len())
+            .map(|nodes| nodes.to_vec())
+            .unwrap_or_default()
     }
 
-    fn select_by_attribute(&self, selector: &str) -> Result<Vec<NodeId>, String> {
-        if !selector.ends_with(']') {
-            return Err(format!(
-                "unsupported selector `{}`; supported forms are #id, tag, and [attr]",
-                selector
-            ));
+    fn matches_selector_query(&self, node_id: NodeId, query: &SelectorQuery) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        if let Some(tag) = query.tag.as_ref() {
+            if element.tag_name != *tag {
+                return false;
+            }
         }
 
-        let attribute = selector[1..selector.len() - 1].trim();
-        if !is_simple_selector_token(attribute) {
-            return Err(format!(
-                "unsupported selector `{}`; supported forms are #id, tag, and [attr]",
-                selector
-            ));
+        if let Some(id) = query.id.as_ref() {
+            if element.attributes.get("id") != Some(id) {
+                return false;
+            }
         }
 
-        let attribute = attribute.to_ascii_lowercase();
-        Ok(self
-            .nodes
-            .iter()
-            .filter_map(|node| match &node.kind {
-                NodeKind::Element(element) if element.attributes.contains_key(&attribute) => {
-                    Some(node.id)
+        if !query.classes.is_empty() {
+            let Some(value) = element.attributes.get("class") else {
+                return false;
+            };
+
+            let element_classes: Vec<&str> = value.split_ascii_whitespace().collect();
+            if !query.classes.iter().all(|class_name| {
+                element_classes
+                    .iter()
+                    .any(|candidate| candidate == class_name)
+            }) {
+                return false;
+            }
+        }
+
+        for attribute in &query.attributes {
+            if !element.attributes.contains_key(attribute) {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn parse_selector_query(selector: &str) -> Result<SelectorQuery, String> {
+        let mut query = SelectorQuery::default();
+        let bytes = selector.as_bytes();
+        let mut pos = 0;
+
+        while pos < bytes.len() {
+            if bytes[pos].is_ascii_whitespace() {
+                return Err(selector_not_supported(selector));
+            }
+
+            match bytes[pos] {
+                b'#' => {
+                    pos += 1;
+                    let token = parse_selector_token(selector, &mut pos)?;
+                    if query.id.is_some() {
+                        return Err(selector_not_supported(selector));
+                    }
+                    query.id = Some(token);
                 }
-                _ => None,
-            })
-            .collect())
+                b'.' => {
+                    pos += 1;
+                    let token = parse_selector_token(selector, &mut pos)?;
+                    query.classes.push(token);
+                }
+                b'[' => {
+                    pos += 1;
+                    let start = pos;
+                    while pos < bytes.len() && bytes[pos] != b']' {
+                        if bytes[pos].is_ascii_whitespace() {
+                            return Err(selector_not_supported(selector));
+                        }
+                        if !is_simple_name_byte(bytes[pos]) {
+                            return Err(selector_not_supported(selector));
+                        }
+                        pos += 1;
+                    }
+
+                    if pos == start || pos >= bytes.len() {
+                        return Err(selector_not_supported(selector));
+                    }
+
+                    let attribute = selector[start..pos].to_ascii_lowercase();
+                    pos += 1;
+                    query.attributes.push(attribute);
+                }
+                byte if is_simple_name_byte(byte) => {
+                    let token = parse_selector_token(selector, &mut pos)?;
+                    if query.tag.is_some() {
+                        return Err(selector_not_supported(selector));
+                    }
+                    query.tag = Some(token.to_ascii_lowercase());
+                }
+                _ => return Err(selector_not_supported(selector)),
+            }
+        }
+
+        if query.tag.is_none()
+            && query.id.is_none()
+            && query.classes.is_empty()
+            && query.attributes.is_empty()
+        {
+            return Err(selector_not_supported(selector));
+        }
+
+        Ok(query)
     }
 
     fn dump_node(&self, node_id: NodeId, indent: usize, output: &mut String) {
@@ -781,6 +879,26 @@ impl DomStore {
             _ => None,
         }
     }
+}
+
+fn selector_not_supported(selector: &str) -> String {
+    format!(
+        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, and [attr]"
+    )
+}
+
+fn parse_selector_token(selector: &str, pos: &mut usize) -> Result<String, String> {
+    let start = *pos;
+    let bytes = selector.as_bytes();
+    while *pos < bytes.len() && is_simple_name_byte(bytes[*pos]) {
+        *pos += 1;
+    }
+
+    if *pos == start {
+        return Err(selector_not_supported(selector));
+    }
+
+    Ok(selector[start..*pos].to_string())
 }
 
 struct HtmlParser<'a> {
@@ -1098,10 +1216,6 @@ fn escape_attr(value: &str) -> String {
 
 fn is_simple_name_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
-}
-
-fn is_simple_selector_token(value: &str) -> bool {
-    !value.is_empty() && value.bytes().all(is_simple_name_byte)
 }
 
 fn is_void_element(tag_name: &str) -> bool {

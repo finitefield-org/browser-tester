@@ -51,14 +51,36 @@ fn malformed_html_is_reported_explicitly() {
 }
 
 #[test]
-fn unsupported_selector_syntax_fails_explicitly() {
+fn unsupported_combinator_syntax_fails_explicitly() {
     let mut store = DomStore::new_empty();
     store.bootstrap_html("<main class='app'></main>").unwrap();
 
     let error = store
-        .select(".app")
-        .expect_err("class selectors are not supported yet");
-    assert!(error.contains("supported forms are #id, tag, and [attr]"));
+        .select("main .app")
+        .expect_err("descendant combinators are not supported yet");
+    assert!(
+        error.contains("supported forms are #id, .class, tag, tag.class, #id.class, and [attr]")
+    );
+}
+
+#[test]
+fn class_and_compound_selectors_match_in_document_order() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main><button id='save' class='primary action'>Save</button><button id='cancel' class='primary'>Cancel</button></main>",
+        )
+        .expect("HTML should parse");
+
+    let save_id = store.select("#save").unwrap()[0];
+    let cancel_id = store.select("#cancel").unwrap()[0];
+
+    assert_eq!(store.select(".primary").unwrap(), vec![save_id, cancel_id]);
+    assert_eq!(
+        store.select("button.primary").unwrap(),
+        vec![save_id, cancel_id]
+    );
+    assert_eq!(store.select("#save.primary").unwrap(), vec![save_id]);
 }
 
 #[test]

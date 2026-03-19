@@ -13,7 +13,7 @@ Current status:
 
 - a compilable Rust workspace exists under `next/crates/`
 - `HarnessBuilder`, `Session`, `DomStore`, scheduler, mock registry, and error taxonomy are in place
-- Phase 1 DOM parsing, selector subset support, `assert_exists`, and debug DOM dumps are implemented
+- Phase 1 DOM parsing, selector subset support, and Phase 6 slice 1 class/compound selector support are implemented
 - Phase 2 inline script bootstrapping, `document.getElementById(...).textContent = ...`, and listener registration are implemented
 - Phase 3 event dispatch, ancestor bubbling, cancelable click default actions, form controls, `click`, `type_text`, `set_checked`, `set_select_value`, `focus`, `blur`, `submit`, `dispatch`, `assert_value`, and `assert_checked` are implemented
 - Phase 4 fake clock hardening, microtask semantics, and runtime mock wiring for fetch, dialogs, clipboard, location, file input, and download capture are implemented
