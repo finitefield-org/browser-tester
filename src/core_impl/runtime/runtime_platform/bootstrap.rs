@@ -8,5 +8,7 @@ mod environment_global_init;
 mod navigation_history_management;
 mod object_type_event_handler_setters;
 mod object_type_global_property_setters;
+mod object_type_node_assignment_setters;
+mod object_type_object_assignment_setters;
 mod object_type_property_setters;
 mod window_document_location_sync;
