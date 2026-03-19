@@ -1,6 +1,6 @@
 # Implementation Guide
 
-This document explains how to actually build out the `next/` rewrite from its current Phase 6-complete baseline.
+This document explains how to actually build out the `next/` rewrite from its current Phase 6-complete baseline with Phase 7 slices 1 through 4 already delivered, plus an adjacent sibling selector backlog slice (`A + B`).
 
 Use it together with:
 
@@ -36,7 +36,7 @@ The safest way to turn the Phase 0 skeleton into a usable runtime is:
 
 This order keeps the public facade thin and avoids implementing user actions before the DOM and selector layers are trustworthy.
 
-Slices 1 through 7 are already implemented in this workspace, including public download capture. Phase 6 selector expansion slices 1 through 4, covering class selectors, compound simple selectors, descendant combinators, child combinators, and selector hardening, are also implemented in this workspace. Phase 7 script DOM query expansion is the next named milestone; keep it bounded to the same selector engine and avoid introducing `querySelectorAll` or collection types in the first slice family.
+Slices 1 through 7 are already implemented in this workspace, including public download capture. Phase 6 selector expansion slices 1 through 4, covering class selectors, compound simple selectors, descendant combinators, child combinators, and selector hardening, are also implemented in this workspace. A post-Phase-7 selector slice adds adjacent sibling combinators (`A + B`) through the same bounded engine. Phase 7 script DOM query slices 1 through 4 (`document.querySelector`, `element.querySelector`, `Element.matches`, `Element.closest`, and selector hardening) are implemented as well; keep `querySelectorAll`, collection types, and general sibling combinators out of scope for this workspace.
 
 ## First Vertical Slices
 
@@ -127,9 +127,10 @@ Goal:
 
 - make one narrow inline-script scenario work end to end
 
-Primary owner:
+Primary owners:
 
 - `bt-script`
+- `bt-runtime`
 
 Recommended first supported scenario:
 
@@ -226,6 +227,7 @@ Suggested scope:
 - `#id.class`
 - descendant combinators (`A B`)
 - child combinators (`A > B`)
+- adjacent sibling combinators (`A + B`)
 - explicit failures for unsupported selector syntax
 
 Tests already in place:
@@ -233,6 +235,7 @@ Tests already in place:
 - class selectors match nodes in document order
 - descendant combinators resolve nested nodes
 - child combinators match only direct children
+- adjacent sibling combinators match the immediate previous element sibling
 - public `Harness` actions and assertions continue to resolve selectors deterministically
 - selector hardening remains explicit for unsupported syntax
 
@@ -241,6 +244,7 @@ Do not add yet:
 - pseudo-classes
 - selector lists
 - attribute value operators beyond the bounded slice
+- general sibling combinators
 - general CSS parsing
 
 ### Slice 9: Script DOM Query Expansion
@@ -249,24 +253,37 @@ Goal:
 
 - make selector-based DOM lookup available inside inline scripts without broadening the JS grammar
 
-Primary owner:
+Primary owners:
 
 - `bt-script`
+- `bt-runtime`
 
-Suggested scope:
+Delivered in this workspace:
 
 - `document.querySelector(selector)`
 - `element.querySelector(selector)`
 - `Element.matches(selector)`
 - `Element.closest(selector)`
-- explicit `null` on miss
+- selector hardening and regression coverage
+- document-order first match
+- subtree-scoped lookup
+- current-element selector checks
+- ancestor-walk selector checks
+- `null` on miss
 - explicit errors for unsupported selector syntax
 
-Tests to add first:
+Remaining slices:
+
+- none
+
+Tests already in place:
 
 - document-scoped lookup works in inline scripts
 - subtree-scoped lookup works in inline scripts
-- `matches` and `closest` honor the bounded selector grammar
+- current-element selector checks work in inline scripts
+- ancestor-walk selector checks work in inline scripts
+- unsupported selector syntax remains explicit
+- null-on-miss behavior is preserved
 - invalid selector syntax fails explicitly
 
 Do not add yet:
@@ -348,8 +365,8 @@ Use this loop for daily implementation work:
 
 The next highest-value task is:
 
-1. implement `document.querySelector(...)` and `element.querySelector(...)` in `bt-script`
-2. thread selector resolution through `bt-runtime`
-3. cover missing-match and unsupported-selector failure paths
+1. pick the next user-visible gap or regression cluster
+2. decide the owning subsystem first
+3. add contract, subsystem, and failure-path tests before implementing
 
-That is the first slice in Phase 7 and the next user-visible DOM query capability to land in the workspace.
+That is the general post-Phase-7 working mode after the script-side selector query family is complete.

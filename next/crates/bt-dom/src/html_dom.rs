@@ -27,6 +27,7 @@ struct SelectorChain {
 enum SelectorCombinator {
     Descendant,
     Child,
+    AdjacentSibling,
 }
 
 impl DomStore {
@@ -750,6 +751,12 @@ impl DomStore {
                 };
                 self.matches_selector_chain_part(parent_id, parts, relations, index - 1)
             }
+            SelectorCombinator::AdjacentSibling => {
+                let Some(previous_sibling) = self.previous_element_sibling_of(node_id) else {
+                    return false;
+                };
+                self.matches_selector_chain_part(previous_sibling, parts, relations, index - 1)
+            }
             SelectorCombinator::Descendant => {
                 let mut ancestor = self.parent_of(node_id);
                 while let Some(ancestor_id) = ancestor {
@@ -826,6 +833,10 @@ impl DomStore {
                 b'>' => {
                     pos += 1;
                     SelectorCombinator::Child
+                }
+                b'+' => {
+                    pos += 1;
+                    SelectorCombinator::AdjacentSibling
                 }
                 byte if is_selector_combinator_byte(byte) => {
                     return Err(selector_not_supported(selector));
@@ -926,6 +937,29 @@ impl DomStore {
             .and_then(|node| node.parent)
     }
 
+    fn previous_element_sibling_of(&self, node_id: NodeId) -> Option<NodeId> {
+        let parent_id = self.parent_of(node_id)?;
+        let parent = self.nodes.get(parent_id.index() as usize)?;
+        let mut previous_element = None;
+
+        for child in &parent.children {
+            if *child == node_id {
+                return previous_element;
+            }
+
+            if matches!(
+                self.nodes
+                    .get(child.index() as usize)
+                    .map(|node| &node.kind),
+                Some(NodeKind::Element(_))
+            ) {
+                previous_element = Some(*child);
+            }
+        }
+
+        None
+    }
+
     fn dump_node(&self, node_id: NodeId, indent: usize, output: &mut String) {
         let node = &self.nodes[node_id.index() as usize];
         let children = node.children.clone();
@@ -992,7 +1026,7 @@ impl DomStore {
 
 fn selector_not_supported(selector: &str) -> String {
     format!(
-        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, and child combinators like `A > B`"
+        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, and child combinators like `A > B`"
     )
 }
 

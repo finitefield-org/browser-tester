@@ -1,4 +1,6 @@
-use bt_runtime::MockRegistry;
+use std::collections::BTreeMap;
+
+use bt_runtime::{MockRegistry, Session, SessionConfig};
 
 #[test]
 fn reset_all_clears_every_mock_family() {
@@ -59,4 +61,20 @@ fn reset_all_clears_every_mock_family() {
     assert!(registry.file_input().selections().is_empty());
     assert!(registry.storage().local().is_empty());
     assert!(registry.storage().session().is_empty());
+}
+
+#[test]
+fn session_rejects_unsupported_selector_syntax_in_closest_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root' class='primary'></main><script>document.getElementById('root').closest('main ~ .primary');</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("unsupported selector syntax should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(error.to_string().contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, and child combinators like `A > B`"));
 }

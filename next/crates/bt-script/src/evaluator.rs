@@ -272,6 +272,7 @@ fn eval_method_call<H: HostBindings>(
                 };
                 Ok(Value::Element(element))
             }
+            "querySelector" => query_selector(QuerySelectorTarget::Document, args, env, host),
             "addEventListener" => register_listener(ListenerTarget::Document, args, env, host),
             other => Err(ScriptError::new(format!(
                 "unsupported Document method: {other}"
@@ -285,6 +286,11 @@ fn eval_method_call<H: HostBindings>(
             ))),
         },
         Value::Element(element) => match method {
+            "querySelector" => {
+                query_selector(QuerySelectorTarget::Element(element), args, env, host)
+            }
+            "matches" => element_matches(element, args, env, host),
+            "closest" => element_closest(element, args, env, host),
             "addEventListener" => {
                 register_listener(ListenerTarget::Element(element), args, env, host)
             }
@@ -327,6 +333,12 @@ fn eval_method_call<H: HostBindings>(
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum QuerySelectorTarget {
+    Document,
+    Element(crate::ElementHandle),
+}
+
 fn register_listener<H: HostBindings>(
     target: ListenerTarget,
     args: &[Expr],
@@ -354,6 +366,57 @@ fn register_listener<H: HostBindings>(
     };
     host.register_event_listener_with_capture(target, &event, capture, handler)?;
     Ok(Value::Undefined)
+}
+
+fn query_selector<H: HostBindings>(
+    target: QuerySelectorTarget,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [selector_expr] = args else {
+        return Err(ScriptError::new(
+            "querySelector() expects exactly one argument",
+        ));
+    };
+
+    let selector = as_string(&eval_expr(selector_expr, env, host)?);
+    let match_handle = match target {
+        QuerySelectorTarget::Document => host.document_query_selector(&selector)?,
+        QuerySelectorTarget::Element(element) => host.element_query_selector(element, &selector)?,
+    };
+
+    Ok(match_handle.map(Value::Element).unwrap_or(Value::Null))
+}
+
+fn element_matches<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [selector_expr] = args else {
+        return Err(ScriptError::new("matches() expects exactly one argument"));
+    };
+
+    let selector = as_string(&eval_expr(selector_expr, env, host)?);
+    Ok(Value::Boolean(host.element_matches(element, &selector)?))
+}
+
+fn element_closest<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [selector_expr] = args else {
+        return Err(ScriptError::new("closest() expects exactly one argument"));
+    };
+
+    let selector = as_string(&eval_expr(selector_expr, env, host)?);
+    let match_handle = host.element_closest(element, &selector)?;
+
+    Ok(match_handle.map(Value::Element).unwrap_or(Value::Null))
 }
 
 fn eval_add(left: Value, right: Value) -> Value {

@@ -14,11 +14,15 @@ This matrix defines what `next/` already exposes, what is only scaffolded, and w
 | Selector slice 1 (`.class`, `tag.class`, `#id.class`) | Stable Core | 6 | Available | The shared selector engine now resolves class selectors and compound simple selectors through existing `Harness` APIs. |
 | Selector slice 2 (descendant combinators) | Stable Core | 6 | Available | `A B` resolves nested matches in document order through the same selector engine. |
 | Selector slice 3 (child combinators) | Stable Core | 6 | Available | `A > B` resolves direct children through the same selector engine. |
+| Selector backlog slice (`A + B`) | Stable Core | post-7 | Available | Immediate previous-element sibling matching now reuses the same bounded selector engine; general sibling combinators (`A ~ B`) stay deferred. |
 | Selector hardening and bounded selector grammar | Stable Core | 6 | Available | unsupported syntax continues to fail explicitly, and no broader CSS parsing is intended. |
-| Script DOM query APIs (`querySelector`, `matches`, `closest`) | Stable Core | 7 | Planned | Script-side selector lookup reuses the bounded engine; `querySelectorAll` remains deferred. |
+| Script DOM query slice 1 (`document.querySelector`, `element.querySelector`) | Stable Core | 7 | Available | Script-side selector lookup reuses the bounded engine and returns the first match in document order or `null` on miss. |
+| Script DOM query slice 2 (`Element.matches`) | Stable Core | 7 | Available | Current-element selector checks now reuse the bounded selector engine and return a boolean. |
+| Script DOM query slice 3 (`Element.closest`) | Stable Core | 7 | Available | Ancestor-walk selector lookup now reuses the bounded selector engine and returns the nearest match or `null`. |
+| Script DOM query hardening (`querySelectorAll`, collections deferred) | Stable Core | 7 | Available | Unsupported selector syntax remains explicit and broader collection types stay out of scope. |
 | `assert_exists` and DOM assertions | Stable Core | 1 | Available | `assert_exists` queries the DOM and includes a dump in failure messages. |
-| Script lexer / parser / evaluator | Stable Core | 2 | Available | Minimal statement/expression support powers inline DOM mutation and listener registration. |
-| Window/document/Element host bindings | Stable Core | 2 | Available | `document.getElementById`, `textContent` mutation, and listener registration are wired through `Session`. |
+| Script lexer / parser / evaluator | Stable Core | 2 | Available | Minimal statement/expression support powers inline DOM mutation, selector lookup, ancestor-walk lookup, and listener registration. |
+| Window/document/Element host bindings | Stable Core | 2 | Available | `document.getElementById`, `document.querySelector`, `element.querySelector`, `Element.matches`, `Element.closest`, `textContent` mutation, and listener registration are wired through `Session`. |
 | Inline script execution | Stable Core | 2 | Available | Inline `<script>` blocks execute during session bootstrap in document order. |
 | Event dispatch and default actions | Stable Core | 3 | Available | Target-phase dispatch, ancestor bubbling, capture listeners, checkbox toggles, cancelable submit/click default actions, and form actions (`click`, `type_text`, `set_checked`, `set_select_value`, `focus`, `blur`, `submit`, `dispatch`) are available. |
 | Fetch mock response and failure injection | Stable Test Mocks | 4 | Available | Response rules, error rules, and call capture are wired through `Harness::fetch(...)`. |

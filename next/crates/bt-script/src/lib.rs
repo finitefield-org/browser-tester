@@ -222,6 +222,10 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("document.getElementById"))
     }
 
+    fn document_query_selector(&mut self, _selector: &str) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("document.querySelector"))
+    }
+
     fn element_text_content(&mut self, _element: ElementHandle) -> Result<String> {
         Err(ScriptError::phase_not_ready("element.textContent"))
     }
@@ -246,6 +250,26 @@ pub trait HostBindings {
 
     fn element_set_checked(&mut self, _element: ElementHandle, _checked: bool) -> Result<()> {
         Err(ScriptError::phase_not_ready("element.checked assignment"))
+    }
+
+    fn element_query_selector(
+        &mut self,
+        _element: ElementHandle,
+        _selector: &str,
+    ) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("element.querySelector"))
+    }
+
+    fn element_matches(&mut self, _element: ElementHandle, _selector: &str) -> Result<bool> {
+        Err(ScriptError::phase_not_ready("element.matches"))
+    }
+
+    fn element_closest(
+        &mut self,
+        _element: ElementHandle,
+        _selector: &str,
+    ) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("element.closest"))
     }
 
     fn register_event_listener(

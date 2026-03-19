@@ -7,7 +7,7 @@ For day-to-day implementation sequencing inside each phase, also see [implementa
 Status note:
 
 - Phases 0 through 6 are complete in this workspace.
-- Phase 7 is reserved for script DOM query expansion and should stay narrow and slice-based.
+- Phase 7 is complete in this workspace; slices 1 through 4 are delivered, adjacent sibling selectors (`A + B`) are also delivered as a backlog slice, and future selector work should stay backlog-driven.
 
 ## Phase 0: Skeleton
 
@@ -134,14 +134,19 @@ Exit criteria:
 
 ## Phase 7: Script DOM Query Expansion
 
-Designed slices:
+Delivered slices 1 through 4:
 
 - `document.querySelector(...)` and `element.querySelector(...)`
   - document-order first match, subtree-scoped lookup, `null` on miss
+
 - `Element.matches(...)`
-  - current element only, boolean return
+  - current-element only, boolean return
+
 - `Element.closest(...)`
   - self-inclusive ancestor walk, `null` on miss
+
+Planned slices:
+
 - selector hardening
   - explicit failures for unsupported selector syntax, with `querySelectorAll` and collection types deferred
 
@@ -151,6 +156,13 @@ Exit criteria:
 - selector grammar stays bounded and deterministic
 - unsupported syntax still fails explicitly
 - docs, contract tests, and regression tests agree
+
+## After Phase 7
+
+Operating rule:
+
+- future selector work should stay backlog-driven and narrow
+- `querySelectorAll` and collection types remain deferred
 
 ## After Phase 7: Rolling Capability Delivery
 

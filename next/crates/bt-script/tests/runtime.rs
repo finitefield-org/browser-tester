@@ -20,6 +20,14 @@ struct RecordingHost {
     text_content: BTreeMap<ElementHandle, String>,
     values: BTreeMap<ElementHandle, String>,
     checked: BTreeMap<ElementHandle, bool>,
+    document_query_selector_results: BTreeMap<String, Option<ElementHandle>>,
+    element_query_selector_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
+    element_closest_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
+    document_query_selector_calls: Vec<String>,
+    element_query_selector_calls: Vec<(ElementHandle, String)>,
+    element_closest_calls: Vec<(ElementHandle, String)>,
+    element_matches_results: BTreeMap<(ElementHandle, String), bool>,
+    element_matches_calls: Vec<(ElementHandle, String)>,
     listeners: Vec<(ListenerTarget, String, bool, ScriptFunction)>,
 }
 
@@ -41,6 +49,45 @@ impl RecordingHost {
 
     fn seed_checked(&mut self, handle: ElementHandle, checked: bool) {
         self.checked.insert(handle, checked);
+    }
+
+    fn seed_document_query_selector(
+        &mut self,
+        selector: impl Into<String>,
+        result: Option<ElementHandle>,
+    ) {
+        self.document_query_selector_results
+            .insert(selector.into(), result);
+    }
+
+    fn seed_element_query_selector(
+        &mut self,
+        element: ElementHandle,
+        selector: impl Into<String>,
+        result: Option<ElementHandle>,
+    ) {
+        self.element_query_selector_results
+            .insert((element, selector.into()), result);
+    }
+
+    fn seed_element_closest(
+        &mut self,
+        element: ElementHandle,
+        selector: impl Into<String>,
+        result: Option<ElementHandle>,
+    ) {
+        self.element_closest_results
+            .insert((element, selector.into()), result);
+    }
+
+    fn seed_element_matches(
+        &mut self,
+        element: ElementHandle,
+        selector: impl Into<String>,
+        result: bool,
+    ) {
+        self.element_matches_results
+            .insert((element, selector.into()), result);
     }
 }
 
@@ -87,6 +134,61 @@ impl HostBindings for RecordingHost {
     ) -> bt_script::Result<()> {
         self.checked.insert(element, checked);
         Ok(())
+    }
+
+    fn document_query_selector(
+        &mut self,
+        selector: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.document_query_selector_calls
+            .push(selector.to_string());
+        Ok(self
+            .document_query_selector_results
+            .get(selector)
+            .copied()
+            .flatten())
+    }
+
+    fn element_query_selector(
+        &mut self,
+        element: ElementHandle,
+        selector: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.element_query_selector_calls
+            .push((element, selector.to_string()));
+        Ok(self
+            .element_query_selector_results
+            .get(&(element, selector.to_string()))
+            .copied()
+            .flatten())
+    }
+
+    fn element_matches(
+        &mut self,
+        element: ElementHandle,
+        selector: &str,
+    ) -> bt_script::Result<bool> {
+        self.element_matches_calls
+            .push((element, selector.to_string()));
+        Ok(self
+            .element_matches_results
+            .get(&(element, selector.to_string()))
+            .copied()
+            .unwrap_or(false))
+    }
+
+    fn element_closest(
+        &mut self,
+        element: ElementHandle,
+        selector: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.element_closest_calls
+            .push((element, selector.to_string()));
+        Ok(self
+            .element_closest_results
+            .get(&(element, selector.to_string()))
+            .copied()
+            .flatten())
     }
 
     fn register_event_listener_with_capture(
@@ -227,6 +329,129 @@ fn runtime_reads_and_writes_form_control_state() {
 }
 
 #[test]
+fn runtime_resolves_query_selector_and_null_miss() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "scopeinside");
+    host.seed_element("inside", ElementHandle::new(2), "inside");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_document_query_selector(".primary", Some(ElementHandle::new(1)));
+    host.seed_element_query_selector(
+        ElementHandle::new(1),
+        ".primary",
+        Some(ElementHandle::new(2)),
+    );
+    host.seed_element_query_selector(ElementHandle::new(1), ".missing", None);
+
+    runtime
+        .eval_program(
+            "const first = document.querySelector('.primary'); const scoped = document.getElementById('root').querySelector('.primary'); const missing = document.getElementById('root').querySelector('.missing'); document.getElementById('out').textContent = first.textContent + ':' + scoped.textContent + ':' + String(missing);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("query selectors should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("scopeinside:inside:null")
+    );
+    assert_eq!(
+        host.document_query_selector_calls,
+        vec![".primary".to_string()]
+    );
+    assert_eq!(
+        host.element_query_selector_calls,
+        vec![
+            (ElementHandle::new(1), ".primary".to_string()),
+            (ElementHandle::new(1), ".missing".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn runtime_resolves_element_matches_for_current_element_only() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "");
+    host.seed_element("child", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_element_matches(ElementHandle::new(1), ".primary", true);
+    host.seed_element_matches(ElementHandle::new(1), ".child", false);
+    host.seed_element_matches(ElementHandle::new(2), ".child", true);
+
+    runtime
+        .eval_program(
+            "const root = document.getElementById('root'); const child = document.getElementById('child'); document.getElementById('out').textContent = String(root.matches('.primary')) + ':' + String(root.matches('.child')) + ':' + String(child.matches('.child'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("matches should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("true:false:true")
+    );
+    assert_eq!(
+        host.element_matches_calls,
+        vec![
+            (ElementHandle::new(1), ".primary".to_string()),
+            (ElementHandle::new(1), ".child".to_string()),
+            (ElementHandle::new(2), ".child".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn runtime_resolves_element_closest_with_self_and_ancestor_matches() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "ROOTSECTIONCHILD");
+    host.seed_element("section", ElementHandle::new(2), "SECTIONCHILD");
+    host.seed_element("child", ElementHandle::new(3), "CHILD");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_element_closest(
+        ElementHandle::new(1),
+        ".primary",
+        Some(ElementHandle::new(1)),
+    );
+    host.seed_element_closest(ElementHandle::new(3), ".child", Some(ElementHandle::new(3)));
+    host.seed_element_closest(
+        ElementHandle::new(3),
+        "#section",
+        Some(ElementHandle::new(2)),
+    );
+    host.seed_element_closest(ElementHandle::new(3), ".missing", None);
+
+    runtime
+        .eval_program(
+            "const root = document.getElementById('root'); const child = document.getElementById('child'); document.getElementById('out').textContent = root.closest('.primary').textContent + ':' + child.closest('.child').textContent + ':' + child.closest('#section').textContent + ':' + String(child.closest('.missing'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("closest should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("ROOTSECTIONCHILD:CHILD:SECTIONCHILD:null")
+    );
+    assert_eq!(
+        host.element_closest_calls,
+        vec![
+            (ElementHandle::new(1), ".primary".to_string()),
+            (ElementHandle::new(3), ".child".to_string()),
+            (ElementHandle::new(3), "#section".to_string()),
+            (ElementHandle::new(3), ".missing".to_string()),
+        ]
+    );
+}
+
+#[test]
 fn runtime_reports_missing_element_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -254,15 +479,15 @@ fn runtime_reports_unsupported_syntax_explicitly() {
 
     let error = runtime
         .eval_program(
-            "document.querySelector('#out').textContent = 'Hello';",
+            "document.querySelectorAll('#out').textContent = 'Hello';",
             "inline-script",
             &mut host,
         )
-        .expect_err("querySelector should not be supported yet");
+        .expect_err("querySelectorAll should not be supported yet");
 
     assert!(
         error
             .to_string()
-            .contains("unsupported Document method: querySelector")
+            .contains("unsupported Document method: querySelectorAll")
     );
 }

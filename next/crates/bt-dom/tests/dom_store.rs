@@ -56,10 +56,29 @@ fn unsupported_combinator_syntax_fails_explicitly() {
     store.bootstrap_html("<main class='app'></main>").unwrap();
 
     let error = store
-        .select("main + .app")
-        .expect_err("adjacent sibling combinators are not supported yet");
+        .select("main ~ .app")
+        .expect_err("general sibling combinators are not supported yet");
     assert!(
-        error.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, and child combinators like `A > B`")
+        error.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, and child combinators like `A > B`")
+    );
+}
+
+#[test]
+fn adjacent_sibling_combinators_match_immediate_previous_element_siblings() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main><button id='first' class='primary'>First</button>text<button id='second' class='primary'>Second</button><button id='third' class='primary'>Third</button></main>",
+        )
+        .expect("HTML should parse");
+
+    let second_id = store.select("#second").unwrap()[0];
+    let third_id = store.select("#third").unwrap()[0];
+
+    assert_eq!(store.select("#first + .primary").unwrap(), vec![second_id]);
+    assert_eq!(
+        store.select(".primary + .primary").unwrap(),
+        vec![second_id, third_id]
     );
 }
 

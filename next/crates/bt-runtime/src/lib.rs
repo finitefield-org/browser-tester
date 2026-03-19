@@ -1202,6 +1202,73 @@ impl Session {
         ElementHandle::new(((node_id.generation() as u64) << 32) | node_id.index() as u64)
     }
 
+    fn query_selector_handle(
+        &self,
+        scope: Option<NodeId>,
+        selector: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let matches = self.dom.select(selector).map_err(ScriptError::new)?;
+        let selected = matches.into_iter().find(|node_id| match scope {
+            None => true,
+            Some(scope_id) => self.is_descendant_of(*node_id, scope_id),
+        });
+        Ok(selected.map(Self::node_id_to_handle))
+    }
+
+    fn element_matches_selector(
+        &self,
+        node_id: NodeId,
+        selector: &str,
+    ) -> Result<bool, ScriptError> {
+        let matches = self.dom.select(selector).map_err(ScriptError::new)?;
+        Ok(matches.contains(&node_id))
+    }
+
+    fn element_closest_selector(
+        &self,
+        node_id: NodeId,
+        selector: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let matches = self.dom.select(selector).map_err(ScriptError::new)?;
+        let mut current = Some(node_id);
+
+        while let Some(candidate) = current {
+            if matches.contains(&candidate) {
+                return Ok(Some(Self::node_id_to_handle(candidate)));
+            }
+
+            current = self
+                .dom
+                .nodes()
+                .get(candidate.index() as usize)
+                .and_then(|node| node.parent);
+        }
+
+        Ok(None)
+    }
+
+    fn is_descendant_of(&self, node_id: NodeId, ancestor_id: NodeId) -> bool {
+        let mut current = self
+            .dom
+            .nodes()
+            .get(node_id.index() as usize)
+            .and_then(|node| node.parent);
+
+        while let Some(parent_id) = current {
+            if parent_id == ancestor_id {
+                return true;
+            }
+
+            current = self
+                .dom
+                .nodes()
+                .get(parent_id.index() as usize)
+                .and_then(|node| node.parent);
+        }
+
+        false
+    }
+
     fn node_id_for_handle(&self, handle: ElementHandle) -> Result<NodeId, ScriptError> {
         let raw = handle.raw();
         let index = (raw & 0xffff_ffff) as u32;
@@ -1239,6 +1306,13 @@ impl HostBindings for Session {
         };
 
         Ok(Some(Self::node_id_to_handle(node_id)))
+    }
+
+    fn document_query_selector(
+        &mut self,
+        selector: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.query_selector_handle(None, selector)
     }
 
     fn element_text_content(&mut self, element: ElementHandle) -> bt_script::Result<String> {
@@ -1300,6 +1374,33 @@ impl HostBindings for Session {
         self.dom
             .set_form_control_checked(node_id, checked)
             .map_err(ScriptError::new)
+    }
+
+    fn element_query_selector(
+        &mut self,
+        element: ElementHandle,
+        selector: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.query_selector_handle(Some(node_id), selector)
+    }
+
+    fn element_matches(
+        &mut self,
+        element: ElementHandle,
+        selector: &str,
+    ) -> bt_script::Result<bool> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.element_matches_selector(node_id, selector)
+    }
+
+    fn element_closest(
+        &mut self,
+        element: ElementHandle,
+        selector: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.element_closest_selector(node_id, selector)
     }
 
     fn register_event_listener_with_capture(

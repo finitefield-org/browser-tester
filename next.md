@@ -1008,7 +1008,8 @@ README は次だけを書く。
 注記:
 
 - この workspace では Phase 0 から Phase 6 まで完了済み
-- Phase 7 を script DOM query expansion として設計済み、実装はこれから
+- Phase 7 の script DOM query expansion は slice 1 の `querySelector`、slice 2 の `matches`、slice 3 の `closest`、slice 4 の selector hardening まで実装済み
+- 追加の selector backlog slice として adjacent sibling combinators (`A + B`) も実装済み
 
 ## Phase 6: Selector Expansion
 
@@ -1060,29 +1061,33 @@ README は次だけを書く。
 
 スライス:
 
-1. `document.querySelector(selector)` と `element.querySelector(selector)`（予定）
+1. `document.querySelector(selector)` と `element.querySelector(selector)`（完了）
    - document order の first match を返す
    - miss は `null`
    - scoped lookup は subtree に限定する
-2. `Element.matches(selector)`（予定）
+2. `Element.matches(selector)`（完了）
    - current element だけを判定する
    - return は boolean
-3. `Element.closest(selector)`（予定）
+3. `Element.closest(selector)`（完了）
    - self を含む ancestor walk
    - miss は `null`
-4. selector hardening and regression coverage（予定）
+4. selector hardening and regression coverage（完了）
    - unsupported selector syntax remains explicit
    - `querySelectorAll` / NodeList / broader CSS parsing are out of scope for this phase
 
 完了条件:
 
-- inline scripts and listeners can use selector-based lookup without a new public `Harness` method
+- inline scripts and listeners can use `document.querySelector(...)`, `element.querySelector(...)`, `Element.matches(...)`, and `Element.closest(...)` without a new public `Harness` method
 - missing matches are `null`, not hard errors
 - selector grammar stays bounded and deterministic
 - unsupported syntax continues to fail explicitly
 - docs, contract tests, and regression tests agree
 
-## Phase 6 以後の進め方
+残り:
+
+- なし
+
+## Phase 7 以後の進め方
 
 運用ルール:
 
@@ -1092,13 +1097,14 @@ README は次だけを書く。
 4. 実装は owning subsystem に閉じる
 5. 既存 API で足りない場合だけ `Harness` に公開する
 6. 公開面が変わる変更では README / capability matrix / mock guide も同じ変更で更新する
+- adjacent sibling combinators (`A + B`) は既に実装済みで、general sibling combinators (`A ~ B`) は backlog のままにする
 
 新しい named phase を切る条件:
 
 - 複数の今後の slice が 1 つの cross-cutting milestone に収束している
 - その milestone に独立した完了条件が必要
 
-それまでは、Phase 6 後モードとして backlog 駆動の小さい slice を継続する。
+それまでは、Phase 7 後モードとして backlog 駆動の小さい slice を継続する。
 
 ---
 
