@@ -1,0 +1,15 @@
+[package]
+name = "bt-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "bt_runtime"
+path = "src/lib.rs"
+
+[dependencies]
+bt-dom = { path = "../bt-dom" }
+bt-script = { path = "../bt-script" }
+

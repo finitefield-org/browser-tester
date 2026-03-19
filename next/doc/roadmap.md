@@ -1,0 +1,97 @@
+# Roadmap
+
+This roadmap mirrors the staged plan from [`next.md`](../../next.md) and turns it into the working order for `next/`.
+
+## Phase 0: Skeleton
+
+Delivered in this workspace:
+
+- independent Rust workspace under `next/`
+- `HarnessBuilder`
+- `Session`
+- `DomStore`
+- scheduler and mock registry skeletons
+- error taxonomy
+- design-document set
+
+Exit criteria:
+
+- build an empty session without HTML
+- keep URL and storage seed configuration
+- compile and test the workspace
+
+## Phase 1: DOM Core
+
+Planned work:
+
+- HTML parser
+- DOM tree construction
+- selector subset
+- `assert_exists`
+- `dump_dom`
+
+Exit criteria:
+
+- build DOM from HTML text
+- resolve `#id`, tag, and attribute selectors
+
+## Phase 2: Script Runtime
+
+Planned work:
+
+- lexer
+- parser
+- evaluator
+- host bindings for `window`, `document`, and `Element`
+- inline script execution
+
+Exit criteria:
+
+- simple DOM mutation through script works
+- event handlers can be registered
+
+## Phase 3: Events and Forms
+
+Planned work:
+
+- event dispatch
+- default action registry
+- form controls
+- `click`, `type_text`, `set_checked`, `submit`
+
+Exit criteria:
+
+- common form-oriented UI tests pass
+
+## Phase 4: Determinism and Mocks
+
+Planned work:
+
+- fake clock hardening
+- microtask queue semantics
+- fetch mock
+- dialogs
+- clipboard
+- location mock
+- file input mock
+
+Exit criteria:
+
+- realistic mock-heavy tests can be expressed through the public facade
+
+## Phase 5: Hardening
+
+Planned work:
+
+- public contract tests
+- subsystem tests
+- regression suite
+- property tests
+- documentation polish
+- publish checklist
+
+Exit criteria:
+
+- docs and code agree
+- quick and hardening test profiles both exist
+

@@ -1,0 +1,121 @@
+# Architecture
+
+## Intent
+
+`next/` is a clean-room rewrite workspace for the next generation of `browser-tester`.
+
+The design is derived from [`next.md`](../../next.md) and keeps four constraints fixed from the start:
+
+- deterministic execution is a product contract
+- the public surface stays centered on `Harness`
+- implementation ownership is enforced by workspace boundaries
+- mocks are first-class test APIs, not ad hoc escape hatches
+
+## Goals
+
+- Run browser-style tests in a single Rust process.
+- Keep time, randomness, and browser-like APIs deterministic.
+- Support form-heavy UI tests without launching a real browser.
+- Make subsystem ownership visible in code and docs before feature growth starts.
+
+## Non-Goals
+
+- real rendering or layout
+- general-purpose network I/O
+- service workers
+- full iframe semantics
+- full browser compatibility
+- broad Web API coverage without an explicit capability decision
+
+## Workspace Layout
+
+```text
+next/
+  crates/
+    browser-tester/   # public facade crate
+    bt-dom/           # DOM store, HTML parser, selector subset
+    bt-runtime/       # session, scheduler, services, mocks, debug state
+    bt-script/        # lexer, parser, evaluator, host bindings
+  doc/
+```
+
+Current Phase 0 status:
+
+- `browser-tester-next` exposes `Harness`, `HarnessBuilder`, and the planned error taxonomy
+- `bt-dom` owns `DomStore`, generational `NodeId`, indexes, and side-table skeletons
+- `bt-runtime` owns `Session`, scheduler, deterministic mock registry, and debug state
+- `bt-script` owns `ScriptRuntime` and the host-binding seam
+
+## High-Level Runtime Shape
+
+```mermaid
+flowchart LR
+  T["Rust test"] --> H["Harness facade"]
+  H --> S["Session"]
+  S --> D["bt-dom::DomStore"]
+  S --> Q["bt-runtime::Scheduler"]
+  S --> M["bt-runtime::MockRegistry"]
+  S --> J["bt-script::ScriptRuntime"]
+```
+
+`Harness` is intentionally thin.
+State lives in `Session`, and subsystem crates own their internal data.
+
+## Data Ownership Rules
+
+- DOM truth lives in `bt-dom`.
+- Scheduler truth lives in `bt-runtime`.
+- Script-runtime internals stay inside `bt-script`.
+- Browser-like service behavior is modeled in `bt-runtime` and consumed through bindings later.
+- Public `Harness` methods delegate inward and should not accumulate long-lived state.
+
+## Phase Plan
+
+### Phase 0
+
+- workspace skeleton
+- `HarnessBuilder`
+- `Session`
+- `DomStore`
+- scheduler and mock registry skeleton
+- error taxonomy
+- design docs
+
+### Phase 1
+
+- HTML parser and tree builder
+- selector subset
+- `assert_exists`
+- DOM dump helpers
+
+### Phase 2
+
+- script lexer, parser, evaluator
+- `window`, `document`, and `Element` bindings
+- inline script bootstrapping
+
+### Phase 3
+
+- event dispatch
+- default action registry
+- form controls
+- user-facing `Harness` actions
+
+### Phase 4
+
+- fake clock hardening
+- microtask semantics
+- fetch, clipboard, dialog, location, and file-input mocks
+
+### Phase 5
+
+- contract tests
+- regression suite
+- property tests
+- publication checklist
+
+## Current Implementation Notes
+
+The Phase 0 workspace compiles and exposes the intended seams, but it does not attempt partial behavior yet.
+Unimplemented public actions fail explicitly so later phases do not inherit silent fallback semantics.
+

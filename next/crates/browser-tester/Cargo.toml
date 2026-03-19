@@ -1,0 +1,16 @@
+[package]
+name = "browser-tester-next"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "browser_tester_next"
+path = "src/lib.rs"
+
+[dependencies]
+bt-dom = { path = "../bt-dom" }
+bt-runtime = { path = "../bt-runtime" }
+bt-script = { path = "../bt-script" }
+
