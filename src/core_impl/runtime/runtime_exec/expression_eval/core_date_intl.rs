@@ -11,6 +11,11 @@ impl Harness {
         if let Some(value) = self.try_eval_core_date_exprs(expr, env, event_param, event)? {
             return Ok(Some(value));
         }
+        if let Some(value) =
+            self.try_eval_core_intl_locale_static_exprs(expr, env, event_param, event)?
+        {
+            return Ok(Some(value));
+        }
         self.try_eval_core_intl_exprs(expr, env, event_param, event)
     }
 }

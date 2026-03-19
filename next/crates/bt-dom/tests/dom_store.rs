@@ -59,3 +59,71 @@ fn unsupported_selector_syntax_fails_explicitly() {
         .expect_err("class selectors are not supported yet");
     assert!(error.contains("supported forms are #id, tag, and [attr]"));
 }
+
+#[test]
+fn text_content_mutation_replaces_descendants_and_rebuilds_indexes() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html("<main id='app'><span id='child'>Hello</span></main>")
+        .expect("HTML should parse");
+
+    store
+        .set_text_content(NodeId::new(1, 0), "Updated")
+        .expect("textContent mutation should work");
+
+    assert_eq!(
+        store.dump_dom(),
+        "#document\n  <main id=\"app\">\n    \"Updated\"\n  </main>"
+    );
+    assert!(store.select("#child").unwrap().is_empty());
+    assert_eq!(store.select("#app").unwrap(), vec![NodeId::new(1, 0)]);
+}
+
+#[test]
+fn form_controls_are_seeded_and_mutable() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<input id='name' value='Ada'><input id='agree' type='checkbox' checked><textarea id='bio'>Hello</textarea>",
+        )
+        .expect("HTML should parse");
+
+    let name_id = store.select("#name").unwrap()[0];
+    let agree_id = store.select("#agree").unwrap()[0];
+    let bio_id = store.select("#bio").unwrap()[0];
+
+    assert_eq!(store.value_for_node(name_id), "Ada");
+    assert_eq!(store.checked_for_node(agree_id), Some(true));
+    assert_eq!(store.value_for_node(bio_id), "Hello");
+
+    store
+        .set_form_control_value(name_id, "Bob")
+        .expect("text input should accept value changes");
+    store
+        .set_form_control_checked(agree_id, false)
+        .expect("checkbox should accept checked changes");
+    store
+        .set_form_control_value(bio_id, "Updated")
+        .expect("textarea should accept value changes");
+
+    assert_eq!(store.value_for_node(name_id), "Bob");
+    assert_eq!(store.checked_for_node(agree_id), Some(false));
+    assert_eq!(store.value_for_node(bio_id), "Updated");
+    assert_eq!(
+        store.dump_dom(),
+        "#document\n  <input id=\"name\" value=\"Bob\" />\n  <input id=\"agree\" type=\"checkbox\" />\n  <textarea id=\"bio\">\n    \"Updated\"\n  </textarea>"
+    );
+}
+
+#[test]
+fn non_form_controls_reject_form_state_mutation() {
+    let mut store = DomStore::new_empty();
+    store.bootstrap_html("<div id='out'></div>").unwrap();
+
+    let out_id = store.select("#out").unwrap()[0];
+    let error = store
+        .set_form_control_value(out_id, "ignored")
+        .expect_err("divs are not form controls");
+
+    assert!(error.contains("supported form control"));
+}

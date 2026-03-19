@@ -6,14 +6,15 @@ This matrix defines what `next/` already exposes, what is only scaffolded, and w
 | --- | --- | --- | --- | --- |
 | `HarnessBuilder` and empty session bootstrap | Stable Core | 0 | Available | Builds a session with URL, parsed optional HTML source, and storage seeds. |
 | Error taxonomy (`HtmlParse`, `Script`, `Timer`, `Mock`, `Assertion`, ...) | Stable Core | 0 | Available | The classification exists even though most branches are not exercised yet. |
-| `DomStore` with generational `NodeId` and side-table skeletons | Internal Only | 0 | Available | Tree building and selector-backed traversal now exist; side tables are still sparse. |
+| `DomStore` with generational `NodeId` and side-table skeletons | Internal Only | 0 | Available | Tree building, selector-backed traversal, and minimal `textContent` mutation now exist; side tables are still sparse. |
 | Scheduler clock (`now_ms`, `advance_time`, `flush`) | Stable Core | 0 | Skeleton | Fake-time semantics exist, timer execution policy is still minimal. |
 | Typed mock registry families | Stable Test Mocks | 0 | Skeleton | Fetch, dialogs, clipboard, location, downloads, file input, and storage seeds are modeled. |
 | HTML parser and DOM tree construction | Stable Core | 1 | Available | `html(...)` now builds a real tree and rejects malformed markup. |
 | Selector subset (`#id`, tag, attr, combinators) | Stable Core | 1 | Available | `#id`, tag, and `[attr]` are supported; combinators fail explicitly. |
 | `assert_exists` and DOM assertions | Stable Core | 1 | Available | `assert_exists` queries the DOM and includes a dump in failure messages. |
-| Script lexer / parser / evaluator | Stable Core | 2 | Skeleton | Host-binding seam exists, no language behavior yet. |
-| Inline script execution | Stable Core | 2 | Planned | Will be wired through `Session` once DOM and bindings land. |
+| Script lexer / parser / evaluator | Stable Core | 2 | Available | Minimal statement/expression support powers inline DOM mutation and listener registration. |
+| Window/document/Element host bindings | Stable Core | 2 | Available | `document.getElementById`, `textContent` mutation, and listener registration are wired through `Session`. |
+| Inline script execution | Stable Core | 2 | Available | Inline `<script>` blocks execute during session bootstrap in document order. |
 | Event dispatch and default actions | Stable Core | 3 | Planned | `click`, `type_text`, `focus`, and friends are intentionally gated. |
 | Fetch mock response and failure injection | Stable Test Mocks | 4 | Skeleton | Response rules, error rules, and call capture structs exist. |
 | Clipboard, dialog, location, download, and file-input capture | Stable Test Mocks | 4 | Skeleton | Families are present; runtime integration is still pending. |

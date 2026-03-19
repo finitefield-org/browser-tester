@@ -97,12 +97,12 @@ fn storage_seed_registry_is_available_through_the_mock_view() {
 }
 
 #[test]
-fn phase_zero_actions_fail_explicitly_until_implemented() {
+fn unsupported_focus_still_fails_explicitly() {
     let mut harness = Harness::builder().build().expect("builder should succeed");
-    let error = harness.click("#submit").expect_err("click should be gated");
+    let error = harness.focus("#submit").expect_err("focus should still be gated");
     assert!(
         error
             .to_string()
-            .contains("Phase 3 after selector and event support land")
+            .contains("focus is planned for a later phase after focus management lands")
     );
 }

@@ -1,6 +1,6 @@
 # Limitations
 
-The `next/` workspace has reached Phase 1 for DOM core.
+The `next/` workspace has reached Phase 2 for DOM and script core.
 
 What exists today:
 
@@ -10,12 +10,12 @@ What exists today:
 - real HTML parsing and DOM tree construction for the Phase 1 subset
 - selector matching for `#id`, tag, and `[attr]`
 - `assert_exists` and DOM dump helpers
+- inline `<script>` bootstrapping with a minimal script parser/evaluator
+- listener registration through the script host seam
 - explicit mock families and debug hooks
 
 What does not exist yet:
 
-- inline script bootstrapping
-- script evaluation semantics
 - event propagation
 - default actions
 - form-control behavior

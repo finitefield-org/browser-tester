@@ -39,7 +39,7 @@ Exit criteria:
 
 ## Phase 2: Script Runtime
 
-Planned work:
+Delivered in this workspace:
 
 - lexer
 - parser

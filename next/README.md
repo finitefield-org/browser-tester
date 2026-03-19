@@ -14,7 +14,8 @@ Current status:
 - a compilable Rust workspace exists under `next/crates/`
 - `HarnessBuilder`, `Session`, `DomStore`, scheduler, mock registry, and error taxonomy are in place
 - Phase 1 DOM parsing, selector subset support, `assert_exists`, and debug DOM dumps are implemented
-- events, forms, and script execution are still gated for later phases
+- Phase 2 inline script bootstrapping, `document.getElementById(...).textContent = ...`, and listener registration are implemented
+- event dispatch, forms, and the wider action surface are still gated for later phases
 
 Workspace layout:
 
@@ -43,20 +44,20 @@ cd next
 cargo test
 ```
 
-Minimal Phase 1 example:
+Minimal Phase 2 example:
 
 ```rust
 use browser_tester_next::Harness;
 
 fn main() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
-        "<main id='app'><span data-state='ready'>Hello</span></main>",
+        "<main id='app'></main><script>document.getElementById('app').textContent = 'Hello';</script>",
     )?;
 
     harness.assert_exists("#app")?;
     assert_eq!(
         harness.debug().dump_dom(),
-        "#document\n  <main id=\"app\">\n    <span data-state=\"ready\">\n      \"Hello\"\n    </span>\n  </main>"
+        "#document\n  <main id=\"app\">\n    \"Hello\"\n  </main>\n  <script>\n    \"document.getElementById('app').textContent = 'Hello';\"\n  </script>"
     );
     Ok(())
 }

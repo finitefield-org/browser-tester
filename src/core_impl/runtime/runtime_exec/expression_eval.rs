@@ -12,6 +12,7 @@ mod calls_timers_binary_super_helpers;
 mod core_date_intl;
 mod core_date_intl_date_exprs;
 mod core_date_intl_intl_exprs;
+mod core_date_intl_locale_static_exprs;
 mod dom_platform;
 mod dom_platform_clipboard;
 mod dom_platform_dom_read_anchor_props;

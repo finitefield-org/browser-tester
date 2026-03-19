@@ -50,5 +50,43 @@ fn session_rejects_malformed_html() {
     })
     .expect_err("malformed HTML should fail");
 
-    assert!(error.contains("mismatched closing tag"));
+    assert!(error.to_string().contains("mismatched closing tag"));
+}
+
+#[test]
+fn session_executes_inline_scripts_during_bootstrap() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = 'Hello';</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute inline scripts");
+
+    assert_eq!(
+        session.dom().dump_dom(),
+        "#document\n  <main id=\"out\">\n    \"Hello\"\n  </main>\n  <script>\n    \"document.getElementById('out').textContent = 'Hello';\"\n  </script>"
+    );
+}
+
+#[test]
+fn session_reports_script_errors_from_inline_bootstrap() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('missing').textContent = 'Hello';</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("missing elements should fail script bootstrap");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(
+        error
+            .to_string()
+            .contains("document.getElementById(\"missing\") returned no element")
+    );
 }

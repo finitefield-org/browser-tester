@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use super::DomStore;
+use super::DomIndexes;
 use super::ElementData;
 use super::NodeId;
 use super::NodeKind;
@@ -15,6 +16,7 @@ impl DomStore {
         parsed.source_html = Some(html.clone());
         let mut parser = HtmlParser::new(&html);
         parser.parse_into(&mut parsed)?;
+        parsed.rebuild_form_controls();
         *self = parsed;
         Ok(())
     }
@@ -40,6 +42,217 @@ impl DomStore {
         let mut output = String::new();
         self.dump_node(self.document_id, 0, &mut output);
         output
+    }
+
+    pub fn set_text_content(&mut self, node_id: NodeId, value: &str) -> Result<(), String> {
+        let node_index = node_id.index() as usize;
+        let old_children = {
+            let Some(node) = self.nodes.get_mut(node_index) else {
+                return Err(format!("invalid node id: {:?}", node_id));
+            };
+
+            match &mut node.kind {
+                NodeKind::Document => return Ok(()),
+                NodeKind::Text(text) => {
+                    text.value = value.to_string();
+                    return Ok(());
+                }
+                NodeKind::Comment(comment) => {
+                    comment.clear();
+                    comment.push_str(value);
+                    return Ok(());
+                }
+                NodeKind::Element(_) => std::mem::take(&mut node.children),
+            }
+        };
+
+        let removed_nodes = self.collect_subtree_nodes(old_children.iter().copied());
+        for removed_id in removed_nodes {
+            if let Some(record) = self.nodes.get_mut(removed_id.index() as usize) {
+                record.parent = None;
+            }
+            self.side_tables.form_controls.remove(&removed_id);
+            self.side_tables.selection.remove(&removed_id);
+            self.side_tables.dialogs.remove(&removed_id);
+            self.side_tables.layout_stub.remove(&removed_id);
+        }
+
+        if !value.is_empty() {
+            self.add_text(node_id, value.to_string());
+        }
+
+        self.rebuild_indexes();
+        self.rebuild_form_controls();
+        Ok(())
+    }
+
+    pub fn text_content_for_node(&self, node_id: NodeId) -> String {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return String::new();
+        };
+
+        match &node.kind {
+            NodeKind::Document | NodeKind::Element(_) => {
+                let mut out = String::new();
+                for child in &node.children {
+                    out.push_str(&self.text_content_for_node(*child));
+                }
+                out
+            }
+            NodeKind::Text(text) => text.value.clone(),
+            NodeKind::Comment(_) => String::new(),
+        }
+    }
+
+    pub fn value_for_node(&self, node_id: NodeId) -> String {
+        if let Some(state) = self.side_tables.form_controls.get(&node_id) {
+            return state.value.clone();
+        }
+
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return String::new();
+        };
+
+        match &node.kind {
+            NodeKind::Element(element) => element
+                .attributes
+                .get("value")
+                .cloned()
+                .unwrap_or_else(|| self.text_content_for_node(node_id)),
+            NodeKind::Document => self.text_content_for_node(node_id),
+            NodeKind::Text(text) => text.value.clone(),
+            NodeKind::Comment(_) => String::new(),
+        }
+    }
+
+    pub fn checked_for_node(&self, node_id: NodeId) -> Option<bool> {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return None;
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return None;
+        };
+
+        if element.tag_name == "input"
+            && is_checkable_input_type(element.attributes.get("type").map(String::as_str))
+        {
+            self.side_tables
+                .form_controls
+                .get(&node_id)
+                .map(|state| state.checked)
+                .or_else(|| Some(element.attributes.contains_key("checked")))
+        } else {
+            None
+        }
+    }
+
+    pub fn set_form_control_value(
+        &mut self,
+        node_id: NodeId,
+        value: impl Into<String>,
+    ) -> Result<(), String> {
+        let value = value.into();
+        let node_index = node_id.index() as usize;
+        let Some(node) = self.nodes.get(node_index) else {
+            return Err(format!("invalid node id: {:?}", node_id));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(format!(
+                "node {:?} is not a supported form control",
+                node_id
+            ));
+        };
+
+        match element.tag_name.as_str() {
+            "textarea" => self.set_text_content(node_id, &value),
+            "input" if is_text_input_type(element.attributes.get("type").map(String::as_str)) => {
+                {
+                    let Some(node) = self.nodes.get_mut(node_index) else {
+                        return Err(format!("invalid node id: {:?}", node_id));
+                    };
+                    let NodeKind::Element(element) = &mut node.kind else {
+                        return Err(format!(
+                            "node {:?} is not a supported form control",
+                            node_id
+                        ));
+                    };
+                    element
+                        .attributes
+                        .insert("value".to_string(), value.clone());
+                }
+                self.rebuild_form_controls();
+                Ok(())
+            }
+            "input" => Err(format!(
+                "set_value is only supported on text-like inputs and textareas, not <input type=\"{}\">",
+                element
+                    .attributes
+                    .get("type")
+                    .map(String::as_str)
+                    .unwrap_or("text")
+            )),
+            _ => Err(format!(
+                "node {:?} is not a supported form control",
+                node_id
+            )),
+        }
+    }
+
+    pub fn set_form_control_checked(
+        &mut self,
+        node_id: NodeId,
+        checked: bool,
+    ) -> Result<(), String> {
+        let node_index = node_id.index() as usize;
+        let Some(node) = self.nodes.get(node_index) else {
+            return Err(format!("invalid node id: {:?}", node_id));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(format!(
+                "node {:?} is not a supported form control",
+                node_id
+            ));
+        };
+
+        match element.tag_name.as_str() {
+            "input" if is_checkable_input_type(element.attributes.get("type").map(String::as_str)) => {
+                {
+                    let Some(node) = self.nodes.get_mut(node_index) else {
+                        return Err(format!("invalid node id: {:?}", node_id));
+                    };
+                    let NodeKind::Element(element) = &mut node.kind else {
+                        return Err(format!(
+                            "node {:?} is not a supported form control",
+                            node_id
+                        ));
+                    };
+                    if checked {
+                        element
+                            .attributes
+                            .insert("checked".to_string(), String::new());
+                    } else {
+                        element.attributes.remove("checked");
+                    }
+                }
+                self.rebuild_form_controls();
+                Ok(())
+            }
+            "input" => Err(format!(
+                "set_checked is only supported on checkbox and radio inputs, not <input type=\"{}\">",
+                element
+                    .attributes
+                    .get("type")
+                    .map(String::as_str)
+                    .unwrap_or("text")
+            )),
+            _ => Err(format!(
+                "node {:?} is not a supported form control",
+                node_id
+            )),
+        }
     }
 
     fn add_node(&mut self, parent: NodeId, kind: NodeKind) -> NodeId {
@@ -110,6 +323,137 @@ impl DomStore {
 
     fn add_comment(&mut self, parent: NodeId, value: String) -> NodeId {
         self.add_node(parent, NodeKind::Comment(value))
+    }
+
+    fn collect_subtree_nodes<I>(&self, roots: I) -> Vec<NodeId>
+    where
+        I: IntoIterator<Item = NodeId>,
+    {
+        let mut collected = Vec::new();
+        for root in roots {
+            self.collect_subtree_nodes_inner(root, &mut collected);
+        }
+        collected
+    }
+
+    fn collect_subtree_nodes_inner(&self, node_id: NodeId, collected: &mut Vec<NodeId>) {
+        collected.push(node_id);
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return;
+        };
+        for child in &node.children {
+            self.collect_subtree_nodes_inner(*child, collected);
+        }
+    }
+
+    fn rebuild_form_controls(&mut self) {
+        self.side_tables.form_controls.clear();
+        self.index_form_controls(self.document_id);
+    }
+
+    fn index_form_controls(&mut self, node_id: NodeId) {
+        let Some(node) = self.nodes.get(node_id.index() as usize).cloned() else {
+            return;
+        };
+
+        if let NodeKind::Element(element) = &node.kind {
+            match element.tag_name.as_str() {
+                "textarea" => {
+                    self.side_tables.form_controls.insert(
+                        node_id,
+                        super::FormControlState {
+                            value: self.text_content_for_node(node_id),
+                            checked: false,
+                        },
+                    );
+                }
+                "input"
+                    if is_text_input_type(element.attributes.get("type").map(String::as_str)) =>
+                {
+                    self.side_tables.form_controls.insert(
+                        node_id,
+                        super::FormControlState {
+                            value: element
+                                .attributes
+                                .get("value")
+                                .cloned()
+                                .unwrap_or_default(),
+                            checked: false,
+                        },
+                    );
+                }
+                "input"
+                    if is_checkable_input_type(element.attributes.get("type").map(String::as_str)) =>
+                {
+                    self.side_tables.form_controls.insert(
+                        node_id,
+                        super::FormControlState {
+                            value: element
+                                .attributes
+                                .get("value")
+                                .cloned()
+                                .unwrap_or_else(|| "on".to_string()),
+                            checked: element.attributes.contains_key("checked"),
+                        },
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        for child in node.children {
+            self.index_form_controls(child);
+        }
+    }
+
+    fn rebuild_indexes(&mut self) {
+        self.indexes = DomIndexes::default();
+        self.index_node(self.document_id);
+    }
+
+    fn index_node(&mut self, node_id: NodeId) {
+        let Some(node) = self.nodes.get(node_id.index() as usize).cloned() else {
+            return;
+        };
+
+        if let NodeKind::Element(element) = node.kind {
+            self.indexes
+                .tag_index
+                .entry(element.tag_name.clone())
+                .or_default()
+                .push(node_id);
+
+            if let Some(value) = element.attributes.get("id") {
+                self.indexes
+                    .id_index
+                    .entry(value.clone())
+                    .or_insert(node_id);
+            }
+
+            if let Some(value) = element.attributes.get("name") {
+                self.indexes
+                    .name_index
+                    .entry(value.clone())
+                    .or_default()
+                    .push(node_id);
+            }
+
+            if let Some(value) = element.attributes.get("class") {
+                for class_name in value.split_ascii_whitespace() {
+                    if !class_name.is_empty() {
+                        self.indexes
+                            .class_index
+                            .entry(class_name.to_string())
+                            .or_default()
+                            .push(node_id);
+                    }
+                }
+            }
+        }
+
+        for child in node.children {
+            self.index_node(child);
+        }
     }
 
     fn select_by_id(&self, id_selector: &str) -> Result<Vec<NodeId>, String> {
@@ -579,4 +923,27 @@ fn is_void_element(tag_name: &str) -> bool {
             | "track"
             | "wbr"
     )
+}
+
+fn is_text_input_type(input_type: Option<&str>) -> bool {
+    matches!(
+        input_type.unwrap_or("text"),
+        "text"
+            | "search"
+            | "url"
+            | "tel"
+            | "email"
+            | "password"
+            | "number"
+            | "date"
+            | "datetime-local"
+            | "month"
+            | "week"
+            | "time"
+            | "color"
+    )
+}
+
+fn is_checkable_input_type(input_type: Option<&str>) -> bool {
+    matches!(input_type.unwrap_or("text"), "checkbox" | "radio")
 }

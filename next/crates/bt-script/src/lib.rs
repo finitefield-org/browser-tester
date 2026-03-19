@@ -1,6 +1,10 @@
 use std::error::Error as StdError;
 use std::fmt;
 
+mod evaluator;
+mod parser;
+mod syntax;
+
 #[derive(Clone, Debug, Default)]
 pub struct ScriptParser;
 
@@ -12,6 +16,41 @@ pub struct ScriptHeap;
 
 #[derive(Clone, Debug, Default)]
 pub struct GlobalEnvironment;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ElementHandle(u64);
+
+impl ElementHandle {
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ListenerTarget {
+    Window,
+    Document,
+    Element(ElementHandle),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScriptFunction {
+    pub params: Vec<String>,
+    pub body_source: String,
+}
+
+impl ScriptFunction {
+    pub fn new(params: Vec<String>, body_source: impl Into<String>) -> Self {
+        Self {
+            params,
+            body_source: body_source.into(),
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScriptError {
@@ -54,6 +93,43 @@ pub trait HostBindings {
     fn on_microtask_checkpoint(&mut self) -> Result<()> {
         Ok(())
     }
+
+    fn document_get_element_by_id(&mut self, _id: &str) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("document.getElementById"))
+    }
+
+    fn element_text_content(&mut self, _element: ElementHandle) -> Result<String> {
+        Err(ScriptError::phase_not_ready("element.textContent"))
+    }
+
+    fn element_set_text_content(&mut self, _element: ElementHandle, _value: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready("element.textContent assignment"))
+    }
+
+    fn element_value(&mut self, _element: ElementHandle) -> Result<String> {
+        Err(ScriptError::phase_not_ready("element.value"))
+    }
+
+    fn element_set_value(&mut self, _element: ElementHandle, _value: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready("element.value assignment"))
+    }
+
+    fn element_checked(&mut self, _element: ElementHandle) -> Result<bool> {
+        Err(ScriptError::phase_not_ready("element.checked"))
+    }
+
+    fn element_set_checked(&mut self, _element: ElementHandle, _checked: bool) -> Result<()> {
+        Err(ScriptError::phase_not_ready("element.checked assignment"))
+    }
+
+    fn register_event_listener(
+        &mut self,
+        _target: ListenerTarget,
+        _event_type: &str,
+        _handler: ScriptFunction,
+    ) -> Result<()> {
+        Err(ScriptError::phase_not_ready("addEventListener"))
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -92,7 +168,9 @@ impl ScriptRuntime {
         source_name: &str,
         host: &mut H,
     ) -> Result<()> {
-        host.on_eval(code, source_name)
+        host.on_eval(code, source_name)?;
+        let program = self.parser.parse_program(code)?;
+        self.evaluator.eval_program(&program, host)
     }
 
     pub fn queue_microtask(&mut self) {
@@ -109,6 +187,22 @@ impl ScriptRuntime {
             host.on_microtask_checkpoint()?;
         }
         Ok(())
+    }
+}
+
+impl ScriptParser {
+    pub(crate) fn parse_program(&self, code: &str) -> Result<syntax::Program> {
+        parser::parse_program(code)
+    }
+}
+
+impl Evaluator {
+    pub(crate) fn eval_program<H: HostBindings>(
+        &self,
+        program: &syntax::Program,
+        host: &mut H,
+    ) -> Result<()> {
+        evaluator::eval_program(program, host)
     }
 }
 
@@ -139,13 +233,13 @@ mod tests {
         let mut runtime = ScriptRuntime::new();
         let mut host = RecordingHost::default();
         runtime
-            .eval_program("document.title = 'x'", "inline-script", &mut host)
+            .eval_program("const value = 'x';", "inline-script", &mut host)
             .expect("host callback should succeed");
         assert_eq!(
             host.evals,
             vec![(
                 "inline-script".to_string(),
-                "document.title = 'x'".to_string(),
+                "const value = 'x';".to_string(),
             )]
         );
     }

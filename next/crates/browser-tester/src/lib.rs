@@ -8,6 +8,7 @@ pub use bt_runtime::{
     FetchErrorRule, FetchMocks, FetchResponseRule, FileInputMocks, FileInputSelection,
     LocationMocks, MockRegistry, ScheduledTimer, Scheduler, Session, SessionConfig, StorageSeeds,
 };
+use bt_runtime::SessionError;
 pub use bt_script::{HostBindings, ScriptError, ScriptRuntime};
 
 macro_rules! message_error {
@@ -104,6 +105,16 @@ impl From<ScriptError> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+fn map_session_error(error: SessionError) -> Error {
+    match error {
+        SessionError::HtmlParse(message) => Error::HtmlParse(HtmlParseError::new(message)),
+        SessionError::Script(error) => Error::Script(error),
+        SessionError::Selector(message) => Error::Selector(SelectorError::new(message)),
+        SessionError::Dom(message) => Error::Dom(DomError::new(message)),
+        SessionError::Event(message) => Error::Event(EventError::new(message)),
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct HarnessBuilder {
     url: Option<String>,
@@ -145,8 +156,7 @@ impl HarnessBuilder {
             html: self.html,
             local_storage: self.local_storage,
         };
-        let session = Session::new(config)
-            .map_err(|message| Error::HtmlParse(HtmlParseError::new(message)))?;
+        let session = Session::new(config).map_err(map_session_error)?;
         Ok(Harness { session })
     }
 }
@@ -217,64 +227,137 @@ impl Harness {
         Ok(())
     }
 
-    pub fn click(&mut self, _selector: &str) -> Result<()> {
-        Err(Error::Unsupported(
-            "click is planned for Phase 3 after selector and event support land",
-        ))
+    pub fn click(&mut self, selector: &str) -> Result<()> {
+        let node_id = self.resolve_action_target(selector)?;
+        self.session.click_node(node_id).map_err(map_session_error)
     }
 
-    pub fn type_text(&mut self, _selector: &str, _text: &str) -> Result<()> {
-        Err(Error::Unsupported(
-            "type_text is planned for Phase 3 after DOM and form support land",
-        ))
+    pub fn type_text(&mut self, selector: &str, text: &str) -> Result<()> {
+        let node_id = self.resolve_action_target(selector)?;
+        self.session
+            .type_text_node(node_id, text)
+            .map_err(map_session_error)
     }
 
-    pub fn set_checked(&mut self, _selector: &str, _checked: bool) -> Result<()> {
-        Err(Error::Unsupported(
-            "set_checked is planned for Phase 3 after form-control support lands",
-        ))
+    pub fn set_checked(&mut self, selector: &str, checked: bool) -> Result<()> {
+        let node_id = self.resolve_action_target(selector)?;
+        self.session
+            .set_checked_node(node_id, checked)
+            .map_err(map_session_error)
     }
 
     pub fn set_select_value(&mut self, _selector: &str, _value: &str) -> Result<()> {
         Err(Error::Unsupported(
-            "set_select_value is planned for Phase 3 after form-control support lands",
+            "set_select_value is planned for a later phase after select-control support lands",
         ))
     }
 
     pub fn focus(&mut self, _selector: &str) -> Result<()> {
         Err(Error::Unsupported(
-            "focus is planned for Phase 3 after selector and event support land",
+            "focus is planned for a later phase after focus management lands",
         ))
     }
 
     pub fn blur(&mut self, _selector: &str) -> Result<()> {
         Err(Error::Unsupported(
-            "blur is planned for Phase 3 after selector and event support land",
+            "blur is planned for a later phase after focus management lands",
         ))
     }
 
-    pub fn dispatch(&mut self, _selector: &str, _event: &str) -> Result<()> {
-        Err(Error::Unsupported(
-            "dispatch is planned for Phase 3 after event support lands",
-        ))
+    pub fn dispatch(&mut self, selector: &str, event: &str) -> Result<()> {
+        let node_id = self.resolve_action_target(selector)?;
+        self.session
+            .dispatch_node(node_id, event)
+            .map_err(map_session_error)
     }
 
-    pub fn assert_text(&self, _selector: &str, _expected: &str) -> Result<()> {
-        Err(Error::Unsupported(
-            "assert_text is planned for a later phase after text inspection lands",
-        ))
+    pub fn submit(&mut self, selector: &str) -> Result<()> {
+        let node_id = self.resolve_action_target(selector)?;
+        self.session.submit_node(node_id).map_err(map_session_error)
     }
 
-    pub fn assert_value(&self, _selector: &str, _expected: &str) -> Result<()> {
-        Err(Error::Unsupported(
-            "assert_value is planned for Phase 3 after form-control support lands",
-        ))
+    pub fn assert_text(&self, selector: &str, expected: &str) -> Result<()> {
+        let matches = self
+            .session
+            .dom()
+            .select(selector)
+            .map_err(|message| Error::Selector(SelectorError::new(message)))?;
+
+        let Some(node_id) = matches.first().copied() else {
+            return Err(Error::Assertion(AssertionError::new(format!(
+                "expected selector `{}` to match at least one node\nDOM:\n{}",
+                selector,
+                self.session.dom().dump_dom()
+            ))));
+        };
+
+        let actual = self.session.dom().text_content_for_node(node_id);
+        if actual != expected {
+            return Err(Error::Assertion(AssertionError::new(format!(
+                "expected selector `{selector}` to have text `{expected}`, got `{actual}`\nDOM:\n{}",
+                self.session.dom().dump_dom()
+            ))));
+        }
+
+        Ok(())
     }
 
-    pub fn assert_checked(&self, _selector: &str, _expected: bool) -> Result<()> {
-        Err(Error::Unsupported(
-            "assert_checked is planned for Phase 3 after form-control support lands",
-        ))
+    pub fn assert_value(&self, selector: &str, expected: &str) -> Result<()> {
+        let matches = self
+            .session
+            .dom()
+            .select(selector)
+            .map_err(|message| Error::Selector(SelectorError::new(message)))?;
+
+        let Some(node_id) = matches.first().copied() else {
+            return Err(Error::Assertion(AssertionError::new(format!(
+                "expected selector `{}` to match at least one node\nDOM:\n{}",
+                selector,
+                self.session.dom().dump_dom()
+            ))));
+        };
+
+        let actual = self.session.dom().value_for_node(node_id);
+        if actual != expected {
+            return Err(Error::Assertion(AssertionError::new(format!(
+                "expected selector `{selector}` to have value `{expected}`, got `{actual}`\nDOM:\n{}",
+                self.session.dom().dump_dom()
+            ))));
+        }
+
+        Ok(())
+    }
+
+    pub fn assert_checked(&self, selector: &str, expected: bool) -> Result<()> {
+        let matches = self
+            .session
+            .dom()
+            .select(selector)
+            .map_err(|message| Error::Selector(SelectorError::new(message)))?;
+
+        let Some(node_id) = matches.first().copied() else {
+            return Err(Error::Assertion(AssertionError::new(format!(
+                "expected selector `{}` to match at least one node\nDOM:\n{}",
+                selector,
+                self.session.dom().dump_dom()
+            ))));
+        };
+
+        let Some(actual) = self.session.dom().checked_for_node(node_id) else {
+            return Err(Error::Assertion(AssertionError::new(format!(
+                "expected selector `{selector}` to refer to a checkable control\nDOM:\n{}",
+                self.session.dom().dump_dom()
+            ))));
+        };
+
+        if actual != expected {
+            return Err(Error::Assertion(AssertionError::new(format!(
+                "expected selector `{selector}` to be checked `{expected}`, got `{actual}`\nDOM:\n{}",
+                self.session.dom().dump_dom()
+            ))));
+        }
+
+        Ok(())
     }
 
     pub fn assert_exists(&self, selector: &str) -> Result<()> {
@@ -305,6 +388,22 @@ impl Harness {
         DebugView {
             session: &self.session,
         }
+    }
+
+    fn resolve_action_target(&self, selector: &str) -> Result<NodeId> {
+        let matches = self
+            .session
+            .dom()
+            .select(selector)
+            .map_err(|message| Error::Selector(SelectorError::new(message)))?;
+
+        let Some(node_id) = matches.first().copied() else {
+            return Err(Error::Dom(DomError::new(format!(
+                "selector `{selector}` did not match any elements"
+            ))));
+        };
+
+        Ok(node_id)
     }
 }
 
