@@ -10,9 +10,12 @@ This matrix defines what `next/` already exposes, what is only scaffolded, and w
 | Scheduler clock (`now_ms`, `advance_time`, `flush`) | Stable Core | 0 | Available | Fake-time semantics now drain due timers deterministically and `flush` clears the remaining timer and microtask queue. |
 | Typed mock registry families | Stable Test Mocks | 0 | Available | Fetch, dialogs, clipboard, location, file input, downloads, and storage seeds are modeled, with public mock actions wired for the browser-service families, including download capture. |
 | HTML parser and DOM tree construction | Stable Core | 1 | Available | `html(...)` now builds a real tree and rejects malformed markup. |
-| Selector subset (`#id`, tag, attr, combinators) | Stable Core | 1 | Available | `#id`, tag, and `[attr]` are supported; combinators fail explicitly. |
+| Selector subset (`#id`, tag, attr) | Stable Core | 1 | Available | `#id`, tag, and `[attr]` are supported as the original Phase 1 subset. |
 | Selector slice 1 (`.class`, `tag.class`, `#id.class`) | Stable Core | 6 | Available | The shared selector engine now resolves class selectors and compound simple selectors through existing `Harness` APIs. |
-| Remaining Phase 6 selector expansion | Stable Core | 6 | Planned | descendant combinators, child combinators, and selector hardening remain bounded and explicit. |
+| Selector slice 2 (descendant combinators) | Stable Core | 6 | Available | `A B` resolves nested matches in document order through the same selector engine. |
+| Selector slice 3 (child combinators) | Stable Core | 6 | Available | `A > B` resolves direct children through the same selector engine. |
+| Selector hardening and bounded selector grammar | Stable Core | 6 | Available | unsupported syntax continues to fail explicitly, and no broader CSS parsing is intended. |
+| Script DOM query APIs (`querySelector`, `matches`, `closest`) | Stable Core | 7 | Planned | Script-side selector lookup reuses the bounded engine; `querySelectorAll` remains deferred. |
 | `assert_exists` and DOM assertions | Stable Core | 1 | Available | `assert_exists` queries the DOM and includes a dump in failure messages. |
 | Script lexer / parser / evaluator | Stable Core | 2 | Available | Minimal statement/expression support powers inline DOM mutation and listener registration. |
 | Window/document/Element host bindings | Stable Core | 2 | Available | `document.getElementById`, `textContent` mutation, and listener registration are wired through `Session`. |

@@ -1,6 +1,6 @@
 # Limitations
 
-The `next/` workspace has reached Phase 4 for DOM, script, events, forms, fake time, and deterministic mock wiring, and Phase 5 for hardening and publication checks.
+The `next/` workspace has reached Phase 4 for DOM, script, events, forms, fake time, and deterministic mock wiring, Phase 5 for hardening and publication checks, and Phase 6 selector slices 1 through 4. Phase 7 script DOM query expansion is designed but not yet implemented.
 
 What exists today:
 
@@ -8,7 +8,7 @@ What exists today:
 - public and internal type skeletons
 - deterministic session bootstrap
 - real HTML parsing and DOM tree construction for the Phase 1 subset
-- selector matching for `#id`, tag, `[attr]`, `.class`, `tag.class`, and `#id.class`
+- selector matching for `#id`, tag, `[attr]`, `.class`, `tag.class`, `#id.class`, descendant combinators, and child combinators
 - `assert_exists` and DOM dump helpers
 - inline `<script>` bootstrapping with a minimal script parser/evaluator
 - listener registration through the script host seam
@@ -17,11 +17,13 @@ What exists today:
 - explicit mock families, debug hooks, and public mock actions for `fetch`, dialogs, clipboard, location, file input, and download capture
 - contract, regression, and property test suites
 - quick and hardening test profiles plus a publication checklist
+- script-side `querySelector`, `matches`, and `closest` remain unavailable
 
 What does not exist yet:
 
-- descendant combinators and child combinators
-- selector hardening beyond the bounded Phase 6 slice set
+- adjacent and general sibling combinators
+- script-side selector collections such as `querySelectorAll`, NodeList, and HTMLCollection
+- selector lists, pseudo-classes, and other broad CSS parsing features
 
 ## Important Consequence
 

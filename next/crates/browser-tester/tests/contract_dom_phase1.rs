@@ -45,13 +45,13 @@ fn malformed_html_is_rejected_with_a_parse_error() {
 fn unsupported_selector_syntax_is_reported_explicitly() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html("<main><span class='app'></span></main>")?;
     let error = harness
-        .assert_exists("main .app")
-        .expect_err("descendant combinators are not part of the phase-one subset");
+        .assert_exists("main + .app")
+        .expect_err("adjacent sibling combinators are not part of the selector slices");
 
     let message = error.to_string();
     assert!(message.contains("Selector error"));
     assert!(
-        message.contains("supported forms are #id, .class, tag, tag.class, #id.class, and [attr]")
+        message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, and child combinators like `A > B`")
     );
     Ok(())
 }

@@ -56,10 +56,10 @@ fn unsupported_combinator_syntax_fails_explicitly() {
     store.bootstrap_html("<main class='app'></main>").unwrap();
 
     let error = store
-        .select("main .app")
-        .expect_err("descendant combinators are not supported yet");
+        .select("main + .app")
+        .expect_err("adjacent sibling combinators are not supported yet");
     assert!(
-        error.contains("supported forms are #id, .class, tag, tag.class, #id.class, and [attr]")
+        error.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, and child combinators like `A > B`")
     );
 }
 
@@ -81,6 +81,51 @@ fn class_and_compound_selectors_match_in_document_order() {
         vec![save_id, cancel_id]
     );
     assert_eq!(store.select("#save.primary").unwrap(), vec![save_id]);
+}
+
+#[test]
+fn descendant_combinators_match_nested_nodes_in_document_order() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main><section><button id='first' class='primary'>First</button></section><div><article><button id='second' class='primary'>Second</button></article></div></main>",
+        )
+        .expect("HTML should parse");
+
+    let first_id = store.select("#first").unwrap()[0];
+    let second_id = store.select("#second").unwrap()[0];
+
+    assert_eq!(
+        store.select("main .primary").unwrap(),
+        vec![first_id, second_id]
+    );
+    assert_eq!(
+        store.select("main section .primary").unwrap(),
+        vec![first_id]
+    );
+}
+
+#[test]
+fn child_combinators_match_only_direct_children() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main><section><button id='nested' class='primary'>Nested</button></section><button id='direct' class='primary'>Direct</button></main>",
+        )
+        .expect("HTML should parse");
+
+    let nested_id = store.select("#nested").unwrap()[0];
+    let direct_id = store.select("#direct").unwrap()[0];
+
+    assert_eq!(store.select("main > .primary").unwrap(), vec![direct_id]);
+    assert_eq!(
+        store.select("main > section > .primary").unwrap(),
+        vec![nested_id]
+    );
+    assert_eq!(
+        store.select("main .primary").unwrap(),
+        vec![nested_id, direct_id]
+    );
 }
 
 #[test]

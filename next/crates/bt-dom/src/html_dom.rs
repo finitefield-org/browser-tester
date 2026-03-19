@@ -17,6 +17,18 @@ struct SelectorQuery {
     attributes: Vec<String>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct SelectorChain {
+    parts: Vec<SelectorQuery>,
+    relations: Vec<SelectorCombinator>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectorCombinator {
+    Descendant,
+    Child,
+}
+
 impl DomStore {
     pub fn bootstrap_html(&mut self, html: impl Into<String>) -> Result<(), String> {
         let html = html.into();
@@ -35,8 +47,8 @@ impl DomStore {
             return Err("selector must not be empty".to_string());
         }
 
-        let query = Self::parse_selector_query(selector)?;
-        Ok(self.select_by_query(&query))
+        let chain = Self::parse_selector_chain(selector)?;
+        Ok(self.select_by_chain(&chain))
     }
 
     pub fn dump_dom(&self) -> String {
@@ -656,11 +668,15 @@ impl DomStore {
         }
     }
 
-    fn select_by_query(&self, query: &SelectorQuery) -> Vec<NodeId> {
-        let candidates = self.selector_candidates(query);
+    fn select_by_chain(&self, chain: &SelectorChain) -> Vec<NodeId> {
+        let Some(last) = chain.parts.last() else {
+            return Vec::new();
+        };
+
+        let candidates = self.selector_candidates(last);
         let mut results: Vec<NodeId> = candidates
             .into_iter()
-            .filter(|node_id| self.matches_selector_query(*node_id, query))
+            .filter(|node_id| self.matches_selector_chain(*node_id, chain))
             .collect();
         results.dedup();
         results
@@ -703,6 +719,48 @@ impl DomStore {
             .min_by_key(|nodes| nodes.len())
             .map(|nodes| nodes.to_vec())
             .unwrap_or_default()
+    }
+
+    fn matches_selector_chain(&self, node_id: NodeId, chain: &SelectorChain) -> bool {
+        let Some(last_index) = chain.parts.len().checked_sub(1) else {
+            return false;
+        };
+        self.matches_selector_chain_part(node_id, &chain.parts, &chain.relations, last_index)
+    }
+
+    fn matches_selector_chain_part(
+        &self,
+        node_id: NodeId,
+        parts: &[SelectorQuery],
+        relations: &[SelectorCombinator],
+        index: usize,
+    ) -> bool {
+        if !self.matches_selector_query(node_id, &parts[index]) {
+            return false;
+        }
+
+        if index == 0 {
+            return true;
+        }
+
+        match relations[index - 1] {
+            SelectorCombinator::Child => {
+                let Some(parent_id) = self.parent_of(node_id) else {
+                    return false;
+                };
+                self.matches_selector_chain_part(parent_id, parts, relations, index - 1)
+            }
+            SelectorCombinator::Descendant => {
+                let mut ancestor = self.parent_of(node_id);
+                while let Some(ancestor_id) = ancestor {
+                    if self.matches_selector_chain_part(ancestor_id, parts, relations, index - 1) {
+                        return true;
+                    }
+                    ancestor = self.parent_of(ancestor_id);
+                }
+                false
+            }
+        }
     }
 
     fn matches_selector_query(&self, node_id: NodeId, query: &SelectorQuery) -> bool {
@@ -750,71 +808,122 @@ impl DomStore {
         true
     }
 
-    fn parse_selector_query(selector: &str) -> Result<SelectorQuery, String> {
-        let mut query = SelectorQuery::default();
+    fn parse_selector_chain(selector: &str) -> Result<SelectorChain, String> {
+        let mut parts = Vec::new();
+        let mut relations = Vec::new();
         let bytes = selector.as_bytes();
         let mut pos = 0;
 
+        parts.push(Self::parse_selector_compound(selector, &mut pos)?);
+
         while pos < bytes.len() {
-            if bytes[pos].is_ascii_whitespace() {
+            let had_whitespace = skip_selector_whitespace(bytes, &mut pos);
+            if pos >= bytes.len() {
+                break;
+            }
+
+            let relation = match bytes[pos] {
+                b'>' => {
+                    pos += 1;
+                    SelectorCombinator::Child
+                }
+                byte if is_selector_combinator_byte(byte) => {
+                    return Err(selector_not_supported(selector));
+                }
+                _ if had_whitespace => SelectorCombinator::Descendant,
+                _ => return Err(selector_not_supported(selector)),
+            };
+
+            skip_selector_whitespace(bytes, &mut pos);
+            if pos >= bytes.len() {
                 return Err(selector_not_supported(selector));
             }
 
-            match bytes[pos] {
+            let part = Self::parse_selector_compound(selector, &mut pos)?;
+            relations.push(relation);
+            parts.push(part);
+        }
+
+        if parts.is_empty() {
+            return Err(selector_not_supported(selector));
+        }
+
+        Ok(SelectorChain { parts, relations })
+    }
+
+    fn parse_selector_compound(selector: &str, pos: &mut usize) -> Result<SelectorQuery, String> {
+        let mut query = SelectorQuery::default();
+        let bytes = selector.as_bytes();
+        let mut saw_token = false;
+
+        while *pos < bytes.len() {
+            if bytes[*pos].is_ascii_whitespace() || is_selector_combinator_byte(bytes[*pos]) {
+                break;
+            }
+
+            match bytes[*pos] {
                 b'#' => {
-                    pos += 1;
-                    let token = parse_selector_token(selector, &mut pos)?;
+                    *pos += 1;
+                    let token = parse_selector_token(selector, pos)?;
                     if query.id.is_some() {
                         return Err(selector_not_supported(selector));
                     }
                     query.id = Some(token);
+                    saw_token = true;
                 }
                 b'.' => {
-                    pos += 1;
-                    let token = parse_selector_token(selector, &mut pos)?;
+                    *pos += 1;
+                    let token = parse_selector_token(selector, pos)?;
                     query.classes.push(token);
+                    saw_token = true;
                 }
                 b'[' => {
-                    pos += 1;
-                    let start = pos;
-                    while pos < bytes.len() && bytes[pos] != b']' {
-                        if bytes[pos].is_ascii_whitespace() {
+                    *pos += 1;
+                    let start = *pos;
+                    while *pos < bytes.len() && bytes[*pos] != b']' {
+                        if bytes[*pos].is_ascii_whitespace()
+                            || is_selector_combinator_byte(bytes[*pos])
+                        {
                             return Err(selector_not_supported(selector));
                         }
-                        if !is_simple_name_byte(bytes[pos]) {
+                        if !is_simple_name_byte(bytes[*pos]) {
                             return Err(selector_not_supported(selector));
                         }
-                        pos += 1;
+                        *pos += 1;
                     }
 
-                    if pos == start || pos >= bytes.len() {
+                    if *pos == start || *pos >= bytes.len() {
                         return Err(selector_not_supported(selector));
                     }
 
-                    let attribute = selector[start..pos].to_ascii_lowercase();
-                    pos += 1;
+                    let attribute = selector[start..*pos].to_ascii_lowercase();
+                    *pos += 1;
                     query.attributes.push(attribute);
+                    saw_token = true;
                 }
                 byte if is_simple_name_byte(byte) => {
-                    let token = parse_selector_token(selector, &mut pos)?;
+                    let token = parse_selector_token(selector, pos)?;
                     if query.tag.is_some() {
                         return Err(selector_not_supported(selector));
                     }
                     query.tag = Some(token.to_ascii_lowercase());
+                    saw_token = true;
                 }
                 _ => return Err(selector_not_supported(selector)),
             }
         }
 
-        if query.tag.is_none()
-            && query.id.is_none()
-            && query.classes.is_empty()
-            && query.attributes.is_empty()
-        {
+        if !saw_token {
             return Err(selector_not_supported(selector));
         }
 
         Ok(query)
+    }
+
+    fn parent_of(&self, node_id: NodeId) -> Option<NodeId> {
+        self.nodes
+            .get(node_id.index() as usize)
+            .and_then(|node| node.parent)
     }
 
     fn dump_node(&self, node_id: NodeId, indent: usize, output: &mut String) {
@@ -883,7 +992,7 @@ impl DomStore {
 
 fn selector_not_supported(selector: &str) -> String {
     format!(
-        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, and [attr]"
+        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, and child combinators like `A > B`"
     )
 }
 
@@ -899,6 +1008,19 @@ fn parse_selector_token(selector: &str, pos: &mut usize) -> Result<String, Strin
     }
 
     Ok(selector[start..*pos].to_string())
+}
+
+fn skip_selector_whitespace(bytes: &[u8], pos: &mut usize) -> bool {
+    let start = *pos;
+    while *pos < bytes.len() && bytes[*pos].is_ascii_whitespace() {
+        *pos += 1;
+    }
+
+    *pos != start
+}
+
+fn is_selector_combinator_byte(byte: u8) -> bool {
+    matches!(byte, b'>' | b'+' | b'~' | b',')
 }
 
 struct HtmlParser<'a> {

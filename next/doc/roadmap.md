@@ -6,8 +6,8 @@ For day-to-day implementation sequencing inside each phase, also see [implementa
 
 Status note:
 
-- Phases 0 through 5 are complete in this workspace.
-- Phase 6 is reserved for selector expansion and should stay narrow and slice-based.
+- Phases 0 through 6 are complete in this workspace.
+- Phase 7 is reserved for script DOM query expansion and should stay narrow and slice-based.
 
 ## Phase 0: Skeleton
 
@@ -107,17 +107,23 @@ Exit criteria:
 
 ## Phase 6: Selector Expansion
 
-Delivered slice 1:
+Delivered slices 1 through 4:
 
 - class selectors and compound simple selectors
   - `.class`, `tag.class`, `#id.class`
   - `DomStore::select`, `assert_exists`, and action resolution now share the selector engine
 
-Planned work:
-
 - descendant combinators
+  - `A B`
+  - nested DOM matching and document-order behavior now work through the same selector engine
+
 - child combinators
-- selector hardening and regression coverage
+  - `A > B`
+  - direct-child matching and false-positive avoidance now work through the same selector engine
+
+Phase 6 complete:
+
+- selector hardening and regression coverage are delivered
 
 Exit criteria:
 
@@ -126,7 +132,27 @@ Exit criteria:
 - unsupported syntax still fails explicitly
 - quick and hardening profiles stay green
 
-## After Phase 6: Rolling Capability Delivery
+## Phase 7: Script DOM Query Expansion
+
+Designed slices:
+
+- `document.querySelector(...)` and `element.querySelector(...)`
+  - document-order first match, subtree-scoped lookup, `null` on miss
+- `Element.matches(...)`
+  - current element only, boolean return
+- `Element.closest(...)`
+  - self-inclusive ancestor walk, `null` on miss
+- selector hardening
+  - explicit failures for unsupported selector syntax, with `querySelectorAll` and collection types deferred
+
+Exit criteria:
+
+- inline scripts can use selector-based lookup without a new `Harness` API
+- selector grammar stays bounded and deterministic
+- unsupported syntax still fails explicitly
+- docs, contract tests, and regression tests agree
+
+## After Phase 7: Rolling Capability Delivery
 
 Operating rule:
 
@@ -142,4 +168,4 @@ Open a new named phase only when:
 - multiple upcoming slices share one cross-cutting milestone
 - that milestone needs its own exit criteria and user-facing status boundary
 
-Until then, keep shipping backlog-driven capability slices under this post-Phase-6 mode.
+Until then, keep shipping backlog-driven capability slices under this post-Phase-7 mode.

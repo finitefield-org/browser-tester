@@ -1,6 +1,6 @@
 # Implementation Guide
 
-This document explains how to actually build out the `next/` rewrite from its current Phase 3 baseline.
+This document explains how to actually build out the `next/` rewrite from its current Phase 6-complete baseline.
 
 Use it together with:
 
@@ -36,8 +36,7 @@ The safest way to turn the Phase 0 skeleton into a usable runtime is:
 
 This order keeps the public facade thin and avoids implementing user actions before the DOM and selector layers are trustworthy.
 
-Slices 1 through 7 are already implemented in this workspace, including public download capture. The next named milestone is Phase 6 selector expansion; use the same vertical-slice pattern for later phases.
-Phase 6 selector expansion slice 1, covering class selectors and compound simple selectors, is also implemented in this workspace. Keep the remaining selector slices bounded to the same selector engine.
+Slices 1 through 7 are already implemented in this workspace, including public download capture. Phase 6 selector expansion slices 1 through 4, covering class selectors, compound simple selectors, descendant combinators, child combinators, and selector hardening, are also implemented in this workspace. Phase 7 script DOM query expansion is the next named milestone; keep it bounded to the same selector engine and avoid introducing `querySelectorAll` or collection types in the first slice family.
 
 ## First Vertical Slices
 
@@ -229,13 +228,13 @@ Suggested scope:
 - child combinators (`A > B`)
 - explicit failures for unsupported selector syntax
 
-Tests to add first:
+Tests already in place:
 
 - class selectors match nodes in document order
 - descendant combinators resolve nested nodes
 - child combinators match only direct children
 - public `Harness` actions and assertions continue to resolve selectors deterministically
-- unsupported syntax still fails explicitly
+- selector hardening remains explicit for unsupported syntax
 
 Do not add yet:
 
@@ -243,6 +242,39 @@ Do not add yet:
 - selector lists
 - attribute value operators beyond the bounded slice
 - general CSS parsing
+
+### Slice 9: Script DOM Query Expansion
+
+Goal:
+
+- make selector-based DOM lookup available inside inline scripts without broadening the JS grammar
+
+Primary owner:
+
+- `bt-script`
+
+Suggested scope:
+
+- `document.querySelector(selector)`
+- `element.querySelector(selector)`
+- `Element.matches(selector)`
+- `Element.closest(selector)`
+- explicit `null` on miss
+- explicit errors for unsupported selector syntax
+
+Tests to add first:
+
+- document-scoped lookup works in inline scripts
+- subtree-scoped lookup works in inline scripts
+- `matches` and `closest` honor the bounded selector grammar
+- invalid selector syntax fails explicitly
+
+Do not add yet:
+
+- `querySelectorAll`
+- NodeList / HTMLCollection
+- broad CSS parsing
+- unrelated DOM mutation APIs
 
 ## Decision Flow for Each Change
 
@@ -316,8 +348,8 @@ Use this loop for daily implementation work:
 
 The next highest-value task is:
 
-1. implement minimal HTML tree building in `bt-dom`
-2. implement `#id` selector support
-3. enable `Harness::assert_exists(...)`
+1. implement `document.querySelector(...)` and `element.querySelector(...)` in `bt-script`
+2. thread selector resolution through `bt-runtime`
+3. cover missing-match and unsupported-selector failure paths
 
-That is the first slice that turns the Phase 0 skeleton into a real, usable contract.
+That is the first slice in Phase 7 and the next user-visible DOM query capability to land in the workspace.

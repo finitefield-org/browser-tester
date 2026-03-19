@@ -1007,8 +1007,8 @@ README は次だけを書く。
 
 注記:
 
-- この workspace では Phase 0 から Phase 5 まで完了済み
-- 次の named phase は selector expansion に限定した Phase 6
+- この workspace では Phase 0 から Phase 6 まで完了済み
+- Phase 7 を script DOM query expansion として設計済み、実装はこれから
 
 ## Phase 6: Selector Expansion
 
@@ -1027,13 +1027,13 @@ README は次だけを書く。
 1. class selectors and compound simple selectors（完了）
    - `.class`, `tag.class`, `#id.class`
    - tests: `DomStore::select`, `assert_exists`, action resolution
-2. descendant combinators（planned）
+2. descendant combinators（完了）
    - `A B`
    - tests: nested DOM matching and document-order behavior
-3. child combinators（planned）
+3. child combinators（完了）
    - `A > B`
    - tests: direct-child matching and false-positive avoidance
-4. selector hardening（planned）
+4. selector hardening（完了）
    - unsupported selector syntax remains explicit
    - tests: `click`, `type_text`, `set_checked`, `set_select_value`, `focus`, `blur`, `submit`, and `dispatch` continue to resolve selectors deterministically
    - keep quick / hardening profiles green
@@ -1043,6 +1043,43 @@ README は次だけを書く。
 - `.class`, descendant, and child selectors work through `DomStore::select`
 - `Harness` assertions and actions can resolve them without new public API
 - unsupported syntax still fails explicitly
+- docs, contract tests, and regression tests agree
+
+## Phase 7: Script DOM Query Expansion
+
+目的:
+
+- inline script と event handler から `getElementById` 以外の bounded selector lookup を使えるようにする
+- script 側の DOM アクセスを `bt-dom` の selector engine と共有しつつ、`Harness` の public API を増やさない
+
+担当:
+
+- `bt-script` が `Document` / `Element` の method dispatch と return value wrapping を所有する
+- `bt-runtime` が host binding を通じて `DomStore` の selector 解決を提供する
+- `bt-dom` は selector parsing / matching / subtree traversal の所有を維持する
+
+スライス:
+
+1. `document.querySelector(selector)` と `element.querySelector(selector)`（予定）
+   - document order の first match を返す
+   - miss は `null`
+   - scoped lookup は subtree に限定する
+2. `Element.matches(selector)`（予定）
+   - current element だけを判定する
+   - return は boolean
+3. `Element.closest(selector)`（予定）
+   - self を含む ancestor walk
+   - miss は `null`
+4. selector hardening and regression coverage（予定）
+   - unsupported selector syntax remains explicit
+   - `querySelectorAll` / NodeList / broader CSS parsing are out of scope for this phase
+
+完了条件:
+
+- inline scripts and listeners can use selector-based lookup without a new public `Harness` method
+- missing matches are `null`, not hard errors
+- selector grammar stays bounded and deterministic
+- unsupported syntax continues to fail explicitly
 - docs, contract tests, and regression tests agree
 
 ## Phase 6 以後の進め方

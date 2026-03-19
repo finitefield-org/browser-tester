@@ -16,17 +16,59 @@ fn class_selectors_and_compound_selectors_work_end_to_end() -> browser_tester_ne
 }
 
 #[test]
-fn descendant_combinators_still_fail_explicitly() -> browser_tester_next::Result<()> {
+fn descendant_combinators_work_end_to_end() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::from_html(
+        "<main><section><button id='save' class='primary action'>Save</button></section><div id='out'></div><script>document.getElementById('save').addEventListener('click', () => { document.getElementById('out').textContent = 'clicked'; });</script></main>",
+    )?;
+
+    harness.assert_exists("main .primary")?;
+    harness.assert_exists("main section .primary")?;
+
+    harness.click("main .primary")?;
+    harness.assert_text("#out", "clicked")?;
+    Ok(())
+}
+
+#[test]
+fn child_combinators_work_end_to_end() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::from_html(
+        "<main><section><button id='save' class='primary action'>Save</button></section><div id='out'></div><script>document.getElementById('save').addEventListener('click', () => { document.getElementById('out').textContent = 'clicked'; });</script></main>",
+    )?;
+
+    harness.assert_exists("main > section > .primary")?;
+    harness.assert_exists("main > section > button.primary")?;
+
+    harness.click("main > section > button.primary")?;
+    harness.assert_text("#out", "clicked")?;
+    Ok(())
+}
+
+#[test]
+fn sibling_combinators_still_fail_explicitly() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html("<main><span class='primary'></span></main>")?;
 
     let error = harness
-        .assert_exists("main .primary")
-        .expect_err("descendant combinators are not part of the first selector slice");
+        .assert_exists("main + .primary")
+        .expect_err("adjacent sibling combinators are not part of the selector slices");
 
     let message = error.to_string();
     assert!(message.contains("Selector error"));
     assert!(
-        message.contains("supported forms are #id, .class, tag, tag.class, #id.class, and [attr]")
+        message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, and child combinators like `A > B`")
     );
+    Ok(())
+}
+
+#[test]
+fn selector_hardening_keeps_public_actions_deterministic() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::from_html(
+        "<main><form id='profile'><section><input id='name' class='field'></section><section><input id='agree' class='flag' type='checkbox'><select id='mode' class='mode'><option value='a'>A</option><option value='b'>B</option></select><button id='submit' type='submit' class='action'>Save</button></section></form><div id='out'></div><script>document.getElementById('profile').addEventListener('submit', () => { document.getElementById('out').textContent = document.getElementById('name').value + ':' + String(document.getElementById('agree').checked) + ':' + document.getElementById('mode').value; });</script></main>",
+    )?;
+
+    harness.type_text("main .field", "Ada")?;
+    harness.set_checked("main > form > section > input.flag", true)?;
+    harness.set_select_value("main > form > section > select.mode", "b")?;
+    harness.submit("main > form")?;
+    harness.assert_text("#out", "Ada:true:b")?;
     Ok(())
 }
