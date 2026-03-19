@@ -22,7 +22,7 @@ pub(super) mod api {
     }
 
     pub(crate) fn parse_class_expr(src: &str) -> Result<Option<Expr>> {
-        super::parser_stmt::declaration_assignment_statements::parse_class_expr(src)
+        super::parser_stmt::parse_class_expr(src)
     }
 
     pub(crate) fn parse_block_statements(body: &str) -> Result<Vec<Stmt>> {
@@ -53,7 +53,7 @@ pub(super) mod api {
     }
 
     pub(crate) fn find_first_top_level_colon(src: &str) -> Option<usize> {
-        super::parser_expr::object_expressions::find_first_top_level_colon(src)
+        super::parser_expr::find_first_top_level_colon(src)
     }
 
     pub(crate) fn parse_queue_microtask_stmt(stmt: &str) -> Result<Option<Stmt>> {
