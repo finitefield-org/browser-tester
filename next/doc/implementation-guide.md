@@ -1,6 +1,6 @@
 # Implementation Guide
 
-This document explains how to actually build out the `next/` rewrite from its current Phase 6-complete baseline with Phase 7 slices 1 through 4 already delivered, plus sibling selector backlog slices (`A + B`, `A ~ B`), selector lists (`A, B`), and a post-Phase-7 collection slice for `querySelectorAll` / minimal `NodeList`.
+This document explains how to actually build out the `next/` rewrite from its current Phase 6-complete baseline with Phase 7 slices 1 through 4 already delivered, plus sibling selector backlog slices (`A + B`, `A ~ B`), selector lists (`A, B`), simple pseudo-classes, and a post-Phase-7 collection slice for `querySelectorAll` / minimal `NodeList`.
 
 Use it together with:
 
@@ -36,7 +36,7 @@ The safest way to turn the Phase 0 skeleton into a usable runtime is:
 
 This order keeps the public facade thin and avoids implementing user actions before the DOM and selector layers are trustworthy.
 
-Slices 1 through 7 are already implemented in this workspace, including public download capture. Phase 6 selector expansion slices 1 through 4, covering class selectors, compound simple selectors, descendant combinators, child combinators, and selector hardening, are also implemented in this workspace. A post-Phase-7 selector slice adds sibling combinators (`A + B`, `A ~ B`) and selector lists (`A, B`) through the same bounded engine. Phase 7 script DOM query slices 1 through 4 (`document.querySelector`, `element.querySelector`, `Element.matches`, `Element.closest`, and selector hardening) are implemented as well. A post-Phase-7 collection slice adds `querySelectorAll` with minimal `NodeList` support; keep `HTMLCollection` and broader collection APIs out of scope for this workspace.
+Slices 1 through 7 are already implemented in this workspace, including public download capture. Phase 6 selector expansion slices 1 through 4, covering class selectors, compound simple selectors, descendant combinators, child combinators, and selector hardening, are also implemented in this workspace. A post-Phase-7 selector slice adds sibling combinators (`A + B`, `A ~ B`), selector lists (`A, B`), and simple pseudo-classes through the same bounded engine. Phase 7 script DOM query slices 1 through 4 (`document.querySelector`, `element.querySelector`, `Element.matches`, `Element.closest`, and selector hardening) are implemented as well. A post-Phase-7 collection slice adds `querySelectorAll` with minimal `NodeList` support; keep `HTMLCollection` and broader collection APIs out of scope for this workspace.
 
 ## First Vertical Slices
 
@@ -230,6 +230,7 @@ Suggested scope:
 - adjacent sibling combinators (`A + B`)
 - general sibling combinators (`A ~ B`)
 - selector lists (`A, B`)
+- simple pseudo-classes (`:first-child`, `:last-child`, `:checked`, `:disabled`, `:enabled`)
 - explicit failures for unsupported selector syntax
 
 Tests already in place:
@@ -240,12 +241,13 @@ Tests already in place:
 - adjacent sibling combinators match the immediate previous element sibling
 - general sibling combinators match later element siblings in document order
 - selector lists preserve document order and deduplicate results
+- simple pseudo-classes resolve against structure and simple form state
 - public `Harness` actions and assertions continue to resolve selectors deterministically
 - selector hardening remains explicit for unsupported syntax
 
 Do not add yet:
 
-- pseudo-classes
+- broad pseudo-classes such as `:nth-child`, `:not`, and `:is`
 - attribute value operators beyond the bounded slice
 - general CSS parsing
 
@@ -285,6 +287,7 @@ Tests already in place:
 - current-element selector checks work in inline scripts
 - ancestor-walk selector checks work in inline scripts
 - selector lists work in inline scripts
+- simple pseudo-classes work in inline scripts
 - unsupported selector syntax remains explicit
 - null-on-miss behavior is preserved
 - invalid selector syntax fails explicitly

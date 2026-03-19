@@ -51,13 +51,46 @@ fn malformed_html_is_reported_explicitly() {
 }
 
 #[test]
+fn simple_pseudo_classes_match_state_and_structure() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main><button id='first' class='primary'>First</button><button id='disabled' class='primary' disabled>Disabled</button><button id='enabled' class='primary'>Enabled</button><input id='agree' type='checkbox' checked><select id='mode'><option value='a'>A</option><option id='selected' value='b' selected>B</option></select></main>",
+        )
+        .expect("HTML should parse");
+
+    let first_id = store.select("#first").unwrap()[0];
+    let disabled_id = store.select("#disabled").unwrap()[0];
+    let enabled_id = store.select("#enabled").unwrap()[0];
+    let agree_id = store.select("#agree").unwrap()[0];
+    let selected_id = store.select("#selected").unwrap()[0];
+    let mode_id = store.select("#mode").unwrap()[0];
+
+    assert_eq!(store.select("#first:first-child").unwrap(), vec![first_id]);
+    assert_eq!(
+        store.select("button:disabled").unwrap(),
+        vec![disabled_id]
+    );
+    assert_eq!(
+        store.select("button:enabled").unwrap(),
+        vec![first_id, enabled_id]
+    );
+    assert_eq!(store.select("input:checked").unwrap(), vec![agree_id]);
+    assert_eq!(
+        store.select("option:checked").unwrap(),
+        vec![selected_id]
+    );
+    assert_eq!(store.select("select:last-child").unwrap(), vec![mode_id]);
+}
+
+#[test]
 fn unsupported_pseudo_class_syntax_fails_explicitly() {
     let mut store = DomStore::new_empty();
     store.bootstrap_html("<main class='app'></main>").unwrap();
 
     let error = store
-        .select("main:first-child")
-        .expect_err("pseudo-classes are not supported yet");
+        .select("main:nth-child(2)")
+        .expect_err("broad pseudo-classes are not supported yet");
     assert!(
         error.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`")
     );

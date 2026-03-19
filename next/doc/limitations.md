@@ -1,6 +1,6 @@
 # Limitations
 
-The `next/` workspace has reached Phase 4 for DOM, script, events, forms, fake time, and deterministic mock wiring, Phase 5 for hardening and publication checks, Phase 6 selector slices 1 through 4 plus sibling combinators, and Phase 7 script DOM query slices 1 through 4. A post-Phase-7 collection slice adds `querySelectorAll` with minimal `NodeList` support. Selector lists are supported by the bounded selector engine; `HTMLCollection` remains pending by design.
+The `next/` workspace has reached Phase 4 for DOM, script, events, forms, fake time, and deterministic mock wiring, Phase 5 for hardening and publication checks, Phase 6 selector slices 1 through 4 plus sibling combinators, and Phase 7 script DOM query slices 1 through 4. A post-Phase-7 collection slice adds `querySelectorAll` with minimal `NodeList` support. Selector lists and a small pseudo-class slice are supported by the bounded selector engine; `HTMLCollection` remains pending by design.
 
 What exists today:
 
@@ -8,7 +8,7 @@ What exists today:
 - public and internal type skeletons
 - deterministic session bootstrap
 - real HTML parsing and DOM tree construction for the Phase 1 subset
-- selector matching for `#id`, tag, `[attr]`, `.class`, `tag.class`, `#id.class`, selector lists, descendant combinators, child combinators, adjacent sibling combinators, and general sibling combinators
+- selector matching for `#id`, tag, `[attr]`, `.class`, `tag.class`, `#id.class`, selector lists, simple pseudo-classes, descendant combinators, child combinators, adjacent sibling combinators, and general sibling combinators
 - `assert_exists` and DOM dump helpers
 - inline `<script>` bootstrapping with a minimal script parser/evaluator
 - listener registration through the script host seam
@@ -26,7 +26,7 @@ What exists today:
 What does not exist yet:
 
 - script-side selector collections such as `HTMLCollection` and broader collection APIs
-- pseudo-classes and other broad CSS parsing features
+- broad pseudo-classes such as `:nth-child`, `:not`, and `:is`
 
 ## Important Consequence
 

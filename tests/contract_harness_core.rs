@@ -41,6 +41,25 @@ fn stable_core_actions_and_assertions_work_together() -> Result<()> {
 }
 
 #[test]
+fn stable_core_assert_exists_reports_presence_and_missing_selectors() -> Result<()> {
+    let h = Harness::from_html("<p id='present'>ok</p>")?;
+
+    h.assert_exists("#present")?;
+
+    let err = h
+        .assert_exists("#missing")
+        .expect_err("missing selector should fail");
+    match err {
+        Error::SelectorNotFound(selector) => {
+            assert_eq!(selector, "#missing");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
 fn stable_core_constructors_and_time_controls_work() -> Result<()> {
     let html = r#"
       <p id='out'></p>

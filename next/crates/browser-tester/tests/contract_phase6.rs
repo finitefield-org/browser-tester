@@ -72,7 +72,7 @@ fn pseudo_class_selectors_still_fail_explicitly() -> browser_tester_next::Result
     let harness = Harness::from_html("<main><span class='primary'></span></main>")?;
 
     let error = harness
-        .assert_exists("main:first-child")
+        .assert_exists("main:nth-child(2)")
         .expect_err("pseudo-class selectors are not part of the selector slices");
 
     let message = error.to_string();

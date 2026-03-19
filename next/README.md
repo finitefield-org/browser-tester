@@ -18,7 +18,7 @@ Current status:
 - Phase 3 event dispatch, ancestor bubbling, cancelable click default actions, form controls, `click`, `type_text`, `set_checked`, `set_select_value`, `focus`, `blur`, `submit`, `dispatch`, `assert_value`, and `assert_checked` are implemented
 - Phase 4 fake clock hardening, microtask semantics, and runtime mock wiring for fetch, dialogs, clipboard, location, file input, and download capture are implemented
 - Phase 5 hardening adds contract tests, subsystem tests, regression coverage, property tests, and a publication checklist
-- Phase 7 script DOM query slices 1 through 4, selector lists, `document.querySelector(...)`, `element.querySelector(...)`, `Element.matches(...)`, `Element.closest(...)`, and selector hardening are implemented; `querySelectorAll` with minimal `NodeList` support is implemented, while `HTMLCollection` remains deferred
+- Phase 7 script DOM query slices 1 through 4, selector lists, simple pseudo-classes, `document.querySelector(...)`, `element.querySelector(...)`, `Element.matches(...)`, `Element.closest(...)`, and selector hardening are implemented; `querySelectorAll` with minimal `NodeList` support is implemented, while `HTMLCollection` remains deferred
 
 Workspace layout:
 

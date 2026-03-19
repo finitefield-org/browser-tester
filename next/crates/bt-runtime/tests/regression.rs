@@ -68,7 +68,7 @@ fn session_rejects_unsupported_selector_syntax_in_closest_explicitly() {
     let error = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
         html: Some(
-            "<main id='root' class='primary'></main><script>document.getElementById('root').closest('main:first-child');</script>"
+            "<main id='root' class='primary'></main><script>document.getElementById('root').closest('main:nth-child(2)');</script>"
                 .to_string(),
         ),
         local_storage: BTreeMap::new(),

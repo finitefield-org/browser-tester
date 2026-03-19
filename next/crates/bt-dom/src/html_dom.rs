@@ -16,6 +16,7 @@ struct SelectorQuery {
     id: Option<String>,
     classes: Vec<String>,
     attributes: Vec<String>,
+    pseudo_classes: Vec<SelectorPseudoClass>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -30,6 +31,15 @@ enum SelectorCombinator {
     Child,
     AdjacentSibling,
     GeneralSibling,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SelectorPseudoClass {
+    FirstChild,
+    LastChild,
+    Checked,
+    Disabled,
+    Enabled,
 }
 
 impl DomStore {
@@ -850,7 +860,27 @@ impl DomStore {
             }
         }
 
+        for pseudo_class in &query.pseudo_classes {
+            if !self.matches_selector_pseudo_class(node_id, pseudo_class) {
+                return false;
+            }
+        }
+
         true
+    }
+
+    fn matches_selector_pseudo_class(
+        &self,
+        node_id: NodeId,
+        pseudo_class: &SelectorPseudoClass,
+    ) -> bool {
+        match pseudo_class {
+            SelectorPseudoClass::FirstChild => self.is_first_child(node_id),
+            SelectorPseudoClass::LastChild => self.is_last_child(node_id),
+            SelectorPseudoClass::Checked => self.is_checked_pseudo_class(node_id),
+            SelectorPseudoClass::Disabled => self.is_disabled_pseudo_class(node_id),
+            SelectorPseudoClass::Enabled => self.is_enabled_pseudo_class(node_id),
+        }
     }
 
     fn parse_selector_chain(selector: &str) -> Result<SelectorChain, String> {
@@ -973,6 +1003,20 @@ impl DomStore {
                     query.attributes.push(attribute);
                     saw_token = true;
                 }
+                b':' => {
+                    *pos += 1;
+                    let token = parse_selector_token(selector, pos)?;
+                    let pseudo_class = match token.as_str() {
+                        "first-child" => SelectorPseudoClass::FirstChild,
+                        "last-child" => SelectorPseudoClass::LastChild,
+                        "checked" => SelectorPseudoClass::Checked,
+                        "disabled" => SelectorPseudoClass::Disabled,
+                        "enabled" => SelectorPseudoClass::Enabled,
+                        _ => return Err(selector_not_supported(selector)),
+                    };
+                    query.pseudo_classes.push(pseudo_class);
+                    saw_token = true;
+                }
                 byte if is_simple_name_byte(byte) => {
                     let token = parse_selector_token(selector, pos)?;
                     if query.tag.is_some() {
@@ -996,6 +1040,76 @@ impl DomStore {
         self.nodes
             .get(node_id.index() as usize)
             .and_then(|node| node.parent)
+    }
+
+    fn is_first_child(&self, node_id: NodeId) -> bool {
+        let Some(parent_id) = self.parent_of(node_id) else {
+            return false;
+        };
+        let Some(parent) = self.nodes.get(parent_id.index() as usize) else {
+            return false;
+        };
+
+        parent.children.first() == Some(&node_id)
+    }
+
+    fn is_last_child(&self, node_id: NodeId) -> bool {
+        let Some(parent_id) = self.parent_of(node_id) else {
+            return false;
+        };
+        let Some(parent) = self.nodes.get(parent_id.index() as usize) else {
+            return false;
+        };
+
+        parent.children.last() == Some(&node_id)
+    }
+
+    fn is_checked_pseudo_class(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        if element.tag_name == "option" {
+            return self.is_option_selected(node_id);
+        }
+
+        self.checked_for_node(node_id) == Some(true)
+    }
+
+    fn is_disabled_pseudo_class(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        if !supports_disabled_pseudo_class(&element.tag_name) {
+            return false;
+        }
+
+        element.attributes.contains_key("disabled")
+    }
+
+    fn is_enabled_pseudo_class(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        if !supports_disabled_pseudo_class(&element.tag_name) {
+            return false;
+        }
+
+        !element.attributes.contains_key("disabled")
     }
 
     fn previous_element_sibling_of(&self, node_id: NodeId) -> Option<NodeId> {
@@ -1433,6 +1547,13 @@ fn escape_attr(value: &str) -> String {
 
 fn is_simple_name_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
+}
+
+fn supports_disabled_pseudo_class(tag_name: &str) -> bool {
+    matches!(
+        tag_name,
+        "button" | "fieldset" | "input" | "option" | "optgroup" | "select" | "textarea"
+    )
 }
 
 fn is_void_element(tag_name: &str) -> bool {

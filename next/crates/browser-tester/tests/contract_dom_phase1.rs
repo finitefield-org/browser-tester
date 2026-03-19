@@ -29,6 +29,21 @@ fn selector_lists_work_with_public_assert_exists() -> browser_tester_next::Resul
 }
 
 #[test]
+fn simple_pseudo_classes_work_with_public_assert_exists() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main><button id='first' class='primary'>First</button><button id='disabled' class='primary' disabled>Disabled</button><button id='enabled' class='primary'>Enabled</button><input id='agree' type='checkbox' checked><select id='mode'><option value='a'>A</option><option id='selected' value='b' selected>B</option></select></main>",
+    )?;
+
+    harness.assert_exists("#first:first-child")?;
+    harness.assert_exists("button:disabled")?;
+    harness.assert_exists("button:enabled")?;
+    harness.assert_exists("input:checked")?;
+    harness.assert_exists("option:checked")?;
+    harness.assert_exists("select:last-child")?;
+    Ok(())
+}
+
+#[test]
 fn assert_exists_reports_missing_nodes_with_dom_dump() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html("<main id='app'></main>")?;
 
@@ -56,8 +71,8 @@ fn malformed_html_is_rejected_with_a_parse_error() {
 fn unsupported_selector_syntax_is_reported_explicitly() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html("<main><span class='app'></span></main>")?;
     let error = harness
-        .assert_exists("main:first-child")
-        .expect_err("pseudo-classes are not part of the selector slices");
+        .assert_exists("main:nth-child(2)")
+        .expect_err("broad pseudo-classes are not part of the selector slices");
 
     let message = error.to_string();
     assert!(message.contains("Selector error"));

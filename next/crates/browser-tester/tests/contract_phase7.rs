@@ -31,6 +31,16 @@ fn script_dom_selector_lists_work_end_to_end() -> browser_tester_next::Result<()
 }
 
 #[test]
+fn script_simple_pseudo_classes_work_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main><button id='first' class='primary'>First</button><button id='disabled' class='primary' disabled>Disabled</button><button id='enabled' class='primary'>Enabled</button><input id='agree' type='checkbox' checked><select id='mode'><option value='a'>A</option><option id='selected' value='b' selected>B</option></select><div id='out'></div><script>const first = document.querySelector('#first:first-child'); const disabled = document.querySelector('button:disabled'); const enabled = document.querySelectorAll('button:enabled'); const checked = document.querySelector('input:checked'); const selected = document.querySelector('option:checked'); document.getElementById('out').textContent = first.textContent + ':' + disabled.textContent + ':' + String(enabled.length) + ':' + checked.checked + ':' + selected.textContent;</script></main>",
+    )?;
+
+    harness.assert_text("#out", "First:Disabled:2:true:B")?;
+    Ok(())
+}
+
+#[test]
 fn script_general_sibling_selectors_work_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main><button id='first' class='primary'>First</button>text<button id='second' class='primary'>Second</button><div id='out'></div><script>const sibling = document.querySelector('#first ~ .primary'); const second = document.getElementById('second'); document.getElementById('out').textContent = sibling.textContent + ':' + String(second.matches('#first ~ .primary'));</script></main>",
@@ -75,7 +85,7 @@ fn unsupported_node_list_methods_fail_explicitly() {
 #[test]
 fn unsupported_element_matches_selector_fails_explicitly() {
     let error = Harness::from_html(
-        "<main id='root' class='primary'></main><script>document.getElementById('root').matches('main:first-child');</script>",
+        "<main id='root' class='primary'></main><script>document.getElementById('root').matches('main:nth-child(2)');</script>",
     )
     .expect_err("unsupported selector syntax should fail");
 
@@ -87,7 +97,7 @@ fn unsupported_element_matches_selector_fails_explicitly() {
 #[test]
 fn unsupported_element_closest_selector_fails_explicitly() {
     let error = Harness::from_html(
-        "<main id='root' class='primary'></main><script>document.getElementById('root').closest('main:first-child');</script>",
+        "<main id='root' class='primary'></main><script>document.getElementById('root').closest('main:nth-child(2)');</script>",
     )
     .expect_err("unsupported selector syntax should fail");
 

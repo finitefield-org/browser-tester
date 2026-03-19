@@ -7,7 +7,7 @@ For day-to-day implementation sequencing inside each phase, also see [implementa
 Status note:
 
 - Phases 0 through 6 are complete in this workspace.
-- Phase 7 is complete in this workspace; slices 1 through 4 are delivered, sibling selectors (`A + B`, `A ~ B`) and selector lists (`A, B`) are also delivered as backlog slices, and a post-Phase-7 collection slice adds `querySelectorAll` with minimal `NodeList` support. Future selector work should stay backlog-driven.
+- Phase 7 is complete in this workspace; slices 1 through 4 are delivered, sibling selectors (`A + B`, `A ~ B`), selector lists (`A, B`), and a small pseudo-class slice are also delivered as backlog slices, and a post-Phase-7 collection slice adds `querySelectorAll` with minimal `NodeList` support. Future selector work should stay backlog-driven.
 
 ## Phase 0: Skeleton
 
@@ -154,6 +154,9 @@ Post-Phase-7 slice:
   - comma-separated selector lists are available through the same bounded engine
   - document-order union and deduplication
   - `HTMLCollection` and broader collection APIs deferred
+- simple pseudo-classes
+  - `:first-child`, `:last-child`, `:checked`, `:disabled`, and `:enabled` are available through the same bounded engine
+  - `:nth-child`, `:not`, `:is`, and broader pseudo-class parsing deferred
 
 Exit criteria:
 
@@ -167,7 +170,7 @@ Exit criteria:
 Operating rule:
 
 - future selector work should stay backlog-driven and narrow
-- `querySelectorAll` with minimal `NodeList` support is available, selector lists are also available through the bounded engine, while `HTMLCollection` and broader collection APIs remain deferred
+- `querySelectorAll` with minimal `NodeList` support is available, selector lists and simple pseudo-classes are also available through the bounded engine, while `HTMLCollection` and broader collection APIs remain deferred
 
 ## After Phase 7: Rolling Capability Delivery
 
