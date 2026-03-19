@@ -6,13 +6,9 @@ src/core_dom_utils.rs
 src/core_impl/parser/parser_expr/builtin_constructors.rs
 src/core_impl/parser/parser_stmt/control_flow_statements.rs
 src/core_impl/runtime/runtime_exec/expression_eval/calls_timers_binary.rs
-src/core_impl/runtime/runtime_exec/expression_eval/dom_platform.rs
-src/core_impl/runtime/runtime_exec/expression_eval/json_object_array.rs
 src/core_impl/runtime/runtime_exec/expression_eval/string_webapi.rs
 src/core_impl/runtime/runtime_exec/json_regex_number/number_format_float16.rs
-src/core_impl/runtime/runtime_exec/member_calls_ops/collection_member_calls.rs
 src/core_impl/runtime/runtime_exec/member_calls_ops/node_selection_input_validity.rs
-src/core_impl/runtime/runtime_platform/bootstrap/object_type_property_setters.rs
 src/core_impl/runtime/runtime_platform/script_runtime/catch_scope_analysis.rs
 src/js_regex.rs
 src/runtime_state.rs
