@@ -7,8 +7,8 @@ For day-to-day implementation sequencing inside each phase, also see [implementa
 Status note:
 
 - Phases 0 through 7 are complete in this workspace.
-- Phase 8 is now scoped as DOM mutation and reflection expansion. Phase 7 is complete in this workspace; slices 1 through 4 are delivered, sibling selectors (`A + B`, `A ~ B`), selector lists (`A, B`), and a small pseudo-class slice are also delivered as backlog slices, and post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support plus `Element.children`, `getElementsByTagName`, `getElementsByTagNameNS`, `getElementsByClassName`, `getElementsByName`, `document.forms` / `form.elements`, `select.options` / `select.selectedOptions`, `fieldset.elements` / `datalist.options`, `map.areas` / `table.tBodies`, `document.images` / `document.links` / `document.embeds` / `document.anchors`, `document.scripts`, `document.all`, and `element.labels` on labelable form controls / fieldset collection support. Future selector work should stay backlog-driven. Phase 8 slices 1 through 5 are delivered; the phase is complete in this workspace.
-- `document.children`, `table.rows` / `tr.cells`, `select.selectedOptions`, `fieldset.elements`, `datalist.options`, `map.areas`, `table.tBodies`, and `element.labels` on labelable form controls / fieldset with live `NodeList` support are also implemented as additional specialized live collection slices.
+- Phase 8 is now scoped as DOM mutation and reflection expansion. Phase 7 is complete in this workspace; slices 1 through 4 are delivered, sibling selectors (`A + B`, `A ~ B`), selector lists (`A, B`), and a small pseudo-class slice are also delivered as backlog slices, and post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support plus `Element.children`, `getElementsByTagName`, `getElementsByTagNameNS`, `getElementsByClassName`, `getElementsByName`, `document.forms` / `form.elements` (with `RadioNodeList` from `namedItem()` when multiple controls share a name), `select.options` / `select.selectedOptions`, `fieldset.elements` / `datalist.options`, `map.areas` / `table.tBodies`, `document.childNodes` / `document.children` / `document.images` / `document.links` / `document.embeds` / `document.anchors`, `document.scripts`, `document.styleSheets`, `document.all`, and `element.labels` on labelable form controls / fieldset collection support. Future selector work should stay backlog-driven. Phase 8 slices 1 through 5 are delivered; the phase is complete in this workspace.
+- `document.childNodes`, `document.styleSheets`, `document.children`, `table.rows` / `tr.cells`, `select.selectedOptions`, `fieldset.elements`, `datalist.options`, `map.areas`, `table.tBodies`, and `element.labels` on labelable form controls / fieldset with live `NodeList` support are also implemented as additional specialized live collection slices.
 
 ## Phase 0: Skeleton
 
@@ -170,6 +170,7 @@ Post-Phase-7 slices:
 - form collections
   - `document.forms` with live `HTMLCollection` support
   - `form.elements` with live `HTMLCollection` support
+  - `form.elements.namedItem()` can return `RadioNodeList` when multiple matching controls share a name
   - `length`, `item()`, and `namedItem()`
 - select collections
   - `select.options` with live `HTMLCollection` support
@@ -185,6 +186,9 @@ Post-Phase-7 slices:
 - all-elements collection
   - `document.all` with live `HTMLCollection` support
   - `length`, `item()`, and `namedItem()`
+- stylesheet collection
+  - `document.styleSheets` with live `StyleSheetList` support
+  - `length` and `item()`
 - bounded attribute selectors
   - `[attr=value]`, `[attr^=value]`, `[attr$=value]`, `[attr*=value]`, `[attr~=value]`, and `[attr|=value]` are available through the same bounded engine
   - unquoted and quoted value forms are supported
@@ -263,10 +267,10 @@ Operating rule:
   2. collection API broadening slice 2 (`document.scripts`) is delivered
   3. collection API broadening slice 3 (`document.anchors`) is delivered
   4. collection API broadening slice 4 (`NodeList.keys()` / `NodeList.values()` / `HTMLCollection.keys()` / `HTMLCollection.values()`) is delivered; the remaining collection API broadening slices are further specialized live collections beyond the current bounded set
-  5. collection API broadening slice 5 (`document.applets`) is delivered; collection API broadening slice 6 (`document.children`) is delivered; collection API broadening slice 7 (`table.rows` / `tbody.rows` / `thead.rows` / `tfoot.rows` / `tr.cells`) is delivered; collection API broadening slice 8 (`select.selectedOptions`) is delivered; collection API broadening slice 9 (`fieldset.elements` / `datalist.options` / `map.areas` / `table.tBodies`) is delivered; collection API broadening slice 10 (`element.labels` on labelable form controls / fieldset) is delivered; the remaining collection API broadening slices are further specialized live collections beyond the current bounded set
+  5. collection API broadening slice 5 (`document.applets`) is delivered; collection API broadening slice 6 (`document.children`) is delivered; collection API broadening slice 7 (`table.rows` / `tbody.rows` / `thead.rows` / `tfoot.rows` / `tr.cells`) is delivered; collection API broadening slice 8 (`select.selectedOptions`) is delivered; collection API broadening slice 9 (`fieldset.elements` / `datalist.options` / `map.areas` / `table.tBodies`) is delivered; collection API broadening slice 10 (`element.labels` on labelable form controls / fieldset) is delivered; collection API broadening slice 11 (`document.styleSheets`) is delivered; collection API broadening slice 12 (`document.childNodes`) is delivered; the remaining collection API broadening slices are further specialized live collections beyond the current bounded set
   6. selector grammar broadening, starting with `:scope`, then `:has(...)`, then structural selector expansion that needs richer nested selector handling
   7. HTML serialization broadening, starting with `insertAdjacentHTML`, then `DocumentFragment` / `template.content` serialization, then namespace-aware serialization compatibility
-- `querySelectorAll` with minimal `NodeList` support is available, `Element.children`, `document.children`, `table.rows` / `tbody.rows` / `thead.rows` / `tfoot.rows` / `tr.cells`, `getElementsByTagName`, `getElementsByTagNameNS`, `getElementsByClassName`, `getElementsByName`, `document.forms` / `form.elements`, `select.options` / `select.selectedOptions`, `fieldset.elements` / `datalist.options`, `map.areas` / `table.tBodies`, `element.labels` on labelable form controls / fieldset, `document.images`, `document.links`, `document.embeds`, `document.anchors`, `document.applets`, `document.scripts`, and `document.all` collection support are also available; `NodeList.forEach` / `HTMLCollection.forEach` and `NodeList.keys()` / `NodeList.values()` / `HTMLCollection.keys()` / `HTMLCollection.values()` are now available too, and selector lists plus the bounded pseudo-class subset are also available through the bounded engine
+- `querySelectorAll` with minimal `NodeList` support is available, `Element.children`, `document.childNodes`, `document.children`, `table.rows` / `tbody.rows` / `thead.rows` / `tfoot.rows` / `tr.cells`, `getElementsByTagName`, `getElementsByTagNameNS`, `getElementsByClassName`, `getElementsByName`, `document.forms` / `form.elements` (including `RadioNodeList` from `namedItem()` when multiple controls share a name), `select.options` / `select.selectedOptions`, `fieldset.elements` / `datalist.options`, `map.areas` / `table.tBodies`, `element.labels` on labelable form controls / fieldset, `document.images`, `document.links`, `document.embeds`, `document.anchors`, `document.applets`, `document.scripts`, `document.styleSheets`, and `document.all` collection support are also available; `NodeList.forEach` / `HTMLCollection.forEach` and `NodeList.keys()` / `NodeList.values()` / `HTMLCollection.keys()` / `HTMLCollection.values()` are now available too, and selector lists plus the bounded pseudo-class subset are also available through the bounded engine
 
 ## After Phase 8: Rolling Capability Delivery
 

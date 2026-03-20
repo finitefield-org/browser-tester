@@ -70,6 +70,8 @@ Phase 4 is complete in this workspace.
 - property tests
 - publication checklist
 
+Phase 5 is complete in this workspace.
+
 ## Phase 6: Selector Expansion
 
 - class selectors and compound simple selectors
@@ -85,8 +87,13 @@ Phase 6 is complete in this workspace.
 - `element.querySelector`
 - `Element.matches`
 - `Element.closest`
-- collection support
-- bounded selector grammar broadening
+- `document.querySelectorAll`
+- `element.querySelectorAll`
+- minimal `NodeList` collection support
+- selector hardening and regression coverage
+
+The query selector and collection slices are implemented in this workspace now.
+Phase 7 is complete in this workspace.
 
 ## Phase 8: DOM Mutation and Reflection Expansion
 
@@ -94,3 +101,5 @@ Phase 6 is complete in this workspace.
 - class and dataset views
 - tree mutation primitives
 - HTML serialization surfaces
+
+The attribute reflection slice is implemented in this workspace now; class and dataset views, tree mutation primitives, and HTML serialization surfaces remain planned.

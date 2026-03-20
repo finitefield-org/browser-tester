@@ -7,8 +7,8 @@ use bt_dom::{
     SVG_NAMESPACE_URI,
 };
 use bt_script::{
-    ElementHandle, EventPhase, HostBindings, HtmlCollectionScope, HtmlCollectionTarget,
-    ListenerTarget, ScriptError, ScriptEventHandle, ScriptFunction, ScriptRuntime, ScriptValue,
+    ElementHandle, EventPhase, HostBindings, HtmlCollectionScope, HtmlCollectionTarget, ListenerTarget,
+    NodeHandle, ScriptError, ScriptEventHandle, ScriptFunction, ScriptRuntime, ScriptValue,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1205,6 +1205,10 @@ impl Session {
         ElementHandle::new(((node_id.generation() as u64) << 32) | node_id.index() as u64)
     }
 
+    fn node_id_to_node_handle(node_id: NodeId) -> NodeHandle {
+        NodeHandle::new(((node_id.generation() as u64) << 32) | node_id.index() as u64)
+    }
+
     fn query_selector_handle(
         &self,
         scope: Option<NodeId>,
@@ -1710,6 +1714,15 @@ impl Session {
         Ok(self.first_named_item_in_nodes(&collected, name))
     }
 
+    fn document_style_sheets(&self) -> Result<Vec<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(root, &mut collected, &|element: &ElementData| {
+            Self::is_document_style_sheet_element(element)
+        });
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
     fn document_children(&self) -> Result<Vec<ElementHandle>, ScriptError> {
         let root = self.dom.document_id();
         let Some(node) = self.dom.nodes().get(root.index() as usize) else {
@@ -1760,6 +1773,20 @@ impl Session {
             .collect();
 
         Ok(self.first_named_item_in_nodes(&children, name))
+    }
+
+    fn node_child_nodes(&self, scope: HtmlCollectionScope) -> Result<Vec<NodeHandle>, ScriptError> {
+        let root = self.collection_root_for_scope(&scope)?;
+        let Some(node) = self.dom.nodes().get(root.index() as usize) else {
+            return Err(ScriptError::new("invalid node id"));
+        };
+
+        Ok(node
+            .children
+            .iter()
+            .copied()
+            .map(Self::node_id_to_node_handle)
+            .collect())
     }
 
     fn map_areas(&self, map: ElementHandle) -> Result<Vec<ElementHandle>, ScriptError> {
@@ -2086,6 +2113,23 @@ impl Session {
         matches!(element.tag_name.as_str(), "a" | "area") && element.attributes.contains_key("href")
     }
 
+    fn is_document_style_sheet_element(element: &ElementData) -> bool {
+        if element.tag_name == "style" {
+            return true;
+        }
+
+        if element.tag_name != "link" {
+            return false;
+        }
+
+        let Some(rel) = element.attributes.get("rel") else {
+            return false;
+        };
+
+        rel.split_ascii_whitespace()
+            .any(|token| token.eq_ignore_ascii_case("stylesheet"))
+    }
+
     fn is_document_anchor_element(element: &ElementData) -> bool {
         element.tag_name == "a" && element.attributes.contains_key("name")
     }
@@ -2144,6 +2188,20 @@ impl Session {
         Ok(node_id)
     }
 
+    fn node_id_for_node_handle(&self, handle: NodeHandle) -> Result<NodeId, ScriptError> {
+        let raw = handle.raw();
+        let index = (raw & 0xffff_ffff) as u32;
+        let generation = (raw >> 32) as u32;
+        let node_id = NodeId::new(index, generation);
+        let Some(record) = self.dom.nodes().get(index as usize) else {
+            return Err(ScriptError::new("invalid node handle"));
+        };
+        if record.id.generation() != generation {
+            return Err(ScriptError::new("invalid node handle"));
+        }
+        Ok(node_id)
+    }
+
     fn register_script_listener(
         &mut self,
         target: SessionEventTarget,
@@ -2188,6 +2246,52 @@ impl HostBindings for Session {
         name: &str,
     ) -> bt_script::Result<Vec<ElementHandle>> {
         self.elements_by_name(name)
+    }
+
+    fn document_style_sheets_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
+        Session::document_style_sheets(self)
+    }
+
+    fn node_child_nodes_items(
+        &mut self,
+        scope: HtmlCollectionScope,
+    ) -> bt_script::Result<Vec<NodeHandle>> {
+        self.node_child_nodes(scope)
+    }
+
+    fn node_text_content(&mut self, node: NodeHandle) -> bt_script::Result<String> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        Ok(self.dom.text_content_for_node(node_id))
+    }
+
+    fn node_type(&mut self, node: NodeHandle) -> bt_script::Result<u8> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let Some(record) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid node handle"));
+        };
+
+        let node_type = match &record.kind {
+            NodeKind::Document => 9,
+            NodeKind::Element(_) => 1,
+            NodeKind::Text(_) => 3,
+            NodeKind::Comment(_) => 8,
+        };
+        Ok(node_type)
+    }
+
+    fn node_name(&mut self, node: NodeHandle) -> bt_script::Result<String> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let Some(record) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid node handle"));
+        };
+
+        let node_name = match &record.kind {
+            NodeKind::Document => "#document".to_string(),
+            NodeKind::Element(element) => element.tag_name.clone(),
+            NodeKind::Text(_) => "#text".to_string(),
+            NodeKind::Comment(_) => "#comment".to_string(),
+        };
+        Ok(node_name)
     }
 
     fn html_collection_tag_name_items(
@@ -2525,9 +2629,7 @@ impl HostBindings for Session {
     ) -> bt_script::Result<Option<ElementHandle>> {
         Session::row_cells_named_item(self, element, name)
     }
-}
 
-impl HostBindings for Session {
     fn element_text_content(&mut self, element: ElementHandle) -> bt_script::Result<String> {
         let node_id = self.node_id_for_handle(element)?;
         let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {

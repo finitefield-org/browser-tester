@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use bt_script::{
     ElementHandle, HostBindings, HtmlCollectionScope, HtmlCollectionTarget, ListenerTarget,
-    ScriptFunction, ScriptRuntime,
+    NodeHandle, ScriptFunction, ScriptRuntime,
 };
 
 #[derive(Default)]
@@ -37,7 +37,12 @@ struct RecordingHost {
     html_collection_table_bodies_items_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
     document_links_items_results: Vec<ElementHandle>,
     document_anchors_items_results: Vec<ElementHandle>,
+    document_style_sheets_items_results: Vec<ElementHandle>,
     document_children_items_results: Vec<ElementHandle>,
+    node_child_nodes_items_results: BTreeMap<HtmlCollectionScope, Vec<NodeHandle>>,
+    node_text_content_results: BTreeMap<NodeHandle, String>,
+    node_type_results: BTreeMap<NodeHandle, u8>,
+    node_name_results: BTreeMap<NodeHandle, String>,
     table_rows_items_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
     row_cells_items_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
     html_collection_named_item_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
@@ -82,7 +87,12 @@ struct RecordingHost {
     html_collection_table_bodies_items_calls: Vec<ElementHandle>,
     document_links_items_calls: usize,
     document_anchors_items_calls: usize,
+    document_style_sheets_items_calls: usize,
     document_children_items_calls: usize,
+    node_child_nodes_items_calls: Vec<HtmlCollectionScope>,
+    node_text_content_calls: Vec<NodeHandle>,
+    node_type_calls: Vec<NodeHandle>,
+    node_name_calls: Vec<NodeHandle>,
     table_rows_items_calls: Vec<ElementHandle>,
     row_cells_items_calls: Vec<ElementHandle>,
     html_collection_named_item_calls: Vec<(ElementHandle, String)>,
@@ -228,8 +238,32 @@ impl RecordingHost {
         self.document_anchors_items_results = result;
     }
 
+    fn seed_document_style_sheets_items(&mut self, result: Vec<ElementHandle>) {
+        self.document_style_sheets_items_results = result;
+    }
+
     fn seed_document_children_items(&mut self, result: Vec<ElementHandle>) {
         self.document_children_items_results = result;
+    }
+
+    fn seed_node_child_nodes_items(
+        &mut self,
+        scope: HtmlCollectionScope,
+        result: Vec<NodeHandle>,
+    ) {
+        self.node_child_nodes_items_results.insert(scope, result);
+    }
+
+    fn seed_node_text_content(&mut self, node: NodeHandle, result: impl Into<String>) {
+        self.node_text_content_results.insert(node, result.into());
+    }
+
+    fn seed_node_type(&mut self, node: NodeHandle, result: u8) {
+        self.node_type_results.insert(node, result);
+    }
+
+    fn seed_node_name(&mut self, node: NodeHandle, result: impl Into<String>) {
+        self.node_name_results.insert(node, result.into());
     }
 
     fn seed_table_rows_items(&mut self, element: ElementHandle, result: Vec<ElementHandle>) {
@@ -988,6 +1022,46 @@ impl HostBindings for RecordingHost {
             .unwrap_or_default())
     }
 
+    fn document_style_sheets_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
+        self.document_style_sheets_items_calls += 1;
+        Ok(self.document_style_sheets_items_results.clone())
+    }
+
+    fn node_child_nodes_items(
+        &mut self,
+        scope: HtmlCollectionScope,
+    ) -> bt_script::Result<Vec<NodeHandle>> {
+        self.node_child_nodes_items_calls.push(scope.clone());
+        Ok(self
+            .node_child_nodes_items_results
+            .get(&scope)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn node_text_content(&mut self, node: NodeHandle) -> bt_script::Result<String> {
+        self.node_text_content_calls.push(node);
+        Ok(self
+            .node_text_content_results
+            .get(&node)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn node_type(&mut self, node: NodeHandle) -> bt_script::Result<u8> {
+        self.node_type_calls.push(node);
+        Ok(self.node_type_results.get(&node).copied().unwrap_or(0))
+    }
+
+    fn node_name(&mut self, node: NodeHandle) -> bt_script::Result<String> {
+        self.node_name_calls.push(node);
+        Ok(self
+            .node_name_results
+            .get(&node)
+            .cloned()
+            .unwrap_or_default())
+    }
+
     fn element_query_selector(
         &mut self,
         element: ElementHandle,
@@ -1693,7 +1767,13 @@ fn runtime_resolves_form_elements_radio_node_list_access() {
     );
     assert_eq!(
         host.html_collection_form_elements_named_items_calls,
-        vec![(ElementHandle::new(1), "mode".to_string())]
+        vec![
+            (ElementHandle::new(1), "mode".to_string()),
+            (ElementHandle::new(1), "mode".to_string()),
+            (ElementHandle::new(1), "mode".to_string()),
+            (ElementHandle::new(1), "mode".to_string()),
+            (ElementHandle::new(1), "mode".to_string()),
+        ]
     );
 }
 
@@ -2159,6 +2239,89 @@ fn runtime_resolves_document_children_access() {
 }
 
 #[test]
+fn runtime_resolves_child_nodes_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_node_child_nodes_items(
+        HtmlCollectionScope::Document,
+        vec![NodeHandle::new(10), NodeHandle::new(11)],
+    );
+    host.seed_node_child_nodes_items(
+        HtmlCollectionScope::Element(ElementHandle::new(1)),
+        vec![
+            NodeHandle::new(20),
+            NodeHandle::new(21),
+            NodeHandle::new(22),
+        ],
+    );
+    host.seed_node_name(NodeHandle::new(10), "#comment");
+    host.seed_node_type(NodeHandle::new(10), 8);
+    host.seed_node_text_content(NodeHandle::new(10), "");
+    host.seed_node_name(NodeHandle::new(11), "main");
+    host.seed_node_type(NodeHandle::new(11), 1);
+    host.seed_node_text_content(NodeHandle::new(11), "Root");
+    host.seed_node_name(NodeHandle::new(20), "#text");
+    host.seed_node_type(NodeHandle::new(20), 3);
+    host.seed_node_text_content(NodeHandle::new(20), "Hello");
+    host.seed_node_name(NodeHandle::new(21), "span");
+    host.seed_node_type(NodeHandle::new(21), 1);
+    host.seed_node_text_content(NodeHandle::new(21), "Inner");
+    host.seed_node_name(NodeHandle::new(22), "#comment");
+    host.seed_node_type(NodeHandle::new(22), 8);
+    host.seed_node_text_content(NodeHandle::new(22), "");
+
+    runtime
+        .eval_program(
+            "const docNodes = document.childNodes; const rootNodes = document.getElementById('root').childNodes; const docFirst = docNodes.item(0); const docSecond = docNodes.item(1); const rootValues = rootNodes.values(); const firstRoot = rootValues.next(); const secondRoot = rootValues.next(); const thirdRoot = rootValues.next(); document.getElementById('out').textContent = String(docNodes.length) + ':' + docFirst.nodeName + ':' + String(docFirst.nodeType) + ':' + String(docFirst) + ':' + docSecond.nodeName + ':' + String(docSecond.nodeType) + ':' + firstRoot.value.nodeName + ':' + String(firstRoot.value.nodeType) + ':' + firstRoot.value.textContent + ':' + secondRoot.value.nodeName + ':' + String(secondRoot.value.nodeType) + ':' + secondRoot.value.textContent + ':' + thirdRoot.value.nodeName + ':' + String(thirdRoot.value.nodeType) + ':' + thirdRoot.value.textContent;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("childNodes should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("2:#comment:8:[object Node]:main:1:#text:3:Hello:span:1:Inner:#comment:8:")
+    );
+    assert_eq!(
+        host.node_child_nodes_items_calls,
+        vec![
+            HtmlCollectionScope::Document,
+            HtmlCollectionScope::Document,
+            HtmlCollectionScope::Element(ElementHandle::new(1)),
+            HtmlCollectionScope::Document
+        ]
+    );
+    assert_eq!(
+        host.node_name_calls,
+        vec![
+            NodeHandle::new(10),
+            NodeHandle::new(11),
+            NodeHandle::new(20),
+            NodeHandle::new(21),
+            NodeHandle::new(22)
+        ]
+    );
+    assert_eq!(
+        host.node_type_calls,
+        vec![
+            NodeHandle::new(10),
+            NodeHandle::new(11),
+            NodeHandle::new(20),
+            NodeHandle::new(21),
+            NodeHandle::new(22)
+        ]
+    );
+    assert_eq!(
+        host.node_text_content_calls,
+        vec![NodeHandle::new(20), NodeHandle::new(21), NodeHandle::new(22)]
+    );
+}
+
+#[test]
 fn runtime_resolves_table_rows_and_row_cells_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -2259,6 +2422,30 @@ fn runtime_resolves_document_scripts_access() {
             (scripts_collection, "missing".to_string()),
         ]
     );
+}
+
+#[test]
+fn runtime_resolves_document_style_sheets_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_document_style_sheets_items(vec![ElementHandle::new(1), ElementHandle::new(2)]);
+
+    runtime
+        .eval_program(
+            "const sheets = document.styleSheets; document.getElementById('out').textContent = String(sheets.length) + ':' + String(sheets.item(0)) + ':' + String(sheets.item(2));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.styleSheets should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("2:[object CSSStyleSheet]:null")
+    );
+    assert_eq!(host.document_style_sheets_items_calls, 3);
 }
 
 #[test]

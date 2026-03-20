@@ -166,28 +166,74 @@ pub const DomStore = struct {
     }
 
     pub fn select(self: *const DomStore, allocator: std.mem.Allocator, selector: []const u8) errors.Result([]NodeId) {
-        const trimmed = std.mem.trim(u8, selector, " \t\r\n");
-        if (trimmed.len == 0) return error.HtmlParse;
+        return try self.selectWithin(allocator, self.documentId(), selector);
+    }
 
-        var chains: std.ArrayList(SelectorChain) = .empty;
-        defer {
-            for (chains.items) |*chain| {
-                chain.deinit(allocator);
-            }
-            chains.deinit(allocator);
-        }
-
-        try appendSelectorChains(allocator, trimmed, &chains);
-        if (chains.items.len == 0) return error.HtmlParse;
+    pub fn selectWithin(
+        self: *const DomStore,
+        allocator: std.mem.Allocator,
+        root_id: NodeId,
+        selector: []const u8,
+    ) errors.Result([]NodeId) {
+        var chains = try self.parseSelectorChains(allocator, selector);
+        defer self.deinitSelectorChains(allocator, &chains);
 
         var results: std.ArrayList(NodeId) = .empty;
         errdefer results.deinit(allocator);
 
-        try collectSelectorMatches(self, self.documentId(), chains.items, &results, allocator);
+        try collectSelectorMatchesWithin(self, root_id, chains.items, &results, allocator);
 
         const owned = try allocator.dupe(NodeId, results.items);
         results.deinit(allocator);
         return owned;
+    }
+
+    pub fn querySelector(self: *const DomStore, allocator: std.mem.Allocator, selector: []const u8) errors.Result(?NodeId) {
+        return self.querySelectorWithin(allocator, self.documentId(), selector);
+    }
+
+    pub fn querySelectorWithin(
+        self: *const DomStore,
+        allocator: std.mem.Allocator,
+        root_id: NodeId,
+        selector: []const u8,
+    ) errors.Result(?NodeId) {
+        var chains = try self.parseSelectorChains(allocator, selector);
+        defer self.deinitSelectorChains(allocator, &chains);
+
+        return self.findFirstMatchingDescendant(root_id, chains.items);
+    }
+
+    pub fn matchesSelector(
+        self: *const DomStore,
+        allocator: std.mem.Allocator,
+        node_id: NodeId,
+        selector: []const u8,
+    ) errors.Result(bool) {
+        var chains = try self.parseSelectorChains(allocator, selector);
+        defer self.deinitSelectorChains(allocator, &chains);
+
+        return nodeMatchesAnyChain(self, node_id, chains.items);
+    }
+
+    pub fn closestSelector(
+        self: *const DomStore,
+        allocator: std.mem.Allocator,
+        node_id: NodeId,
+        selector: []const u8,
+    ) errors.Result(?NodeId) {
+        var chains = try self.parseSelectorChains(allocator, selector);
+        defer self.deinitSelectorChains(allocator, &chains);
+
+        var current = node_id;
+        while (true) {
+            if (nodeMatchesAnyChain(self, current, chains.items)) {
+                return current;
+            }
+            current = parentOf(self, current) orelse break;
+        }
+
+        return null;
     }
 
     pub fn bootstrapHtml(self: *DomStore, html: []const u8) errors.Result(void) {
@@ -245,6 +291,119 @@ pub const DomStore = struct {
             },
             else => return error.HtmlParse,
         }
+    }
+
+    pub fn getAttribute(
+        self: *const DomStore,
+        node_id: NodeId,
+        name: []const u8,
+    ) errors.Result(?[]const u8) {
+        const trimmed = trimAttributeName(name) orelse return error.DomError;
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return error.DomError,
+        };
+
+        return elementAttributeValue(element, trimmed);
+    }
+
+    pub fn hasAttribute(
+        self: *const DomStore,
+        node_id: NodeId,
+        name: []const u8,
+    ) errors.Result(bool) {
+        const trimmed = trimAttributeName(name) orelse return error.DomError;
+        return (try self.getAttribute(node_id, trimmed)) != null;
+    }
+
+    pub fn setAttribute(
+        self: *DomStore,
+        node_id: NodeId,
+        name: []const u8,
+        value: []const u8,
+    ) errors.Result(void) {
+        const trimmed = trimAttributeName(name) orelse return error.DomError;
+        const node = self.nodeAtMut(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |*element| element,
+            else => return error.DomError,
+        };
+
+        const arena_alloc = self.arena.allocator();
+        const value_copy = try duplicateString(self, value);
+        if (findAttributeIndexByName(element.attributes.items, trimmed)) |index| {
+            element.attributes.items[index].value = value_copy;
+            return;
+        }
+
+        try element.attributes.append(arena_alloc, .{
+            .name = try duplicateLowercase(self, trimmed),
+            .value = value_copy,
+        });
+        return;
+    }
+
+    pub fn removeAttribute(
+        self: *DomStore,
+        node_id: NodeId,
+        name: []const u8,
+    ) errors.Result(void) {
+        const trimmed = trimAttributeName(name) orelse return error.DomError;
+        const node = self.nodeAtMut(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |*element| element,
+            else => return error.DomError,
+        };
+
+        if (findAttributeIndexByName(element.attributes.items, trimmed)) |index| {
+            _ = element.attributes.orderedRemove(index);
+        }
+        return;
+    }
+
+    pub fn toggleAttribute(
+        self: *DomStore,
+        node_id: NodeId,
+        name: []const u8,
+        force: ?bool,
+    ) errors.Result(bool) {
+        const trimmed = trimAttributeName(name) orelse return error.DomError;
+        const node = self.nodeAtMut(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |*element| element,
+            else => return error.DomError,
+        };
+        const arena_alloc = self.arena.allocator();
+        const index = findAttributeIndexByName(element.attributes.items, trimmed);
+
+        if (force) |forced| {
+            if (!forced) {
+                if (index) |found| {
+                    _ = element.attributes.orderedRemove(found);
+                }
+                return false;
+            }
+
+            if (index == null) {
+                try element.attributes.append(arena_alloc, .{
+                    .name = try duplicateLowercase(self, trimmed),
+                    .value = try duplicateString(self, ""),
+                });
+            }
+            return true;
+        }
+
+        if (index) |found| {
+            _ = element.attributes.orderedRemove(found);
+            return false;
+        }
+
+        try element.attributes.append(arena_alloc, .{
+            .name = try duplicateLowercase(self, trimmed),
+            .value = try duplicateString(self, ""),
+        });
+        return true;
     }
 
     pub fn valueForNode(
@@ -681,6 +840,57 @@ pub const DomStore = struct {
         const arena_alloc = self.arena.allocator();
         self.source_html = try arena_alloc.dupe(u8, html);
     }
+
+    fn parseSelectorChains(self: *const DomStore, allocator: std.mem.Allocator, selector: []const u8) errors.Result(std.ArrayList(SelectorChain)) {
+        _ = self;
+        const trimmed = std.mem.trim(u8, selector, " \t\r\n");
+        if (trimmed.len == 0) return error.HtmlParse;
+
+        var chains: std.ArrayList(SelectorChain) = .empty;
+        errdefer {
+            for (chains.items) |*chain| {
+                chain.deinit(allocator);
+            }
+            chains.deinit(allocator);
+        }
+
+        try appendSelectorChains(allocator, trimmed, &chains);
+        if (chains.items.len == 0) return error.HtmlParse;
+        return chains;
+    }
+
+    fn deinitSelectorChains(self: *const DomStore, allocator: std.mem.Allocator, chains: *std.ArrayList(SelectorChain)) void {
+        _ = self;
+        for (chains.items) |*chain| {
+            chain.deinit(allocator);
+        }
+        chains.deinit(allocator);
+    }
+
+    fn findFirstMatchingDescendant(
+        self: *const DomStore,
+        node_id: NodeId,
+        chains: []const SelectorChain,
+    ) errors.Result(?NodeId) {
+        const node = self.nodeAt(node_id) orelse return error.HtmlParse;
+        for (node.children.items) |child_id| {
+            const child = self.nodeAt(child_id) orelse return error.HtmlParse;
+            switch (child.kind) {
+                .element => {
+                    if (nodeMatchesAnyChain(self, child_id, chains)) {
+                        return child_id;
+                    }
+                },
+                else => {},
+            }
+
+            if (try self.findFirstMatchingDescendant(child_id, chains)) |found| {
+                return found;
+            }
+        }
+
+        return null;
+    }
 };
 
 const HtmlParser = struct {
@@ -903,6 +1113,20 @@ fn duplicateLowercase(store: *DomStore, value: []const u8) errors.Result([]const
         out[i] = std.ascii.toLower(byte);
     }
     return out;
+}
+
+fn trimAttributeName(name: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, name, " \t\r\n");
+    return if (trimmed.len == 0) null else trimmed;
+}
+
+fn findAttributeIndexByName(attributes: []const Attribute, name: []const u8) ?usize {
+    for (attributes, 0..) |attribute, index| {
+        if (asciiEqualIgnoreCase(attribute.name, name)) {
+            return index;
+        }
+    }
+    return null;
 }
 
 fn upsertAttribute(
@@ -1336,6 +1560,29 @@ fn collectSelectorMatches(
     }
 }
 
+fn collectSelectorMatchesWithin(
+    self: *const DomStore,
+    node_id: NodeId,
+    chains: []const SelectorChain,
+    results: *std.ArrayList(NodeId),
+    allocator: std.mem.Allocator,
+) errors.Result(void) {
+    const node = self.nodeAt(node_id) orelse return error.HtmlParse;
+    for (node.children.items) |child_id| {
+        const child = self.nodeAt(child_id) orelse return error.HtmlParse;
+        switch (child.kind) {
+            .element => {
+                if (nodeMatchesAnyChain(self, child_id, chains)) {
+                    try results.append(allocator, child_id);
+                }
+            },
+            else => {},
+        }
+
+        try collectSelectorMatchesWithin(self, child_id, chains, results, allocator);
+    }
+}
+
 fn nodeMatchesAnyChain(self: *const DomStore, node_id: NodeId, chains: []const SelectorChain) bool {
     for (chains) |chain| {
         if (nodeMatchesSelectorChain(self, node_id, &chain)) return true;
@@ -1512,6 +1759,79 @@ fn textContains(
     return false;
 }
 
+fn nodeIdEquals(left: NodeId, right: NodeId) bool {
+    return left.index == right.index and left.generation == right.generation;
+}
+
+fn expectNodeIdSliceEquals(expected: []const NodeId, actual: []const NodeId) !void {
+    try std.testing.expectEqual(expected.len, actual.len);
+    for (expected, 0..) |expected_id, index| {
+        try std.testing.expect(nodeIdEquals(expected_id, actual[index]));
+    }
+}
+
+const SelectorFixtureBuilder = struct {
+    allocator: std.mem.Allocator,
+    html: std.ArrayList(u8) = .empty,
+    next_node_index: u32 = 1,
+
+    fn init(allocator: std.mem.Allocator) SelectorFixtureBuilder {
+        return .{
+            .allocator = allocator,
+        };
+    }
+
+    fn deinit(self: *SelectorFixtureBuilder) void {
+        self.html.deinit(self.allocator);
+    }
+
+    fn source(self: *const SelectorFixtureBuilder) []const u8 {
+        return self.html.items;
+    }
+
+    fn startTag(
+        self: *SelectorFixtureBuilder,
+        tag: []const u8,
+        id_value: ?[]const u8,
+        class_value: ?[]const u8,
+    ) errors.Result(NodeId) {
+        try self.html.appendSlice(self.allocator, "<");
+        try self.html.appendSlice(self.allocator, tag);
+        if (id_value) |value| {
+            try self.html.appendSlice(self.allocator, " id='");
+            try self.html.appendSlice(self.allocator, value);
+            try self.html.appendSlice(self.allocator, "'");
+        }
+        if (class_value) |value| {
+            try self.html.appendSlice(self.allocator, " class='");
+            try self.html.appendSlice(self.allocator, value);
+            try self.html.appendSlice(self.allocator, "'");
+        }
+        try self.html.appendSlice(self.allocator, ">");
+
+        const node_id = NodeId.new(self.next_node_index, 0);
+        self.next_node_index += 1;
+        return node_id;
+    }
+
+    fn endTag(self: *SelectorFixtureBuilder, tag: []const u8) errors.Result(void) {
+        try self.html.appendSlice(self.allocator, "</");
+        try self.html.appendSlice(self.allocator, tag);
+        try self.html.appendSlice(self.allocator, ">");
+    }
+
+    fn openClose(
+        self: *SelectorFixtureBuilder,
+        tag: []const u8,
+        id_value: ?[]const u8,
+        class_value: ?[]const u8,
+    ) errors.Result(NodeId) {
+        const node_id = try self.startTag(tag, id_value, class_value);
+        try self.endTag(tag);
+        return node_id;
+    }
+};
+
 fn textContainsWord(
     actual: []const u8,
     expected: []const u8,
@@ -1615,6 +1935,149 @@ test "phase one: selector subset matches ids, tags, and attributes" {
     try std.testing.expectEqual(NodeId.new(4, 0), by_list[1]);
 }
 
+test "property: selector combinators keep document-order subsets stable" {
+    const allocator = std.testing.allocator;
+
+    for (0..12) |case_index| {
+        var fixture = SelectorFixtureBuilder.init(allocator);
+        defer fixture.deinit();
+
+        var expected_global: std.ArrayList(NodeId) = .empty;
+        defer expected_global.deinit(allocator);
+        var expected_main_descendant: std.ArrayList(NodeId) = .empty;
+        defer expected_main_descendant.deinit(allocator);
+        var expected_section_children: std.ArrayList(NodeId) = .empty;
+        defer expected_section_children.deinit(allocator);
+
+        const leading_noise_count = 1 + (case_index % 2);
+        for (0..leading_noise_count) |noise_index| {
+            const class_value = if ((case_index + noise_index) % 2 == 0) "action" else "secondary";
+            const node_id = try fixture.openClose("button", null, class_value);
+            if (std.mem.eql(u8, class_value, "action")) {
+                try expected_global.append(allocator, node_id);
+            }
+        }
+
+        _ = try fixture.startTag("main", "app", null);
+
+        const section_count = 2 + (case_index % 3);
+        for (0..section_count) |section_index| {
+            _ = try fixture.startTag("section", null, "panel");
+            if (((case_index + section_index) % 2) == 0) {
+                const direct_id = try fixture.openClose("button", null, "action");
+                try expected_global.append(allocator, direct_id);
+                try expected_main_descendant.append(allocator, direct_id);
+                try expected_section_children.append(allocator, direct_id);
+            } else {
+                _ = try fixture.startTag("div", null, null);
+                const wrapped_id = try fixture.openClose("button", null, "action");
+                try fixture.endTag("div");
+                try expected_global.append(allocator, wrapped_id);
+                try expected_main_descendant.append(allocator, wrapped_id);
+            }
+            try fixture.endTag("section");
+        }
+
+        try fixture.endTag("main");
+
+        const trailing_noise_count = 1 + ((case_index + 1) % 3);
+        for (0..trailing_noise_count) |noise_index| {
+            const class_value = if ((case_index + noise_index) % 3 == 0) "action" else "secondary";
+            const node_id = try fixture.openClose("button", null, class_value);
+            if (std.mem.eql(u8, class_value, "action")) {
+                try expected_global.append(allocator, node_id);
+            }
+        }
+
+        var store = try DomStore.init(allocator);
+        defer store.deinit();
+        try store.bootstrapHtml(fixture.source());
+
+        const action_nodes = try store.select(allocator, ".action");
+        defer allocator.free(action_nodes);
+        try expectNodeIdSliceEquals(expected_global.items, action_nodes);
+
+        const main_nodes = try store.select(allocator, "main .action");
+        defer allocator.free(main_nodes);
+        try expectNodeIdSliceEquals(expected_main_descendant.items, main_nodes);
+
+        const direct_nodes = try store.select(allocator, "main > section.panel > button.action");
+        defer allocator.free(direct_nodes);
+        try expectNodeIdSliceEquals(expected_section_children.items, direct_nodes);
+    }
+}
+
+test "property: selector lists deduplicate overlapping matches" {
+    const allocator = std.testing.allocator;
+
+    for (0..12) |case_index| {
+        var fixture = SelectorFixtureBuilder.init(allocator);
+        defer fixture.deinit();
+
+        var expected_action: std.ArrayList(NodeId) = .empty;
+        defer expected_action.deinit(allocator);
+        var expected_primary: std.ArrayList(NodeId) = .empty;
+        defer expected_primary.deinit(allocator);
+        var expected_union: std.ArrayList(NodeId) = .empty;
+        defer expected_union.deinit(allocator);
+
+        const leading_primary = try fixture.openClose("div", null, "primary");
+        try expected_primary.append(allocator, leading_primary);
+        try expected_union.append(allocator, leading_primary);
+
+        _ = try fixture.startTag("main", "root", null);
+
+        const slot_count = 4 + (case_index % 3);
+        for (0..slot_count) |slot_index| {
+            switch ((case_index + slot_index) % 4) {
+                0 => {
+                    const node_id = try fixture.openClose("button", null, "action");
+                    try expected_action.append(allocator, node_id);
+                    try expected_union.append(allocator, node_id);
+                },
+                1 => {
+                    const node_id = try fixture.openClose("div", null, "primary");
+                    try expected_primary.append(allocator, node_id);
+                    try expected_union.append(allocator, node_id);
+                },
+                2 => {
+                    const node_id = try fixture.openClose("button", null, "action primary");
+                    try expected_action.append(allocator, node_id);
+                    try expected_primary.append(allocator, node_id);
+                    try expected_union.append(allocator, node_id);
+                },
+                3 => {
+                    _ = try fixture.openClose("span", null, "secondary");
+                },
+                else => unreachable,
+            }
+        }
+
+        try fixture.endTag("main");
+
+        const trailing_both = try fixture.openClose("button", null, "action primary");
+        try expected_action.append(allocator, trailing_both);
+        try expected_primary.append(allocator, trailing_both);
+        try expected_union.append(allocator, trailing_both);
+
+        var store = try DomStore.init(allocator);
+        defer store.deinit();
+        try store.bootstrapHtml(fixture.source());
+
+        const action_nodes = try store.select(allocator, "button.action");
+        defer allocator.free(action_nodes);
+        try expectNodeIdSliceEquals(expected_action.items, action_nodes);
+
+        const primary_nodes = try store.select(allocator, ".primary");
+        defer allocator.free(primary_nodes);
+        try expectNodeIdSliceEquals(expected_primary.items, primary_nodes);
+
+        const union_nodes = try store.select(allocator, "button.action, .primary");
+        defer allocator.free(union_nodes);
+        try expectNodeIdSliceEquals(expected_union.items, union_nodes);
+    }
+}
+
 test "phase six: selector expansion matches classes and combinators" {
     const allocator = std.testing.allocator;
     var store = try DomStore.init(allocator);
@@ -1651,6 +2114,98 @@ test "phase six: selector expansion matches classes and combinators" {
     try std.testing.expectEqual(@as(usize, 2), by_child.len);
     try std.testing.expectEqual(NodeId.new(3, 0), by_child[0]);
     try std.testing.expectEqual(NodeId.new(6, 0), by_child[1]);
+}
+
+test "phase seven: selector single-node helpers match and climb ancestors" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml("<main id='root'><section id='panel' class='panel'><span id='marker'>panel</span><button id='second' class='secondary'>Second</button></section></main>");
+
+    const second = store.findElementById("second").?;
+    try std.testing.expect(try store.matchesSelector(allocator, second, "button.secondary"));
+    try std.testing.expect(!(try store.matchesSelector(allocator, second, "button.primary")));
+
+    const closest = try store.closestSelector(allocator, second, "section.panel");
+    try std.testing.expectEqual(store.findElementById("panel").?, closest.?);
+}
+
+test "phase seven: selector collection helpers stay within the subtree" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml("<main id='root'><button id='first' class='action'>First</button><section><button id='second' class='action'>Second</button></section></main>");
+
+    const root = store.findElementById("root").?;
+    const within = try store.selectWithin(allocator, root, "main, button.action");
+    defer allocator.free(within);
+
+    try std.testing.expectEqual(@as(usize, 2), within.len);
+    try std.testing.expectEqual(NodeId.new(2, 0), within[0]);
+    try std.testing.expectEqual(NodeId.new(5, 0), within[1]);
+}
+
+test "phase eight: attribute reflection updates selectors and form state" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml("<main id='root'><button id='button'>First</button><input id='name'><input id='agree' type='checkbox'><select id='mode'><option value='a'>A</option><option id='selected' value='b'>B</option></select></main>");
+
+    const button = store.findElementById("button").?;
+    try std.testing.expectEqual(@as(?[]const u8, null), try store.getAttribute(button, "data-label"));
+    try store.setAttribute(button, "class", "primary");
+    try std.testing.expect(try store.hasAttribute(button, "class"));
+    try std.testing.expect(try store.toggleAttribute(button, "data-flag", null));
+
+    const class_nodes = try store.select(allocator, ".primary");
+    defer allocator.free(class_nodes);
+    try std.testing.expectEqual(@as(usize, 1), class_nodes.len);
+
+    const flag_nodes = try store.select(allocator, "[data-flag]");
+    defer allocator.free(flag_nodes);
+    try std.testing.expectEqual(@as(usize, 1), flag_nodes.len);
+
+    try std.testing.expect(!(try store.toggleAttribute(button, "data-flag", false)));
+    try std.testing.expect(!(try store.hasAttribute(button, "data-flag")));
+
+    try store.setAttribute(button, "data-label", "Hello");
+    try std.testing.expectEqualStrings("Hello", (try store.getAttribute(button, "data-label")).?);
+    try store.removeAttribute(button, "data-label");
+    try std.testing.expectEqual(@as(?[]const u8, null), try store.getAttribute(button, "data-label"));
+
+    const name = store.findElementById("name").?;
+    try store.setAttribute(name, "value", "Alice");
+    const name_value = try store.valueForNode(allocator, name);
+    defer allocator.free(name_value);
+    try std.testing.expectEqualStrings("Alice", name_value);
+
+    const agree = store.findElementById("agree").?;
+    try store.setAttribute(agree, "checked", "");
+    try std.testing.expectEqual(@as(?bool, true), store.checkedForNode(agree));
+
+    const selected = store.findElementById("selected").?;
+    try store.setAttribute(selected, "selected", "");
+    const mode = store.findElementById("mode").?;
+    const mode_value = try store.valueForNode(allocator, mode);
+    defer allocator.free(mode_value);
+    try std.testing.expectEqualStrings("b", mode_value);
+}
+
+test "phase eight: empty attribute names are rejected explicitly" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml("<main id='root'><button id='button'>First</button></main>");
+
+    const button = store.findElementById("button").?;
+    try std.testing.expectError(error.DomError, store.setAttribute(button, "   ", "x"));
+    try std.testing.expectError(error.DomError, store.getAttribute(button, ""));
+    try std.testing.expectError(error.DomError, store.removeAttribute(button, ""));
+    try std.testing.expectError(error.DomError, store.toggleAttribute(button, "", null));
 }
 
 test "phase one: unsupported selector syntax is rejected explicitly" {

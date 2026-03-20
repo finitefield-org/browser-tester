@@ -98,6 +98,16 @@ fn document_scripts_are_live_end_to_end() -> browser_tester_next::Result<()> {
 }
 
 #[test]
+fn document_style_sheets_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><style id='first-style'>.primary { color: red; }</style><link id='first-link' rel='stylesheet' href='a.css'><link id='ignored-link' rel='preload' href='b.css'></main><div id='out'></div><script>const sheets = document.styleSheets; const before = sheets.length; const first = sheets.item(0); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(sheets.length) + ':' + String(first) + ':' + String(sheets.item(1));</script>",
+    )?;
+
+    harness.assert_text("#out", "2:0:[object CSSStyleSheet]:null")?;
+    Ok(())
+}
+
+#[test]
 fn document_embeds_are_live_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><embed id='first-embed'><embed name='second-embed'></main><div id='out'></div><script>const embeds = document.embeds; const before = embeds.length; const first = embeds.namedItem('first-embed'); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(embeds.length) + ':' + String(first) + ':' + String(embeds.namedItem('missing'));</script>",
@@ -128,6 +138,19 @@ fn document_children_are_live_end_to_end() -> browser_tester_next::Result<()> {
     harness.assert_text("#out", "3:2:[object Element]:[object Element]:null")?;
     harness.assert_exists("#out")?;
     assert!(harness.assert_exists("#root").is_err());
+    Ok(())
+}
+
+#[test]
+fn child_nodes_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<!--pre--><main id='root'>Hello<span>World</span><!--tail--></main><div id='out'></div><script>const docNodes = document.childNodes; const rootNodes = document.getElementById('root').childNodes; const docFirst = docNodes.item(0); const docSecond = docNodes.item(1); const rootValues = rootNodes.values(); const firstRoot = rootValues.next(); const secondRoot = rootValues.next(); const thirdRoot = rootValues.next(); document.getElementById('out').textContent = String(docNodes.length) + ':' + docFirst.nodeName + ':' + String(docFirst.nodeType) + ':' + String(docFirst) + ':' + docSecond.nodeName + ':' + String(docSecond.nodeType) + ':' + firstRoot.value.nodeName + ':' + String(firstRoot.value.nodeType) + ':' + firstRoot.value.textContent + ':' + secondRoot.value.nodeName + ':' + String(secondRoot.value.nodeType) + ':' + secondRoot.value.textContent + ':' + thirdRoot.value.nodeName + ':' + String(thirdRoot.value.nodeType) + ':' + thirdRoot.value.textContent;</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "4:#comment:8:[object Node]:main:1:#text:3:Hello:span:1:World:#comment:8:",
+    )?;
     Ok(())
 }
 
@@ -170,6 +193,20 @@ fn document_embeds_are_not_available_on_elements_end_to_end() -> browser_tester_
 
     assert!(error.to_string().contains("unsupported member access"));
     assert!(error.to_string().contains("`embeds`"));
+    assert!(error.to_string().contains("element value"));
+    Ok(())
+}
+
+#[test]
+fn document_style_sheets_are_not_available_on_elements_end_to_end() -> browser_tester_next::Result<()>
+{
+    let error = Harness::from_html(
+        "<div id='wrapper'><div id='not-doc'></div></div><script>document.getElementById('not-doc').styleSheets.length;</script>",
+    )
+    .expect_err("non-document styleSheets access should fail");
+
+    assert!(error.to_string().contains("unsupported member access"));
+    assert!(error.to_string().contains("`styleSheets`"));
     assert!(error.to_string().contains("element value"));
     Ok(())
 }
@@ -302,7 +339,7 @@ fn fieldset_elements_and_datalist_options_are_live_end_to_end() -> browser_teste
 #[test]
 fn radio_node_list_is_live_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
-        "<main id='root'><form id='signup'><input type='radio' name='mode' id='mode-a' value='a' checked><input type='radio' name='mode' id='mode-b' value='b'></form><div id='out'></div><script>const elements = document.getElementById('signup').elements; const named = elements.namedItem('mode'); const before = named.length; document.getElementById('signup').innerHTML += '<input type=\"radio\" name=\"mode\" id=\"mode-c\" value=\"c\" checked>'; document.getElementById('out').textContent = String(before) + ':' + String(named.length) + ':' + named.item(0).value + ':' + named.item(1).value + ':' + named.value + ':' + String(named);</script></main>",
+        "<main id='root'><form id='signup'><input type='radio' name='mode' id='mode-a' value='a'><input type='radio' name='mode' id='mode-b' value='b'></form><div id='out'></div><script>const elements = document.getElementById('signup').elements; const named = elements.namedItem('mode'); const before = named.length; document.getElementById('signup').innerHTML += '<input type=\"radio\" name=\"mode\" id=\"mode-c\" value=\"c\" checked>'; document.getElementById('out').textContent = String(before) + ':' + String(named.length) + ':' + named.item(0).value + ':' + named.item(1).value + ':' + named.value + ':' + String(named);</script></main>",
     )?;
 
     harness.assert_text("#out", "2:3:a:b:c:[object RadioNodeList]")?;

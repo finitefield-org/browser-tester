@@ -66,6 +66,9 @@ It owns the copied configuration state, the internal DOM store, the internal scr
 
 `Harness` now exposes `assertExists()`, `assertValue()`, `assertChecked()`, and `dumpDom()` for read-only inspection, plus `nowMs()`, `advanceTime()`, `flush()`, `mocksMut()`, `fetch()`, `alert()`, `confirm()`, `prompt()`, `readClipboard()`, `writeClipboard()`, `captureDownload()`, `navigate()`, and `setFiles()` for deterministic runtime control, and `click()`, `typeText()`, `setChecked()`, `setSelectValue()`, `focus()`, `blur()`, `submit()`, and `dispatch()` for user-like actions.
 `assertExists()` and the action methods resolve through the shared DOM selector engine, which now covers class selectors, compound simple selectors, descendant combinators, and child combinators.
+Inline scripts and event handlers also reuse that selector engine through `document.querySelector()`, `element.querySelector()`, `Element.matches()`, and `Element.closest()`.
+Collection lookups reuse it through `document.querySelectorAll()` and `element.querySelectorAll()`, which return minimal `NodeList` snapshots with `length` and `item(index)`.
+Inline scripts also use attribute reflection methods like `getAttribute()`, `setAttribute()`, `removeAttribute()`, `hasAttribute()`, and `toggleAttribute()`, which update the shared DOM attribute store and keep selectors plus form-control getters in sync.
 
 ## High-Level Shape
 
@@ -141,6 +144,8 @@ The deterministic clock helpers and mock registry slice are implemented in this 
 - property tests
 - publication checklist
 
+The hardening suite is implemented in this workspace now.
+
 ### Phase 6
 
 - selector expansion
@@ -154,7 +159,8 @@ The selector expansion slice is implemented in this workspace now.
 
 - script DOM query expansion
 - collection support
-- bounded selector grammar broadening
+
+The query selector and collection slices are implemented in this workspace now; selector hardening is already covered by the phase 6 selector engine.
 
 ### Phase 8
 
@@ -163,6 +169,8 @@ The selector expansion slice is implemented in this workspace now.
 - class and dataset views
 - HTML serialization surfaces
 
+The attribute reflection slice is implemented in this workspace now; the other phase 8 slices remain planned.
+
 ## Current Status
 
-Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, and Phase 6 are delivered in this workspace.
+Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, Phase 5, and Phase 6 are delivered in this workspace, the Phase 7 query selector and collection slices are delivered as well, and the Phase 8 attribute reflection slice is delivered.

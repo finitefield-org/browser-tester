@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use crate::syntax::{AssignTarget, Expr, Program, Statement};
 use crate::{
     CollectionIteratorHandle, HostBindings, HtmlCollectionNamedItem, HtmlCollectionScope,
-    HtmlCollectionTarget, ListenerTarget, NodeListTarget, RadioNodeListTarget, Result, ScriptError,
-    ScriptValue as Value,
+    HtmlCollectionTarget, ListenerTarget, NodeHandle, NodeListTarget, RadioNodeListTarget, Result,
+    ScriptError, ScriptValue as Value, StyleSheetListTarget, StyleSheetTarget,
 };
 
 pub(crate) fn eval_program<H: HostBindings>(program: &Program, host: &mut H) -> Result<()> {
@@ -40,6 +40,9 @@ fn as_string(value: &Value) -> String {
         Value::ClassList(_) => "[object DOMTokenList]".to_string(),
         Value::Dataset(_) => "[object DOMStringMap]".to_string(),
         Value::HtmlCollection(_) => "[object HTMLCollection]".to_string(),
+        Value::StyleSheetList(_) => "[object StyleSheetList]".to_string(),
+        Value::StyleSheet(_) => "[object CSSStyleSheet]".to_string(),
+        Value::Node(_) => "[object Node]".to_string(),
         Value::NodeList(_) => "[object NodeList]".to_string(),
         Value::RadioNodeList(_) => "[object RadioNodeList]".to_string(),
         Value::CollectionIterator(_) => "[object Iterator]".to_string(),
@@ -127,6 +130,15 @@ fn eval_assignment<H: HostBindings>(
                 ))),
                 (Value::HtmlCollection(_), property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on html collection value"
+                ))),
+                (Value::StyleSheetList(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on style sheet list value"
+                ))),
+                (Value::StyleSheet(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on style sheet value"
+                ))),
+                (Value::Node(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on node value"
                 ))),
                 (Value::CollectionIterator(_), property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on iterator value"
@@ -238,6 +250,12 @@ fn eval_member<H: HostBindings>(
                 tag_name: "script".to_string(),
             }))
         }
+        Value::Document if property == "styleSheets" => {
+            Ok(Value::StyleSheetList(StyleSheetListTarget::Document))
+        }
+        Value::Document if property == "childNodes" => Ok(Value::NodeList(
+            NodeListTarget::ChildNodes(HtmlCollectionScope::Document),
+        )),
         Value::Document if property == "links" => {
             Ok(Value::HtmlCollection(HtmlCollectionTarget::DocumentLinks))
         }
@@ -285,6 +303,9 @@ fn eval_member<H: HostBindings>(
         Value::Element(element) if property == "children" => Ok(Value::HtmlCollection(
             HtmlCollectionTarget::Children(element),
         )),
+        Value::Element(element) if property == "childNodes" => Ok(Value::NodeList(
+            NodeListTarget::ChildNodes(HtmlCollectionScope::Element(element)),
+        )),
         Value::Element(element) if property == "labels" => {
             Ok(Value::NodeList(NodeListTarget::Labels(element)))
         }
@@ -325,8 +346,19 @@ fn eval_member<H: HostBindings>(
         Value::Event(event) if property == "eventPhase" => {
             Ok(Value::Number(event.event_phase() as u8 as f64))
         }
+        Value::Node(node) if property == "textContent" => {
+            Ok(Value::String(host.node_text_content(node)?))
+        }
+        Value::Node(node) if property == "nodeType" => {
+            Ok(Value::Number(host.node_type(node)? as f64))
+        }
+        Value::Node(node) if property == "nodeName" => Ok(Value::String(host.node_name(node)?)),
         Value::HtmlCollection(collection) if property == "length" => {
             let length = html_collection_items(&collection, host)?.len();
+            Ok(Value::Number(length as f64))
+        }
+        Value::StyleSheetList(target) if property == "length" => {
+            let length = style_sheet_list_items(&target, host)?.len();
             Ok(Value::Number(length as f64))
         }
         Value::IteratorResult(result) if property == "value" => {
@@ -367,6 +399,9 @@ fn eval_member<H: HostBindings>(
         Value::Null | Value::Undefined => Err(unsupported_member_access(property, "nullish")),
         Value::Event(_) => Err(unsupported_member_access(property, "event")),
         Value::HtmlCollection(_) => Err(unsupported_member_access(property, "html collection")),
+        Value::StyleSheetList(_) => Err(unsupported_member_access(property, "style sheet list")),
+        Value::StyleSheet(_) => Err(unsupported_member_access(property, "style sheet")),
+        Value::Node(_) => Err(unsupported_member_access(property, "node")),
         Value::NodeList(_) => Err(unsupported_member_access(property, "node list")),
         Value::RadioNodeList(_) => Err(unsupported_member_access(property, "radio node list")),
         Value::CollectionIterator(_) => Err(unsupported_member_access(property, "iterator")),
@@ -528,6 +563,18 @@ fn eval_method_call<H: HostBindings>(
                 "unsupported HTMLCollection method: {other}"
             ))),
         },
+        Value::StyleSheetList(target) => match method {
+            "item" => style_sheet_list_item(&target, args, env, host),
+            other => Err(ScriptError::new(format!(
+                "unsupported StyleSheetList method: {other}"
+            ))),
+        },
+        Value::StyleSheet(_) => Err(ScriptError::new(format!(
+            "cannot call `{method}` on a style sheet value"
+        ))),
+        Value::Node(_) => Err(ScriptError::new(format!(
+            "cannot call `{method}` on a node value"
+        ))),
         Value::ClassList(element) => match method {
             "contains" => class_list_contains(element, args, env, host),
             "add" => class_list_add(element, args, env, host),
@@ -1027,6 +1074,21 @@ fn element_closest<H: HostBindings>(
     Ok(match_handle.map(Value::Element).unwrap_or(Value::Null))
 }
 
+#[derive(Clone, Debug, PartialEq)]
+enum NodeListItem {
+    Element(crate::ElementHandle),
+    Node(NodeHandle),
+}
+
+impl NodeListItem {
+    fn into_value(self) -> Value {
+        match self {
+            NodeListItem::Element(handle) => Value::Element(handle),
+            NodeListItem::Node(handle) => Value::Node(handle),
+        }
+    }
+}
+
 fn node_list_item<H: HostBindings>(
     target: &NodeListTarget,
     args: &[Expr],
@@ -1045,6 +1107,30 @@ fn node_list_item<H: HostBindings>(
     };
 
     Ok(node_list_items(target, host)?
+        .get(index)
+        .cloned()
+        .map(NodeListItem::into_value)
+        .unwrap_or(Value::Null))
+}
+
+fn radio_node_list_item<H: HostBindings>(
+    target: &RadioNodeListTarget,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [index_expr] = args else {
+        return Err(ScriptError::new(
+            "RadioNodeList.item() expects exactly one argument",
+        ));
+    };
+
+    let index_value = eval_expr(index_expr, env, host)?;
+    let Some(index) = index_from_value(&index_value) else {
+        return Ok(Value::Null);
+    };
+
+    Ok(radio_node_list_items(target, host)?
         .get(index)
         .copied()
         .map(Value::Element)
@@ -1125,7 +1211,10 @@ fn html_collection_for_each<H: HostBindings>(
         let _ = eval_expr(this_arg_expr, env, host)?;
     }
 
-    let items = html_collection_items(collection, host)?;
+    let items = html_collection_items(collection, host)?
+        .into_iter()
+        .map(|handle| Value::Element(handle))
+        .collect();
     let collection_value = Value::HtmlCollection(collection.clone());
     for_each_over_items(&callback, items, collection_value, env, host)
 }
@@ -1150,6 +1239,30 @@ fn html_collection_values<H: HostBindings>(
     Ok(collection_iterator(
         items.into_iter().map(Value::Element).collect(),
     ))
+}
+
+fn style_sheet_list_item<H: HostBindings>(
+    target: &StyleSheetListTarget,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [index_expr] = args else {
+        return Err(ScriptError::new(
+            "StyleSheetList.item() expects exactly one argument",
+        ));
+    };
+
+    let index_value = eval_expr(index_expr, env, host)?;
+    let Some(index) = index_from_value(&index_value) else {
+        return Ok(Value::Null);
+    };
+
+    Ok(style_sheet_list_items(target, host)?
+        .get(index)
+        .copied()
+        .map(|handle| Value::StyleSheet(StyleSheetTarget::OwnerNode(handle)))
+        .unwrap_or(Value::Null))
 }
 
 fn html_collection_items<H: HostBindings>(
@@ -1185,6 +1298,15 @@ fn html_collection_items<H: HostBindings>(
         }
         HtmlCollectionTarget::TableRows(element) => host.html_collection_table_rows_items(*element),
         HtmlCollectionTarget::RowCells(element) => host.html_collection_row_cells_items(*element),
+    }
+}
+
+fn style_sheet_list_items<H: HostBindings>(
+    target: &StyleSheetListTarget,
+    host: &mut H,
+) -> Result<Vec<crate::ElementHandle>> {
+    match target {
+        StyleSheetListTarget::Document => host.document_style_sheets_items(),
     }
 }
 
@@ -1288,7 +1410,10 @@ fn node_list_for_each<H: HostBindings>(
         let _ = eval_expr(this_arg_expr, env, host)?;
     }
 
-    let items = node_list_items(target, host)?;
+    let items = node_list_items(target, host)?
+        .into_iter()
+        .map(NodeListItem::into_value)
+        .collect();
     let collection_value = Value::NodeList(target.clone());
     for_each_over_items(&callback, items, collection_value, env, host)
 }
@@ -1321,7 +1446,10 @@ fn radio_node_list_for_each<H: HostBindings>(
         let _ = eval_expr(this_arg_expr, env, host)?;
     }
 
-    let items = radio_node_list_items(target, host)?;
+    let items = radio_node_list_items(target, host)?
+        .into_iter()
+        .map(|handle| Value::Element(handle))
+        .collect();
     let collection_value = Value::RadioNodeList(target.clone());
     for_each_over_items(&callback, items, collection_value, env, host)
 }
@@ -1338,7 +1466,7 @@ fn node_list_keys<H: HostBindings>(target: &NodeListTarget, host: &mut H) -> Res
 fn node_list_values<H: HostBindings>(target: &NodeListTarget, host: &mut H) -> Result<Value> {
     let items = node_list_items(target, host)?;
     Ok(collection_iterator(
-        items.into_iter().map(Value::Element).collect(),
+        items.into_iter().map(NodeListItem::into_value).collect(),
     ))
 }
 
@@ -1367,11 +1495,28 @@ fn radio_node_list_values<H: HostBindings>(
 fn node_list_items<H: HostBindings>(
     target: &NodeListTarget,
     host: &mut H,
-) -> Result<Vec<crate::ElementHandle>> {
+) -> Result<Vec<NodeListItem>> {
     match target {
-        NodeListTarget::Snapshot(nodes) => Ok(nodes.clone()),
-        NodeListTarget::ByName(name) => host.document_get_elements_by_name(name),
-        NodeListTarget::Labels(element) => host.element_labels(*element),
+        NodeListTarget::Snapshot(nodes) => Ok(nodes
+            .iter()
+            .copied()
+            .map(NodeListItem::Element)
+            .collect()),
+        NodeListTarget::ByName(name) => Ok(host
+            .document_get_elements_by_name(name)?
+            .into_iter()
+            .map(NodeListItem::Element)
+            .collect()),
+        NodeListTarget::Labels(element) => Ok(host
+            .element_labels(*element)?
+            .into_iter()
+            .map(NodeListItem::Element)
+            .collect()),
+        NodeListTarget::ChildNodes(scope) => Ok(host
+            .node_child_nodes_items(scope.clone())?
+            .into_iter()
+            .map(NodeListItem::Node)
+            .collect()),
     }
 }
 
@@ -1403,7 +1548,7 @@ fn radio_node_list_value<H: HostBindings>(
 
 fn for_each_over_items<H: HostBindings>(
     callback: &crate::ScriptFunction,
-    items: Vec<crate::ElementHandle>,
+    items: Vec<Value>,
     collection_value: Value,
     env: &mut BTreeMap<String, Value>,
     host: &mut H,
@@ -1414,7 +1559,7 @@ fn for_each_over_items<H: HostBindings>(
         let mut bindings = env.clone();
         for (param_index, param) in callback.params.iter().enumerate() {
             let value = match param_index {
-                0 => Value::Element(item),
+                0 => item.clone(),
                 1 => Value::Number(index as f64),
                 2 => collection_value.clone(),
                 _ => Value::Undefined,
@@ -1452,6 +1597,9 @@ fn is_truthy(value: &Value) -> bool {
         | Value::ClassList(_)
         | Value::Dataset(_)
         | Value::HtmlCollection(_)
+        | Value::StyleSheetList(_)
+        | Value::StyleSheet(_)
+        | Value::Node(_)
         | Value::NodeList(_)
         | Value::RadioNodeList(_)
         | Value::CollectionIterator(_)

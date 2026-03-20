@@ -33,6 +33,19 @@ impl ElementHandle {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NodeHandle(u64);
+
+impl NodeHandle {
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ListenerTarget {
     Window,
@@ -75,11 +88,21 @@ pub enum HtmlCollectionTarget {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum StyleSheetListTarget {
+    Document,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RadioNodeListTarget {
     FormElements {
         element: ElementHandle,
         name: String,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum StyleSheetTarget {
+    OwnerNode(ElementHandle),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -93,6 +116,7 @@ pub enum NodeListTarget {
     Snapshot(Vec<ElementHandle>),
     ByName(String),
     Labels(ElementHandle),
+    ChildNodes(HtmlCollectionScope),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -262,6 +286,9 @@ pub enum ScriptValue {
     ClassList(ElementHandle),
     Dataset(ElementHandle),
     HtmlCollection(HtmlCollectionTarget),
+    StyleSheetList(StyleSheetListTarget),
+    StyleSheet(StyleSheetTarget),
+    Node(NodeHandle),
     NodeList(NodeListTarget),
     RadioNodeList(RadioNodeListTarget),
     CollectionIterator(CollectionIteratorHandle),
@@ -343,6 +370,26 @@ pub trait HostBindings {
 
     fn document_get_elements_by_name(&mut self, _name: &str) -> Result<Vec<ElementHandle>> {
         Err(ScriptError::phase_not_ready("document.getElementsByName"))
+    }
+
+    fn document_style_sheets_items(&mut self) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("document.styleSheets"))
+    }
+
+    fn node_child_nodes_items(&mut self, _scope: HtmlCollectionScope) -> Result<Vec<NodeHandle>> {
+        Err(ScriptError::phase_not_ready("Node.childNodes"))
+    }
+
+    fn node_text_content(&mut self, _node: NodeHandle) -> Result<String> {
+        Err(ScriptError::phase_not_ready("Node.textContent"))
+    }
+
+    fn node_type(&mut self, _node: NodeHandle) -> Result<u8> {
+        Err(ScriptError::phase_not_ready("Node.nodeType"))
+    }
+
+    fn node_name(&mut self, _node: NodeHandle) -> Result<String> {
+        Err(ScriptError::phase_not_ready("Node.nodeName"))
     }
 
     fn element_children(&mut self, _element: ElementHandle) -> Result<Vec<ElementHandle>> {

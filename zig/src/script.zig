@@ -64,6 +64,10 @@ pub const Binding = struct {
     value: Value,
 };
 
+const NodeList = struct {
+    items: []dom.NodeId,
+};
+
 pub const ScriptRuntime = struct {
     pub fn init() ScriptRuntime {
         return .{};
@@ -169,6 +173,7 @@ const Value = union(enum) {
     number: f64,
     string: []const u8,
     element: dom.NodeId,
+    node_list: NodeList,
     event: *ScriptEvent,
     function: ScriptFunction,
     document,
@@ -768,6 +773,12 @@ fn evalMember(
             }
             break :blk error.ScriptRuntime;
         },
+        .node_list => |list| blk: {
+            if (std.mem.eql(u8, member.property, "length")) {
+                break :blk Value{ .number = @floatFromInt(list.items.len) };
+            }
+            break :blk error.ScriptRuntime;
+        },
         .event => |event| blk: {
             if (std.mem.eql(u8, member.property, "type")) {
                 break :blk Value{ .string = event.eventType() };
@@ -841,6 +852,27 @@ fn evalMethodCall(
                 break :blk Value{ .element = element_id };
             }
             break :blk Value{ .null_value = {} };
+        } else if (std.mem.eql(u8, method, "querySelector")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const selector_value = try evalExpr(allocator, host, bindings, args[0]);
+            const selector = try asString(allocator, selector_value);
+            const match = host.domStore().querySelector(allocator, selector) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            if (match) |element_id| {
+                break :blk Value{ .element = element_id };
+            }
+            break :blk Value{ .null_value = {} };
+        } else if (std.mem.eql(u8, method, "querySelectorAll")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const selector_value = try evalExpr(allocator, host, bindings, args[0]);
+            const selector = try asString(allocator, selector_value);
+            const matches = host.domStore().select(allocator, selector) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            break :blk Value{ .node_list = .{ .items = matches } };
         } else if (std.mem.eql(u8, method, "addEventListener")) blk: {
             break :blk try registerListener(allocator, host, bindings, .document, args);
         } else error.ScriptRuntime,
@@ -851,8 +883,113 @@ fn evalMethodCall(
             if (args.len != 0) return error.ScriptRuntime;
             const text = try host.domStore().textContent(allocator, element);
             break :blk Value{ .string = text };
+        } else if (std.mem.eql(u8, method, "getAttribute")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const name_value = try evalExpr(allocator, host, bindings, args[0]);
+            const name = try asString(allocator, name_value);
+            const value = host.domStore().getAttribute(element, name) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            if (value) |text| {
+                break :blk Value{ .string = text };
+            }
+            break :blk Value{ .null_value = {} };
+        } else if (std.mem.eql(u8, method, "setAttribute")) blk: {
+            if (args.len != 2) return error.ScriptRuntime;
+            const name_value = try evalExpr(allocator, host, bindings, args[0]);
+            const name = try asString(allocator, name_value);
+            const value_value = try evalExpr(allocator, host, bindings, args[1]);
+            const value = try asString(allocator, value_value);
+            host.domStoreMut().setAttribute(element, name, value) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "removeAttribute")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const name_value = try evalExpr(allocator, host, bindings, args[0]);
+            const name = try asString(allocator, name_value);
+            host.domStoreMut().removeAttribute(element, name) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "hasAttribute")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const name_value = try evalExpr(allocator, host, bindings, args[0]);
+            const name = try asString(allocator, name_value);
+            const present = host.domStore().hasAttribute(element, name) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            break :blk Value{ .boolean = present };
+        } else if (std.mem.eql(u8, method, "toggleAttribute")) blk: {
+            if (args.len != 1 and args.len != 2) return error.ScriptRuntime;
+            const name_value = try evalExpr(allocator, host, bindings, args[0]);
+            const name = try asString(allocator, name_value);
+            const force: ?bool = if (args.len == 2) force_blk: {
+                const force_value = try evalExpr(allocator, host, bindings, args[1]);
+                break :force_blk isTruthy(force_value);
+            } else null;
+            const present = host.domStoreMut().toggleAttribute(element, name, force) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            break :blk Value{ .boolean = present };
+        } else if (std.mem.eql(u8, method, "querySelector")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const selector_value = try evalExpr(allocator, host, bindings, args[0]);
+            const selector = try asString(allocator, selector_value);
+            const match = host.domStore().querySelectorWithin(allocator, element, selector) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            if (match) |element_id| {
+                break :blk Value{ .element = element_id };
+            }
+            break :blk Value{ .null_value = {} };
+        } else if (std.mem.eql(u8, method, "querySelectorAll")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const selector_value = try evalExpr(allocator, host, bindings, args[0]);
+            const selector = try asString(allocator, selector_value);
+            const matches = host.domStore().selectWithin(allocator, element, selector) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            break :blk Value{ .node_list = .{ .items = matches } };
+        } else if (std.mem.eql(u8, method, "matches")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const selector_value = try evalExpr(allocator, host, bindings, args[0]);
+            const selector = try asString(allocator, selector_value);
+            const matches = host.domStore().matchesSelector(allocator, element, selector) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            break :blk Value{ .boolean = matches };
+        } else if (std.mem.eql(u8, method, "closest")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const selector_value = try evalExpr(allocator, host, bindings, args[0]);
+            const selector = try asString(allocator, selector_value);
+            const match = host.domStore().closestSelector(allocator, element, selector) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            if (match) |element_id| {
+                break :blk Value{ .element = element_id };
+            }
+            break :blk Value{ .null_value = {} };
         } else if (std.mem.eql(u8, method, "addEventListener")) blk: {
             break :blk try registerListener(allocator, host, bindings, .{ .element = element }, args);
+        } else error.ScriptRuntime,
+        .node_list => |list| if (std.mem.eql(u8, method, "item")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const index_value = try evalExpr(allocator, host, bindings, args[0]);
+            const index = try asNodeListIndex(index_value);
+            if (index >= list.items.len) {
+                break :blk Value{ .null_value = {} };
+            }
+            break :blk Value{ .element = list.items[index] };
         } else error.ScriptRuntime,
         .event => |event| if (std.mem.eql(u8, method, "preventDefault")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
@@ -939,6 +1076,7 @@ fn asString(allocator: std.mem.Allocator, value: Value) errors.Result([]const u8
         .number => |number| try std.fmt.allocPrint(allocator, "{d}", .{number}),
         .string => |text| text,
         .element => "[object Element]",
+        .node_list => "[object NodeList]",
         .event => "[object Event]",
         .document => "[object Document]",
         .window => "[object Window]",
@@ -960,7 +1098,22 @@ fn isTruthy(value: Value) bool {
         .boolean => |flag| flag,
         .number => |number| number != 0,
         .string => |text| text.len != 0,
-        .element, .event, .document, .window, .function => true,
+        .element, .node_list, .event, .document, .window, .function => true,
+    };
+}
+
+fn asNodeListIndex(value: Value) errors.Result(usize) {
+    return switch (value) {
+        .number => |number| blk: {
+            if (!std.math.isFinite(number)) return error.ScriptRuntime;
+            if (number < 0) return error.ScriptRuntime;
+            const floored = std.math.floor(number);
+            if (floored != number) return error.ScriptRuntime;
+            const max_index: f64 = @floatFromInt(std.math.maxInt(usize));
+            if (number > max_index) return error.ScriptRuntime;
+            break :blk @as(usize, @intFromFloat(number));
+        },
+        else => return error.ScriptRuntime,
     };
 }
 
