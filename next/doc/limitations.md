@@ -1,6 +1,6 @@
 # Limitations
 
-The `next/` workspace has reached Phase 4 for DOM, script, events, forms, fake time, and deterministic mock wiring, Phase 5 for hardening and publication checks, Phase 6 selector slices 1 through 4 plus sibling combinators, and Phase 7 script DOM query slices 1 through 4. Post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support, `Element.children` with minimal `HTMLCollection` support, including `namedItem()`, `getElementsByTagName` with live `HTMLCollection` support, `getElementsByTagNameNS` with live `HTMLCollection` support, `getElementsByClassName` with live `HTMLCollection` support, `getElementsByName` with live `NodeList` support, `document.forms` / `form.elements` with live `HTMLCollection` support, `select.options` with live `HTMLCollection` support, `document.images` / `document.links` with live `HTMLCollection` support, and `document.all` with live `HTMLCollection` support. Selector lists and a small pseudo-class slice are supported by the bounded selector engine.
+The `next/` workspace has reached Phase 4 for DOM, script, events, forms, fake time, and deterministic mock wiring, Phase 5 for hardening and publication checks, Phase 6 selector slices 1 through 4 plus sibling combinators, and Phase 7 script DOM query slices 1 through 4. Post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support, `Element.children` with minimal `HTMLCollection` support, including `namedItem()`, `getElementsByTagName` with live `HTMLCollection` support, `getElementsByTagNameNS` with live `HTMLCollection` support, `getElementsByClassName` with live `HTMLCollection` support, `getElementsByName` with live `NodeList` support, `document.forms` / `form.elements` with live `HTMLCollection` support, `select.options` with live `HTMLCollection` support, `document.images` / `document.links` with live `HTMLCollection` support, and `document.all` with live `HTMLCollection` support. Selector lists, bounded attribute selectors (`[attr=value]`, `[attr^=value]`, `[attr$=value]`, `[attr*=value]`, `[attr~=value]`, `[attr|=value]`) plus optional `i` / `s` flags, and a bounded pseudo-class slice, including `:not(...)`, `:is(...)`, `:nth-child(<positive integer>)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`, `:nth-last-child(<positive integer>)`, `:nth-last-child(odd)`, `:nth-last-child(even)`, and `:nth-last-child(an+b)`, are supported by the bounded selector engine.
 
 What exists today:
 
@@ -8,7 +8,7 @@ What exists today:
 - public and internal type skeletons
 - deterministic session bootstrap
 - real HTML parsing and DOM tree construction for the Phase 1 subset
-- selector matching for `#id`, tag, `[attr]`, `.class`, `tag.class`, `#id.class`, selector lists, simple pseudo-classes, descendant combinators, child combinators, adjacent sibling combinators, and general sibling combinators
+- selector matching for `#id`, tag, `[attr]`, `[attr=value]`, `[attr^=value]`, `[attr$=value]`, `[attr*=value]`, `[attr~=value]`, `[attr|=value]`, optional `i` / `s` flags, `.class`, `tag.class`, `#id.class`, selector lists, bounded pseudo-classes, descendant combinators, child combinators, adjacent sibling combinators, and general sibling combinators
 - `assert_exists` and DOM dump helpers
 - inline `<script>` bootstrapping with a minimal script parser/evaluator
 - listener registration through the script host seam
@@ -37,7 +37,7 @@ What exists today:
 What does not exist yet:
 
 - broader collection APIs beyond the current bounded DOM collection set
-- broad pseudo-classes such as `:nth-child`, `:not`, and `:is`
+- broader CSS parsing beyond the bounded selector grammar, including malformed or unknown attribute selector flags such as `[attr=value x]`
 
 ## Important Consequence
 

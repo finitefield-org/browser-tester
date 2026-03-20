@@ -180,12 +180,16 @@ Post-Phase-7 slices:
 - all-elements collection
   - `document.all` with live `HTMLCollection` support
   - `length`, `item()`, and `namedItem()`
+- bounded attribute selectors
+  - `[attr=value]`, `[attr^=value]`, `[attr$=value]`, `[attr*=value]`, `[attr~=value]`, and `[attr|=value]` are available through the same bounded engine
+  - unquoted and quoted value forms are supported
+  - optional `i` / `s` attribute selector flags are available through the same bounded engine
 - selector lists
   - comma-separated selector lists are available through the same bounded engine
   - document-order union and deduplication
-- simple pseudo-classes
-  - `:first-child`, `:last-child`, `:checked`, `:disabled`, and `:enabled` are available through the same bounded engine
-  - `:nth-child`, `:not`, `:is`, and broader pseudo-class parsing deferred
+- bounded pseudo-classes
+  - `:not(...)`, `:is(...)`, `:first-child`, `:last-child`, `:nth-child(<positive integer>)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`, `:nth-last-child(<positive integer>)`, `:nth-last-child(odd)`, `:nth-last-child(even)`, `:nth-last-child(an+b)`, `:checked`, `:disabled`, and `:enabled` are available through the same bounded engine
+  - bounded selector lists and combinators inside `:not(...)` and `:is(...)` are available; broader CSS parsing and malformed or unknown attribute selector flags stay deferred
 
 Exit criteria:
 
@@ -199,7 +203,7 @@ Exit criteria:
 Operating rule:
 
 - future selector work should stay backlog-driven and narrow
-- `querySelectorAll` with minimal `NodeList` support is available, `Element.children`, `getElementsByTagName`, `getElementsByTagNameNS`, `getElementsByClassName`, `getElementsByName`, `document.forms` / `form.elements`, `select.options`, `document.images`, `document.links`, and `document.all` collection support are also available, and selector lists and simple pseudo-classes are also available through the bounded engine
+- `querySelectorAll` with minimal `NodeList` support is available, `Element.children`, `getElementsByTagName`, `getElementsByTagNameNS`, `getElementsByClassName`, `getElementsByName`, `document.forms` / `form.elements`, `select.options`, `document.images`, `document.links`, and `document.all` collection support are also available, and selector lists plus the bounded pseudo-class subset are also available through the bounded engine
 
 ## After Phase 7: Rolling Capability Delivery
 

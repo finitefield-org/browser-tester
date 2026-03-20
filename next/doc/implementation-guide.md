@@ -1,6 +1,6 @@
 # Implementation Guide
 
-This document explains how to actually build out the `next/` rewrite from its current Phase 6-complete baseline with Phase 7 slices 1 through 4 already delivered, plus sibling selector backlog slices (`A + B`, `A ~ B`), selector lists (`A, B`), simple pseudo-classes, and post-Phase-7 collection slices for `querySelectorAll` / minimal `NodeList`, `Element.children` / minimal `HTMLCollection`, `getElementsByTagName` / live `HTMLCollection`, `getElementsByTagNameNS` / live `HTMLCollection`, `getElementsByClassName` / live `HTMLCollection`, `getElementsByName` / live `NodeList`, `document.forms` / `form.elements` live `HTMLCollection`, `select.options` live `HTMLCollection`, `document.images` / `document.links` live `HTMLCollection`, and `document.all` live `HTMLCollection`.
+This document explains how to actually build out the `next/` rewrite from its current Phase 6-complete baseline with Phase 7 slices 1 through 4 already delivered, plus sibling selector backlog slices (`A + B`, `A ~ B`), selector lists (`A, B`), bounded attribute selectors (`[attr=value]`, `[attr^=value]`, `[attr$=value]`, `[attr*=value]`, `[attr~=value]`, `[attr|=value]`) plus optional `i` / `s` flags, bounded pseudo-classes including `:not(...)`, `:is(...)`, `:nth-child(<positive integer>)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`, `:nth-last-child(<positive integer>)`, `:nth-last-child(odd)`, `:nth-last-child(even)`, and `:nth-last-child(an+b)`, and post-Phase-7 collection slices for `querySelectorAll` / minimal `NodeList`, `Element.children` / minimal `HTMLCollection`, `getElementsByTagName` / live `HTMLCollection`, `getElementsByTagNameNS` / live `HTMLCollection`, `getElementsByClassName` / live `HTMLCollection`, `getElementsByName` / live `NodeList`, `document.forms` / `form.elements` live `HTMLCollection`, `select.options` live `HTMLCollection`, `document.images` / `document.links` live `HTMLCollection`, and `document.all` live `HTMLCollection`.
 
 Use it together with:
 
@@ -36,7 +36,7 @@ The safest way to turn the Phase 0 skeleton into a usable runtime is:
 
 This order keeps the public facade thin and avoids implementing user actions before the DOM and selector layers are trustworthy.
 
-Slices 1 through 18 are already implemented in this workspace, including public download capture. Phase 6 selector expansion slices 1 through 4, covering class selectors, compound simple selectors, descendant combinators, child combinators, and selector hardening, are also implemented in this workspace. A post-Phase-7 selector slice adds sibling combinators (`A + B`, `A ~ B`), selector lists (`A, B`), and simple pseudo-classes through the same bounded engine. Phase 7 script DOM query slices 1 through 4 (`document.querySelector`, `element.querySelector`, `Element.matches`, `Element.closest`, and selector hardening) are implemented as well. Post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support, `Element.children` with minimal `HTMLCollection` support, `getElementsByTagName` with live `HTMLCollection` support, `getElementsByTagNameNS` with live `HTMLCollection` support, `getElementsByClassName` with live `HTMLCollection` support, `getElementsByName` with live `NodeList` support, `document.forms` / `form.elements` live `HTMLCollection` support, `select.options` live `HTMLCollection` support, `document.images` / `document.links` live `HTMLCollection` support, and `document.all` live `HTMLCollection` support.
+Slices 1 through 18 are already implemented in this workspace, including public download capture. Phase 6 selector expansion slices 1 through 4, covering class selectors, compound simple selectors, descendant combinators, child combinators, and selector hardening, are also implemented in this workspace. A post-Phase-7 selector slice adds sibling combinators (`A + B`, `A ~ B`), selector lists (`A, B`), bounded attribute selectors (`[attr=value]`, `[attr^=value]`, `[attr$=value]`, `[attr*=value]`, `[attr~=value]`, `[attr|=value]`) plus optional `i` / `s` flags, and bounded pseudo-classes including `:not(...)`, `:is(...)`, `:nth-child(<positive integer>)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`, `:nth-last-child(<positive integer>)`, `:nth-last-child(odd)`, `:nth-last-child(even)`, and `:nth-last-child(an+b)` through the same bounded engine. Phase 7 script DOM query slices 1 through 4 (`document.querySelector`, `element.querySelector`, `Element.matches`, `Element.closest`, and selector hardening) are implemented as well. Post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support, `Element.children` with minimal `HTMLCollection` support, `getElementsByTagName` with live `HTMLCollection` support, `getElementsByTagNameNS` with live `HTMLCollection` support, `getElementsByClassName` with live `HTMLCollection` support, `getElementsByName` with live `NodeList` support, `document.forms` / `form.elements` live `HTMLCollection` support, `select.options` live `HTMLCollection` support, `document.images` / `document.links` live `HTMLCollection` support, and `document.all` live `HTMLCollection` support.
 
 ## First Vertical Slices
 
@@ -230,7 +230,7 @@ Suggested scope:
 - adjacent sibling combinators (`A + B`)
 - general sibling combinators (`A ~ B`)
 - selector lists (`A, B`)
-- simple pseudo-classes (`:first-child`, `:last-child`, `:checked`, `:disabled`, `:enabled`)
+- bounded pseudo-classes (`:not(...)`, `:is(...)`, `:first-child`, `:last-child`, `:nth-child(<positive integer>)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`, `:nth-last-child(<positive integer>)`, `:nth-last-child(odd)`, `:nth-last-child(even)`, `:nth-last-child(an+b)`, `:checked`, `:disabled`, `:enabled`)
 - explicit failures for unsupported selector syntax
 
 Tests already in place:
@@ -241,14 +241,13 @@ Tests already in place:
 - adjacent sibling combinators match the immediate previous element sibling
 - general sibling combinators match later element siblings in document order
 - selector lists preserve document order and deduplicate results
-- simple pseudo-classes resolve against structure and simple form state
+- bounded pseudo-classes resolve against logical negation, bounded selector lists/combinators, structure, and simple form state
 - public `Harness` actions and assertions continue to resolve selectors deterministically
 - selector hardening remains explicit for unsupported syntax
 
 Do not add yet:
 
-- broad pseudo-classes such as `:nth-child`, `:not`, and `:is`
-- attribute value operators beyond the bounded slice
+- broader CSS parsing beyond the bounded selector grammar, including malformed or unknown attribute selector flags such as `[attr=value x]`
 - general CSS parsing
 
 ### Slice 9: Script DOM Query Expansion
@@ -287,7 +286,7 @@ Tests already in place:
 - current-element selector checks work in inline scripts
 - ancestor-walk selector checks work in inline scripts
 - selector lists work in inline scripts
-- simple pseudo-classes work in inline scripts
+- bounded pseudo-classes work in inline scripts
 - unsupported selector syntax remains explicit
 - null-on-miss behavior is preserved
 - invalid selector syntax fails explicitly

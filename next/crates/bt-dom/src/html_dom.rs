@@ -18,8 +18,33 @@ struct SelectorQuery {
     tag: Option<String>,
     id: Option<String>,
     classes: Vec<String>,
-    attributes: Vec<String>,
+    attributes: Vec<SelectorAttribute>,
     pseudo_classes: Vec<SelectorPseudoClass>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SelectorAttribute {
+    name: String,
+    operator: SelectorAttributeOperator,
+    value: Option<String>,
+    case_sensitivity: SelectorAttributeCaseSensitivity,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectorAttributeOperator {
+    Exists,
+    Exact,
+    Prefix,
+    Suffix,
+    Contains,
+    Includes,
+    DashMatch,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectorAttributeCaseSensitivity {
+    CaseSensitive,
+    AsciiInsensitive,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -40,9 +65,20 @@ enum SelectorCombinator {
 enum SelectorPseudoClass {
     FirstChild,
     LastChild,
+    NthChild(SelectorNthChildPattern),
+    NthLastChild(SelectorNthChildPattern),
+    Is(Vec<SelectorChain>),
+    Where(Vec<SelectorChain>),
+    Not(Vec<SelectorChain>),
     Checked,
     Disabled,
     Enabled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SelectorNthChildPattern {
+    step: isize,
+    offset: isize,
 }
 
 impl DomStore {
@@ -885,8 +921,92 @@ impl DomStore {
         }
 
         for attribute in &query.attributes {
-            if !element.attributes.contains_key(attribute) {
+            let Some(element_value) = element.attributes.get(&attribute.name) else {
                 return false;
+            };
+
+            match (
+                attribute.operator,
+                attribute.value.as_ref(),
+                attribute.case_sensitivity,
+            ) {
+                (SelectorAttributeOperator::Exists, None, _) => {}
+                (
+                    SelectorAttributeOperator::Exact,
+                    Some(value),
+                    SelectorAttributeCaseSensitivity::CaseSensitive,
+                ) if element_value == value => {}
+                (
+                    SelectorAttributeOperator::Exact,
+                    Some(value),
+                    SelectorAttributeCaseSensitivity::AsciiInsensitive,
+                ) if element_value.eq_ignore_ascii_case(value) => {}
+                (
+                    SelectorAttributeOperator::Prefix,
+                    Some(value),
+                    SelectorAttributeCaseSensitivity::CaseSensitive,
+                ) if element_value.starts_with(value) => {}
+                (
+                    SelectorAttributeOperator::Prefix,
+                    Some(value),
+                    SelectorAttributeCaseSensitivity::AsciiInsensitive,
+                ) if starts_with_ignore_ascii_case(element_value, value) => {}
+                (
+                    SelectorAttributeOperator::Suffix,
+                    Some(value),
+                    SelectorAttributeCaseSensitivity::CaseSensitive,
+                ) if element_value.ends_with(value) => {}
+                (
+                    SelectorAttributeOperator::Suffix,
+                    Some(value),
+                    SelectorAttributeCaseSensitivity::AsciiInsensitive,
+                ) if ends_with_ignore_ascii_case(element_value, value) => {}
+                (
+                    SelectorAttributeOperator::Contains,
+                    Some(value),
+                    SelectorAttributeCaseSensitivity::CaseSensitive,
+                ) if element_value.contains(value) => {}
+                (
+                    SelectorAttributeOperator::Contains,
+                    Some(value),
+                    SelectorAttributeCaseSensitivity::AsciiInsensitive,
+                ) if contains_ignore_ascii_case(element_value, value) => {}
+                (
+                    SelectorAttributeOperator::Includes,
+                    Some(value),
+                    SelectorAttributeCaseSensitivity::CaseSensitive,
+                ) if element_value
+                    .split_ascii_whitespace()
+                    .any(|candidate| candidate == value) => {}
+                (
+                    SelectorAttributeOperator::Includes,
+                    Some(value),
+                    SelectorAttributeCaseSensitivity::AsciiInsensitive,
+                ) if element_value
+                    .split_ascii_whitespace()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(value)) => {}
+                (
+                    SelectorAttributeOperator::DashMatch,
+                    Some(value),
+                    SelectorAttributeCaseSensitivity::CaseSensitive,
+                ) if element_value == value
+                    || (!value.is_empty()
+                        && element_value
+                            .strip_prefix(value)
+                            .is_some_and(|rest| rest.starts_with('-'))) => {}
+                (
+                    SelectorAttributeOperator::DashMatch,
+                    Some(value),
+                    SelectorAttributeCaseSensitivity::AsciiInsensitive,
+                ) if element_value.eq_ignore_ascii_case(value)
+                    || (!value.is_empty()
+                        && starts_with_ignore_ascii_case(element_value, value)
+                        && element_value
+                            .get(value.len()..)
+                            .is_some_and(|rest| rest.starts_with('-'))) => {}
+                _ => {
+                    return false;
+                }
             }
         }
 
@@ -907,6 +1027,17 @@ impl DomStore {
         match pseudo_class {
             SelectorPseudoClass::FirstChild => self.is_first_child(node_id),
             SelectorPseudoClass::LastChild => self.is_last_child(node_id),
+            SelectorPseudoClass::NthChild(pattern) => self.is_nth_child(node_id, pattern),
+            SelectorPseudoClass::NthLastChild(pattern) => self.is_nth_last_child(node_id, pattern),
+            SelectorPseudoClass::Is(chains) => chains
+                .iter()
+                .any(|chain| self.matches_selector_chain(node_id, chain)),
+            SelectorPseudoClass::Where(chains) => chains
+                .iter()
+                .any(|chain| self.matches_selector_chain(node_id, chain)),
+            SelectorPseudoClass::Not(chains) => !chains
+                .iter()
+                .any(|chain| self.matches_selector_chain(node_id, chain)),
             SelectorPseudoClass::Checked => self.is_checked_pseudo_class(node_id),
             SelectorPseudoClass::Disabled => self.is_disabled_pseudo_class(node_id),
             SelectorPseudoClass::Enabled => self.is_enabled_pseudo_class(node_id),
@@ -967,12 +1098,7 @@ impl DomStore {
     fn parse_selector_list(selector: &str) -> Result<Vec<SelectorChain>, String> {
         let mut chains = Vec::new();
 
-        for item in selector.split(',') {
-            let item = item.trim();
-            if item.is_empty() {
-                return Err(selector_not_supported(selector));
-            }
-
+        for item in split_selector_list_items(selector)? {
             chains.push(Self::parse_selector_chain(item)?);
         }
 
@@ -1011,26 +1137,32 @@ impl DomStore {
                 }
                 b'[' => {
                     *pos += 1;
-                    let start = *pos;
-                    while *pos < bytes.len() && bytes[*pos] != b']' {
-                        if bytes[*pos].is_ascii_whitespace()
-                            || is_selector_combinator_byte(bytes[*pos])
-                        {
-                            return Err(selector_not_supported(selector));
-                        }
-                        if !is_simple_name_byte(bytes[*pos]) {
-                            return Err(selector_not_supported(selector));
-                        }
-                        *pos += 1;
-                    }
+                    skip_selector_whitespace(bytes, pos);
+                    let name = parse_selector_token(selector, pos)?.to_ascii_lowercase();
+                    skip_selector_whitespace(bytes, pos);
 
-                    if *pos == start || *pos >= bytes.len() {
+                    let (operator, value, case_sensitivity) =
+                        if *pos < bytes.len() && bytes[*pos] != b']' {
+                            parse_selector_attribute_operator_and_value(selector, pos)?
+                        } else {
+                            (
+                                SelectorAttributeOperator::Exists,
+                                None,
+                                SelectorAttributeCaseSensitivity::CaseSensitive,
+                            )
+                        };
+
+                    skip_selector_whitespace(bytes, pos);
+                    if *pos >= bytes.len() || bytes[*pos] != b']' {
                         return Err(selector_not_supported(selector));
                     }
-
-                    let attribute = selector[start..*pos].to_ascii_lowercase();
                     *pos += 1;
-                    query.attributes.push(attribute);
+                    query.attributes.push(SelectorAttribute {
+                        name,
+                        operator,
+                        value,
+                        case_sensitivity,
+                    });
                     saw_token = true;
                 }
                 b':' => {
@@ -1039,6 +1171,21 @@ impl DomStore {
                     let pseudo_class = match token.as_str() {
                         "first-child" => SelectorPseudoClass::FirstChild,
                         "last-child" => SelectorPseudoClass::LastChild,
+                        "nth-child" => {
+                            SelectorPseudoClass::NthChild(parse_nth_child_argument(selector, pos)?)
+                        }
+                        "nth-last-child" => SelectorPseudoClass::NthLastChild(
+                            parse_nth_child_argument(selector, pos)?,
+                        ),
+                        "is" => {
+                            SelectorPseudoClass::Is(parse_logical_pseudo_argument(selector, pos)?)
+                        }
+                        "where" => SelectorPseudoClass::Where(parse_logical_pseudo_argument(
+                            selector, pos,
+                        )?),
+                        "not" => {
+                            SelectorPseudoClass::Not(parse_logical_pseudo_argument(selector, pos)?)
+                        }
                         "checked" => SelectorPseudoClass::Checked,
                         "disabled" => SelectorPseudoClass::Disabled,
                         "enabled" => SelectorPseudoClass::Enabled,
@@ -1073,14 +1220,7 @@ impl DomStore {
     }
 
     fn is_first_child(&self, node_id: NodeId) -> bool {
-        let Some(parent_id) = self.parent_of(node_id) else {
-            return false;
-        };
-        let Some(parent) = self.nodes.get(parent_id.index() as usize) else {
-            return false;
-        };
-
-        parent.children.first() == Some(&node_id)
+        self.element_child_position(node_id) == Some(1)
     }
 
     fn is_last_child(&self, node_id: NodeId) -> bool {
@@ -1091,7 +1231,46 @@ impl DomStore {
             return false;
         };
 
-        parent.children.last() == Some(&node_id)
+        parent.children.iter().rev().find_map(|child| {
+            matches!(
+                self.nodes
+                    .get(child.index() as usize)
+                    .map(|node| &node.kind),
+                Some(NodeKind::Element(_))
+            )
+            .then_some(*child)
+        }) == Some(node_id)
+    }
+
+    fn is_nth_child(&self, node_id: NodeId, pattern: &SelectorNthChildPattern) -> bool {
+        let Some(position) = self.element_child_position(node_id) else {
+            return false;
+        };
+
+        self.matches_nth_pattern(position as isize, pattern)
+    }
+
+    fn is_nth_last_child(&self, node_id: NodeId, pattern: &SelectorNthChildPattern) -> bool {
+        let Some(position) = self.element_child_position_from_end(node_id) else {
+            return false;
+        };
+
+        self.matches_nth_pattern(position as isize, pattern)
+    }
+
+    fn matches_nth_pattern(&self, position: isize, pattern: &SelectorNthChildPattern) -> bool {
+        match pattern.step.cmp(&0) {
+            std::cmp::Ordering::Equal => position == pattern.offset && position > 0,
+            std::cmp::Ordering::Greater => {
+                let diff = position - pattern.offset;
+                diff >= 0 && diff % pattern.step == 0
+            }
+            std::cmp::Ordering::Less => {
+                let step = -pattern.step;
+                let diff = pattern.offset - position;
+                diff >= 0 && diff % step == 0
+            }
+        }
     }
 
     fn is_checked_pseudo_class(&self, node_id: NodeId) -> bool {
@@ -1165,6 +1344,54 @@ impl DomStore {
         None
     }
 
+    fn element_child_position(&self, node_id: NodeId) -> Option<usize> {
+        let parent_id = self.parent_of(node_id)?;
+        let parent = self.nodes.get(parent_id.index() as usize)?;
+        let mut position = 0;
+
+        for child in &parent.children {
+            if matches!(
+                self.nodes
+                    .get(child.index() as usize)
+                    .map(|node| &node.kind),
+                Some(NodeKind::Element(_))
+            ) {
+                position += 1;
+                if *child == node_id {
+                    return Some(position);
+                }
+            } else if *child == node_id {
+                return None;
+            }
+        }
+
+        None
+    }
+
+    fn element_child_position_from_end(&self, node_id: NodeId) -> Option<usize> {
+        let parent_id = self.parent_of(node_id)?;
+        let parent = self.nodes.get(parent_id.index() as usize)?;
+        let mut position = 0;
+
+        for child in parent.children.iter().rev() {
+            if matches!(
+                self.nodes
+                    .get(child.index() as usize)
+                    .map(|node| &node.kind),
+                Some(NodeKind::Element(_))
+            ) {
+                position += 1;
+                if *child == node_id {
+                    return Some(position);
+                }
+            } else if *child == node_id {
+                return None;
+            }
+        }
+
+        None
+    }
+
     fn dump_node(&self, node_id: NodeId, indent: usize, output: &mut String) {
         let node = &self.nodes[node_id.index() as usize];
         let children = node.children.clone();
@@ -1231,8 +1458,295 @@ impl DomStore {
 
 fn selector_not_supported(selector: &str) -> String {
     format!(
-        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`"
+        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`"
     )
+}
+
+fn parse_nth_child_argument(
+    selector: &str,
+    pos: &mut usize,
+) -> Result<SelectorNthChildPattern, String> {
+    let mut formula: String = parse_parenthesized_argument(selector, pos)?
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace())
+        .collect();
+
+    if formula.is_empty() {
+        return Err(selector_not_supported(selector));
+    }
+
+    formula.make_ascii_lowercase();
+    match formula.as_str() {
+        "odd" => {
+            return Ok(SelectorNthChildPattern { step: 2, offset: 1 });
+        }
+        "even" => {
+            return Ok(SelectorNthChildPattern { step: 2, offset: 0 });
+        }
+        _ => {}
+    }
+
+    if let Some(n_index) = formula.find('n') {
+        if formula[n_index + 1..].contains('n') {
+            return Err(selector_not_supported(selector));
+        }
+
+        let step = match &formula[..n_index] {
+            "" | "+" => 1,
+            "-" => -1,
+            value => value
+                .parse::<isize>()
+                .map_err(|_| selector_not_supported(selector))?,
+        };
+        let offset = if formula[n_index + 1..].is_empty() {
+            0
+        } else {
+            formula[n_index + 1..]
+                .parse::<isize>()
+                .map_err(|_| selector_not_supported(selector))?
+        };
+
+        return Ok(SelectorNthChildPattern { step, offset });
+    }
+
+    let offset = formula
+        .parse::<isize>()
+        .map_err(|_| selector_not_supported(selector))?;
+    Ok(SelectorNthChildPattern { step: 0, offset })
+}
+
+fn parse_logical_pseudo_argument(
+    selector: &str,
+    pos: &mut usize,
+) -> Result<Vec<SelectorChain>, String> {
+    let argument = parse_parenthesized_argument(selector, pos)?;
+    let mut chains = Vec::new();
+    for item in
+        split_selector_list_items(&argument).map_err(|_| selector_not_supported(selector))?
+    {
+        chains.push(
+            DomStore::parse_selector_chain(item).map_err(|_| selector_not_supported(selector))?,
+        );
+    }
+
+    if chains.is_empty() {
+        return Err(selector_not_supported(selector));
+    }
+
+    Ok(chains)
+}
+
+fn parse_selector_attribute_operator_and_value(
+    selector: &str,
+    pos: &mut usize,
+) -> Result<
+    (
+        SelectorAttributeOperator,
+        Option<String>,
+        SelectorAttributeCaseSensitivity,
+    ),
+    String,
+> {
+    let bytes = selector.as_bytes();
+    let Some(current) = bytes.get(*pos).copied() else {
+        return Err(selector_not_supported(selector));
+    };
+
+    let operator = match current {
+        b'=' => {
+            *pos += 1;
+            SelectorAttributeOperator::Exact
+        }
+        b'^' => {
+            if bytes.get(*pos + 1) != Some(&b'=') {
+                return Err(selector_not_supported(selector));
+            }
+            *pos += 2;
+            SelectorAttributeOperator::Prefix
+        }
+        b'$' => {
+            if bytes.get(*pos + 1) != Some(&b'=') {
+                return Err(selector_not_supported(selector));
+            }
+            *pos += 2;
+            SelectorAttributeOperator::Suffix
+        }
+        b'*' => {
+            if bytes.get(*pos + 1) != Some(&b'=') {
+                return Err(selector_not_supported(selector));
+            }
+            *pos += 2;
+            SelectorAttributeOperator::Contains
+        }
+        b'~' => {
+            if bytes.get(*pos + 1) != Some(&b'=') {
+                return Err(selector_not_supported(selector));
+            }
+            *pos += 2;
+            SelectorAttributeOperator::Includes
+        }
+        b'|' => {
+            if bytes.get(*pos + 1) != Some(&b'=') {
+                return Err(selector_not_supported(selector));
+            }
+            *pos += 2;
+            SelectorAttributeOperator::DashMatch
+        }
+        _ => return Err(selector_not_supported(selector)),
+    };
+
+    skip_selector_whitespace(bytes, pos);
+    let value = parse_selector_attribute_value(selector, pos)?;
+    skip_selector_whitespace(bytes, pos);
+    let case_sensitivity = parse_selector_attribute_case_sensitivity(selector, pos)?;
+    Ok((operator, Some(value), case_sensitivity))
+}
+
+fn parse_selector_attribute_value(selector: &str, pos: &mut usize) -> Result<String, String> {
+    let bytes = selector.as_bytes();
+    match bytes.get(*pos).copied() {
+        Some(quote @ (b'"' | b'\'')) => {
+            *pos += 1;
+            let start = *pos;
+            while *pos < bytes.len() && bytes[*pos] != quote {
+                *pos += 1;
+            }
+
+            if *pos >= bytes.len() {
+                return Err(selector_not_supported(selector));
+            }
+
+            let value = selector[start..*pos].to_string();
+            *pos += 1;
+            Ok(value)
+        }
+        Some(_) => {
+            let start = *pos;
+            while *pos < bytes.len() && !bytes[*pos].is_ascii_whitespace() && bytes[*pos] != b']' {
+                *pos += 1;
+            }
+
+            if *pos == start {
+                return Err(selector_not_supported(selector));
+            }
+
+            Ok(selector[start..*pos].to_string())
+        }
+        None => Err(selector_not_supported(selector)),
+    }
+}
+
+fn parse_selector_attribute_case_sensitivity(
+    selector: &str,
+    pos: &mut usize,
+) -> Result<SelectorAttributeCaseSensitivity, String> {
+    let bytes = selector.as_bytes();
+    match bytes.get(*pos).copied() {
+        Some(b']') | None => Ok(SelectorAttributeCaseSensitivity::CaseSensitive),
+        Some(flag) => {
+            *pos += 1;
+            let case_sensitivity = match flag.to_ascii_lowercase() {
+                b'i' => SelectorAttributeCaseSensitivity::AsciiInsensitive,
+                b's' => SelectorAttributeCaseSensitivity::CaseSensitive,
+                _ => return Err(selector_not_supported(selector)),
+            };
+            skip_selector_whitespace(bytes, pos);
+            if bytes.get(*pos) != Some(&b']') {
+                return Err(selector_not_supported(selector));
+            }
+            Ok(case_sensitivity)
+        }
+    }
+}
+
+fn starts_with_ignore_ascii_case(value: &str, prefix: &str) -> bool {
+    value
+        .get(..prefix.len())
+        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix))
+}
+
+fn ends_with_ignore_ascii_case(value: &str, suffix: &str) -> bool {
+    value
+        .get(value.len().saturating_sub(suffix.len())..)
+        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(suffix))
+}
+
+fn contains_ignore_ascii_case(value: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+
+    value
+        .to_ascii_lowercase()
+        .contains(&needle.to_ascii_lowercase())
+}
+
+fn parse_parenthesized_argument(selector: &str, pos: &mut usize) -> Result<String, String> {
+    let bytes = selector.as_bytes();
+    if *pos >= bytes.len() || bytes[*pos] != b'(' {
+        return Err(selector_not_supported(selector));
+    }
+    *pos += 1;
+
+    let start = *pos;
+    let mut depth = 1;
+    while *pos < bytes.len() {
+        match bytes[*pos] {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    let argument = selector[start..*pos].to_string();
+                    *pos += 1;
+                    return Ok(argument);
+                }
+            }
+            _ => {}
+        }
+        *pos += 1;
+    }
+
+    Err(selector_not_supported(selector))
+}
+
+fn split_selector_list_items(selector: &str) -> Result<Vec<&str>, String> {
+    let bytes = selector.as_bytes();
+    let mut items = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+
+    for (index, byte) in bytes.iter().enumerate() {
+        match byte {
+            b'(' => depth += 1,
+            b')' => {
+                if depth == 0 {
+                    return Err(selector_not_supported(selector));
+                }
+                depth -= 1;
+            }
+            b',' if depth == 0 => {
+                let item = selector[start..index].trim();
+                if item.is_empty() {
+                    return Err(selector_not_supported(selector));
+                }
+                items.push(item);
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+
+    if depth != 0 {
+        return Err(selector_not_supported(selector));
+    }
+
+    let item = selector[start..].trim();
+    if item.is_empty() {
+        return Err(selector_not_supported(selector));
+    }
+    items.push(item);
+
+    Ok(items)
 }
 
 fn parse_selector_token(selector: &str, pos: &mut usize) -> Result<String, String> {

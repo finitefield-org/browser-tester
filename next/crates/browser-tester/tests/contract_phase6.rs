@@ -72,13 +72,13 @@ fn pseudo_class_selectors_still_fail_explicitly() -> browser_tester_next::Result
     let harness = Harness::from_html("<main><span class='primary'></span></main>")?;
 
     let error = harness
-        .assert_exists("main:nth-child(2)")
-        .expect_err("broad pseudo-class selectors are not part of the selector slices");
+        .assert_exists("main:where([data-kind=primary x])")
+        .expect_err("broader CSS parsing is not part of the selector slices");
 
     let message = error.to_string();
     assert!(message.contains("Selector error"));
     assert!(
-        message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`")
+        message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`")
     );
     Ok(())
 }

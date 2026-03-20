@@ -31,6 +31,19 @@ fn script_dom_selector_lists_work_end_to_end() -> browser_tester_next::Result<()
 }
 
 #[test]
+fn script_attribute_value_selectors_work_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root' data-kind='APP-shell' lang='EN-US'><button id='first' data-role='Primary Action' data-tags='Primary Ready' data-label='Primary Action'>First</button><button id='second' data-role='Secondary Action'>Second</button><input id='toggle' disabled></main><div id='out'></div><script>const prefix = document.querySelector(\"button[data-role^=prim i]\"); const strict = document.querySelector(\"button[data-role^='Primary' s]\"); const suffix = document.querySelector(\"[data-label$='action' i]\"); const contains = document.querySelector(\"button[data-role*='ond' i]\"); const token = document.querySelector(\"[data-tags~=ready i]\"); const all = document.querySelectorAll(\"main[data-kind|=app i], button[data-role$='Action' s]\"); const second = document.getElementById('second'); const root = second.closest(\"main:is([lang|=en i], .blocked)\"); const disabled = document.querySelector(\"input[disabled='']\"); document.getElementById('out').textContent = prefix.textContent + ':' + strict.textContent + ':' + suffix.textContent + ':' + contains.textContent + ':' + token.textContent + ':' + String(all.length) + ':' + String(second.matches(\"button[data-role~=secondary i]\")) + ':' + root.textContent + ':' + String(disabled);</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "First:First:First:Second:First:3:true:FirstSecond:[object Element]",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn script_html_collection_children_are_live_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><span id='first'>First</span><span id='second'>Second</span></main><div id='out'></div><script>const children = document.getElementById('root').children; const before = children.length; document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(children.length) + ':' + String(children.item(0));</script>",
@@ -146,10 +159,43 @@ fn script_get_elements_by_tag_name_ns_is_live_end_to_end() -> browser_tester_nex
 #[test]
 fn script_simple_pseudo_classes_work_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
-        "<main><button id='first' class='primary'>First</button><button id='disabled' class='primary' disabled>Disabled</button><button id='enabled' class='primary'>Enabled</button><input id='agree' type='checkbox' checked><select id='mode'><option value='a'>A</option><option id='selected' value='b' selected>B</option></select><div id='out'></div><script>const first = document.querySelector('#first:first-child'); const disabled = document.querySelector('button:disabled'); const enabled = document.querySelectorAll('button:enabled'); const checked = document.querySelector('input:checked'); const selected = document.querySelector('option:checked'); document.getElementById('out').textContent = first.textContent + ':' + disabled.textContent + ':' + String(enabled.length) + ':' + checked.checked + ':' + selected.textContent;</script></main>",
+        "<main>lead<!-- gap --><button id='first' class='primary'>First</button><button id='disabled' class='primary' disabled>Disabled</button><button id='enabled' class='primary'>Enabled</button><input id='agree' type='checkbox' checked><select id='mode'><option value='a'>A</option><option id='selected' value='b' selected>B</option></select></main><div id='out'></div><script>const first = document.querySelector('#first:first-child'); const second = document.querySelector('button:nth-child(2)'); const third = document.querySelector('button:nth-child(3)'); const oddButtons = document.querySelectorAll('button:nth-child(odd)'); const evenButton = document.querySelector('button:nth-child(even)'); const formula = document.querySelector('button:nth-child(2n+1)'); const limited = document.querySelectorAll('button:nth-child(-n+2)'); const lastFirst = document.querySelector('button:nth-last-child(5)'); const lastSecond = document.querySelector('button:nth-last-child(4)'); const lastOdd = document.querySelectorAll('button:nth-last-child(odd)'); const lastEven = document.querySelector('button:nth-last-child(even)'); const lastFormula = document.querySelector('button:nth-last-child(2n+1)'); const disabled = document.querySelector('button:disabled'); const enabled = document.querySelectorAll('button:enabled'); const checked = document.querySelector('input:checked'); const selected = document.querySelector('option:checked'); document.getElementById('out').textContent = first.textContent + ':' + second.textContent + ':' + third.textContent + ':' + evenButton.textContent + ':' + formula.textContent + ':' + String(oddButtons.length) + ':' + String(limited.length) + ':' + lastFirst.textContent + ':' + lastSecond.textContent + ':' + String(lastOdd.length) + ':' + lastEven.textContent + ':' + lastFormula.textContent + ':' + disabled.textContent + ':' + String(enabled.length) + ':' + checked.checked + ':' + selected.textContent;</script>",
     )?;
 
-    harness.assert_text("#out", "First:Disabled:2:true:B")?;
+    harness.assert_text(
+        "#out",
+        "First:Disabled:Enabled:Disabled:First:2:2:First:Disabled:2:Disabled:First:Disabled:2:true:B",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn script_not_pseudo_class_works_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root' class='app' data-kind='app'><button id='first' class='primary'>First</button><button id='disabled' class='primary' disabled>Disabled</button><button id='enabled' class='secondary'>Enabled</button><div id='out'></div><script>const enabled = document.querySelectorAll('button:not(:disabled)'); const second = document.getElementById('enabled'); const root = second.closest('main:not([data-kind*=blocked], .blocked)'); const bounded = document.querySelectorAll('button:not(main > .secondary, :disabled)'); document.getElementById('out').textContent = String(enabled.length) + ':' + enabled.item(0).textContent + ':' + enabled.item(1).textContent + ':' + String(second.matches('button:not(.primary)')) + ':' + String(root.matches('main:not([data-kind*=blocked], .blocked)')) + ':' + document.querySelector('button:not(:nth-child(even))').textContent + ':' + String(bounded.length) + ':' + bounded.item(0).textContent;</script></main>",
+    )?;
+
+    harness.assert_text("#out", "2:First:Enabled:true:true:First:1:First")?;
+    Ok(())
+}
+
+#[test]
+fn script_is_pseudo_class_works_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root' class='app' data-kind='app'><button id='first' class='primary'>First</button><button id='disabled' class='primary' disabled>Disabled</button><button id='enabled' class='secondary'>Enabled</button></main><div id='out'></div><script>const all = document.querySelectorAll('button:is(.primary, .secondary)'); const filtered = document.querySelectorAll('button:is(:disabled, .secondary)'); const bounded = document.querySelectorAll('button:is(main > .secondary, :disabled)'); const second = document.getElementById('enabled'); const root = second.closest('main:is([data-kind^=ap], .blocked)'); document.getElementById('out').textContent = String(all.length) + ':' + String(filtered.length) + ':' + String(second.matches('button:is(.secondary, .blocked)')) + ':' + String(root.matches('main:is([data-kind^=ap], .blocked)')) + ':' + document.querySelector('button:is(.primary, .secondary):not(:disabled)').textContent + ':' + String(bounded.length) + ':' + bounded.item(0).textContent;</script>",
+    )?;
+
+    harness.assert_text("#out", "3:2:true:true:First:2:Disabled")?;
+    Ok(())
+}
+
+#[test]
+fn script_where_pseudo_class_works_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root' class='app' data-kind='APP READY' lang='EN-US'><button id='first' class='primary'>First</button><button id='disabled' class='primary' disabled>Disabled</button><button id='enabled' class='secondary'>Enabled</button></main><div id='out'></div><script>const all = document.querySelectorAll('button:where(.primary, .secondary)'); const filtered = document.querySelectorAll('button:where(:disabled, .secondary)'); const bounded = document.querySelectorAll('button:where(main > .secondary, :disabled)'); const second = document.getElementById('enabled'); const root = second.closest('main:where([lang|=en i], .blocked)'); document.getElementById('out').textContent = String(all.length) + ':' + String(filtered.length) + ':' + String(second.matches('button:where(.secondary, .blocked)')) + ':' + String(root.matches('main:where([lang|=en i], .blocked)')) + ':' + document.querySelector('button:where(.primary, .secondary):not(:disabled)').textContent + ':' + String(bounded.length) + ':' + bounded.item(0).textContent;</script>",
+    )?;
+
+    harness.assert_text("#out", "3:2:true:true:First:2:Disabled")?;
     Ok(())
 }
 
@@ -286,23 +332,23 @@ fn unsupported_get_elements_by_tag_name_ns_arity_fails_explicitly() {
 #[test]
 fn unsupported_element_matches_selector_fails_explicitly() {
     let error = Harness::from_html(
-        "<main id='root' class='primary'></main><script>document.getElementById('root').matches('main:nth-child(2)');</script>",
+        "<main id='root' class='primary'></main><script>document.getElementById('root').matches('main:where([data-kind=primary x])');</script>",
     )
-    .expect_err("unsupported selector syntax should fail");
+    .expect_err("broader CSS parsing inside :where should fail");
 
     let message = error.to_string();
     assert!(message.contains("Script error"));
-    assert!(message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`"));
+    assert!(message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`"));
 }
 
 #[test]
 fn unsupported_element_closest_selector_fails_explicitly() {
     let error = Harness::from_html(
-        "<main id='root' class='primary'></main><script>document.getElementById('root').closest('main:nth-child(2)');</script>",
+        "<main id='root' class='primary'></main><script>document.getElementById('root').closest('main:where([data-kind=primary x])');</script>",
     )
-    .expect_err("unsupported selector syntax should fail");
+    .expect_err("broader CSS parsing inside :where should fail");
 
     let message = error.to_string();
     assert!(message.contains("Script error"));
-    assert!(message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`"));
+    assert!(message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`"));
 }

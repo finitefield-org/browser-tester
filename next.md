@@ -496,6 +496,12 @@ pub enum NodeKind {
 - `tag`
 - `[attr]`
 - `[attr=value]`
+- `[attr^=value]`
+- `[attr$=value]`
+- `[attr*=value]`
+- `[attr~=value]`
+- `[attr|=value]`
+- optional `i` / `s` attribute selector flags
 - descendant combinator
 - child combinator
 - `:checked`
@@ -503,14 +509,23 @@ pub enum NodeKind {
 - `:enabled`
 - `:first-child`
 - `:last-child`
-- `:nth-child(n)`
-- `:not(...)`
+- `:nth-child(<positive integer>)`
+- `:nth-child(odd)`
+- `:nth-child(even)`
+- `:nth-child(an+b)`
+- `:nth-last-child(<positive integer>)`
+- `:nth-last-child(odd)`
+- `:nth-last-child(even)`
+- `:nth-last-child(an+b)`
 - `:is(...)`
+- `:not(...)`
+- `:where(...)`
 
 ### 10.2 やらないこと
 
 - CSS4 全面対応を初期目標にしない
-- 複雑な pseudo class の拡張は backlog 化する
+- `:not(...)` / `:is(...)` / `:where(...)` の内側でも、bounded selector grammar を超える CSS parsing はやらない
+- attribute operator は bounded subset (`[attr=value]`, `[attr^=value]`, `[attr$=value]`, `[attr*=value]`, `[attr~=value]`, `[attr|=value]`) と optional `i` / `s` flag までに絞る
 - silent ignore はしない
 
 未対応セレクタは必ず明示エラーにする。
@@ -1010,7 +1025,7 @@ README は次だけを書く。
 - この workspace では Phase 0 から Phase 6 まで完了済み
 - Phase 7 の script DOM query expansion は slice 1 の `querySelector`、slice 2 の `matches`、slice 3 の `closest`、slice 4 の selector hardening まで実装済み
 - 追加の selector backlog slices として sibling combinators (`A + B`, `A ~ B`) も実装済み
-- 追加の selector / collection backlog slice として `querySelectorAll` と minimal `NodeList`、selector lists、simple pseudo-classes、`Element.children` / minimal `HTMLCollection`（`namedItem()` 含む）、`getElementsByTagName` / live `HTMLCollection`、`getElementsByTagNameNS` / live `HTMLCollection`、`getElementsByClassName` / live `HTMLCollection`、`getElementsByName` / live `NodeList`、`document.forms` / `form.elements` / live `HTMLCollection`、`select.options` / live `HTMLCollection`、`document.images` / `document.links` / live `HTMLCollection`、`document.all` / live `HTMLCollection` も実装済み
+- 追加の selector / collection backlog slice として `querySelectorAll` と minimal `NodeList`、selector lists、bounded pseudo-classes（`not(<compound selector>)`, `is(<compound selector>, ...)`, `where(<compound selector>, ...)`, `nth-child(<positive integer>)`, `nth-child(odd)`, `nth-child(even)`, `nth-child(an+b)`, `nth-last-child(<positive integer>)`, `nth-last-child(odd)`, `nth-last-child(even)`, `nth-last-child(an+b)` を含む）、`Element.children` / minimal `HTMLCollection`（`namedItem()` 含む）、`getElementsByTagName` / live `HTMLCollection`、`getElementsByTagNameNS` / live `HTMLCollection`、`getElementsByClassName` / live `HTMLCollection`、`getElementsByName` / live `NodeList`、`document.forms` / `form.elements` / live `HTMLCollection`、`select.options` / live `HTMLCollection`、`document.images` / `document.links` / live `HTMLCollection`、`document.all` / live `HTMLCollection` も実装済み
 
 ## Phase 6: Selector Expansion
 
@@ -1080,9 +1095,10 @@ README は次だけを書く。
 6. selector lists (`A, B`)（post-Phase-7 selector slice, 完了）
    - document / element scoped lookup accepts comma-separated selector lists
    - results are document-order and deduplicated
-7. simple pseudo-classes (`:first-child`, `:last-child`, `:checked`, `:disabled`, `:enabled`)（post-Phase-7 selector slice, 完了）
-   - structural pseudo-classes and simple form-state pseudo-classes resolve through the same bounded selector engine
-   - broader pseudo-classes like `:nth-child`, `:not`, and `:is` remain deferred
+7. bounded pseudo-classes (`:not(...)`, `:is(...)`, `:where(...)`, `:first-child`, `:last-child`, `:nth-child(<positive integer>)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`, `:nth-last-child(<positive integer>)`, `:nth-last-child(odd)`, `:nth-last-child(even)`, `:nth-last-child(an+b)`, `:checked`, `:disabled`, `:enabled`)（post-Phase-7 selector slice, 完了）
+   - bounded logical, structural, and simple form-state pseudo-classes resolve through the same bounded selector engine
+   - `:not(...)` / `:is(...)` / `:where(...)` の内側でも bounded selector list / combinator は使える
+   - broader CSS parsing は引き続き未対応で、明示エラーにする
 8. `Element.children` and minimal `HTMLCollection`（post-Phase-7 collection slice, 完了）
    - live child-element collection on elements
    - `length` と `item(index)`
@@ -1138,7 +1154,7 @@ README は次だけを書く。
 4. 実装は owning subsystem に閉じる
 5. 既存 API で足りない場合だけ `Harness` に公開する
 6. 公開面が変わる変更では README / capability matrix / mock guide も同じ変更で更新する
-- `querySelectorAll` と minimal `NodeList` は既に実装済みで、selector lists と simple pseudo-classes も実装済み、`Element.children` / minimal `HTMLCollection`（`namedItem()` 含む）と `getElementsByTagName` / `getElementsByTagNameNS` / `getElementsByClassName` / live `HTMLCollection`、`getElementsByName` / live `NodeList`、`document.forms` / `form.elements` / live `HTMLCollection`、`select.options` / live `HTMLCollection`、`document.images` / `document.links` / `document.all` / live `HTMLCollection` も実装済み
+- `querySelectorAll` と minimal `NodeList` は既に実装済みで、selector lists と bounded pseudo-classes も実装済み、`Element.children` / minimal `HTMLCollection`（`namedItem()` 含む）と `getElementsByTagName` / `getElementsByTagNameNS` / `getElementsByClassName` / live `HTMLCollection`、`getElementsByName` / live `NodeList`、`document.forms` / `form.elements` / live `HTMLCollection`、`select.options` / live `HTMLCollection`、`document.images` / `document.links` / `document.all` / live `HTMLCollection` も実装済み
 
 新しい named phase を切る条件:
 

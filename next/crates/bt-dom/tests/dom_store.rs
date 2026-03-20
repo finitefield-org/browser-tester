@@ -21,13 +21,15 @@ fn phase_one_html_tree_building_and_selectors_work() {
     let mut store = DomStore::new_empty();
     store
         .bootstrap_html(
-            "<main id='app'><span data-state='ready'>Hello</span><input disabled></main>",
+            "<main id='app'><span data-state='Ready' data-tags='Ready NOW' lang='EN-US' data-label='Hello World'>Hello</span><input disabled></main>",
         )
         .expect("HTML should parse");
 
     assert_eq!(
         store.source_html(),
-        Some("<main id='app'><span data-state='ready'>Hello</span><input disabled></main>")
+        Some(
+            "<main id='app'><span data-state='Ready' data-tags='Ready NOW' lang='EN-US' data-label='Hello World'>Hello</span><input disabled></main>"
+        )
     );
     assert_eq!(store.node_count(), 5);
     assert_eq!(store.select("#app").unwrap(), vec![NodeId::new(1, 0)]);
@@ -37,8 +39,48 @@ fn phase_one_html_tree_building_and_selectors_work() {
         vec![NodeId::new(2, 0)]
     );
     assert_eq!(
+        store.select("[data-state=ready i]").unwrap(),
+        vec![NodeId::new(2, 0)]
+    );
+    assert_eq!(
+        store.select("[data-state=Ready s]").unwrap(),
+        vec![NodeId::new(2, 0)]
+    );
+    assert_eq!(
+        store.select("[data-state^=rea i]").unwrap(),
+        vec![NodeId::new(2, 0)]
+    );
+    assert_eq!(
+        store.select("[data-tags~=ready i]").unwrap(),
+        vec![NodeId::new(2, 0)]
+    );
+    assert_eq!(
+        store.select("[data-label='hello world' i]").unwrap(),
+        vec![NodeId::new(2, 0)]
+    );
+    assert_eq!(
+        store.select("[data-label$=world i]").unwrap(),
+        vec![NodeId::new(2, 0)]
+    );
+    assert_eq!(
+        store.select("[data-label*='LO WO' i]").unwrap(),
+        vec![NodeId::new(2, 0)]
+    );
+    assert_eq!(
+        store.select("[lang|=en i]").unwrap(),
+        vec![NodeId::new(2, 0)]
+    );
+    assert_eq!(
+        store.select("[lang|=EN s]").unwrap(),
+        vec![NodeId::new(2, 0)]
+    );
+    assert_eq!(
+        store.select("[disabled='']").unwrap(),
+        vec![NodeId::new(4, 0)]
+    );
+    assert_eq!(
         store.dump_dom(),
-        "#document\n  <main id=\"app\">\n    <span data-state=\"ready\">\n      \"Hello\"\n    </span>\n    <input disabled />\n  </main>"
+        "#document\n  <main id=\"app\">\n    <span data-label=\"Hello World\" data-state=\"Ready\" data-tags=\"Ready NOW\" lang=\"EN-US\">\n      \"Hello\"\n    </span>\n    <input disabled />\n  </main>"
     );
 }
 
@@ -57,7 +99,7 @@ fn simple_pseudo_classes_match_state_and_structure() {
     let mut store = DomStore::new_empty();
     store
         .bootstrap_html(
-            "<main><button id='first' class='primary'>First</button><button id='disabled' class='primary' disabled>Disabled</button><button id='enabled' class='primary'>Enabled</button><input id='agree' type='checkbox' checked><select id='mode'><option value='a'>A</option><option id='selected' value='b' selected>B</option></select></main>",
+            "<main>lead<!-- gap --><button id='first' class='primary'>First</button><button id='disabled' class='primary' disabled>Disabled</button><button id='enabled' class='primary'>Enabled</button><input id='agree' type='checkbox' checked><select id='mode'><option value='a'>A</option><option id='selected' value='b' selected>B</option></select></main>",
         )
         .expect("HTML should parse");
 
@@ -69,6 +111,54 @@ fn simple_pseudo_classes_match_state_and_structure() {
     let mode_id = store.select("#mode").unwrap()[0];
 
     assert_eq!(store.select("#first:first-child").unwrap(), vec![first_id]);
+    assert_eq!(
+        store.select("button:nth-child(2)").unwrap(),
+        vec![disabled_id]
+    );
+    assert_eq!(
+        store.select("button:nth-child(3)").unwrap(),
+        vec![enabled_id]
+    );
+    assert_eq!(
+        store.select("button:nth-child(odd)").unwrap(),
+        vec![first_id, enabled_id]
+    );
+    assert_eq!(
+        store.select("button:nth-child(even)").unwrap(),
+        vec![disabled_id]
+    );
+    assert_eq!(
+        store.select("button:nth-child(2n+1)").unwrap(),
+        vec![first_id, enabled_id]
+    );
+    assert_eq!(
+        store.select("button:nth-child(-n+2)").unwrap(),
+        vec![first_id, disabled_id]
+    );
+    assert_eq!(
+        store.select("button:nth-child( 2n + 1 )").unwrap(),
+        vec![first_id, enabled_id]
+    );
+    assert_eq!(
+        store.select("button:nth-last-child(5)").unwrap(),
+        vec![first_id]
+    );
+    assert_eq!(
+        store.select("button:nth-last-child(4)").unwrap(),
+        vec![disabled_id]
+    );
+    assert_eq!(
+        store.select("button:nth-last-child(odd)").unwrap(),
+        vec![first_id, enabled_id]
+    );
+    assert_eq!(
+        store.select("button:nth-last-child(even)").unwrap(),
+        vec![disabled_id]
+    );
+    assert_eq!(
+        store.select("button:nth-last-child(2n+1)").unwrap(),
+        vec![first_id, enabled_id]
+    );
     assert_eq!(store.select("button:disabled").unwrap(), vec![disabled_id]);
     assert_eq!(
         store.select("button:enabled").unwrap(),
@@ -80,15 +170,160 @@ fn simple_pseudo_classes_match_state_and_structure() {
 }
 
 #[test]
+fn not_pseudo_class_negates_supported_compound_selectors() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root' class='app' data-kind='APP READY' lang='EN-US'><button id='first' class='primary'>First</button><button id='disabled' class='primary' disabled>Disabled</button><button id='enabled' class='secondary'>Enabled</button></main>",
+        )
+        .expect("HTML should parse");
+
+    let root_id = store.select("#root").unwrap()[0];
+    let first_id = store.select("#first").unwrap()[0];
+    let enabled_id = store.select("#enabled").unwrap()[0];
+
+    assert_eq!(store.select("main:not(.blocked)").unwrap(), vec![root_id]);
+    assert_eq!(
+        store.select("main:not(section .app, .blocked)").unwrap(),
+        vec![root_id]
+    );
+    assert_eq!(
+        store
+            .select("main:not([data-kind~=blocked i], .blocked)")
+            .unwrap(),
+        vec![root_id]
+    );
+    assert_eq!(
+        store.select("button:not(:disabled)").unwrap(),
+        vec![first_id, enabled_id]
+    );
+    assert_eq!(
+        store.select("button:not(.primary)").unwrap(),
+        vec![enabled_id]
+    );
+    assert_eq!(
+        store.select("button:not(:nth-child(even))").unwrap(),
+        vec![first_id, enabled_id]
+    );
+    assert_eq!(
+        store
+            .select("button:not(main > .secondary, :disabled)")
+            .unwrap(),
+        vec![first_id]
+    );
+}
+
+#[test]
+fn is_pseudo_class_matches_supported_compound_selector_lists() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root' class='app' data-kind='APP READY' lang='EN-US'><button id='first' class='primary'>First</button><button id='disabled' class='primary' disabled>Disabled</button><button id='enabled' class='secondary'>Enabled</button></main>",
+        )
+        .expect("HTML should parse");
+
+    let root_id = store.select("#root").unwrap()[0];
+    let first_id = store.select("#first").unwrap()[0];
+    let disabled_id = store.select("#disabled").unwrap()[0];
+    let enabled_id = store.select("#enabled").unwrap()[0];
+
+    assert_eq!(
+        store.select("main:is(.app, .blocked)").unwrap(),
+        vec![root_id]
+    );
+    assert_eq!(
+        store.select("main:is([lang|=en i], .blocked)").unwrap(),
+        vec![root_id]
+    );
+    assert_eq!(
+        store.select("main:is([lang|=EN s], .blocked)").unwrap(),
+        vec![root_id]
+    );
+    assert_eq!(
+        store.select("button:is(:disabled, .secondary)").unwrap(),
+        vec![disabled_id, enabled_id]
+    );
+    assert_eq!(
+        store
+            .select("button:is(main > .secondary, :disabled)")
+            .unwrap(),
+        vec![disabled_id, enabled_id]
+    );
+    assert_eq!(
+        store
+            .select("button:is(.primary, .secondary):not(:disabled)")
+            .unwrap(),
+        vec![first_id, enabled_id]
+    );
+}
+
+#[test]
+fn where_pseudo_class_matches_supported_compound_selector_lists() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root' class='app' data-kind='APP READY' lang='EN-US'><button id='first' class='primary'>First</button><button id='disabled' class='primary' disabled>Disabled</button><button id='enabled' class='secondary'>Enabled</button></main>",
+        )
+        .expect("HTML should parse");
+
+    let root_id = store.select("#root").unwrap()[0];
+    let first_id = store.select("#first").unwrap()[0];
+    let disabled_id = store.select("#disabled").unwrap()[0];
+    let enabled_id = store.select("#enabled").unwrap()[0];
+
+    assert_eq!(
+        store.select("main:where(.app, .blocked)").unwrap(),
+        vec![root_id]
+    );
+    assert_eq!(
+        store.select("main:where([lang|=en i], .blocked)").unwrap(),
+        vec![root_id]
+    );
+    assert_eq!(
+        store.select("main:where([lang|=EN s], .blocked)").unwrap(),
+        vec![root_id]
+    );
+    assert_eq!(
+        store.select("button:where(:disabled, .secondary)").unwrap(),
+        vec![disabled_id, enabled_id]
+    );
+    assert_eq!(
+        store
+            .select("button:where(main > .secondary, :disabled)")
+            .unwrap(),
+        vec![disabled_id, enabled_id]
+    );
+    assert_eq!(
+        store
+            .select("button:where(.primary, .secondary):not(:disabled)")
+            .unwrap(),
+        vec![first_id, enabled_id]
+    );
+}
+
+#[test]
 fn unsupported_pseudo_class_syntax_fails_explicitly() {
     let mut store = DomStore::new_empty();
     store.bootstrap_html("<main class='app'></main>").unwrap();
 
     let error = store
-        .select("main:nth-child(2)")
-        .expect_err("broad pseudo-classes are not supported yet");
+        .select("main:where([data-kind=app x])")
+        .expect_err("broader CSS parsing inside :where is not supported yet");
     assert!(
-        error.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`")
+        error.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`")
+    );
+}
+
+#[test]
+fn unsupported_not_argument_syntax_fails_explicitly() {
+    let mut store = DomStore::new_empty();
+    store.bootstrap_html("<main class='app'></main>").unwrap();
+
+    let error = store
+        .select("main:not([data-kind=app x])")
+        .expect_err("broader CSS parsing inside :not is not supported yet");
+    assert!(
+        error.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`")
     );
 }
 
