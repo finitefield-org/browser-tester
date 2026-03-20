@@ -400,6 +400,21 @@ fn session_resolves_document_embeds_regression() {
 }
 
 #[test]
+fn session_rejects_labels_on_non_labelable_elements_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><div id='not-labelable'></div></div><script>document.getElementById('not-labelable').labels.length;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-labelable labels access should fail explicitly");
+
+    assert!(error.to_string().contains("node is not a labelable element"));
+}
+
+#[test]
 fn session_resolves_node_list_for_each_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -840,6 +855,48 @@ fn session_rejects_select_selected_options_on_non_select_elements_explicitly() {
 
     assert!(error.to_string().contains("Script error"));
     assert!(error.to_string().contains("node is not a select element"));
+}
+
+#[test]
+fn session_rejects_map_areas_on_non_map_elements_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><div id='not-map'></div></div><script>document.getElementById('not-map').areas.length;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-map areas access should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(error.to_string().contains("map.areas"));
+    assert!(
+        error
+            .to_string()
+            .contains("supported map.areas host element")
+    );
+}
+
+#[test]
+fn session_rejects_table_t_bodies_on_non_table_elements_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><div id='not-table'></div></div><script>document.getElementById('not-table').tBodies.length;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-table tBodies access should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(error.to_string().contains("table.tBodies"));
+    assert!(
+        error
+            .to_string()
+            .contains("supported table.tBodies host element")
+    );
 }
 
 #[test]

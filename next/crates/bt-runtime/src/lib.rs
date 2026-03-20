@@ -1493,6 +1493,51 @@ impl Session {
         Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
     }
 
+    fn element_labels(&self, element: ElementHandle) -> Result<Vec<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(element)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element_data) = &node.kind else {
+            return Err(ScriptError::new("node is not a labelable element"));
+        };
+
+        if !Self::is_labelable_element(element_data) {
+            return Err(ScriptError::new("node is not a labelable element"));
+        }
+
+        let target_id = element_data.attributes.get("id").cloned();
+        let root = self.dom.document_id();
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(root, &mut collected, &|element: &ElementData| {
+            element.tag_name == "label"
+        });
+
+        let mut labels = Vec::new();
+        for label_id in collected {
+            let Some(label_node) = self.dom.nodes().get(label_id.index() as usize) else {
+                continue;
+            };
+            let NodeKind::Element(label_element) = &label_node.kind else {
+                continue;
+            };
+
+            let explicit = target_id.as_deref().is_some_and(|target_id| {
+                label_element
+                    .attributes
+                    .get("for")
+                    .is_some_and(|value| value == target_id)
+            });
+            let implicit = self.is_descendant_of(node_id, label_id);
+            if explicit || implicit {
+                labels.push(Self::node_id_to_handle(label_id));
+            }
+        }
+
+        Ok(labels)
+    }
+
     fn form_elements(&self, form: ElementHandle) -> Result<Vec<ElementHandle>, ScriptError> {
         let node_id = self.node_id_for_handle(form)?;
         let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
@@ -1503,7 +1548,7 @@ impl Session {
             return Err(ScriptError::new("node is not a form element"));
         };
 
-        if element.tag_name != "form" {
+        if !matches!(element.tag_name.as_str(), "form" | "fieldset") {
             return Err(ScriptError::new("node is not a form element"));
         }
 
@@ -1530,7 +1575,7 @@ impl Session {
             return Err(ScriptError::new("node is not a form element"));
         };
 
-        if element.tag_name != "form" {
+        if !matches!(element.tag_name.as_str(), "form" | "fieldset") {
             return Err(ScriptError::new("node is not a form element"));
         }
 
@@ -1553,7 +1598,7 @@ impl Session {
             return Err(ScriptError::new("node is not a select element"));
         };
 
-        if element.tag_name != "select" {
+        if !matches!(element.tag_name.as_str(), "select" | "datalist") {
             return Err(ScriptError::new("node is not a select element"));
         }
 
@@ -1580,7 +1625,7 @@ impl Session {
             return Err(ScriptError::new("node is not a select element"));
         };
 
-        if element.tag_name != "select" {
+        if !matches!(element.tag_name.as_str(), "select" | "datalist") {
             return Err(ScriptError::new("node is not a select element"));
         }
 
@@ -1703,6 +1748,102 @@ impl Session {
             .collect();
 
         Ok(self.first_named_item_in_nodes(&children, name))
+    }
+
+    fn map_areas(&self, map: ElementHandle) -> Result<Vec<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(map)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a supported map.areas host element"));
+        };
+
+        if element.tag_name != "map" {
+            return Err(ScriptError::new("node is not a supported map.areas host element"));
+        }
+
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            node_id,
+            &mut collected,
+            &|element: &ElementData| element.tag_name == "area",
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn map_areas_named_item(
+        &self,
+        map: ElementHandle,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(map)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a supported map.areas host element"));
+        };
+
+        if element.tag_name != "map" {
+            return Err(ScriptError::new("node is not a supported map.areas host element"));
+        }
+
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            node_id,
+            &mut collected,
+            &|element: &ElementData| element.tag_name == "area",
+        );
+        Ok(self.first_named_item_in_nodes(&collected, name))
+    }
+
+    fn table_bodies(&self, table: ElementHandle) -> Result<Vec<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(table)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a supported table.tBodies host element"));
+        };
+
+        if element.tag_name != "table" {
+            return Err(ScriptError::new("node is not a supported table.tBodies host element"));
+        }
+
+        let collected = self.direct_child_elements_matching(node_id, &|element: &ElementData| {
+            element.tag_name == "tbody"
+        })?;
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn table_bodies_named_item(
+        &self,
+        table: ElementHandle,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(table)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a supported table.tBodies host element"));
+        };
+
+        if element.tag_name != "table" {
+            return Err(ScriptError::new("node is not a supported table.tBodies host element"));
+        }
+
+        let bodies = self.table_bodies(table)?;
+        let body_ids: Vec<NodeId> = bodies
+            .into_iter()
+            .map(|handle| self.node_id_for_handle(handle))
+            .collect::<Result<_, _>>()?;
+        Ok(self.first_named_item_in_nodes(&body_ids, name))
     }
 
     fn table_rows(&self, table: ElementHandle) -> Result<Vec<ElementHandle>, ScriptError> {
@@ -1891,6 +2032,18 @@ impl Session {
         )
     }
 
+    fn is_labelable_element(element: &ElementData) -> bool {
+        match element.tag_name.as_str() {
+            "button" | "fieldset" | "meter" | "output" | "progress" | "select"
+            | "textarea" => true,
+            "input" => !element
+                .attributes
+                .get("type")
+                .is_some_and(|value| value.eq_ignore_ascii_case("hidden")),
+            _ => false,
+        }
+    }
+
     fn is_document_link_element(element: &ElementData) -> bool {
         matches!(element.tag_name.as_str(), "a" | "area") && element.attributes.contains_key("href")
     }
@@ -2022,6 +2175,8 @@ impl HostBindings for Session {
             HtmlCollectionTarget::DocumentLinks => self.document_links(),
             HtmlCollectionTarget::DocumentAnchors => self.document_anchors(),
             HtmlCollectionTarget::DocumentChildren => self.document_children(),
+            HtmlCollectionTarget::MapAreas(element) => self.map_areas(element),
+            HtmlCollectionTarget::TableTBodies(element) => self.table_bodies(element),
             HtmlCollectionTarget::TableRows(element) => self.table_rows(element),
             HtmlCollectionTarget::RowCells(element) => self.row_cells(element),
         }
@@ -2064,6 +2219,10 @@ impl HostBindings for Session {
             HtmlCollectionTarget::DocumentLinks => self.document_links_named_item(name),
             HtmlCollectionTarget::DocumentAnchors => self.document_anchors_named_item(name),
             HtmlCollectionTarget::DocumentChildren => self.document_children_named_item(name),
+            HtmlCollectionTarget::MapAreas(element) => self.map_areas_named_item(element, name),
+            HtmlCollectionTarget::TableTBodies(element) => {
+                self.table_bodies_named_item(element, name)
+            }
             HtmlCollectionTarget::TableRows(element) => self.table_rows_named_item(element, name),
             HtmlCollectionTarget::RowCells(element) => self.row_cells_named_item(element, name),
         }
@@ -2092,6 +2251,8 @@ impl HostBindings for Session {
             HtmlCollectionTarget::DocumentLinks => self.document_links(),
             HtmlCollectionTarget::DocumentAnchors => self.document_anchors(),
             HtmlCollectionTarget::DocumentChildren => self.document_children(),
+            HtmlCollectionTarget::MapAreas(element) => self.map_areas(element),
+            HtmlCollectionTarget::TableTBodies(element) => self.table_bodies(element),
             HtmlCollectionTarget::TableRows(element) => self.table_rows(element),
             HtmlCollectionTarget::RowCells(element) => self.row_cells(element),
         }
@@ -2134,6 +2295,10 @@ impl HostBindings for Session {
             HtmlCollectionTarget::DocumentLinks => self.document_links_named_item(name),
             HtmlCollectionTarget::DocumentAnchors => self.document_anchors_named_item(name),
             HtmlCollectionTarget::DocumentChildren => self.document_children_named_item(name),
+            HtmlCollectionTarget::MapAreas(element) => self.map_areas_named_item(element, name),
+            HtmlCollectionTarget::TableTBodies(element) => {
+                self.table_bodies_named_item(element, name)
+            }
             HtmlCollectionTarget::TableRows(element) => self.table_rows_named_item(element, name),
             HtmlCollectionTarget::RowCells(element) => self.row_cells_named_item(element, name),
         }
@@ -2188,6 +2353,36 @@ impl HostBindings for Session {
         name: &str,
     ) -> bt_script::Result<Option<ElementHandle>> {
         self.form_elements_named_item(element, name)
+    }
+
+    fn html_collection_map_areas_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.map_areas(element)
+    }
+
+    fn html_collection_map_areas_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.map_areas_named_item(element, name)
+    }
+
+    fn html_collection_table_bodies_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.table_bodies(element)
+    }
+
+    fn html_collection_table_bodies_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.table_bodies_named_item(element, name)
     }
 
     fn html_collection_select_options_items(
@@ -2383,6 +2578,10 @@ impl HostBindings for Session {
             .collect();
 
         Ok(children)
+    }
+
+    fn element_labels(&mut self, element: ElementHandle) -> bt_script::Result<Vec<ElementHandle>> {
+        Session::element_labels(self, element)
     }
 
     fn html_collection_named_item(

@@ -6,9 +6,11 @@ pub const Error = error{
     DomError,
     EventError,
     HtmlParse,
+    MockError,
     ScriptParse,
     ScriptRuntime,
     InvalidUrl,
+    TimerError,
     OutOfMemory,
 };
 

@@ -243,12 +243,20 @@ pub const DomStore = struct {
         const node = self.nodeAt(node_id) orelse return error.HtmlParse;
         return switch (node.kind) {
             .document => self.textContent(allocator, node_id),
-            .element => |element| switch (element.tag_name) {
-                "select" => self.selectValueForNode(allocator, node_id),
-                "option" => self.optionValueForNode(allocator, node_id),
-                "textarea" => self.textContent(allocator, node_id),
-                "input" => self.inputValueForNode(allocator, node_id),
-                else => self.textContent(allocator, node_id),
+            .element => |element| blk: {
+                if (std.mem.eql(u8, element.tag_name, "select")) {
+                    break :blk self.selectValueForNode(allocator, node_id);
+                }
+                if (std.mem.eql(u8, element.tag_name, "option")) {
+                    break :blk self.optionValueForNode(allocator, node_id);
+                }
+                if (std.mem.eql(u8, element.tag_name, "textarea")) {
+                    break :blk self.textContent(allocator, node_id);
+                }
+                if (std.mem.eql(u8, element.tag_name, "input")) {
+                    break :blk self.inputValueForNode(allocator, node_id);
+                }
+                break :blk self.textContent(allocator, node_id);
             },
             .text => |text| allocator.dupe(u8, text),
             .comment => allocator.dupe(u8, ""),
@@ -281,21 +289,21 @@ pub const DomStore = struct {
             return;
         }
 
-        if (std.mem.eql(u8, element.tag_name, "input") and isTextInputType(elementAttributeValue(element, "type"))) {
+        if (std.mem.eql(u8, element.tag_name, "input") and isTextInputType(elementAttributeValue(element.*, "type"))) {
             const arena_alloc = self.arena.allocator();
             try upsertAttribute(arena_alloc, &element.attributes, "value", try duplicateString(self, value));
             return;
         }
 
-        if (std.mem.eql(u8, element.tag_name, "input") and isCheckableInputType(elementAttributeValue(element, "type"))) {
-            return error.HtmlParse;
+        if (std.mem.eql(u8, element.tag_name, "input") and isCheckableInputType(elementAttributeValue(element.*, "type"))) {
+            return error.DomError;
         }
 
         if (std.mem.eql(u8, element.tag_name, "select")) {
-            return error.HtmlParse;
+            return error.DomError;
         }
 
-        return error.HtmlParse;
+        return error.DomError;
     }
 
     pub fn setFormControlChecked(self: *DomStore, node_id: NodeId, checked: bool) errors.Result(void) {
@@ -305,8 +313,8 @@ pub const DomStore = struct {
             else => return error.HtmlParse,
         };
 
-        if (!std.mem.eql(u8, element.tag_name, "input") or !isCheckableInputType(elementAttributeValue(element, "type"))) {
-            return error.HtmlParse;
+        if (!std.mem.eql(u8, element.tag_name, "input") or !isCheckableInputType(elementAttributeValue(element.*, "type"))) {
+            return error.DomError;
         }
 
         if (checked) {
@@ -327,11 +335,11 @@ pub const DomStore = struct {
         };
 
         if (!std.mem.eql(u8, element.tag_name, "select")) {
-            return error.HtmlParse;
+            return error.DomError;
         }
 
         var descendants: std.ArrayList(NodeId) = .empty;
-        errdefer descendants.deinit(self.allocator);
+        defer descendants.deinit(self.allocator);
         try self.collectSubtreeNodes(node_id, &descendants, self.allocator);
 
         var found = false;
@@ -355,6 +363,41 @@ pub const DomStore = struct {
             try self.setOptionSelected(descendant_id, selected);
         }
 
+        return;
+    }
+
+    pub fn setFileInputFiles(
+        self: *DomStore,
+        node_id: NodeId,
+        files: []const []const u8,
+    ) errors.Result(void) {
+        const node = self.nodeAtMut(node_id) orelse return error.HtmlParse;
+        const element = switch (node.kind) {
+            .element => |*element| element,
+            else => return error.HtmlParse,
+        };
+
+        if (!std.mem.eql(u8, element.tag_name, "input") or !isFileInputType(elementAttributeValue(element.*, "type"))) {
+            return error.DomError;
+        }
+
+        var joined: std.ArrayList(u8) = .empty;
+        defer joined.deinit(self.allocator);
+
+        for (files, 0..) |file, index| {
+            if (index > 0) {
+                try joined.appendSlice(self.allocator, ", ");
+            }
+            try joined.appendSlice(self.allocator, file);
+        }
+
+        const arena_alloc = self.arena.allocator();
+        try upsertAttribute(
+            arena_alloc,
+            &element.attributes,
+            "value",
+            try duplicateString(self, joined.items),
+        );
         return;
     }
 
@@ -473,7 +516,7 @@ pub const DomStore = struct {
 
         var descendants: std.ArrayList(NodeId) = .empty;
         defer descendants.deinit(self.allocator);
-        self.collectSubtreeNodes(node_id, &descendants, self.allocator) catch return allocator.dupe(u8, "");
+        try self.collectSubtreeNodes(node_id, &descendants, self.allocator);
 
         var first_option: ?[]u8 = null;
         defer if (first_option) |value| allocator.free(value);
@@ -519,7 +562,7 @@ pub const DomStore = struct {
         };
 
         if (!std.mem.eql(u8, element.tag_name, "option")) {
-            return error.HtmlParse;
+            return error.DomError;
         }
 
         if (selected) {
@@ -892,19 +935,7 @@ fn isTagNameByte(byte: u8) bool {
 
 fn isTextInputType(input_type: ?[]const u8) bool {
     const value = input_type orelse "text";
-    return std.mem.eql(u8, value, "text")
-        or std.mem.eql(u8, value, "search")
-        or std.mem.eql(u8, value, "url")
-        or std.mem.eql(u8, value, "tel")
-        or std.mem.eql(u8, value, "email")
-        or std.mem.eql(u8, value, "password")
-        or std.mem.eql(u8, value, "number")
-        or std.mem.eql(u8, value, "date")
-        or std.mem.eql(u8, value, "datetime-local")
-        or std.mem.eql(u8, value, "month")
-        or std.mem.eql(u8, value, "week")
-        or std.mem.eql(u8, value, "time")
-        or std.mem.eql(u8, value, "color");
+    return std.mem.eql(u8, value, "text") or std.mem.eql(u8, value, "search") or std.mem.eql(u8, value, "url") or std.mem.eql(u8, value, "tel") or std.mem.eql(u8, value, "email") or std.mem.eql(u8, value, "password") or std.mem.eql(u8, value, "number") or std.mem.eql(u8, value, "date") or std.mem.eql(u8, value, "datetime-local") or std.mem.eql(u8, value, "month") or std.mem.eql(u8, value, "week") or std.mem.eql(u8, value, "time") or std.mem.eql(u8, value, "color");
 }
 
 fn isCheckableInputType(input_type: ?[]const u8) bool {
@@ -912,25 +943,17 @@ fn isCheckableInputType(input_type: ?[]const u8) bool {
     return std.mem.eql(u8, value, "checkbox") or std.mem.eql(u8, value, "radio");
 }
 
+fn isFileInputType(input_type: ?[]const u8) bool {
+    const value = input_type orelse "text";
+    return std.mem.eql(u8, value, "file");
+}
+
 fn isSelectorTokenByte(byte: u8) bool {
     return std.ascii.isAlphanumeric(byte) or byte == '-' or byte == '_';
 }
 
 fn isVoidElement(tag_name: []const u8) bool {
-    return std.mem.eql(u8, tag_name, "area")
-        or std.mem.eql(u8, tag_name, "base")
-        or std.mem.eql(u8, tag_name, "br")
-        or std.mem.eql(u8, tag_name, "col")
-        or std.mem.eql(u8, tag_name, "embed")
-        or std.mem.eql(u8, tag_name, "hr")
-        or std.mem.eql(u8, tag_name, "img")
-        or std.mem.eql(u8, tag_name, "input")
-        or std.mem.eql(u8, tag_name, "link")
-        or std.mem.eql(u8, tag_name, "meta")
-        or std.mem.eql(u8, tag_name, "param")
-        or std.mem.eql(u8, tag_name, "source")
-        or std.mem.eql(u8, tag_name, "track")
-        or std.mem.eql(u8, tag_name, "wbr");
+    return std.mem.eql(u8, tag_name, "area") or std.mem.eql(u8, tag_name, "base") or std.mem.eql(u8, tag_name, "br") or std.mem.eql(u8, tag_name, "col") or std.mem.eql(u8, tag_name, "embed") or std.mem.eql(u8, tag_name, "hr") or std.mem.eql(u8, tag_name, "img") or std.mem.eql(u8, tag_name, "input") or std.mem.eql(u8, tag_name, "link") or std.mem.eql(u8, tag_name, "meta") or std.mem.eql(u8, tag_name, "param") or std.mem.eql(u8, tag_name, "source") or std.mem.eql(u8, tag_name, "track") or std.mem.eql(u8, tag_name, "wbr");
 }
 
 fn isRawTextElement(tag_name: []const u8) bool {
@@ -1019,7 +1042,7 @@ fn appendSelectorQueries(
         }
 
         switch (byte) {
-            '"' , '\'' => quote = byte,
+            '"', '\'' => quote = byte,
             '[' => bracket_depth += 1,
             ']' => {
                 if (bracket_depth == 0) return error.HtmlParse;

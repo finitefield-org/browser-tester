@@ -273,6 +273,59 @@ fn select_selected_options_are_live_end_to_end() -> browser_tester_next::Result<
 }
 
 #[test]
+fn element_labels_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><label id='explicit-label' for='control'>Explicit</label><input id='control' value='A'><label id='implicit-label'><input id='inner-control' value='B'>Implicit</label><div id='wrapper'></div><div id='out'></div><script>const control = document.getElementById('control'); const labels = control.labels; const inner = document.getElementById('inner-control').labels; const before = labels.length; document.getElementById('wrapper').innerHTML = '<label id=\"second-label\" for=\"control\">Second</label>'; document.getElementById('out').textContent = String(before) + ':' + String(labels.length) + ':' + labels.item(0).getAttribute('id') + ':' + labels.item(1).textContent + ':' + String(inner.length) + ':' + inner.item(0).getAttribute('id');</script></main>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "1:2:explicit-label:Second:1:implicit-label",
+    )?;
+    harness.assert_exists("#second-label")?;
+    Ok(())
+}
+
+#[test]
+fn fieldset_elements_and_datalist_options_are_live_end_to_end() -> browser_tester_next::Result<()>
+{
+    let harness = Harness::from_html(
+        "<main id='root'><fieldset id='fieldset'><input name='first' value='Ada'><textarea name='bio'>Bio</textarea></fieldset><datalist id='list'><option name='alpha' value='a'>A</option><option id='second' value='b'>B</option></datalist><div id='out'></div><script>const elements = document.getElementById('fieldset').elements; const options = document.getElementById('list').options; const beforeElements = elements.length; const beforeOptions = options.length; const first = elements.item(0); const namedElement = elements.namedItem('first'); const namedOption = options.namedItem('second'); document.getElementById('fieldset').textContent = 'gone'; document.getElementById('list').textContent = 'gone'; document.getElementById('out').textContent = String(beforeElements) + ':' + String(elements.length) + ':' + String(beforeOptions) + ':' + String(options.length) + ':' + first.value + ':' + namedElement.value + ':' + namedOption.textContent + ':' + String(options.namedItem('missing'));</script></main>",
+    )?;
+
+    harness.assert_text("#out", "2:0:2:0:Ada:Ada:B:null")?;
+    harness.assert_exists("fieldset#fieldset")?;
+    harness.assert_exists("datalist#list")?;
+    Ok(())
+}
+
+#[test]
+fn labels_reject_non_labelable_elements_end_to_end() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html(
+        "<div id='wrapper'><div id='not-labelable'></div></div><script>document.getElementById('not-labelable').labels.length;</script>",
+    )
+    .expect_err("non-labelable labels access should fail");
+
+    assert!(error.to_string().contains("node is not a labelable element"));
+    Ok(())
+}
+
+#[test]
+fn map_areas_and_table_t_bodies_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><map id='map'><area id='first-area' name='first' href='/first'><area id='second-area' name='second' href='/second'></map><table id='table'><tbody id='first-body'><tr><td>One</td></tr></tbody></table><div id='out'></div><script>const areas = document.getElementById('map').areas; const bodies = document.getElementById('table').tBodies; const beforeAreas = areas.length; const beforeBodies = bodies.length; const firstArea = areas.item(0); const firstBody = bodies.item(0); document.getElementById('map').innerHTML += '<area id=\"third-area\" name=\"third\" href=\"/third\">'; document.getElementById('table').innerHTML += '<tbody id=\"second-body\"></tbody>'; document.getElementById('out').textContent = String(beforeAreas) + ':' + String(areas.length) + ':' + String(beforeBodies) + ':' + String(bodies.length) + ':' + String(firstArea.getAttribute('id')) + ':' + String(firstBody.getAttribute('id')) + ':' + String(areas.namedItem('third-area')) + ':' + String(bodies.namedItem('second-body')) + ':' + String(areas.namedItem('missing'));</script></main>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "2:3:1:2:first-area:first-body:[object Element]:[object Element]:null",
+    )?;
+    harness.assert_exists("#third-area")?;
+    harness.assert_exists("#second-body")?;
+    Ok(())
+}
+
+#[test]
 fn select_selected_options_reject_non_select_elements_end_to_end() -> browser_tester_next::Result<()>
 {
     let error = Harness::from_html(
@@ -281,6 +334,34 @@ fn select_selected_options_reject_non_select_elements_end_to_end() -> browser_te
     .expect_err("non-select selectedOptions access should fail");
 
     assert!(error.to_string().contains("node is not a select element"));
+    Ok(())
+}
+
+#[test]
+fn map_areas_reject_non_map_elements_end_to_end() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html(
+        "<div id='wrapper'><div id='not-map'></div></div><script>document.getElementById('not-map').areas.length;</script>",
+    )
+    .expect_err("non-map areas access should fail");
+
+    assert!(error.to_string().contains("map.areas"));
+    assert!(error.to_string().contains("supported map.areas host element"));
+    Ok(())
+}
+
+#[test]
+fn table_t_bodies_reject_non_table_elements_end_to_end() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html(
+        "<div id='wrapper'><div id='not-table'></div></div><script>document.getElementById('not-table').tBodies.length;</script>",
+    )
+    .expect_err("non-table tBodies access should fail");
+
+    assert!(error.to_string().contains("table.tBodies"));
+    assert!(
+        error
+            .to_string()
+            .contains("supported table.tBodies host element")
+    );
     Ok(())
 }
 

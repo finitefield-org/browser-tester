@@ -1,48 +1,80 @@
 # Mock Guide
 
-Mocks are reserved as a first-class part of the Zig rewrite, but no public mock family is exposed yet.
-The workspace is already shaped so that a future `Session` can own a typed mock registry without turning `Harness` into a bag of `set_*` methods.
+`Harness.mocksMut()` returns the typed test-only `MockRegistry`. Use it when a test needs deterministic network, dialogs, clipboard, location, download, file-input, or storage behavior.
 
-## Reserved Families
+The registry is intentionally narrow:
 
-- `fetch`
-- `dialogs`
-- `clipboard`
-- `location`
-- `downloads`
-- `file_input`
-- `storage`
+- it exposes families, not a bag of `set_*` helpers
+- each family carries its own capture and reset semantics
+- `resetAll()` clears every family between scenarios
+
+## Minimal Example
+
+```zig
+const std = @import("std");
+const bt = @import("browser_tester_zig");
+
+pub fn main() !void {
+    var harness = try bt.Harness.fromHtml(std.heap.page_allocator, "<main></main>");
+    defer harness.deinit();
+
+    var mocks = harness.mocksMut();
+    try mocks.fetch().respondText("https://app.local/api/message", 201, "ok");
+    try mocks.dialogs().pushConfirm(true);
+    try mocks.clipboard().seedText("seeded");
+
+    const response = try harness.fetch("https://app.local/api/message");
+    try std.testing.expectEqualStrings("ok", response.body);
+    try std.testing.expectEqual(@as(usize, 1), mocks.fetch().calls().len);
+
+    try std.testing.expect(try harness.confirm("Continue?"));
+    try std.testing.expectEqualStrings("seeded", try harness.readClipboard());
+
+    try harness.captureDownload("report.csv", "downloaded bytes");
+    try std.testing.expectEqual(@as(usize, 1), mocks.downloads().artifacts().len);
+}
+```
 
 ## Capture Model
 
-When a family is promoted to a public test-only mock, it should follow one of these patterns:
+Call capture records the inputs requested by the test:
 
-- call capture: record the inputs that were requested
-- artifact capture: record the outputs or side effects that a test needs to inspect later
+- `fetch.calls()` records requested URLs
+- `dialogs.alertMessages()`, `confirmMessages()`, and `promptMessages()` record dialog text
+- `location.navigations()` records navigated URLs
+- `fileInput.selections()` records selector/file lists
 
-Examples:
+Artifact capture records the side effects a test needs to inspect:
 
-- `fetch`: call capture plus response and failure injection
-- `dialogs`: call capture plus queued responses
-- `clipboard`: read seeding plus write capture
-- `location`: navigation call capture
-- `downloads`: artifact capture
-- `file_input`: selection capture
-- `storage`: seed state plus deterministic reads
+- `fetch.respondText(...)` injects a deterministic response
+- `fetch.fail(...)` injects a deterministic failure
+- `clipboard.writes()` records written clipboard values and keeps the latest value available for subsequent reads
+- `downloads.artifacts()` records captured file names and bytes
+- `storage.local()` and `storage.session()` hold seeded key/value pairs for deterministic reads
 
-## Promotion Checklist
+The same capture model is what keeps the mock families predictable without exposing browser internals.
 
-When a mock family becomes public, the same change should include:
+## Failure Semantics
 
-- a public API addition or update
-- a minimal usage example
-- success and failure tests where applicable
-- a clear description of call capture or artifact capture
-- `README.md` updates
-- this guide updated in the same change
+The public mock API fails explicitly when the test has not seeded the required state:
 
-## Current State
+- `Harness.fetch()` returns `error.MockError` if no matching response or failure rule exists
+- `Harness.confirm()` and `Harness.prompt()` return `error.MockError` when the queue is empty
+- `Harness.readClipboard()` returns `error.MockError` when clipboard text has not been seeded
+- `Harness.captureDownload()` returns `error.MockError` for blank file names
+- `Harness.advanceTime(-1)` returns `error.TimerError`
+- `Harness.setFiles()` returns `error.DomError` when the target is not a file input
 
-Do not expect runtime mock behavior from this workspace yet.
-The mock guide exists now so future mock families can be added with the same contract discipline from the start.
+## Reset Semantics
 
+`MockRegistry.resetAll()` clears every family:
+
+- fetch response rules, error rules, and call capture
+- dialog queues and capture logs
+- clipboard seed and write capture
+- location current URL and navigation capture
+- download artifacts
+- file-input selections
+- storage seeds
+
+That makes it safe to reuse the same harness in a test loop without carrying mock state across scenarios.

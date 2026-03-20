@@ -36,6 +36,7 @@ zig/
     root.zig        # public facade
     harness.zig     # Harness and HarnessBuilder
     session.zig     # internal session state
+    mocks.zig       # internal mock families and registry
     dom.zig         # internal HTML parsing and DOM tree storage
     script.zig      # internal script runtime and host bindings
     errors.zig      # public error surface
@@ -55,13 +56,15 @@ zig/
 - `Harness`
 - `HarnessBuilder`
 - `StorageSeed`
+- `MockRegistry`
 - `Error`
 - `Result(T)`
+- `Harness` now exposes read-only inspection methods, user actions, deterministic clock helpers, and typed test-only mock families.
 
 `Session` stays internal for now.
-It owns the copied configuration state, the internal DOM store, the internal script runtime state, and is the future home for scheduler state and mock registry state.
+It owns the copied configuration state, the internal DOM store, the internal script runtime state, the event listener registry, the focused-node snapshot, the fake clock state, and the mock registry.
 
-`Harness` now exposes `assertExists()` and `dumpDom()` for read-only inspection.
+`Harness` now exposes `assertExists()`, `assertValue()`, `assertChecked()`, and `dumpDom()` for read-only inspection, plus `nowMs()`, `advanceTime()`, `flush()`, `mocksMut()`, `fetch()`, `alert()`, `confirm()`, `prompt()`, `readClipboard()`, `writeClipboard()`, `captureDownload()`, `navigate()`, and `setFiles()` for deterministic runtime control, and `click()`, `typeText()`, `setChecked()`, `setSelectValue()`, `focus()`, `blur()`, `submit()`, and `dispatch()` for user-like actions.
 
 ## High-Level Shape
 
@@ -72,7 +75,8 @@ flowchart LR
   H --> S["Session"]
   S --> D["DOM store / tree builder"]
   S --> R["script runtime"]
-  S --> M["reserved mock space"]
+  S --> E["event listener registry / focus"]
+  S --> M["clock / mock registry"]
 ```
 
 `Harness` is intentionally thin.
@@ -83,7 +87,7 @@ State lives in `Session`, and subsystem files own their internal data.
 - The public facade should stay narrow.
 - Long-lived state belongs to the subsystem that owns it.
 - `HarnessBuilder` only collects input and assembles an owned `Session`.
-- `Session` currently owns DOM state and script runtime state, and will later own runtime, mock, and debug state.
+- `Session` currently owns DOM state, script runtime state, event dispatch state, fake clock state, and mock state, and will later own additional runtime and debug state.
 - Public methods should delegate inward instead of growing facade logic.
 
 ## Phase Plan
@@ -120,10 +124,14 @@ The script runtime minimum slice is implemented in this workspace now.
 - cancelable default actions
 - form controls and user actions
 
+The event/default-action and form-control slice is implemented in this workspace now.
+
 ### Phase 4
 
 - deterministic mock wiring
 - fetch, clipboard, dialogs, location, file input, and download capture
+
+The deterministic clock helpers and mock registry slice are implemented in this workspace now.
 
 ### Phase 5
 
@@ -154,4 +162,4 @@ The script runtime minimum slice is implemented in this workspace now.
 
 ## Current Status
 
-Phase 0, Phase 1, and Phase 2 are delivered in this workspace.
+Phase 0, Phase 1, Phase 2, Phase 3, and Phase 4 are delivered in this workspace.

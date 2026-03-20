@@ -27,7 +27,7 @@ The safest order for turning the phase 0 scaffold into a usable runtime is:
 7. deterministic mocks
 8. hardening and publication work
 
-The DOM bootstrap, selector subset, read-only inspection slices, and the phase 2 script runtime minimum slice are already landed in this workspace, so the next phase 3 work is event dispatch and default actions.
+The DOM bootstrap, selector subset, read-only inspection slices, the phase 2 script runtime minimum slice, the phase 3 event/default-action and form-control slice, and the phase 4 deterministic mock slice are already landed in this workspace, so the next named work is hardening.
 
 This order keeps the public facade thin and avoids implementing user actions before the DOM and selector layers are trustworthy.
 

@@ -78,8 +78,6 @@ pub const ScriptRuntime = struct {
         allocator: std.mem.Allocator,
         host: anytype,
     ) errors.Result(void) {
-        _ = self;
-
         var script_ids: std.ArrayList(dom.NodeId) = .empty;
         defer script_ids.deinit(allocator);
 
@@ -192,6 +190,7 @@ fn executeScriptSource(
     var parser = Parser.init(arena_alloc, source);
     const program = try parser.parseProgram();
     try evalProgram(arena_alloc, host, program, bindings);
+    return;
 }
 
 const Parser = struct {
@@ -649,6 +648,7 @@ fn evalProgram(
     for (program.statements) |statement| {
         try evalStatement(allocator, host, bindings, statement);
     }
+    return;
 }
 
 fn evalStatement(

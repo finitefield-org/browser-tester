@@ -43,17 +43,25 @@ Phase 2 is complete in this workspace.
 
 ## Phase 3: Events and Forms
 
+Delivered in this workspace:
+
 - event dispatch with bubbling and capture listeners
 - default actions
 - form controls
 - user-facing `Harness` actions
 
+Phase 3 is complete in this workspace.
+
 ## Phase 4: Determinism and Mocks
 
-- fake clock hardening
-- microtask semantics
+Delivered in this workspace:
+
+- fake clock helpers (`nowMs`, `advanceTime`, `flush`)
+- typed mock registry (`mocksMut`)
 - fetch, clipboard, dialog, location, and file-input mocks
 - download capture
+
+Phase 4 is complete in this workspace.
 
 ## Phase 5: Hardening
 

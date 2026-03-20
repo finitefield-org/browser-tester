@@ -280,6 +280,9 @@ fn eval_member<H: HostBindings>(
         Value::Element(element) if property == "children" => Ok(Value::HtmlCollection(
             HtmlCollectionTarget::Children(element),
         )),
+        Value::Element(element) if property == "labels" => {
+            Ok(Value::NodeList(NodeListTarget::Labels(element)))
+        }
         Value::Element(element) if property == "rows" => Ok(Value::HtmlCollection(
             HtmlCollectionTarget::TableRows(element),
         )),
@@ -294,6 +297,12 @@ fn eval_member<H: HostBindings>(
         )),
         Value::Element(element) if property == "selectedOptions" => Ok(Value::HtmlCollection(
             HtmlCollectionTarget::SelectSelectedOptions(element),
+        )),
+        Value::Element(element) if property == "areas" => Ok(Value::HtmlCollection(
+            HtmlCollectionTarget::MapAreas(element),
+        )),
+        Value::Element(element) if property == "tBodies" => Ok(Value::HtmlCollection(
+            HtmlCollectionTarget::TableTBodies(element),
         )),
         Value::Event(event) if property == "type" => Ok(Value::String(event.event_type())),
         Value::Event(event) if property == "target" => {
@@ -1146,6 +1155,10 @@ fn html_collection_items<H: HostBindings>(
         HtmlCollectionTarget::DocumentLinks => host.html_collection_document_links_items(),
         HtmlCollectionTarget::DocumentAnchors => host.html_collection_document_anchors_items(),
         HtmlCollectionTarget::DocumentChildren => host.html_collection_document_children_items(),
+        HtmlCollectionTarget::MapAreas(element) => host.html_collection_map_areas_items(*element),
+        HtmlCollectionTarget::TableTBodies(element) => {
+            host.html_collection_table_bodies_items(*element)
+        }
         HtmlCollectionTarget::TableRows(element) => host.html_collection_table_rows_items(*element),
         HtmlCollectionTarget::RowCells(element) => host.html_collection_row_cells_items(*element),
     }
@@ -1182,6 +1195,12 @@ fn html_collection_named_item_handle<H: HostBindings>(
         }
         HtmlCollectionTarget::DocumentChildren => {
             host.html_collection_document_children_named_item(name)
+        }
+        HtmlCollectionTarget::MapAreas(element) => {
+            host.html_collection_map_areas_named_item(*element, name)
+        }
+        HtmlCollectionTarget::TableTBodies(element) => {
+            host.html_collection_table_bodies_named_item(*element, name)
         }
         HtmlCollectionTarget::TableRows(element) => {
             host.html_collection_table_rows_named_item(*element, name)
@@ -1248,6 +1267,7 @@ fn node_list_items<H: HostBindings>(
     match target {
         NodeListTarget::Snapshot(nodes) => Ok(nodes.clone()),
         NodeListTarget::ByName(name) => host.document_get_elements_by_name(name),
+        NodeListTarget::Labels(element) => host.element_labels(*element),
     }
 }
 

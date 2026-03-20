@@ -25,6 +25,7 @@ struct RecordingHost {
     checked: BTreeMap<ElementHandle, bool>,
     attributes: BTreeMap<(ElementHandle, String), String>,
     element_children_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
+    element_labels_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
     html_collection_tag_name_items_results: BTreeMap<HtmlCollectionTarget, Vec<ElementHandle>>,
     html_collection_tag_name_ns_items_results: BTreeMap<HtmlCollectionTarget, Vec<ElementHandle>>,
     html_collection_class_name_items_results: BTreeMap<HtmlCollectionTarget, Vec<ElementHandle>>,
@@ -32,6 +33,8 @@ struct RecordingHost {
     html_collection_select_options_items_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
     html_collection_select_selected_options_items_results:
         BTreeMap<ElementHandle, Vec<ElementHandle>>,
+    html_collection_map_areas_items_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
+    html_collection_table_bodies_items_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
     document_links_items_results: Vec<ElementHandle>,
     document_anchors_items_results: Vec<ElementHandle>,
     document_children_items_results: Vec<ElementHandle>,
@@ -50,6 +53,10 @@ struct RecordingHost {
         BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
     html_collection_select_selected_options_named_item_results:
         BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
+    html_collection_map_areas_named_item_results:
+        BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
+    html_collection_table_bodies_named_item_results:
+        BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
     document_links_named_item_results: BTreeMap<String, Option<ElementHandle>>,
     document_anchors_named_item_results: BTreeMap<String, Option<ElementHandle>>,
     document_children_named_item_results: BTreeMap<String, Option<ElementHandle>>,
@@ -62,12 +69,15 @@ struct RecordingHost {
     element_query_selector_all_results: BTreeMap<(ElementHandle, String), Vec<ElementHandle>>,
     element_closest_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
     element_children_calls: Vec<ElementHandle>,
+    element_labels_calls: Vec<ElementHandle>,
     html_collection_tag_name_items_calls: Vec<HtmlCollectionTarget>,
     html_collection_tag_name_ns_items_calls: Vec<HtmlCollectionTarget>,
     html_collection_class_name_items_calls: Vec<HtmlCollectionTarget>,
     html_collection_form_elements_items_calls: Vec<ElementHandle>,
     html_collection_select_options_items_calls: Vec<ElementHandle>,
     html_collection_select_selected_options_items_calls: Vec<ElementHandle>,
+    html_collection_map_areas_items_calls: Vec<ElementHandle>,
+    html_collection_table_bodies_items_calls: Vec<ElementHandle>,
     document_links_items_calls: usize,
     document_anchors_items_calls: usize,
     document_children_items_calls: usize,
@@ -80,6 +90,8 @@ struct RecordingHost {
     html_collection_form_elements_named_item_calls: Vec<(ElementHandle, String)>,
     html_collection_select_options_named_item_calls: Vec<(ElementHandle, String)>,
     html_collection_select_selected_options_named_item_calls: Vec<(ElementHandle, String)>,
+    html_collection_map_areas_named_item_calls: Vec<(ElementHandle, String)>,
+    html_collection_table_bodies_named_item_calls: Vec<(ElementHandle, String)>,
     document_links_named_item_calls: Vec<String>,
     document_anchors_named_item_calls: Vec<String>,
     document_children_named_item_calls: Vec<String>,
@@ -127,6 +139,10 @@ impl RecordingHost {
 
     fn seed_element_children(&mut self, element: ElementHandle, result: Vec<ElementHandle>) {
         self.element_children_results.insert(element, result);
+    }
+
+    fn seed_element_labels(&mut self, element: ElementHandle, result: Vec<ElementHandle>) {
+        self.element_labels_results.insert(element, result);
     }
 
     fn seed_html_collection_tag_name_items(
@@ -180,6 +196,24 @@ impl RecordingHost {
         result: Vec<ElementHandle>,
     ) {
         self.html_collection_select_selected_options_items_results
+            .insert(element, result);
+    }
+
+    fn seed_html_collection_map_areas_items(
+        &mut self,
+        element: ElementHandle,
+        result: Vec<ElementHandle>,
+    ) {
+        self.html_collection_map_areas_items_results
+            .insert(element, result);
+    }
+
+    fn seed_html_collection_table_bodies_items(
+        &mut self,
+        element: ElementHandle,
+        result: Vec<ElementHandle>,
+    ) {
+        self.html_collection_table_bodies_items_results
             .insert(element, result);
     }
 
@@ -270,6 +304,26 @@ impl RecordingHost {
         result: Option<ElementHandle>,
     ) {
         self.html_collection_select_selected_options_named_item_results
+            .insert((element, name.into()), result);
+    }
+
+    fn seed_html_collection_map_areas_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: impl Into<String>,
+        result: Option<ElementHandle>,
+    ) {
+        self.html_collection_map_areas_named_item_results
+            .insert((element, name.into()), result);
+    }
+
+    fn seed_html_collection_table_bodies_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: impl Into<String>,
+        result: Option<ElementHandle>,
+    ) {
+        self.html_collection_table_bodies_named_item_results
             .insert((element, name.into()), result);
     }
 
@@ -404,6 +458,18 @@ impl HostBindings for RecordingHost {
         self.element_children_calls.push(element);
         Ok(self
             .element_children_results
+            .get(&element)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn element_labels(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.element_labels_calls.push(element);
+        Ok(self
+            .element_labels_results
             .get(&element)
             .cloned()
             .unwrap_or_default())
@@ -579,6 +645,58 @@ impl HostBindings for RecordingHost {
             .push((element, name.to_string()));
         Ok(self
             .html_collection_select_selected_options_named_item_results
+            .get(&(element, name.to_string()))
+            .copied()
+            .flatten())
+    }
+
+    fn html_collection_map_areas_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.html_collection_map_areas_items_calls.push(element);
+        Ok(self
+            .html_collection_map_areas_items_results
+            .get(&element)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn html_collection_map_areas_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.html_collection_map_areas_named_item_calls
+            .push((element, name.to_string()));
+        Ok(self
+            .html_collection_map_areas_named_item_results
+            .get(&(element, name.to_string()))
+            .copied()
+            .flatten())
+    }
+
+    fn html_collection_table_bodies_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.html_collection_table_bodies_items_calls.push(element);
+        Ok(self
+            .html_collection_table_bodies_items_results
+            .get(&element)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn html_collection_table_bodies_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.html_collection_table_bodies_named_item_calls
+            .push((element, name.to_string()));
+        Ok(self
+            .html_collection_table_bodies_named_item_results
             .get(&(element, name.to_string()))
             .copied()
             .flatten())
@@ -1549,6 +1667,85 @@ fn runtime_resolves_select_options_access() {
 }
 
 #[test]
+fn runtime_resolves_fieldset_elements_and_datalist_options_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("fieldset", ElementHandle::new(1), "fieldset");
+    host.seed_element("first-control", ElementHandle::new(2), "A");
+    host.seed_element("second-control", ElementHandle::new(3), "B");
+    host.seed_element("list", ElementHandle::new(4), "list");
+    host.seed_element("first-option", ElementHandle::new(5), "One");
+    host.seed_element("second-option", ElementHandle::new(6), "Two");
+    host.seed_element("out", ElementHandle::new(7), "");
+    host.seed_html_collection_form_elements_items(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2), ElementHandle::new(3)],
+    );
+    host.seed_html_collection_form_elements_named_item(
+        ElementHandle::new(1),
+        "second-control",
+        Some(ElementHandle::new(3)),
+    );
+    host.seed_html_collection_form_elements_named_item(
+        ElementHandle::new(1),
+        "missing",
+        None,
+    );
+    host.seed_html_collection_select_options_items(
+        ElementHandle::new(4),
+        vec![ElementHandle::new(5), ElementHandle::new(6)],
+    );
+    host.seed_html_collection_select_options_named_item(
+        ElementHandle::new(4),
+        "second-option",
+        Some(ElementHandle::new(6)),
+    );
+    host.seed_html_collection_select_options_named_item(ElementHandle::new(4), "missing", None);
+
+    runtime
+        .eval_program(
+            "const controls = document.getElementById('fieldset').elements; const options = document.getElementById('list').options; document.getElementById('out').textContent = String(controls.length) + ':' + String(options.length) + ':' + controls.item(0).textContent + ':' + controls.item(1).textContent + ':' + String(controls.namedItem('second-control')) + ':' + options.item(0).textContent + ':' + options.item(1).textContent + ':' + options.namedItem('second-option').textContent + ':' + String(options.namedItem('missing'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("fieldset.elements and datalist.options should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(7))
+            .map(String::as_str),
+        Some("2:2:A:B:[object Element]:One:Two:Two:null")
+    );
+    assert_eq!(
+        host.html_collection_form_elements_items_calls,
+        vec![
+            ElementHandle::new(1),
+            ElementHandle::new(1),
+            ElementHandle::new(1),
+        ]
+    );
+    assert_eq!(
+        host.html_collection_form_elements_named_item_calls,
+        vec![(ElementHandle::new(1), "second-control".to_string())]
+    );
+    assert_eq!(
+        host.html_collection_select_options_items_calls,
+        vec![
+            ElementHandle::new(4),
+            ElementHandle::new(4),
+            ElementHandle::new(4),
+        ]
+    );
+    assert_eq!(
+        host.html_collection_select_options_named_item_calls,
+        vec![
+            (ElementHandle::new(4), "second-option".to_string()),
+            (ElementHandle::new(4), "missing".to_string()),
+        ]
+    );
+}
+
+#[test]
 fn runtime_resolves_select_selected_options_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -1598,6 +1795,126 @@ fn runtime_resolves_select_selected_options_access() {
         vec![
             (ElementHandle::new(1), "second".to_string()),
             (ElementHandle::new(1), "missing".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn runtime_resolves_element_labels_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("control", ElementHandle::new(1), "");
+    host.seed_element("explicit-label", ElementHandle::new(2), "Explicit");
+    host.seed_element("implicit-label", ElementHandle::new(3), "Implicit");
+    host.seed_element("inner-control", ElementHandle::new(4), "");
+    host.seed_element("wrapper", ElementHandle::new(5), "");
+    host.seed_element("out", ElementHandle::new(6), "");
+    host.seed_element("second-label", ElementHandle::new(7), "Second");
+    host.seed_attribute(ElementHandle::new(2), "id", "explicit-label");
+    host.seed_attribute(ElementHandle::new(3), "id", "implicit-label");
+    host.seed_attribute(ElementHandle::new(7), "id", "second-label");
+    host.seed_element_labels(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2), ElementHandle::new(7)],
+    );
+    host.seed_element_labels(
+        ElementHandle::new(4),
+        vec![ElementHandle::new(3)],
+    );
+
+    runtime
+        .eval_program(
+            "const control = document.getElementById('control'); const labels = control.labels; const inner = document.getElementById('inner-control').labels; document.getElementById('wrapper').textContent = 'updated'; document.getElementById('out').textContent = String(labels.length) + ':' + String(labels.length) + ':' + labels.item(0).getAttribute('id') + ':' + labels.item(1).textContent + ':' + String(inner.length) + ':' + inner.item(0).getAttribute('id');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("label collections should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(6))
+            .map(String::as_str),
+        Some("2:2:explicit-label:Second:1:implicit-label")
+    );
+    assert_eq!(
+        host.element_labels_calls,
+        vec![
+            ElementHandle::new(1),
+            ElementHandle::new(1),
+            ElementHandle::new(1),
+            ElementHandle::new(1),
+            ElementHandle::new(4),
+            ElementHandle::new(4),
+        ]
+    );
+}
+
+#[test]
+fn runtime_resolves_map_areas_and_table_bodies_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("map", ElementHandle::new(1), "map");
+    host.seed_element("first-area", ElementHandle::new(2), "First area");
+    host.seed_element("second-area", ElementHandle::new(3), "Second area");
+    host.seed_element("table", ElementHandle::new(4), "table");
+    host.seed_element("first-body", ElementHandle::new(5), "Body 1");
+    host.seed_element("second-body", ElementHandle::new(6), "Body 2");
+    host.seed_element("out", ElementHandle::new(7), "");
+    host.seed_html_collection_map_areas_items(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2), ElementHandle::new(3)],
+    );
+    host.seed_html_collection_map_areas_named_item(
+        ElementHandle::new(1),
+        "second-area",
+        Some(ElementHandle::new(3)),
+    );
+    host.seed_html_collection_map_areas_named_item(ElementHandle::new(1), "missing", None);
+    host.seed_html_collection_table_bodies_items(
+        ElementHandle::new(4),
+        vec![ElementHandle::new(5), ElementHandle::new(6)],
+    );
+    host.seed_html_collection_table_bodies_named_item(
+        ElementHandle::new(4),
+        "second-body",
+        Some(ElementHandle::new(6)),
+    );
+    host.seed_html_collection_table_bodies_named_item(ElementHandle::new(4), "missing", None);
+
+    runtime
+        .eval_program(
+            "const areas = document.getElementById('map').areas; const bodies = document.getElementById('table').tBodies; document.getElementById('out').textContent = String(areas.length) + ':' + String(bodies.length) + ':' + areas.item(0).textContent + ':' + bodies.item(0).textContent + ':' + String(areas.namedItem('second-area')) + ':' + String(areas.namedItem('missing')) + ':' + String(bodies.namedItem('second-body')) + ':' + String(bodies.namedItem('missing'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("map.areas and table.tBodies should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(7))
+            .map(String::as_str),
+        Some("2:2:First area:Body 1:[object Element]:null:[object Element]:null")
+    );
+    assert_eq!(
+        host.html_collection_map_areas_items_calls,
+        vec![ElementHandle::new(1), ElementHandle::new(1)]
+    );
+    assert_eq!(
+        host.html_collection_map_areas_named_item_calls,
+        vec![
+            (ElementHandle::new(1), "second-area".to_string()),
+            (ElementHandle::new(1), "missing".to_string()),
+        ]
+    );
+    assert_eq!(
+        host.html_collection_table_bodies_items_calls,
+        vec![ElementHandle::new(4), ElementHandle::new(4)]
+    );
+    assert_eq!(
+        host.html_collection_table_bodies_named_item_calls,
+        vec![
+            (ElementHandle::new(4), "second-body".to_string()),
+            (ElementHandle::new(4), "missing".to_string()),
         ]
     );
 }

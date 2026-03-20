@@ -9,9 +9,13 @@ Owns:
 - `Harness`
 - `HarnessBuilder`
 - read-only inspection methods
+- user-facing actions
+- deterministic clock helpers
+- typed mock registry access
 - `Error`
 - `Result(T)`
 - `StorageSeed`
+- `MockRegistry`
 
 Location:
 
@@ -31,12 +35,16 @@ Owns:
 - copied configuration state
 - internal DOM store
 - internal script runtime state
+- event listener registry
+- focused-node snapshot
+- fake clock state
+- mock registry
 - future long-lived runtime state
-- the reserved mock registry slot
 
 Location:
 
 - `src/session.zig`
+- `src/mocks.zig`
 
 Choose this layer when the question is:
 
@@ -74,7 +82,8 @@ Owns:
 
 Location:
 
-- future `src/runtime.zig` or equivalent files
+- `src/session.zig`
+- `src/mocks.zig`
 
 Choose this layer when the question is:
 

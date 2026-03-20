@@ -68,6 +68,8 @@ pub enum HtmlCollectionTarget {
     DocumentLinks,
     DocumentAnchors,
     DocumentChildren,
+    MapAreas(ElementHandle),
+    TableTBodies(ElementHandle),
     TableRows(ElementHandle),
     RowCells(ElementHandle),
 }
@@ -76,6 +78,7 @@ pub enum HtmlCollectionTarget {
 pub enum NodeListTarget {
     Snapshot(Vec<ElementHandle>),
     ByName(String),
+    Labels(ElementHandle),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -331,6 +334,10 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("element.children"))
     }
 
+    fn element_labels(&mut self, _element: ElementHandle) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("element.labels"))
+    }
+
     fn html_collection_named_item(
         &mut self,
         _element: ElementHandle,
@@ -474,6 +481,21 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("document.children"))
     }
 
+    fn html_collection_map_areas_items(
+        &mut self,
+        _element: ElementHandle,
+    ) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("map.areas"))
+    }
+
+    fn html_collection_map_areas_named_item(
+        &mut self,
+        _element: ElementHandle,
+        _name: &str,
+    ) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("map.areas"))
+    }
+
     fn html_collection_table_rows_items(
         &mut self,
         _element: ElementHandle,
@@ -487,6 +509,21 @@ pub trait HostBindings {
         _name: &str,
     ) -> Result<Option<ElementHandle>> {
         Err(ScriptError::phase_not_ready("table.rows"))
+    }
+
+    fn html_collection_table_bodies_items(
+        &mut self,
+        _element: ElementHandle,
+    ) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("table.tBodies"))
+    }
+
+    fn html_collection_table_bodies_named_item(
+        &mut self,
+        _element: ElementHandle,
+        _name: &str,
+    ) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("table.tBodies"))
     }
 
     fn html_collection_row_cells_items(

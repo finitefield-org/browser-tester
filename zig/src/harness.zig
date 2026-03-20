@@ -1,5 +1,7 @@
 const std = @import("std");
+const dom = @import("dom.zig");
 const errors = @import("errors.zig");
+const mocks = @import("mocks.zig");
 const session = @import("session.zig");
 
 const default_url = "https://app.local/";
@@ -126,16 +128,78 @@ pub const Harness = struct {
         self.session.deinit();
     }
 
-    pub fn url(self: Harness) []const u8 {
+    pub fn url(self: *const Harness) []const u8 {
         return self.session.url();
     }
 
-    pub fn html(self: Harness) ?[]const u8 {
+    pub fn html(self: *const Harness) ?[]const u8 {
         return self.session.html();
     }
 
-    pub fn localStorage(self: Harness) []const session.StorageSeed {
+    pub fn localStorage(self: *const Harness) []const session.StorageSeed {
         return self.session.localStorage();
+    }
+
+    pub fn nowMs(self: *const Harness) i64 {
+        return self.session.nowMs();
+    }
+
+    pub fn advanceTime(self: *Harness, delta_ms: i64) errors.Result(void) {
+        return self.session.advanceTime(delta_ms);
+    }
+
+    pub fn flush(self: *Harness) errors.Result(void) {
+        return self.session.flush();
+    }
+
+    pub fn mocksMut(self: *Harness) *mocks.MockRegistry {
+        return self.session.mocksMut();
+    }
+
+    pub fn alert(self: *Harness, message: []const u8) errors.Result(void) {
+        return self.session.alert(message);
+    }
+
+    pub fn confirm(self: *Harness, message: []const u8) errors.Result(bool) {
+        return self.session.confirm(message);
+    }
+
+    pub fn prompt(self: *Harness, message: []const u8) errors.Result(?[]const u8) {
+        return self.session.prompt(message);
+    }
+
+    pub fn readClipboard(self: *Harness) errors.Result([]const u8) {
+        return self.session.readClipboard();
+    }
+
+    pub fn writeClipboard(self: *Harness, text: []const u8) errors.Result(void) {
+        return self.session.writeClipboard(text);
+    }
+
+    pub fn captureDownload(
+        self: *Harness,
+        file_name: []const u8,
+        bytes: []const u8,
+    ) errors.Result(void) {
+        return self.session.captureDownload(file_name, bytes);
+    }
+
+    pub fn fetch(self: *Harness, url_source: []const u8) errors.Result(mocks.FetchResponse) {
+        return self.session.fetch(url_source);
+    }
+
+    pub fn navigate(self: *Harness, url_source: []const u8) errors.Result(void) {
+        return self.session.navigate(url_source);
+    }
+
+    pub fn setFiles(
+        self: *Harness,
+        selector: []const u8,
+        files: []const []const u8,
+    ) errors.Result(void) {
+        const node_id = try self.resolveActionTarget(selector);
+        try self.session.setFilesNode(node_id, selector, files);
+        return;
     }
 
     pub fn assertExists(self: *const Harness, selector: []const u8) errors.Result(void) {
@@ -156,6 +220,111 @@ pub const Harness = struct {
         allocator: std.mem.Allocator,
     ) errors.Result([]u8) {
         return self.session.domStore().dumpDom(allocator);
+    }
+
+    pub fn click(self: *Harness, selector: []const u8) errors.Result(void) {
+        const node_id = try self.resolveActionTarget(selector);
+        try self.session.clickNode(node_id);
+        return;
+    }
+
+    pub fn typeText(self: *Harness, selector: []const u8, text: []const u8) errors.Result(void) {
+        const node_id = try self.resolveActionTarget(selector);
+        try self.session.typeTextNode(node_id, text);
+        return;
+    }
+
+    pub fn setChecked(self: *Harness, selector: []const u8, checked: bool) errors.Result(void) {
+        const node_id = try self.resolveActionTarget(selector);
+        try self.session.setCheckedNode(node_id, checked);
+        return;
+    }
+
+    pub fn setSelectValue(self: *Harness, selector: []const u8, value: []const u8) errors.Result(void) {
+        const node_id = try self.resolveActionTarget(selector);
+        try self.session.setSelectValueNode(node_id, value);
+        return;
+    }
+
+    pub fn focus(self: *Harness, selector: []const u8) errors.Result(void) {
+        const node_id = try self.resolveActionTarget(selector);
+        try self.session.focusNode(node_id);
+        return;
+    }
+
+    pub fn blur(self: *Harness, selector: []const u8) errors.Result(void) {
+        const node_id = try self.resolveActionTarget(selector);
+        try self.session.blurNode(node_id);
+        return;
+    }
+
+    pub fn submit(self: *Harness, selector: []const u8) errors.Result(void) {
+        const node_id = try self.resolveActionTarget(selector);
+        try self.session.submitNode(node_id);
+        return;
+    }
+
+    pub fn dispatch(self: *Harness, selector: []const u8, event_type: []const u8) errors.Result(void) {
+        const node_id = try self.resolveActionTarget(selector);
+        try self.session.dispatchNode(node_id, event_type);
+        return;
+    }
+
+    pub fn assertValue(
+        self: *const Harness,
+        selector: []const u8,
+        expected: []const u8,
+    ) errors.Result(void) {
+        const node_id = try self.resolveAssertionTarget(selector);
+        const actual = try self.session.domStore().valueForNode(std.heap.page_allocator, node_id);
+        defer std.heap.page_allocator.free(actual);
+
+        if (!std.mem.eql(u8, actual, expected)) {
+            return error.AssertionFailed;
+        }
+
+        return;
+    }
+
+    pub fn assertChecked(
+        self: *const Harness,
+        selector: []const u8,
+        expected: bool,
+    ) errors.Result(void) {
+        const node_id = try self.resolveAssertionTarget(selector);
+        const actual = self.session.domStore().checkedForNode(node_id) orelse return error.AssertionFailed;
+        if (actual != expected) {
+            return error.AssertionFailed;
+        }
+
+        return;
+    }
+
+    fn resolveActionTarget(self: *const Harness, selector: []const u8) errors.Result(dom.NodeId) {
+        const node_id = try self.selectFirstMatch(selector);
+        if (node_id) |id| return id;
+        return error.DomError;
+    }
+
+    fn resolveAssertionTarget(self: *const Harness, selector: []const u8) errors.Result(dom.NodeId) {
+        const node_id = try self.selectFirstMatch(selector);
+        if (node_id) |id| return id;
+        return error.AssertionFailed;
+    }
+
+    fn selectFirstMatch(self: *const Harness, selector: []const u8) errors.Result(?dom.NodeId) {
+        const matches = self.session.domStore().select(std.heap.page_allocator, selector) catch |err| switch (err) {
+            error.HtmlParse => return error.InvalidSelector,
+            error.OutOfMemory => return error.OutOfMemory,
+            else => unreachable,
+        };
+        defer std.heap.page_allocator.free(matches);
+
+        if (matches.len == 0) {
+            return null;
+        }
+
+        return matches[0];
     }
 };
 
@@ -218,4 +387,45 @@ test "regression: inline scripts execute against the copied html snapshot" {
         dump,
     );
     try std.testing.expectEqualStrings("<main id='out'>Before</main><script>document.getElementById('out').textContent = 'Hello';</script>", subject.html().?);
+}
+
+test "regression: phase 3 actions operate on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<input id='agree' type='checkbox'><div id='out'></div><script>document.getElementById('agree').addEventListener('change', () => { document.getElementById('out').textContent = String(document.getElementById('agree').checked); });</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.click("#agree");
+    try subject.assertChecked("#agree", true);
+    try subject.assertValue("#out", "true");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 4 mock helpers operate on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<input id='upload' type='file'><div id='out'></div><script>document.getElementById('upload').addEventListener('change', () => { document.getElementById('out').textContent = document.getElementById('upload').value; });</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.setFiles("#upload", &.{"report.csv"});
+    try subject.assertValue("#upload", "report.csv");
+    try subject.assertValue("#out", "report.csv");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+
+    const registry = subject.mocksMut();
+    const selections = registry.fileInput().selections();
+    try std.testing.expectEqual(@as(usize, 1), selections.len);
+    try std.testing.expectEqualStrings("#upload", selections[0].selector);
+    try std.testing.expectEqual(@as(usize, 1), selections[0].files.len);
+    try std.testing.expectEqualStrings("report.csv", selections[0].files[0]);
 }
