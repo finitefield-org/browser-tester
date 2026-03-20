@@ -5,9 +5,12 @@ use std::fmt::Write as _;
 use super::DomIndexes;
 use super::DomStore;
 use super::ElementData;
+use super::HTML_NAMESPACE_URI;
+use super::MATHML_NAMESPACE_URI;
 use super::NodeId;
 use super::NodeKind;
 use super::NodeRecord;
+use super::SVG_NAMESPACE_URI;
 use super::TextData;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -399,10 +402,13 @@ impl DomStore {
         tag_name: String,
         attributes: BTreeMap<String, String>,
     ) -> NodeId {
+        let namespace_uri = self.namespace_uri_for_child(parent, &tag_name).to_string();
         let node_id = self.add_node(
             parent,
             NodeKind::Element(ElementData {
                 tag_name: tag_name.clone(),
+                local_name: tag_name.clone(),
+                namespace_uri,
                 attributes: attributes.clone(),
             }),
         );
@@ -441,6 +447,30 @@ impl DomStore {
         }
 
         node_id
+    }
+
+    fn namespace_uri_for_child(&self, parent: NodeId, tag_name: &str) -> &'static str {
+        let parent_kind = self
+            .nodes
+            .get(parent.index() as usize)
+            .map(|node| &node.kind);
+        let parent_element = match parent_kind {
+            Some(NodeKind::Element(element)) => Some(element),
+            _ => None,
+        };
+
+        match parent_element {
+            None => element_namespace_for_root(tag_name),
+            Some(element)
+                if element.namespace_uri == SVG_NAMESPACE_URI
+                    && element.local_name == "foreignobject" =>
+            {
+                element_namespace_for_root(tag_name)
+            }
+            Some(element) if element.namespace_uri == SVG_NAMESPACE_URI => SVG_NAMESPACE_URI,
+            Some(element) if element.namespace_uri == MATHML_NAMESPACE_URI => MATHML_NAMESPACE_URI,
+            Some(_) => element_namespace_for_root(tag_name),
+        }
     }
 
     fn add_text(&mut self, parent: NodeId, value: String) -> NodeId {
@@ -1547,6 +1577,14 @@ fn escape_attr(value: &str) -> String {
 
 fn is_simple_name_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
+}
+
+fn element_namespace_for_root(tag_name: &str) -> &'static str {
+    match tag_name {
+        "svg" => SVG_NAMESPACE_URI,
+        "math" => MATHML_NAMESPACE_URI,
+        _ => HTML_NAMESPACE_URI,
+    }
 }
 
 fn supports_disabled_pseudo_class(tag_name: &str) -> bool {

@@ -1,4 +1,6 @@
-use bt_dom::{DomStore, NodeId, NodeKind};
+use bt_dom::{
+    DomStore, HTML_NAMESPACE_URI, MATHML_NAMESPACE_URI, NodeId, NodeKind, SVG_NAMESPACE_URI,
+};
 
 #[test]
 fn phase_zero_store_exposes_document_root() {
@@ -216,6 +218,49 @@ fn child_combinators_match_only_direct_children() {
         store.select("main .primary").unwrap(),
         vec![nested_id, direct_id]
     );
+}
+
+#[test]
+fn namespace_assignment_tracks_html_svg_and_mathml_subtrees() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><svg id='icon'><rect id='rect'></rect></svg><math id='formula'><mi id='symbol'>x</mi></math><span id='label'>Label</span></main>",
+        )
+        .expect("HTML should parse");
+
+    let root_id = store.select("#root").unwrap()[0];
+    let rect_id = store.select("#rect").unwrap()[0];
+    let formula_id = store.select("#formula").unwrap()[0];
+    let symbol_id = store.select("#symbol").unwrap()[0];
+    let label_id = store.select("#label").unwrap()[0];
+
+    let NodeKind::Element(root) = &store.nodes()[root_id.index() as usize].kind else {
+        panic!("root should be an element");
+    };
+    let NodeKind::Element(rect) = &store.nodes()[rect_id.index() as usize].kind else {
+        panic!("rect should be an element");
+    };
+    let NodeKind::Element(formula) = &store.nodes()[formula_id.index() as usize].kind else {
+        panic!("formula should be an element");
+    };
+    let NodeKind::Element(symbol) = &store.nodes()[symbol_id.index() as usize].kind else {
+        panic!("symbol should be an element");
+    };
+    let NodeKind::Element(label) = &store.nodes()[label_id.index() as usize].kind else {
+        panic!("label should be an element");
+    };
+
+    assert_eq!(root.namespace_uri, HTML_NAMESPACE_URI);
+    assert_eq!(root.local_name, "main");
+    assert_eq!(rect.namespace_uri, SVG_NAMESPACE_URI);
+    assert_eq!(rect.local_name, "rect");
+    assert_eq!(formula.namespace_uri, MATHML_NAMESPACE_URI);
+    assert_eq!(formula.local_name, "math");
+    assert_eq!(symbol.namespace_uri, MATHML_NAMESPACE_URI);
+    assert_eq!(symbol.local_name, "mi");
+    assert_eq!(label.namespace_uri, HTML_NAMESPACE_URI);
+    assert_eq!(label.local_name, "span");
 }
 
 #[test]

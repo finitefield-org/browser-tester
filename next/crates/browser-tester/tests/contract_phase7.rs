@@ -124,6 +124,26 @@ fn script_document_images_and_links_are_live_end_to_end() -> browser_tester_next
 }
 
 #[test]
+fn script_document_all_is_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<div id='root'><span id='first'>First</span><span id='second'>Second</span></div><div id='out'></div><script>const all = document.all; const before = all.length; const named = all.namedItem('second'); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(all.length) + ':' + String(named) + ':' + String(all.namedItem('missing'));</script>",
+    )?;
+
+    harness.assert_text("#out", "5:3:[object Element]:null")?;
+    Ok(())
+}
+
+#[test]
+fn script_get_elements_by_tag_name_ns_is_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<div id='root'><svg id='icon'><rect id='rect'></rect><circle id='dot'></circle></svg><math id='formula'><mi id='symbol'>x</mi></math><span id='label'>Label</span></div><div id='out'></div><script>const svgAll = document.getElementsByTagNameNS('http://www.w3.org/2000/svg', '*'); const svgRect = document.getElementById('icon').getElementsByTagNameNS('http://www.w3.org/2000/svg', 'rect'); const htmlSpan = document.getElementsByTagNameNS('http://www.w3.org/1999/xhtml', 'span'); const mathAll = document.getElementsByTagNameNS('http://www.w3.org/1998/Math/MathML', '*'); const beforeSvgAll = svgAll.length; const beforeSvgRect = svgRect.length; const beforeHtmlSpan = htmlSpan.length; const beforeMathAll = mathAll.length; const dot = svgAll.namedItem('dot'); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(beforeSvgAll) + ':' + String(svgAll.length) + ':' + String(beforeSvgRect) + ':' + String(svgRect.length) + ':' + String(beforeHtmlSpan) + ':' + String(htmlSpan.length) + ':' + String(beforeMathAll) + ':' + String(mathAll.length) + ':' + String(dot) + ':' + String(svgAll.namedItem('dot'));</script>",
+    )?;
+
+    harness.assert_text("#out", "3:0:1:1:1:0:2:0:[object Element]:null")?;
+    Ok(())
+}
+
+#[test]
 fn script_simple_pseudo_classes_work_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main><button id='first' class='primary'>First</button><button id='disabled' class='primary' disabled>Disabled</button><button id='enabled' class='primary'>Enabled</button><input id='agree' type='checkbox' checked><select id='mode'><option value='a'>A</option><option id='selected' value='b' selected>B</option></select><div id='out'></div><script>const first = document.querySelector('#first:first-child'); const disabled = document.querySelector('button:disabled'); const enabled = document.querySelectorAll('button:enabled'); const checked = document.querySelector('input:checked'); const selected = document.querySelector('option:checked'); document.getElementById('out').textContent = first.textContent + ':' + disabled.textContent + ':' + String(enabled.length) + ':' + checked.checked + ':' + selected.textContent;</script></main>",
@@ -235,6 +255,32 @@ fn unsupported_document_images_on_elements_fails_explicitly() {
     assert!(message.contains("unsupported member access"));
     assert!(message.contains("`images`"));
     assert!(message.contains("element value"));
+}
+
+#[test]
+fn unsupported_document_all_on_elements_fails_explicitly() {
+    let error = Harness::from_html(
+        "<div id='wrapper'><div id='not-doc'></div></div><script>document.getElementById('not-doc').all.length;</script>",
+    )
+    .expect_err("non-document all access should fail");
+
+    let message = error.to_string();
+    assert!(message.contains("Script error"));
+    assert!(message.contains("unsupported member access"));
+    assert!(message.contains("`all`"));
+    assert!(message.contains("element value"));
+}
+
+#[test]
+fn unsupported_get_elements_by_tag_name_ns_arity_fails_explicitly() {
+    let error = Harness::from_html(
+        "<div id='root'><svg id='icon'><rect id='rect'></rect></svg></div><script>document.getElementsByTagNameNS('http://www.w3.org/2000/svg');</script>",
+    )
+    .expect_err("arity mismatch should fail");
+
+    let message = error.to_string();
+    assert!(message.contains("Script error"));
+    assert!(message.contains("getElementsByTagNameNS() expects exactly two arguments"));
 }
 
 #[test]

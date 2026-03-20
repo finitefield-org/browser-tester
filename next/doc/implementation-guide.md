@@ -1,6 +1,6 @@
 # Implementation Guide
 
-This document explains how to actually build out the `next/` rewrite from its current Phase 6-complete baseline with Phase 7 slices 1 through 4 already delivered, plus sibling selector backlog slices (`A + B`, `A ~ B`), selector lists (`A, B`), simple pseudo-classes, and post-Phase-7 collection slices for `querySelectorAll` / minimal `NodeList`, `Element.children` / minimal `HTMLCollection`, `getElementsByTagName` / live `HTMLCollection`, `getElementsByClassName` / live `HTMLCollection`, `getElementsByName` / live `NodeList`, `document.forms` / `form.elements` live `HTMLCollection`, `select.options` live `HTMLCollection`, and `document.images` / `document.links` live `HTMLCollection`.
+This document explains how to actually build out the `next/` rewrite from its current Phase 6-complete baseline with Phase 7 slices 1 through 4 already delivered, plus sibling selector backlog slices (`A + B`, `A ~ B`), selector lists (`A, B`), simple pseudo-classes, and post-Phase-7 collection slices for `querySelectorAll` / minimal `NodeList`, `Element.children` / minimal `HTMLCollection`, `getElementsByTagName` / live `HTMLCollection`, `getElementsByTagNameNS` / live `HTMLCollection`, `getElementsByClassName` / live `HTMLCollection`, `getElementsByName` / live `NodeList`, `document.forms` / `form.elements` live `HTMLCollection`, `select.options` live `HTMLCollection`, `document.images` / `document.links` live `HTMLCollection`, and `document.all` live `HTMLCollection`.
 
 Use it together with:
 
@@ -36,7 +36,7 @@ The safest way to turn the Phase 0 skeleton into a usable runtime is:
 
 This order keeps the public facade thin and avoids implementing user actions before the DOM and selector layers are trustworthy.
 
-Slices 1 through 16 are already implemented in this workspace, including public download capture. Phase 6 selector expansion slices 1 through 4, covering class selectors, compound simple selectors, descendant combinators, child combinators, and selector hardening, are also implemented in this workspace. A post-Phase-7 selector slice adds sibling combinators (`A + B`, `A ~ B`), selector lists (`A, B`), and simple pseudo-classes through the same bounded engine. Phase 7 script DOM query slices 1 through 4 (`document.querySelector`, `element.querySelector`, `Element.matches`, `Element.closest`, and selector hardening) are implemented as well. Post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support, `Element.children` with minimal `HTMLCollection` support, `getElementsByTagName` with live `HTMLCollection` support, `getElementsByClassName` with live `HTMLCollection` support, `getElementsByName` with live `NodeList` support, `document.forms` / `form.elements` live `HTMLCollection` support, `select.options` live `HTMLCollection` support, and `document.images` / `document.links` live `HTMLCollection` support; keep broader collection APIs out of scope for this workspace.
+Slices 1 through 18 are already implemented in this workspace, including public download capture. Phase 6 selector expansion slices 1 through 4, covering class selectors, compound simple selectors, descendant combinators, child combinators, and selector hardening, are also implemented in this workspace. A post-Phase-7 selector slice adds sibling combinators (`A + B`, `A ~ B`), selector lists (`A, B`), and simple pseudo-classes through the same bounded engine. Phase 7 script DOM query slices 1 through 4 (`document.querySelector`, `element.querySelector`, `Element.matches`, `Element.closest`, and selector hardening) are implemented as well. Post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support, `Element.children` with minimal `HTMLCollection` support, `getElementsByTagName` with live `HTMLCollection` support, `getElementsByTagNameNS` with live `HTMLCollection` support, `getElementsByClassName` with live `HTMLCollection` support, `getElementsByName` with live `NodeList` support, `document.forms` / `form.elements` live `HTMLCollection` support, `select.options` live `HTMLCollection` support, `document.images` / `document.links` live `HTMLCollection` support, and `document.all` live `HTMLCollection` support.
 
 ## First Vertical Slices
 
@@ -514,11 +514,63 @@ Tests already in place:
 
 - image and link collections reflect DOM mutations in inline scripts
 - `length`, `item()`, and `namedItem()` work for document images and links
+- `document.all` reflects DOM mutations in inline scripts
+- `length`, `item()`, and `namedItem()` work for document.all
 - non-document `images` access fails explicitly
 
-Do not add yet:
+### Slice 17: Document All
 
-- broader collection APIs
+Goal:
+
+- make `document.all` available in inline scripts through a minimal live HTMLCollection surface
+
+Primary owners:
+
+- `bt-script`
+- `bt-runtime`
+
+Delivered in this workspace:
+
+- `document.all`
+- live all-elements collection semantics
+- `HTMLCollection.length`
+- `HTMLCollection.item(index)`
+- `HTMLCollection.namedItem(name)`
+
+Tests already in place:
+
+- `document.all` reflects DOM mutations in inline scripts
+- `length`, `item()`, and `namedItem()` work for document.all
+- non-document `all` access fails explicitly
+
+### Slice 18: Namespace-aware Tag-name Collections
+
+Goal:
+
+- make `getElementsByTagNameNS` available in inline scripts through a minimal live `HTMLCollection` surface
+
+Primary owners:
+
+- `bt-dom`
+- `bt-script`
+- `bt-runtime`
+
+Delivered in this workspace:
+
+- `document.getElementsByTagNameNS(namespaceUri, localName)`
+- `element.getElementsByTagNameNS(namespaceUri, localName)`
+- live namespace-aware descendant collection semantics
+- bounded namespace support for HTML, SVG, and MathML URIs plus `*`
+- `HTMLCollection.length`
+- `HTMLCollection.item(index)`
+- `HTMLCollection.namedItem(name)`
+
+Tests already in place:
+
+- namespace-aware collections resolve in inline scripts for document and element scope
+- `length`, `item()`, and `namedItem()` work for namespace-aware collections
+- detached scoped subtree behavior stays explicit through regression coverage
+- arity mismatches fail explicitly
 
 ## Decision Flow for Each Change
 

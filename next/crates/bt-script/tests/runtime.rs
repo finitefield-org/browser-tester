@@ -25,12 +25,15 @@ struct RecordingHost {
     checked: BTreeMap<ElementHandle, bool>,
     element_children_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
     html_collection_tag_name_items_results: BTreeMap<HtmlCollectionTarget, Vec<ElementHandle>>,
+    html_collection_tag_name_ns_items_results: BTreeMap<HtmlCollectionTarget, Vec<ElementHandle>>,
     html_collection_class_name_items_results: BTreeMap<HtmlCollectionTarget, Vec<ElementHandle>>,
     html_collection_form_elements_items_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
     html_collection_select_options_items_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
     document_links_items_results: Vec<ElementHandle>,
     html_collection_named_item_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
     html_collection_tag_name_named_item_results:
+        BTreeMap<(HtmlCollectionTarget, String), Option<ElementHandle>>,
+    html_collection_tag_name_ns_named_item_results:
         BTreeMap<(HtmlCollectionTarget, String), Option<ElementHandle>>,
     html_collection_class_name_named_item_results:
         BTreeMap<(HtmlCollectionTarget, String), Option<ElementHandle>>,
@@ -47,12 +50,14 @@ struct RecordingHost {
     element_closest_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
     element_children_calls: Vec<ElementHandle>,
     html_collection_tag_name_items_calls: Vec<HtmlCollectionTarget>,
+    html_collection_tag_name_ns_items_calls: Vec<HtmlCollectionTarget>,
     html_collection_class_name_items_calls: Vec<HtmlCollectionTarget>,
     html_collection_form_elements_items_calls: Vec<ElementHandle>,
     html_collection_select_options_items_calls: Vec<ElementHandle>,
     document_links_items_calls: usize,
     html_collection_named_item_calls: Vec<(ElementHandle, String)>,
     html_collection_tag_name_named_item_calls: Vec<(HtmlCollectionTarget, String)>,
+    html_collection_tag_name_ns_named_item_calls: Vec<(HtmlCollectionTarget, String)>,
     html_collection_class_name_named_item_calls: Vec<(HtmlCollectionTarget, String)>,
     html_collection_form_elements_named_item_calls: Vec<(ElementHandle, String)>,
     html_collection_select_options_named_item_calls: Vec<(ElementHandle, String)>,
@@ -98,6 +103,15 @@ impl RecordingHost {
         result: Vec<ElementHandle>,
     ) {
         self.html_collection_tag_name_items_results
+            .insert(collection, result);
+    }
+
+    fn seed_html_collection_tag_name_ns_items(
+        &mut self,
+        collection: HtmlCollectionTarget,
+        result: Vec<ElementHandle>,
+    ) {
+        self.html_collection_tag_name_ns_items_results
             .insert(collection, result);
     }
 
@@ -149,6 +163,16 @@ impl RecordingHost {
         result: Option<ElementHandle>,
     ) {
         self.html_collection_tag_name_named_item_results
+            .insert((collection, name.into()), result);
+    }
+
+    fn seed_html_collection_tag_name_ns_named_item(
+        &mut self,
+        collection: HtmlCollectionTarget,
+        name: impl Into<String>,
+        result: Option<ElementHandle>,
+    ) {
+        self.html_collection_tag_name_ns_named_item_results
             .insert((collection, name.into()), result);
     }
 
@@ -293,6 +317,19 @@ impl HostBindings for RecordingHost {
             .unwrap_or_default())
     }
 
+    fn html_collection_tag_name_ns_items(
+        &mut self,
+        collection: HtmlCollectionTarget,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.html_collection_tag_name_ns_items_calls
+            .push(collection.clone());
+        Ok(self
+            .html_collection_tag_name_ns_items_results
+            .get(&collection)
+            .cloned()
+            .unwrap_or_default())
+    }
+
     fn html_collection_named_item(
         &mut self,
         element: ElementHandle,
@@ -316,6 +353,20 @@ impl HostBindings for RecordingHost {
             .push((collection.clone(), name.to_string()));
         Ok(self
             .html_collection_tag_name_named_item_results
+            .get(&(collection, name.to_string()))
+            .copied()
+            .flatten())
+    }
+
+    fn html_collection_tag_name_ns_named_item(
+        &mut self,
+        collection: HtmlCollectionTarget,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.html_collection_tag_name_ns_named_item_calls
+            .push((collection.clone(), name.to_string()));
+        Ok(self
+            .html_collection_tag_name_ns_named_item_results
             .get(&(collection, name.to_string()))
             .copied()
             .flatten())
@@ -1217,6 +1268,129 @@ fn runtime_resolves_document_images_and_links_access() {
     assert_eq!(
         host.document_links_named_item_calls,
         vec!["docs".to_string(), "map".to_string(), "plain".to_string()]
+    );
+}
+
+#[test]
+fn runtime_resolves_document_all_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "root");
+    host.seed_element("first", ElementHandle::new(2), "First");
+    host.seed_element("second", ElementHandle::new(3), "Second");
+    host.seed_element("out", ElementHandle::new(4), "");
+    let all_collection = HtmlCollectionTarget::ByTagName {
+        scope: HtmlCollectionScope::Document,
+        tag_name: "*".to_string(),
+    };
+    host.seed_html_collection_tag_name_items(
+        all_collection.clone(),
+        vec![
+            ElementHandle::new(1),
+            ElementHandle::new(2),
+            ElementHandle::new(3),
+        ],
+    );
+    host.seed_html_collection_tag_name_named_item(
+        all_collection.clone(),
+        "root",
+        Some(ElementHandle::new(1)),
+    );
+    host.seed_html_collection_tag_name_named_item(
+        all_collection.clone(),
+        "second",
+        Some(ElementHandle::new(3)),
+    );
+    host.seed_html_collection_tag_name_named_item(all_collection.clone(), "missing", None);
+
+    runtime
+        .eval_program(
+            "const all = document.all; const before = all.length; const named = all.namedItem('second'); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(all.length) + ':' + String(named) + ':' + String(all.namedItem('missing'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.all should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("3:3:[object Element]:null")
+    );
+    assert_eq!(
+        host.html_collection_tag_name_items_calls,
+        vec![all_collection.clone(), all_collection.clone()]
+    );
+    assert_eq!(
+        host.html_collection_tag_name_named_item_calls,
+        vec![
+            (all_collection.clone(), "second".to_string()),
+            (all_collection, "missing".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn runtime_resolves_get_elements_by_tag_name_ns_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("icon", ElementHandle::new(1), "");
+    host.seed_element("rect", ElementHandle::new(2), "");
+    host.seed_element("dot", ElementHandle::new(3), "");
+    host.seed_element("out", ElementHandle::new(4), "");
+    let document_collection = HtmlCollectionTarget::ByTagNameNs {
+        scope: HtmlCollectionScope::Document,
+        namespace_uri: "http://www.w3.org/2000/svg".to_string(),
+        local_name: "*".to_string(),
+    };
+    let scoped_collection = HtmlCollectionTarget::ByTagNameNs {
+        scope: HtmlCollectionScope::Element(ElementHandle::new(1)),
+        namespace_uri: "http://www.w3.org/2000/svg".to_string(),
+        local_name: "rect".to_string(),
+    };
+    host.seed_html_collection_tag_name_ns_items(
+        document_collection.clone(),
+        vec![
+            ElementHandle::new(1),
+            ElementHandle::new(2),
+            ElementHandle::new(3),
+        ],
+    );
+    host.seed_html_collection_tag_name_ns_items(
+        scoped_collection.clone(),
+        vec![ElementHandle::new(2)],
+    );
+    host.seed_html_collection_tag_name_ns_named_item(
+        document_collection.clone(),
+        "dot",
+        Some(ElementHandle::new(3)),
+    );
+    host.seed_html_collection_tag_name_ns_named_item(document_collection.clone(), "missing", None);
+
+    runtime
+        .eval_program(
+            "const all = document.getElementsByTagNameNS('http://www.w3.org/2000/svg', '*'); const scoped = document.getElementById('icon').getElementsByTagNameNS('http://www.w3.org/2000/svg', 'rect'); const dot = all.namedItem('dot'); document.getElementById('out').textContent = String(all.length) + ':' + String(scoped.length) + ':' + String(dot) + ':' + String(all.namedItem('missing'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("getElementsByTagNameNS should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("3:1:[object Element]:null")
+    );
+    assert_eq!(
+        host.html_collection_tag_name_ns_items_calls,
+        vec![document_collection.clone(), scoped_collection]
+    );
+    assert_eq!(
+        host.html_collection_tag_name_ns_named_item_calls,
+        vec![
+            (document_collection.clone(), "dot".to_string()),
+            (document_collection, "missing".to_string()),
+        ]
     );
 }
 

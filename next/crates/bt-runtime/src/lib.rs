@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::fmt;
 
-use bt_dom::{DomStore, ElementData, NodeId, NodeKind};
+use bt_dom::{
+    DomStore, ElementData, HTML_NAMESPACE_URI, MATHML_NAMESPACE_URI, NodeId, NodeKind,
+    SVG_NAMESPACE_URI,
+};
 use bt_script::{
     ElementHandle, EventPhase, HostBindings, HtmlCollectionScope, HtmlCollectionTarget,
     ListenerTarget, ScriptError, ScriptEventHandle, ScriptFunction, ScriptRuntime, ScriptValue,
@@ -1328,6 +1331,25 @@ impl Session {
         Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
     }
 
+    fn elements_by_tag_name_ns(
+        &self,
+        scope: &HtmlCollectionScope,
+        namespace_uri: &str,
+        local_name: &str,
+    ) -> Result<Vec<ElementHandle>, ScriptError> {
+        let root = self.collection_root_for_scope(scope)?;
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| {
+                Self::matches_namespace_uri(element, namespace_uri)
+                    && (local_name == "*" || element.local_name.eq_ignore_ascii_case(local_name))
+            },
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
     fn named_item_for_tag_name_collection(
         &self,
         scope: &HtmlCollectionScope,
@@ -1341,6 +1363,26 @@ impl Session {
             &mut collected,
             &|element: &ElementData| {
                 tag_name == "*" || element.tag_name.eq_ignore_ascii_case(tag_name)
+            },
+        );
+        Ok(self.first_named_item_in_nodes(&collected, name))
+    }
+
+    fn named_item_for_tag_name_ns_collection(
+        &self,
+        scope: &HtmlCollectionScope,
+        namespace_uri: &str,
+        local_name: &str,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let root = self.collection_root_for_scope(scope)?;
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| {
+                Self::matches_namespace_uri(element, namespace_uri)
+                    && (local_name == "*" || element.local_name.eq_ignore_ascii_case(local_name))
             },
         );
         Ok(self.first_named_item_in_nodes(&collected, name))
@@ -1581,6 +1623,16 @@ impl Session {
         matches!(element.tag_name.as_str(), "a" | "area") && element.attributes.contains_key("href")
     }
 
+    fn matches_namespace_uri(element: &ElementData, namespace_uri: &str) -> bool {
+        match namespace_uri {
+            "*" => true,
+            HTML_NAMESPACE_URI | SVG_NAMESPACE_URI | MATHML_NAMESPACE_URI => {
+                element.namespace_uri == namespace_uri
+            }
+            _ => false,
+        }
+    }
+
     fn ordered_class_names(class_names: &str) -> Vec<String> {
         class_names
             .split_ascii_whitespace()
@@ -1680,6 +1732,11 @@ impl HostBindings for Session {
             HtmlCollectionTarget::ByTagName { scope, tag_name } => {
                 self.elements_by_tag_name(&scope, &tag_name)
             }
+            HtmlCollectionTarget::ByTagNameNs {
+                scope,
+                namespace_uri,
+                local_name,
+            } => self.elements_by_tag_name_ns(&scope, &namespace_uri, &local_name),
             HtmlCollectionTarget::ByClassName { scope, class_names } => {
                 self.elements_by_class_name(&scope, &class_names)
             }
@@ -1701,6 +1758,16 @@ impl HostBindings for Session {
             HtmlCollectionTarget::ByTagName { scope, tag_name } => {
                 self.named_item_for_tag_name_collection(&scope, &tag_name, name)
             }
+            HtmlCollectionTarget::ByTagNameNs {
+                scope,
+                namespace_uri,
+                local_name,
+            } => self.named_item_for_tag_name_ns_collection(
+                &scope,
+                &namespace_uri,
+                &local_name,
+                name,
+            ),
             HtmlCollectionTarget::ByClassName { scope, class_names } => {
                 self.named_item_for_class_name_collection(&scope, &class_names, name)
             }
@@ -1723,6 +1790,11 @@ impl HostBindings for Session {
             HtmlCollectionTarget::ByTagName { scope, tag_name } => {
                 self.elements_by_tag_name(&scope, &tag_name)
             }
+            HtmlCollectionTarget::ByTagNameNs {
+                scope,
+                namespace_uri,
+                local_name,
+            } => self.elements_by_tag_name_ns(&scope, &namespace_uri, &local_name),
             HtmlCollectionTarget::ByClassName { scope, class_names } => {
                 self.elements_by_class_name(&scope, &class_names)
             }
@@ -1744,6 +1816,16 @@ impl HostBindings for Session {
             HtmlCollectionTarget::ByTagName { scope, tag_name } => {
                 self.named_item_for_tag_name_collection(&scope, &tag_name, name)
             }
+            HtmlCollectionTarget::ByTagNameNs {
+                scope,
+                namespace_uri,
+                local_name,
+            } => self.named_item_for_tag_name_ns_collection(
+                &scope,
+                &namespace_uri,
+                &local_name,
+                name,
+            ),
             HtmlCollectionTarget::ByClassName { scope, class_names } => {
                 self.named_item_for_class_name_collection(&scope, &class_names, name)
             }
@@ -1762,6 +1844,40 @@ impl HostBindings for Session {
         element: ElementHandle,
     ) -> bt_script::Result<Vec<ElementHandle>> {
         self.form_elements(element)
+    }
+
+    fn html_collection_tag_name_ns_items(
+        &mut self,
+        collection: HtmlCollectionTarget,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        match collection {
+            HtmlCollectionTarget::ByTagNameNs {
+                scope,
+                namespace_uri,
+                local_name,
+            } => self.elements_by_tag_name_ns(&scope, &namespace_uri, &local_name),
+            other => self.html_collection_tag_name_items(other),
+        }
+    }
+
+    fn html_collection_tag_name_ns_named_item(
+        &mut self,
+        collection: HtmlCollectionTarget,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        match collection {
+            HtmlCollectionTarget::ByTagNameNs {
+                scope,
+                namespace_uri,
+                local_name,
+            } => self.named_item_for_tag_name_ns_collection(
+                &scope,
+                &namespace_uri,
+                &local_name,
+                name,
+            ),
+            other => self.html_collection_tag_name_named_item(other, name),
+        }
     }
 
     fn html_collection_form_elements_named_item(

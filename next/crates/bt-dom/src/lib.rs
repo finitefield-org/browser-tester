@@ -1,5 +1,9 @@
 use std::collections::BTreeMap;
 
+pub const HTML_NAMESPACE_URI: &str = "http://www.w3.org/1999/xhtml";
+pub const SVG_NAMESPACE_URI: &str = "http://www.w3.org/2000/svg";
+pub const MATHML_NAMESPACE_URI: &str = "http://www.w3.org/1998/Math/MathML";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeId {
     index: u32,
@@ -28,6 +32,8 @@ pub struct DocumentState {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ElementData {
     pub tag_name: String,
+    pub local_name: String,
+    pub namespace_uri: String,
     pub attributes: BTreeMap<String, String>,
 }
 

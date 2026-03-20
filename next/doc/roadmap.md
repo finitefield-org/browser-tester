@@ -7,7 +7,7 @@ For day-to-day implementation sequencing inside each phase, also see [implementa
 Status note:
 
 - Phases 0 through 6 are complete in this workspace.
-- Phase 7 is complete in this workspace; slices 1 through 4 are delivered, sibling selectors (`A + B`, `A ~ B`), selector lists (`A, B`), and a small pseudo-class slice are also delivered as backlog slices, and post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support plus `Element.children`, `getElementsByTagName`, `getElementsByClassName`, `getElementsByName`, `document.forms` / `form.elements`, `select.options`, and `document.images` / `document.links` collection support. Future selector work should stay backlog-driven.
+- Phase 7 is complete in this workspace; slices 1 through 4 are delivered, sibling selectors (`A + B`, `A ~ B`), selector lists (`A, B`), and a small pseudo-class slice are also delivered as backlog slices, and post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support plus `Element.children`, `getElementsByTagName`, `getElementsByTagNameNS`, `getElementsByClassName`, `getElementsByName`, `document.forms` / `form.elements`, `select.options`, `document.images` / `document.links`, and `document.all` collection support. Future selector work should stay backlog-driven.
 
 ## Phase 0: Skeleton
 
@@ -156,6 +156,10 @@ Post-Phase-7 slices:
 - tag-name collections
   - `getElementsByTagName` with minimal `HTMLCollection` support
   - `length`, `item()`, and `namedItem()`
+- namespace-aware tag-name collections
+  - `getElementsByTagNameNS` with minimal `HTMLCollection` support
+  - `length`, `item()`, and `namedItem()`
+  - bounded to the HTML, SVG, and MathML namespace URIs plus `*`
 - class-name collections
   - `getElementsByClassName` with live `HTMLCollection` support
   - `length`, `item()`, and `namedItem()`
@@ -173,10 +177,12 @@ Post-Phase-7 slices:
   - `document.images` with live `HTMLCollection` support
   - `document.links` with live `HTMLCollection` support
   - `length`, `item()`, and `namedItem()`
+- all-elements collection
+  - `document.all` with live `HTMLCollection` support
+  - `length`, `item()`, and `namedItem()`
 - selector lists
   - comma-separated selector lists are available through the same bounded engine
   - document-order union and deduplication
-  - broader collection APIs deferred
 - simple pseudo-classes
   - `:first-child`, `:last-child`, `:checked`, `:disabled`, and `:enabled` are available through the same bounded engine
   - `:nth-child`, `:not`, `:is`, and broader pseudo-class parsing deferred
@@ -193,7 +199,7 @@ Exit criteria:
 Operating rule:
 
 - future selector work should stay backlog-driven and narrow
-- `querySelectorAll` with minimal `NodeList` support is available, `Element.children`, `getElementsByTagName`, `getElementsByClassName`, `getElementsByName`, `document.forms` / `form.elements`, `select.options`, `document.images`, and `document.links` collection support are also available, selector lists and simple pseudo-classes are also available through the bounded engine, while broader collection APIs remain deferred
+- `querySelectorAll` with minimal `NodeList` support is available, `Element.children`, `getElementsByTagName`, `getElementsByTagNameNS`, `getElementsByClassName`, `getElementsByName`, `document.forms` / `form.elements`, `select.options`, `document.images`, `document.links`, and `document.all` collection support are also available, and selector lists and simple pseudo-classes are also available through the bounded engine
 
 ## After Phase 7: Rolling Capability Delivery
 

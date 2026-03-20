@@ -53,6 +53,11 @@ pub enum HtmlCollectionTarget {
         scope: HtmlCollectionScope,
         tag_name: String,
     },
+    ByTagNameNs {
+        scope: HtmlCollectionScope,
+        namespace_uri: String,
+        local_name: String,
+    },
     ByClassName {
         scope: HtmlCollectionScope,
         class_names: String,
@@ -292,6 +297,25 @@ pub trait HostBindings {
     ) -> Result<Option<ElementHandle>> {
         Err(ScriptError::phase_not_ready(
             "HTMLCollection.getElementsByTagName",
+        ))
+    }
+
+    fn html_collection_tag_name_ns_items(
+        &mut self,
+        _collection: HtmlCollectionTarget,
+    ) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready(
+            "HTMLCollection.getElementsByTagNameNS",
+        ))
+    }
+
+    fn html_collection_tag_name_ns_named_item(
+        &mut self,
+        _collection: HtmlCollectionTarget,
+        _name: &str,
+    ) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready(
+            "HTMLCollection.getElementsByTagNameNS",
         ))
     }
 

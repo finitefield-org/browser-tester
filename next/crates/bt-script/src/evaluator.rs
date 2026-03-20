@@ -189,6 +189,12 @@ fn eval_member<H: HostBindings>(
                 tag_name: "form".to_string(),
             }))
         }
+        Value::Document if property == "all" => {
+            Ok(Value::HtmlCollection(HtmlCollectionTarget::ByTagName {
+                scope: HtmlCollectionScope::Document,
+                tag_name: "*".to_string(),
+            }))
+        }
         Value::Document if property == "images" => {
             Ok(Value::HtmlCollection(HtmlCollectionTarget::ByTagName {
                 scope: HtmlCollectionScope::Document,
@@ -324,6 +330,9 @@ fn eval_method_call<H: HostBindings>(
             "getElementsByTagName" => {
                 get_elements_by_tag_name(HtmlCollectionScope::Document, args, env, host)
             }
+            "getElementsByTagNameNS" => {
+                get_elements_by_tag_name_ns(HtmlCollectionScope::Document, args, env, host)
+            }
             "getElementsByClassName" => {
                 get_elements_by_class_name(HtmlCollectionScope::Document, args, env, host)
             }
@@ -349,6 +358,9 @@ fn eval_method_call<H: HostBindings>(
             }
             "getElementsByTagName" => {
                 get_elements_by_tag_name(HtmlCollectionScope::Element(element), args, env, host)
+            }
+            "getElementsByTagNameNS" => {
+                get_elements_by_tag_name_ns(HtmlCollectionScope::Element(element), args, env, host)
             }
             "getElementsByClassName" => {
                 get_elements_by_class_name(HtmlCollectionScope::Element(element), args, env, host)
@@ -508,6 +520,27 @@ fn get_elements_by_tag_name<H: HostBindings>(
     }))
 }
 
+fn get_elements_by_tag_name_ns<H: HostBindings>(
+    scope: HtmlCollectionScope,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [namespace_expr, local_name_expr] = args else {
+        return Err(ScriptError::new(
+            "getElementsByTagNameNS() expects exactly two arguments",
+        ));
+    };
+
+    let namespace_uri = as_string(&eval_expr(namespace_expr, env, host)?);
+    let local_name = as_string(&eval_expr(local_name_expr, env, host)?);
+    Ok(Value::HtmlCollection(HtmlCollectionTarget::ByTagNameNs {
+        scope,
+        namespace_uri,
+        local_name,
+    }))
+}
+
 fn get_elements_by_class_name<H: HostBindings>(
     scope: HtmlCollectionScope,
     args: &[Expr],
@@ -649,6 +682,9 @@ fn html_collection_items<H: HostBindings>(
         HtmlCollectionTarget::ByTagName { .. } => {
             host.html_collection_tag_name_items(collection.clone())
         }
+        HtmlCollectionTarget::ByTagNameNs { .. } => {
+            host.html_collection_tag_name_ns_items(collection.clone())
+        }
         HtmlCollectionTarget::ByClassName { .. } => {
             host.html_collection_class_name_items(collection.clone())
         }
@@ -671,6 +707,9 @@ fn html_collection_named_item_handle<H: HostBindings>(
         HtmlCollectionTarget::Children(element) => host.html_collection_named_item(*element, name),
         HtmlCollectionTarget::ByTagName { .. } => {
             host.html_collection_tag_name_named_item(collection.clone(), name)
+        }
+        HtmlCollectionTarget::ByTagNameNs { .. } => {
+            host.html_collection_tag_name_ns_named_item(collection.clone(), name)
         }
         HtmlCollectionTarget::ByClassName { .. } => {
             host.html_collection_class_name_named_item(collection.clone(), name)
