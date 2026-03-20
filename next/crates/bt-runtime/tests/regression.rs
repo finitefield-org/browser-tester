@@ -311,6 +311,42 @@ fn session_resolves_document_children_regression() {
 }
 
 #[test]
+fn session_rejects_table_rows_on_non_table_elements_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='bad'></div><script>document.getElementById('bad').rows.length;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-table rows access should fail explicitly");
+
+    let message = error.to_string();
+    assert!(message.contains("Script error"));
+    assert!(message.contains("table.rows"));
+    assert!(message.contains("supported table.rows host element"));
+}
+
+#[test]
+fn session_rejects_row_cells_on_non_row_elements_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='bad'></div><script>document.getElementById('bad').cells.length;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-row cells access should fail explicitly");
+
+    let message = error.to_string();
+    assert!(message.contains("Script error"));
+    assert!(message.contains("tr.cells"));
+    assert!(message.contains("supported tr.cells host element"));
+}
+
+#[test]
 fn session_rejects_document_applets_on_elements_explicitly() {
     let error = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -785,6 +821,22 @@ fn session_rejects_select_options_on_non_select_elements_explicitly() {
         local_storage: BTreeMap::new(),
     })
     .expect_err("non-select elements should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(error.to_string().contains("node is not a select element"));
+}
+
+#[test]
+fn session_rejects_select_selected_options_on_non_select_elements_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><div id='not-select'></div></div><script>document.getElementById('not-select').selectedOptions.length;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-select selectedOptions access should fail explicitly");
 
     assert!(error.to_string().contains("Script error"));
     assert!(error.to_string().contains("node is not a select element"));

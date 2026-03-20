@@ -393,6 +393,25 @@ fn session_resolves_select_options_through_inline_scripts() {
 }
 
 #[test]
+fn session_resolves_select_selected_options_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><select id='mode'><option id='first' value='a' selected>A</option><option id='second' value='b'>B</option></select></div><div id='out'></div><script>const select = document.getElementById('mode'); const selected = select.selectedOptions; const before = selected.length; const first = selected.item(0); select.innerHTML = '<option id=\"third\" value=\"c\" selected>C</option><option id=\"fourth\" value=\"d\" selected>D</option>'; document.getElementById('out').textContent = String(before) + ':' + String(selected.length) + ':' + first.textContent + ':' + selected.item(0).textContent + ':' + selected.item(1).textContent + ':' + String(selected.namedItem('third')) + ':' + String(selected.namedItem('missing'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute select.selectedOptions scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "1:2:A:C:D:[object Element]:null"
+    );
+}
+
+#[test]
 fn session_resolves_document_images_and_links_through_inline_scripts() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -451,6 +470,26 @@ fn session_resolves_document_children_through_inline_scripts() {
 }
 
 #[test]
+fn session_resolves_table_rows_and_row_cells_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<table id='table'><thead id='head'><tr id='head-row'><th id='head-cell'>H</th></tr></thead><tbody id='body'><tr id='first-row'><td id='first-cell'>A</td></tr></tbody><tfoot id='foot'><tr id='foot-row'><td id='foot-cell'>F</td></tr></tfoot></table><div id='out'></div><script>const table = document.getElementById('table'); const body = document.getElementById('body'); const row = document.getElementById('first-row'); const rows = table.rows; const bodyRows = body.rows; const cells = row.cells; const before = String(rows.length) + ':' + String(bodyRows.length) + ':' + String(cells.length) + ':' + String(rows.namedItem('first-row')) + ':' + String(cells.namedItem('first-cell')); body.innerHTML = body.innerHTML + '<tr id=\"second-row\"><td id=\"second-cell\">B</td><td id=\"third-cell\">C</td></tr>'; row.append(document.getElementById('third-cell')); document.getElementById('out').textContent = before + '|' + String(rows.length) + ':' + String(bodyRows.length) + ':' + String(cells.length) + ':' + String(rows.namedItem('second-row')) + ':' + String(bodyRows.namedItem('second-row')) + ':' + String(cells.namedItem('third-cell'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute table.rows and tr.cells scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "3:1:1:[object Element]:[object Element]|4:2:2:[object Element]:[object Element]:[object Element]"
+    );
+    assert_eq!(session.dom().select("#second-row").unwrap().len(), 1);
+}
+
+#[test]
 fn session_resolves_document_scripts_through_inline_scripts() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -466,6 +505,27 @@ fn session_resolves_document_scripts_through_inline_scripts() {
     assert_eq!(
         session.dom().text_content_for_node(out_id),
         "2:1:[object Element]:null"
+    );
+}
+
+#[test]
+fn session_reports_table_rows_on_non_table_elements_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='bad'></div><div id='out'></div><script>document.getElementById('bad').rows.length;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-table rows access should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(error.to_string().contains("table.rows"));
+    assert!(
+        error
+            .to_string()
+            .contains("supported table.rows host element")
     );
 }
 
@@ -664,6 +724,22 @@ fn session_reports_select_options_on_non_select_elements_explicitly() {
         local_storage: BTreeMap::new(),
     })
     .expect_err("non-select elements should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(error.to_string().contains("node is not a select element"));
+}
+
+#[test]
+fn session_reports_select_selected_options_on_non_select_elements_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><div id='not-select'></div></div><script>document.getElementById('not-select').selectedOptions.length;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-select selectedOptions access should fail explicitly");
 
     assert!(error.to_string().contains("Script error"));
     assert!(error.to_string().contains("node is not a select element"));

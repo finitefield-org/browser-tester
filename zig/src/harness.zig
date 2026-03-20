@@ -137,6 +137,26 @@ pub const Harness = struct {
     pub fn localStorage(self: Harness) []const session.StorageSeed {
         return self.session.localStorage();
     }
+
+    pub fn assertExists(self: *const Harness, selector: []const u8) errors.Result(void) {
+        const matches = self.session.domStore().select(std.heap.page_allocator, selector) catch |err| switch (err) {
+            error.HtmlParse => return error.InvalidSelector,
+            error.OutOfMemory => return error.OutOfMemory,
+            else => unreachable,
+        };
+        defer std.heap.page_allocator.free(matches);
+
+        if (matches.len == 0) {
+            return error.AssertionFailed;
+        }
+    }
+
+    pub fn dumpDom(
+        self: *const Harness,
+        allocator: std.mem.Allocator,
+    ) errors.Result([]u8) {
+        return self.session.domStore().dumpDom(allocator);
+    }
 };
 
 test "failure: blank url is rejected" {
@@ -159,4 +179,43 @@ test "regression: builder copies caller-provided html" {
     html_bytes[3] = 'B';
 
     try std.testing.expectEqualStrings("<p>A</p>", subject.html().?);
+}
+
+test "regression: read-only inspection uses the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    var html_bytes = [_]u8{ '<', 'm', 'a', 'i', 'n', ' ', 'i', 'd', '=', '\'', 'a', 'p', 'p', '\'', '>', '<', 's', 'p', 'a', 'n', '>', 'H', 'i', '<', '/', 's', 'p', 'a', 'n', '>', '<', '/', 'm', 'a', 'i', 'n', '>' };
+
+    var subject = try Harness.fromHtml(allocator, html_bytes[0..]);
+    defer subject.deinit();
+
+    html_bytes[10] = 'z';
+
+    try subject.assertExists("#app");
+    const dump = try subject.dumpDom(allocator);
+    defer allocator.free(dump);
+
+    try std.testing.expectEqualStrings(
+        "#document\n  <main id=\"app\">\n    <span>\n      \"Hi\"\n    </span>\n  </main>\n",
+        dump,
+    );
+    try std.testing.expectEqualStrings("<main id='app'><span>Hi</span></main>", subject.html().?);
+}
+
+test "regression: inline scripts execute against the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    var html_bytes = [_]u8{ '<', 'm', 'a', 'i', 'n', ' ', 'i', 'd', '=', '\'', 'o', 'u', 't', '\'', '>', 'B', 'e', 'f', 'o', 'r', 'e', '<', '/', 'm', 'a', 'i', 'n', '>', '<', 's', 'c', 'r', 'i', 'p', 't', '>', 'd', 'o', 'c', 'u', 'm', 'e', 'n', 't', '.', 'g', 'e', 't', 'E', 'l', 'e', 'm', 'e', 'n', 't', 'B', 'y', 'I', 'd', '(', '\'', 'o', 'u', 't', '\'', ')', '.', 't', 'e', 'x', 't', 'C', 'o', 'n', 't', 'e', 'n', 't', ' ', '=', ' ', '\'', 'H', 'e', 'l', 'l', 'o', '\'', ';', '<', '/', 's', 'c', 'r', 'i', 'p', 't', '>' };
+
+    var subject = try Harness.fromHtml(allocator, html_bytes[0..]);
+    defer subject.deinit();
+
+    html_bytes[16] = 'Z';
+
+    const dump = try subject.dumpDom(allocator);
+    defer allocator.free(dump);
+
+    try std.testing.expectEqualStrings(
+        "#document\n  <main id=\"out\">\n    \"Hello\"\n  </main>\n  <script>\n    \"document.getElementById('out').textContent = 'Hello';\"\n  </script>\n",
+        dump,
+    );
+    try std.testing.expectEqualStrings("<main id='out'>Before</main><script>document.getElementById('out').textContent = 'Hello';</script>", subject.html().?);
 }

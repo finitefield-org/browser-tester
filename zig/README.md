@@ -5,11 +5,13 @@ The rewrite follows [`next.md`](../next.md) and keeps the public surface small w
 
 Current state:
 
-- phase 0 scaffold plus the internal phase 1 DOM bootstrap and selector slices
+- phase 0 scaffold plus the internal phase 1 DOM bootstrap and selector slices, plus the phase 2 script runtime minimum slice
+- `Harness.assertExists(...)` and `Harness.dumpDom(...)` are available for read-only inspection
+- inline `<script>` bootstrapping runs during `Harness.fromHtml(...)` construction for the `document.getElementById(...).textContent = ...` slice
 - `Harness` and `HarnessBuilder` are available
-- `Session` stays internal and owns the copied configuration state plus the DOM store
+- `Session` stays internal and owns the copied configuration state plus the DOM store and script runtime state
 - `DomStore` builds, selects, and dumps HTML trees for tests, but it is not part of the public API
-- deterministic selector, script, event, timer, and mock runtime pieces are still planned
+- deterministic selector expansion, event, timer, and mock runtime pieces are still planned
 
 ## Quick Start
 
@@ -25,10 +27,17 @@ const std = @import("std");
 const bt = @import("browser_tester_zig");
 
 pub fn main() !void {
-    var harness = try bt.Harness.fromHtml(std.heap.page_allocator, "<p>Hello</p>");
+    var harness = try bt.Harness.fromHtml(
+        std.heap.page_allocator,
+        "<main id='out'>Before</main><script>document.getElementById('out').textContent = 'Hello';</script>",
+    );
     defer harness.deinit();
 
-    std.debug.print("url={s}\n", .{harness.url()});
+    try harness.assertExists("#out");
+    const dom = try harness.dumpDom(std.heap.page_allocator);
+    defer std.heap.page_allocator.free(dom);
+
+    std.debug.print("{s}\n", .{dom});
 }
 ```
 
@@ -39,6 +48,9 @@ pub fn main() !void {
 - `StorageSeed`
 - `Error`
 - `Result(T)`
+- `Error` currently includes `InvalidUrl`, `InvalidSelector`, `AssertionFailed`, `ScriptParse`, `ScriptRuntime`, `HtmlParse`, and `OutOfMemory`
+- `Harness.assertExists(selector)`
+- `Harness.dumpDom(allocator)`
 
 ## Docs
 

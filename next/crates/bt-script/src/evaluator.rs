@@ -280,11 +280,20 @@ fn eval_member<H: HostBindings>(
         Value::Element(element) if property == "children" => Ok(Value::HtmlCollection(
             HtmlCollectionTarget::Children(element),
         )),
+        Value::Element(element) if property == "rows" => Ok(Value::HtmlCollection(
+            HtmlCollectionTarget::TableRows(element),
+        )),
+        Value::Element(element) if property == "cells" => Ok(Value::HtmlCollection(
+            HtmlCollectionTarget::RowCells(element),
+        )),
         Value::Element(element) if property == "elements" => Ok(Value::HtmlCollection(
             HtmlCollectionTarget::FormElements(element),
         )),
         Value::Element(element) if property == "options" => Ok(Value::HtmlCollection(
             HtmlCollectionTarget::SelectOptions(element),
+        )),
+        Value::Element(element) if property == "selectedOptions" => Ok(Value::HtmlCollection(
+            HtmlCollectionTarget::SelectSelectedOptions(element),
         )),
         Value::Event(event) if property == "type" => Ok(Value::String(event.event_type())),
         Value::Event(event) if property == "target" => {
@@ -1131,9 +1140,14 @@ fn html_collection_items<H: HostBindings>(
         HtmlCollectionTarget::SelectOptions(element) => {
             host.html_collection_select_options_items(*element)
         }
+        HtmlCollectionTarget::SelectSelectedOptions(element) => {
+            host.html_collection_select_selected_options_items(*element)
+        }
         HtmlCollectionTarget::DocumentLinks => host.html_collection_document_links_items(),
         HtmlCollectionTarget::DocumentAnchors => host.html_collection_document_anchors_items(),
         HtmlCollectionTarget::DocumentChildren => host.html_collection_document_children_items(),
+        HtmlCollectionTarget::TableRows(element) => host.html_collection_table_rows_items(*element),
+        HtmlCollectionTarget::RowCells(element) => host.html_collection_row_cells_items(*element),
     }
 }
 
@@ -1159,12 +1173,21 @@ fn html_collection_named_item_handle<H: HostBindings>(
         HtmlCollectionTarget::SelectOptions(element) => {
             host.html_collection_select_options_named_item(*element, name)
         }
+        HtmlCollectionTarget::SelectSelectedOptions(element) => {
+            host.html_collection_select_selected_options_named_item(*element, name)
+        }
         HtmlCollectionTarget::DocumentLinks => host.html_collection_document_links_named_item(name),
         HtmlCollectionTarget::DocumentAnchors => {
             host.html_collection_document_anchors_named_item(name)
         }
         HtmlCollectionTarget::DocumentChildren => {
             host.html_collection_document_children_named_item(name)
+        }
+        HtmlCollectionTarget::TableRows(element) => {
+            host.html_collection_table_rows_named_item(*element, name)
+        }
+        HtmlCollectionTarget::RowCells(element) => {
+            host.html_collection_row_cells_named_item(*element, name)
         }
     }
 }

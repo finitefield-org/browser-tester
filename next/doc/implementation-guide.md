@@ -1,6 +1,6 @@
 # Implementation Guide
 
-This document explains how to actually build out the `next/` rewrite from its current Phase 6-complete baseline with Phase 7 slices 1 through 4 already delivered, plus sibling selector backlog slices (`A + B`, `A ~ B`), selector lists (`A, B`), bounded attribute selectors (`[attr=value]`, `[attr^=value]`, `[attr$=value]`, `[attr*=value]`, `[attr~=value]`, `[attr|=value]`) plus optional `i` / `s` flags, bounded pseudo-classes including `:not(...)`, `:is(...)`, `:root`, `:empty`, `:only-child`, `:only-of-type`, `:first-of-type`, `:last-of-type`, `:nth-child(<positive integer>)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`, `:nth-last-child(<positive integer>)`, `:nth-last-child(odd)`, `:nth-last-child(even)`, `:nth-last-child(an+b)`, `:nth-of-type(<positive integer>)`, `:nth-of-type(odd)`, `:nth-of-type(even)`, `:nth-of-type(an+b)`, `:nth-last-of-type(<positive integer>)`, `:nth-last-of-type(odd)`, `:nth-last-of-type(even)`, and `:nth-last-of-type(an+b)`, and post-Phase-7 collection slices for `querySelectorAll` / minimal `NodeList`, `Element.children` / minimal `HTMLCollection`, `getElementsByTagName` / live `HTMLCollection`, `getElementsByTagNameNS` / live `HTMLCollection`, `getElementsByClassName` / live `HTMLCollection`, `getElementsByName` / live `NodeList`, `document.forms` / `form.elements` live `HTMLCollection`, `select.options` live `HTMLCollection`, `document.images` / `document.links` / `document.embeds` / `document.anchors` live `HTMLCollection`, `document.scripts` live `HTMLCollection`, and `document.all` live `HTMLCollection`. Phase 8 is the next named milestone and scopes DOM mutation and reflection expansion.
+This document explains how to actually build out the `next/` rewrite from its current Phase 6-complete baseline with Phase 7 slices 1 through 4 already delivered, plus sibling selector backlog slices (`A + B`, `A ~ B`), selector lists (`A, B`), bounded attribute selectors (`[attr=value]`, `[attr^=value]`, `[attr$=value]`, `[attr*=value]`, `[attr~=value]`, `[attr|=value]`) plus optional `i` / `s` flags, bounded pseudo-classes including `:not(...)`, `:is(...)`, `:root`, `:empty`, `:only-child`, `:only-of-type`, `:first-of-type`, `:last-of-type`, `:nth-child(<positive integer>)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`, `:nth-last-child(<positive integer>)`, `:nth-last-child(odd)`, `:nth-last-child(even)`, `:nth-last-child(an+b)`, `:nth-of-type(<positive integer>)`, `:nth-of-type(odd)`, `:nth-of-type(even)`, `:nth-of-type(an+b)`, `:nth-last-of-type(<positive integer>)`, `:nth-last-of-type(odd)`, `:nth-last-of-type(even)`, and `:nth-last-of-type(an+b)`, and post-Phase-7 collection slices for `querySelectorAll` / minimal `NodeList`, `Element.children` / minimal `HTMLCollection`, `getElementsByTagName` / live `HTMLCollection`, `getElementsByTagNameNS` / live `HTMLCollection`, `getElementsByClassName` / live `HTMLCollection`, `getElementsByName` / live `NodeList`, `document.forms` / `form.elements` live `HTMLCollection`, `select.options` / `select.selectedOptions` live `HTMLCollection`, `document.images` / `document.links` / `document.embeds` / `document.anchors` live `HTMLCollection`, `document.scripts` live `HTMLCollection`, and `document.all` live `HTMLCollection`. Phase 8 is the next named milestone and scopes DOM mutation and reflection expansion.
 
 Use it together with:
 
@@ -36,7 +36,7 @@ The safest way to turn the Phase 0 skeleton into a usable runtime is:
 
 This order keeps the public facade thin and avoids implementing user actions before the DOM and selector layers are trustworthy.
 
-Slices 1 through 19 are already implemented in this workspace, including public download capture. Phase 6 selector expansion slices 1 through 4, covering class selectors, compound simple selectors, descendant combinators, child combinators, and selector hardening, are also implemented in this workspace. A post-Phase-7 selector slice adds sibling combinators (`A + B`, `A ~ B`), selector lists (`A, B`), bounded attribute selectors (`[attr=value]`, `[attr^=value]`, `[attr$=value]`, `[attr*=value]`, `[attr~=value]`, `[attr|=value]`) plus optional `i` / `s` flags, and bounded pseudo-classes including `:not(...)`, `:is(...)`, `:root`, `:empty`, `:only-child`, `:only-of-type`, `:first-of-type`, `:last-of-type`, `:nth-child(<positive integer>)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`, `:nth-last-child(<positive integer>)`, `:nth-last-child(odd)`, `:nth-last-child(even)`, `:nth-last-child(an+b)`, `:nth-of-type(<positive integer>)`, `:nth-of-type(odd)`, `:nth-of-type(even)`, `:nth-of-type(an+b)`, `:nth-last-of-type(<positive integer>)`, `:nth-last-of-type(odd)`, `:nth-last-of-type(even)`, and `:nth-last-of-type(an+b)` through the same bounded engine. Phase 7 script DOM query slices 1 through 4 (`document.querySelector`, `element.querySelector`, `Element.matches`, `Element.closest`, and selector hardening) are implemented as well. Post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support, `Element.children` with minimal `HTMLCollection` support, `getElementsByTagName` with live `HTMLCollection` support, `getElementsByTagNameNS` with live `HTMLCollection` support, `getElementsByClassName` with live `HTMLCollection` support, `getElementsByName` with live `NodeList` support, `document.forms` / `form.elements` live `HTMLCollection` support, `select.options` live `HTMLCollection` support, `document.images` / `document.links` / `document.embeds` / `document.anchors` live `HTMLCollection` support, and `document.scripts` / `document.all` live `HTMLCollection` support.
+Slices 1 through 20 are already implemented in this workspace, including public download capture. Phase 6 selector expansion slices 1 through 4, covering class selectors, compound simple selectors, descendant combinators, child combinators, and selector hardening, are also implemented in this workspace. A post-Phase-7 selector slice adds sibling combinators (`A + B`, `A ~ B`), selector lists (`A, B`), bounded attribute selectors (`[attr=value]`, `[attr^=value]`, `[attr$=value]`, `[attr*=value]`, `[attr~=value]`, `[attr|=value]`) plus optional `i` / `s` flags, and bounded pseudo-classes including `:not(...)`, `:is(...)`, `:root`, `:empty`, `:only-child`, `:only-of-type`, `:first-of-type`, `:last-of-type`, `:nth-child(<positive integer>)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`, `:nth-last-child(<positive integer>)`, `:nth-last-child(odd)`, `:nth-last-child(even)`, `:nth-last-child(an+b)`, `:nth-of-type(<positive integer>)`, `:nth-of-type(odd)`, `:nth-of-type(even)`, `:nth-of-type(an+b)`, `:nth-last-of-type(<positive integer>)`, `:nth-last-of-type(odd)`, `:nth-last-of-type(even)`, and `:nth-last-of-type(an+b)` through the same bounded engine. Phase 7 script DOM query slices 1 through 4 (`document.querySelector`, `element.querySelector`, `Element.matches`, `Element.closest`, and selector hardening) are implemented as well. Post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support, `Element.children` with minimal `HTMLCollection` support, `getElementsByTagName` with live `HTMLCollection` support, `getElementsByTagNameNS` with live `HTMLCollection` support, `getElementsByClassName` with live `HTMLCollection` support, `getElementsByName` with live `NodeList` support, `document.forms` / `form.elements` live `HTMLCollection` support, `select.options` / `select.selectedOptions` live `HTMLCollection` support, `document.images` / `document.links` / `document.embeds` / `document.anchors` live `HTMLCollection` support, and `document.scripts` / `document.all` live `HTMLCollection` support.
 
 ## First Vertical Slices
 
@@ -580,6 +580,61 @@ Tests already in place:
 - detached scoped subtree behavior stays explicit through regression coverage
 - arity mismatches fail explicitly
 
+### Slice 19: Specialized Table Live Collections
+
+Goal:
+
+- make `table.rows`, `tbody.rows`, `thead.rows`, `tfoot.rows`, and `tr.cells` available in inline scripts through minimal live HTMLCollection surfaces
+
+Primary owners:
+
+- `bt-script`
+- `bt-runtime`
+
+Delivered in this workspace:
+
+- `table.rows`
+- `tbody.rows`
+- `thead.rows`
+- `tfoot.rows`
+- `tr.cells`
+- live table row collection semantics spanning table and section rows
+- live cell collection semantics spanning direct row children
+- `HTMLCollection.length`
+- `HTMLCollection.item(index)`
+- `HTMLCollection.namedItem(name)`
+
+Tests already in place:
+
+- table row and cell collections reflect DOM mutations in inline scripts
+- `length`, `item()`, and `namedItem()` work for table rows and row cells
+- non-table rows and non-row cells access fail explicitly
+
+### Slice 20: Select Selected Options
+
+Goal:
+
+- make `select.selectedOptions` available in inline scripts through a minimal live HTMLCollection surface
+
+Primary owners:
+
+- `bt-script`
+- `bt-runtime`
+
+Delivered in this workspace:
+
+- `select.selectedOptions`
+- live selected-option collection semantics
+- `HTMLCollection.length`
+- `HTMLCollection.item(index)`
+- `HTMLCollection.namedItem(name)`
+
+Tests already in place:
+
+- selected-option collections reflect DOM mutations in inline scripts
+- `length`, `item()`, and `namedItem()` work for selected options
+- non-select `selectedOptions` access fails explicitly
+
 ### Phase 8: DOM Mutation and Reflection Expansion
 
 Goal:
@@ -641,7 +696,8 @@ Use these when the next user-visible gap lands:
 | Collection API slice 4 (`NodeList.keys()`, `NodeList.values()`, `HTMLCollection.keys()`, `HTMLCollection.values()`) | 1. iterator-style helpers (delivered) | `bt-script` | public contract, owning-crate regression, snapshot iterator hardening |
 | Collection API slice 5 (`document.applets`) | 1. `document.applets` (delivered) | `bt-script` + `bt-runtime` | public contract, owning-crate regression, live collection hardening |
 | Collection API slice 6 (`document.children`) | 1. `document.children` (delivered) | `bt-script` + `bt-runtime` | public contract, owning-crate regression, live collection hardening |
-| Collection API broadening remainder (specialized live collections) | 1. additional specialized live collections beyond `document.children` | `bt-script` + `bt-runtime` | public contract, owning-crate regression, unsupported-method failure |
+| Collection API slice 7 (`table.rows`, `tbody.rows`, `thead.rows`, `tfoot.rows`, `tr.cells`) | 1. `table.rows` / `tr.cells` (delivered) | `bt-script` + `bt-runtime` | public contract, owning-crate regression, live collection hardening |
+| Collection API broadening remainder (specialized live collections) | 1. additional specialized live collections beyond `document.children`, `table.rows` / `tr.cells`, and `select.selectedOptions` | `bt-script` + `bt-runtime` | public contract, owning-crate regression, unsupported-method failure |
 | Selector grammar broadening | 1. `:scope` 2. `:has(...)` 3. structural selector expansion with richer nested selector handling | `bt-dom` | public contract, DOM matcher regression, explicit unsupported syntax |
 | HTML serialization broadening | 1. `insertAdjacentHTML` 2. `DocumentFragment` / `template.content` serialization 3. namespace-aware serialization compatibility | `bt-dom` + `bt-script` + `bt-runtime` | round-trip success, lossy / malformed failure, runtime regression |
 

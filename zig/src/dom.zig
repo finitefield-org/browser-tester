@@ -120,11 +120,21 @@ pub const DomStore = struct {
         return &self.nodes.items[index];
     }
 
+    pub fn nodeAtMut(self: *DomStore, node_id: NodeId) ?*NodeRecord {
+        const index: usize = @intCast(node_id.index);
+        if (index >= self.nodes.items.len) return null;
+        return &self.nodes.items[index];
+    }
+
     pub fn childIds(self: *const DomStore, node_id: NodeId) []const NodeId {
         if (self.nodeAt(node_id)) |node| {
             return node.children.items;
         }
         return &.{};
+    }
+
+    pub fn findElementById(self: *const DomStore, id: []const u8) ?NodeId {
+        return self.findElementByIdInSubtree(self.documentId(), id);
     }
 
     pub fn tagNameForNode(self: *const DomStore, node_id: NodeId) ?[]const u8 {
@@ -191,6 +201,163 @@ pub const DomStore = struct {
         return result;
     }
 
+    pub fn textContent(
+        self: *const DomStore,
+        allocator: std.mem.Allocator,
+        node_id: NodeId,
+    ) errors.Result([]u8) {
+        var output: std.ArrayList(u8) = .empty;
+        errdefer output.deinit(allocator);
+
+        try self.appendTextContent(node_id, &output, allocator);
+        const result = try allocator.dupe(u8, output.items);
+        output.deinit(allocator);
+        return result;
+    }
+
+    pub fn setTextContent(self: *DomStore, node_id: NodeId, text: []const u8) errors.Result(void) {
+        const node = self.nodeAtMut(node_id) orelse return error.HtmlParse;
+        switch (node.kind) {
+            .document, .element => {
+                const old_children = node.children.items;
+                for (old_children) |child_id| {
+                    if (self.nodeAtMut(child_id)) |child| {
+                        child.parent = null;
+                    }
+                }
+
+                node.children.items.len = 0;
+                if (text.len > 0) {
+                    _ = try self.addText(node_id, text);
+                }
+            },
+            else => return error.HtmlParse,
+        }
+    }
+
+    pub fn valueForNode(
+        self: *const DomStore,
+        allocator: std.mem.Allocator,
+        node_id: NodeId,
+    ) errors.Result([]u8) {
+        const node = self.nodeAt(node_id) orelse return error.HtmlParse;
+        return switch (node.kind) {
+            .document => self.textContent(allocator, node_id),
+            .element => |element| switch (element.tag_name) {
+                "select" => self.selectValueForNode(allocator, node_id),
+                "option" => self.optionValueForNode(allocator, node_id),
+                "textarea" => self.textContent(allocator, node_id),
+                "input" => self.inputValueForNode(allocator, node_id),
+                else => self.textContent(allocator, node_id),
+            },
+            .text => |text| allocator.dupe(u8, text),
+            .comment => allocator.dupe(u8, ""),
+        };
+    }
+
+    pub fn checkedForNode(self: *const DomStore, node_id: NodeId) ?bool {
+        const node = self.nodeAt(node_id) orelse return null;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return null,
+        };
+
+        if (std.mem.eql(u8, element.tag_name, "input") and isCheckableInputType(elementAttributeValue(element, "type"))) {
+            return elementAttributeValue(element, "checked") != null;
+        }
+
+        return null;
+    }
+
+    pub fn setFormControlValue(self: *DomStore, node_id: NodeId, value: []const u8) errors.Result(void) {
+        const node = self.nodeAtMut(node_id) orelse return error.HtmlParse;
+        const element = switch (node.kind) {
+            .element => |*element| element,
+            else => return error.HtmlParse,
+        };
+
+        if (std.mem.eql(u8, element.tag_name, "textarea")) {
+            try self.setTextContent(node_id, value);
+            return;
+        }
+
+        if (std.mem.eql(u8, element.tag_name, "input") and isTextInputType(elementAttributeValue(element, "type"))) {
+            const arena_alloc = self.arena.allocator();
+            try upsertAttribute(arena_alloc, &element.attributes, "value", try duplicateString(self, value));
+            return;
+        }
+
+        if (std.mem.eql(u8, element.tag_name, "input") and isCheckableInputType(elementAttributeValue(element, "type"))) {
+            return error.HtmlParse;
+        }
+
+        if (std.mem.eql(u8, element.tag_name, "select")) {
+            return error.HtmlParse;
+        }
+
+        return error.HtmlParse;
+    }
+
+    pub fn setFormControlChecked(self: *DomStore, node_id: NodeId, checked: bool) errors.Result(void) {
+        const node = self.nodeAtMut(node_id) orelse return error.HtmlParse;
+        const element = switch (node.kind) {
+            .element => |*element| element,
+            else => return error.HtmlParse,
+        };
+
+        if (!std.mem.eql(u8, element.tag_name, "input") or !isCheckableInputType(elementAttributeValue(element, "type"))) {
+            return error.HtmlParse;
+        }
+
+        if (checked) {
+            const arena_alloc = self.arena.allocator();
+            try upsertAttribute(arena_alloc, &element.attributes, "checked", try duplicateString(self, ""));
+        } else {
+            removeAttributeByName(&element.attributes, "checked");
+        }
+
+        return;
+    }
+
+    pub fn setSelectValue(self: *DomStore, node_id: NodeId, value: []const u8) errors.Result(void) {
+        const node = self.nodeAt(node_id) orelse return error.HtmlParse;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return error.HtmlParse,
+        };
+
+        if (!std.mem.eql(u8, element.tag_name, "select")) {
+            return error.HtmlParse;
+        }
+
+        var descendants: std.ArrayList(NodeId) = .empty;
+        errdefer descendants.deinit(self.allocator);
+        try self.collectSubtreeNodes(node_id, &descendants, self.allocator);
+
+        var found = false;
+        for (descendants.items) |descendant_id| {
+            if (!self.isOptionNode(descendant_id)) continue;
+            const option_value = try self.optionValueForNode(self.allocator, descendant_id);
+            defer self.allocator.free(option_value);
+            if (std.mem.eql(u8, option_value, value)) {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) return error.HtmlParse;
+
+        for (descendants.items) |descendant_id| {
+            if (!self.isOptionNode(descendant_id)) continue;
+            const option_value = try self.optionValueForNode(self.allocator, descendant_id);
+            defer self.allocator.free(option_value);
+            const selected = std.mem.eql(u8, option_value, value);
+            try self.setOptionSelected(descendant_id, selected);
+        }
+
+        return;
+    }
+
     fn dumpNode(
         self: *const DomStore,
         node_id: NodeId,
@@ -248,6 +415,155 @@ pub const DomStore = struct {
                 try output.appendSlice(allocator, ">\n");
             },
         }
+    }
+
+    fn appendTextContent(
+        self: *const DomStore,
+        node_id: NodeId,
+        output: *std.ArrayList(u8),
+        allocator: std.mem.Allocator,
+    ) errors.Result(void) {
+        const node = self.nodeAt(node_id) orelse return error.HtmlParse;
+        switch (node.kind) {
+            .document, .element => {
+                for (node.children.items) |child_id| {
+                    try self.appendTextContent(child_id, output, allocator);
+                }
+            },
+            .text => |text| {
+                try output.appendSlice(allocator, text);
+            },
+            .comment => {},
+        }
+    }
+
+    fn inputValueForNode(self: *const DomStore, allocator: std.mem.Allocator, node_id: NodeId) errors.Result([]u8) {
+        const node = self.nodeAt(node_id) orelse return allocator.dupe(u8, "");
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return allocator.dupe(u8, ""),
+        };
+        return if (elementAttributeValue(element, "value")) |value|
+            allocator.dupe(u8, value)
+        else
+            allocator.dupe(u8, "");
+    }
+
+    fn optionValueForNode(self: *const DomStore, allocator: std.mem.Allocator, node_id: NodeId) errors.Result([]u8) {
+        const node = self.nodeAt(node_id) orelse return allocator.dupe(u8, "");
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return allocator.dupe(u8, ""),
+        };
+
+        if (elementAttributeValue(element, "value")) |value| {
+            return allocator.dupe(u8, value);
+        }
+
+        return self.textContent(allocator, node_id);
+    }
+
+    fn selectValueForNode(self: *const DomStore, allocator: std.mem.Allocator, node_id: NodeId) errors.Result([]u8) {
+        const node = self.nodeAt(node_id) orelse return allocator.dupe(u8, "");
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return allocator.dupe(u8, ""),
+        };
+        if (!std.mem.eql(u8, element.tag_name, "select")) return allocator.dupe(u8, "");
+
+        var descendants: std.ArrayList(NodeId) = .empty;
+        defer descendants.deinit(self.allocator);
+        self.collectSubtreeNodes(node_id, &descendants, self.allocator) catch return allocator.dupe(u8, "");
+
+        var first_option: ?[]u8 = null;
+        defer if (first_option) |value| allocator.free(value);
+        for (descendants.items) |descendant_id| {
+            if (!self.isOptionNode(descendant_id)) continue;
+            const option_value = try self.optionValueForNode(allocator, descendant_id);
+            defer allocator.free(option_value);
+            if (first_option == null) {
+                first_option = try allocator.dupe(u8, option_value);
+            }
+            if (self.isOptionSelected(descendant_id)) {
+                return allocator.dupe(u8, option_value);
+            }
+        }
+
+        if (first_option) |value| {
+            first_option = null;
+            return value;
+        }
+
+        return allocator.dupe(u8, "");
+    }
+
+    fn isOptionSelected(self: *const DomStore, node_id: NodeId) bool {
+        const node = self.nodeAt(node_id) orelse return false;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return false,
+        };
+        return std.mem.eql(u8, element.tag_name, "option") and elementAttributeValue(element, "selected") != null;
+    }
+
+    fn isOptionNode(self: *const DomStore, node_id: NodeId) bool {
+        const tag_name = self.tagNameForNode(node_id) orelse return false;
+        return std.mem.eql(u8, tag_name, "option");
+    }
+
+    fn setOptionSelected(self: *DomStore, node_id: NodeId, selected: bool) errors.Result(void) {
+        const node = self.nodeAtMut(node_id) orelse return error.HtmlParse;
+        const element = switch (node.kind) {
+            .element => |*element| element,
+            else => return error.HtmlParse,
+        };
+
+        if (!std.mem.eql(u8, element.tag_name, "option")) {
+            return error.HtmlParse;
+        }
+
+        if (selected) {
+            const arena_alloc = self.arena.allocator();
+            try upsertAttribute(arena_alloc, &element.attributes, "selected", try duplicateString(self, ""));
+        } else {
+            removeAttributeByName(&element.attributes, "selected");
+        }
+        return;
+    }
+
+    fn collectSubtreeNodes(
+        self: *const DomStore,
+        node_id: NodeId,
+        output: *std.ArrayList(NodeId),
+        allocator: std.mem.Allocator,
+    ) errors.Result(void) {
+        try output.append(allocator, node_id);
+        const node = self.nodeAt(node_id) orelse return error.HtmlParse;
+        for (node.children.items) |child_id| {
+            try self.collectSubtreeNodes(child_id, output, allocator);
+        }
+    }
+
+    fn findElementByIdInSubtree(self: *const DomStore, node_id: NodeId, id: []const u8) ?NodeId {
+        const node = self.nodeAt(node_id) orelse return null;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => null,
+        };
+        if (element) |element_data| {
+            const actual_id = elementAttributeValue(element_data, "id") orelse return null;
+            if (std.mem.eql(u8, actual_id, id)) {
+                return node.id;
+            }
+        }
+
+        for (node.children.items) |child_id| {
+            if (self.findElementByIdInSubtree(child_id, id)) |found| {
+                return found;
+            }
+        }
+
+        return null;
     }
 
     fn addElement(
@@ -553,6 +869,16 @@ fn upsertAttribute(
     });
 }
 
+fn removeAttributeByName(attributes: *std.ArrayListUnmanaged(Attribute), name: []const u8) void {
+    var index: usize = 0;
+    while (index < attributes.items.len) : (index += 1) {
+        if (std.mem.eql(u8, attributes.items[index].name, name)) {
+            _ = attributes.orderedRemove(index);
+            return;
+        }
+    }
+}
+
 fn isHtmlWhitespace(byte: u8) bool {
     return switch (byte) {
         ' ', '\n', '\r', '\t', 0x0c => true,
@@ -562,6 +888,28 @@ fn isHtmlWhitespace(byte: u8) bool {
 
 fn isTagNameByte(byte: u8) bool {
     return std.ascii.isAlphanumeric(byte) or byte == '-' or byte == '_' or byte == ':';
+}
+
+fn isTextInputType(input_type: ?[]const u8) bool {
+    const value = input_type orelse "text";
+    return std.mem.eql(u8, value, "text")
+        or std.mem.eql(u8, value, "search")
+        or std.mem.eql(u8, value, "url")
+        or std.mem.eql(u8, value, "tel")
+        or std.mem.eql(u8, value, "email")
+        or std.mem.eql(u8, value, "password")
+        or std.mem.eql(u8, value, "number")
+        or std.mem.eql(u8, value, "date")
+        or std.mem.eql(u8, value, "datetime-local")
+        or std.mem.eql(u8, value, "month")
+        or std.mem.eql(u8, value, "week")
+        or std.mem.eql(u8, value, "time")
+        or std.mem.eql(u8, value, "color");
+}
+
+fn isCheckableInputType(input_type: ?[]const u8) bool {
+    const value = input_type orelse "text";
+    return std.mem.eql(u8, value, "checkbox") or std.mem.eql(u8, value, "radio");
 }
 
 fn isSelectorTokenByte(byte: u8) bool {

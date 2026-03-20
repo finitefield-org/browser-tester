@@ -64,9 +64,12 @@ pub enum HtmlCollectionTarget {
     },
     FormElements(ElementHandle),
     SelectOptions(ElementHandle),
+    SelectSelectedOptions(ElementHandle),
     DocumentLinks,
     DocumentAnchors,
     DocumentChildren,
+    TableRows(ElementHandle),
+    RowCells(ElementHandle),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -423,6 +426,21 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("select.options"))
     }
 
+    fn html_collection_select_selected_options_items(
+        &mut self,
+        _element: ElementHandle,
+    ) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("select.selectedOptions"))
+    }
+
+    fn html_collection_select_selected_options_named_item(
+        &mut self,
+        _element: ElementHandle,
+        _name: &str,
+    ) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("select.selectedOptions"))
+    }
+
     fn html_collection_document_links_items(&mut self) -> Result<Vec<ElementHandle>> {
         Err(ScriptError::phase_not_ready("document.links"))
     }
@@ -454,6 +472,36 @@ pub trait HostBindings {
         _name: &str,
     ) -> Result<Option<ElementHandle>> {
         Err(ScriptError::phase_not_ready("document.children"))
+    }
+
+    fn html_collection_table_rows_items(
+        &mut self,
+        _element: ElementHandle,
+    ) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("table.rows"))
+    }
+
+    fn html_collection_table_rows_named_item(
+        &mut self,
+        _element: ElementHandle,
+        _name: &str,
+    ) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("table.rows"))
+    }
+
+    fn html_collection_row_cells_items(
+        &mut self,
+        _element: ElementHandle,
+    ) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("tr.cells"))
+    }
+
+    fn html_collection_row_cells_named_item(
+        &mut self,
+        _element: ElementHandle,
+        _name: &str,
+    ) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("tr.cells"))
     }
 
     fn element_text_content(&mut self, _element: ElementHandle) -> Result<String> {

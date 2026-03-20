@@ -8,6 +8,7 @@ Owns:
 
 - `Harness`
 - `HarnessBuilder`
+- read-only inspection methods
 - `Error`
 - `Result(T)`
 - `StorageSeed`
@@ -29,6 +30,7 @@ Owns:
 
 - copied configuration state
 - internal DOM store
+- internal script runtime state
 - future long-lived runtime state
 - the reserved mock registry slot
 
@@ -91,7 +93,7 @@ Owns:
 
 Location:
 
-- future `src/script.zig` or equivalent files
+- `src/script.zig`
 
 Choose this layer when the question is:
 

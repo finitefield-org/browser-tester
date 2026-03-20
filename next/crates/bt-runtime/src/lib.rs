@@ -1314,6 +1314,34 @@ impl Session {
         }
     }
 
+    fn direct_child_elements_matching<F>(
+        &self,
+        node_id: NodeId,
+        matches: &F,
+    ) -> Result<Vec<NodeId>, ScriptError>
+    where
+        F: Fn(&ElementData) -> bool,
+    {
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid node id"));
+        };
+
+        Ok(node
+            .children
+            .iter()
+            .copied()
+            .filter_map(|child_id| {
+                let Some(child) = self.dom.nodes().get(child_id.index() as usize) else {
+                    return None;
+                };
+                let NodeKind::Element(element) = &child.kind else {
+                    return None;
+                };
+                matches(element).then_some(child_id)
+            })
+            .collect())
+    }
+
     fn elements_by_tag_name(
         &self,
         scope: &HtmlCollectionScope,
@@ -1565,6 +1593,44 @@ impl Session {
         Ok(self.first_named_item_in_nodes(&collected, name))
     }
 
+    fn selected_options(&self, select: ElementHandle) -> Result<Vec<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(select)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a select element"));
+        };
+
+        if element.tag_name != "select" {
+            return Err(ScriptError::new("node is not a select element"));
+        }
+
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            node_id,
+            &mut collected,
+            &|element: &ElementData| {
+                element.tag_name == "option" && element.attributes.contains_key("selected")
+            },
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn selected_options_named_item(
+        &self,
+        select: ElementHandle,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let selected = self.selected_options(select)?;
+        let selected_ids: Vec<NodeId> = selected
+            .into_iter()
+            .map(|handle| self.node_id_for_handle(handle))
+            .collect::<Result<_, _>>()?;
+        Ok(self.first_named_item_in_nodes(&selected_ids, name))
+    }
+
     fn document_links(&self) -> Result<Vec<ElementHandle>, ScriptError> {
         let root = self.dom.document_id();
         let mut collected = Vec::new();
@@ -1637,6 +1703,135 @@ impl Session {
             .collect();
 
         Ok(self.first_named_item_in_nodes(&children, name))
+    }
+
+    fn table_rows(&self, table: ElementHandle) -> Result<Vec<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(table)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a table.rows host element"));
+        };
+
+        let collected = match element.tag_name.as_str() {
+            "table" => {
+                let mut collected = Vec::new();
+                for child_id in &node.children {
+                    let Some(child) = self.dom.nodes().get(child_id.index() as usize) else {
+                        continue;
+                    };
+                    let NodeKind::Element(child_element) = &child.kind else {
+                        continue;
+                    };
+
+                    match child_element.tag_name.as_str() {
+                        "tr" => collected.push(*child_id),
+                        "thead" | "tbody" | "tfoot" => {
+                            collected.extend(self.direct_child_elements_matching(
+                                *child_id,
+                                &|element: &ElementData| element.tag_name == "tr",
+                            )?);
+                        }
+                        _ => {}
+                    }
+                }
+                collected
+            }
+            "thead" | "tbody" | "tfoot" => self
+                .direct_child_elements_matching(node_id, &|element: &ElementData| {
+                    element.tag_name == "tr"
+                })?,
+            _ => {
+                return Err(ScriptError::new(
+                    "node is not a supported table.rows host element",
+                ));
+            }
+        };
+
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn table_rows_named_item(
+        &self,
+        table: ElementHandle,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(table)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a table.rows host element"));
+        };
+
+        match element.tag_name.as_str() {
+            "table" | "thead" | "tbody" | "tfoot" => {
+                let rows = self.table_rows(table)?;
+                let row_ids: Vec<NodeId> = rows
+                    .into_iter()
+                    .map(|handle| self.node_id_for_handle(handle))
+                    .collect::<Result<_, _>>()?;
+                Ok(self.first_named_item_in_nodes(&row_ids, name))
+            }
+            _ => Err(ScriptError::new(
+                "node is not a supported table.rows host element",
+            )),
+        }
+    }
+
+    fn row_cells(&self, row: ElementHandle) -> Result<Vec<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(row)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a tr.cells host element"));
+        };
+
+        if element.tag_name != "tr" {
+            return Err(ScriptError::new(
+                "node is not a supported tr.cells host element",
+            ));
+        }
+
+        let collected = self
+            .direct_child_elements_matching(node_id, &|element: &ElementData| {
+                matches!(element.tag_name.as_str(), "td" | "th")
+            })?;
+
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn row_cells_named_item(
+        &self,
+        row: ElementHandle,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(row)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a tr.cells host element"));
+        };
+
+        if element.tag_name != "tr" {
+            return Err(ScriptError::new(
+                "node is not a supported tr.cells host element",
+            ));
+        }
+
+        let cells = self.row_cells(row)?;
+        let cell_ids: Vec<NodeId> = cells
+            .into_iter()
+            .map(|handle| self.node_id_for_handle(handle))
+            .collect::<Result<_, _>>()?;
+        Ok(self.first_named_item_in_nodes(&cell_ids, name))
     }
 
     fn document_anchors(&self) -> Result<Vec<ElementHandle>, ScriptError> {
@@ -1823,9 +2018,12 @@ impl HostBindings for Session {
             }
             HtmlCollectionTarget::FormElements(element) => self.form_elements(element),
             HtmlCollectionTarget::SelectOptions(element) => self.select_options(element),
+            HtmlCollectionTarget::SelectSelectedOptions(element) => self.selected_options(element),
             HtmlCollectionTarget::DocumentLinks => self.document_links(),
             HtmlCollectionTarget::DocumentAnchors => self.document_anchors(),
             HtmlCollectionTarget::DocumentChildren => self.document_children(),
+            HtmlCollectionTarget::TableRows(element) => self.table_rows(element),
+            HtmlCollectionTarget::RowCells(element) => self.row_cells(element),
         }
     }
 
@@ -1860,9 +2058,14 @@ impl HostBindings for Session {
             HtmlCollectionTarget::SelectOptions(element) => {
                 self.select_options_named_item(element, name)
             }
+            HtmlCollectionTarget::SelectSelectedOptions(element) => {
+                self.selected_options_named_item(element, name)
+            }
             HtmlCollectionTarget::DocumentLinks => self.document_links_named_item(name),
             HtmlCollectionTarget::DocumentAnchors => self.document_anchors_named_item(name),
             HtmlCollectionTarget::DocumentChildren => self.document_children_named_item(name),
+            HtmlCollectionTarget::TableRows(element) => self.table_rows_named_item(element, name),
+            HtmlCollectionTarget::RowCells(element) => self.row_cells_named_item(element, name),
         }
     }
 
@@ -1885,9 +2088,12 @@ impl HostBindings for Session {
             }
             HtmlCollectionTarget::FormElements(element) => self.form_elements(element),
             HtmlCollectionTarget::SelectOptions(element) => self.select_options(element),
+            HtmlCollectionTarget::SelectSelectedOptions(element) => self.selected_options(element),
             HtmlCollectionTarget::DocumentLinks => self.document_links(),
             HtmlCollectionTarget::DocumentAnchors => self.document_anchors(),
             HtmlCollectionTarget::DocumentChildren => self.document_children(),
+            HtmlCollectionTarget::TableRows(element) => self.table_rows(element),
+            HtmlCollectionTarget::RowCells(element) => self.row_cells(element),
         }
     }
 
@@ -1922,9 +2128,14 @@ impl HostBindings for Session {
             HtmlCollectionTarget::SelectOptions(element) => {
                 self.select_options_named_item(element, name)
             }
+            HtmlCollectionTarget::SelectSelectedOptions(element) => {
+                self.selected_options_named_item(element, name)
+            }
             HtmlCollectionTarget::DocumentLinks => self.document_links_named_item(name),
             HtmlCollectionTarget::DocumentAnchors => self.document_anchors_named_item(name),
             HtmlCollectionTarget::DocumentChildren => self.document_children_named_item(name),
+            HtmlCollectionTarget::TableRows(element) => self.table_rows_named_item(element, name),
+            HtmlCollectionTarget::RowCells(element) => self.row_cells_named_item(element, name),
         }
     }
 
@@ -1994,6 +2205,21 @@ impl HostBindings for Session {
         self.select_options_named_item(element, name)
     }
 
+    fn html_collection_select_selected_options_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.selected_options(element)
+    }
+
+    fn html_collection_select_selected_options_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.selected_options_named_item(element, name)
+    }
+
     fn html_collection_document_links_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
         self.document_links()
     }
@@ -2025,6 +2251,36 @@ impl HostBindings for Session {
         name: &str,
     ) -> bt_script::Result<Option<ElementHandle>> {
         self.document_children_named_item(name)
+    }
+
+    fn html_collection_table_rows_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.table_rows(element)
+    }
+
+    fn html_collection_table_rows_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.table_rows_named_item(element, name)
+    }
+
+    fn html_collection_row_cells_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.row_cells(element)
+    }
+
+    fn html_collection_row_cells_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.row_cells_named_item(element, name)
     }
 
     fn element_text_content(&mut self, element: ElementHandle) -> bt_script::Result<String> {

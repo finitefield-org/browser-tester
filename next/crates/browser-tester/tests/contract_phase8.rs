@@ -132,6 +132,36 @@ fn document_children_are_live_end_to_end() -> browser_tester_next::Result<()> {
 }
 
 #[test]
+fn table_rows_and_cells_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<table id='table'><thead id='head'><tr id='head-row'><th id='head-cell'>H</th></tr></thead><tbody id='body'><tr id='first-row'><td id='first-cell'>A</td></tr></tbody><tfoot id='foot'><tr id='foot-row'><td id='foot-cell'>F</td></tr></tfoot></table><div id='out'></div><script>const table = document.getElementById('table'); const body = document.getElementById('body'); const row = document.getElementById('first-row'); const rows = table.rows; const bodyRows = body.rows; const cells = row.cells; const before = String(rows.length) + ':' + String(bodyRows.length) + ':' + String(cells.length) + ':' + String(rows.namedItem('first-row')) + ':' + String(cells.namedItem('first-cell')); body.innerHTML = body.innerHTML + '<tr id=\"second-row\"><td id=\"second-cell\">B</td><td id=\"third-cell\">C</td></tr>'; row.append(document.getElementById('third-cell')); document.getElementById('out').textContent = before + '|' + String(rows.length) + ':' + String(bodyRows.length) + ':' + String(cells.length) + ':' + String(rows.namedItem('second-row')) + ':' + String(bodyRows.namedItem('second-row')) + ':' + String(cells.namedItem('third-cell'));</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "3:1:1:[object Element]:[object Element]|4:2:2:[object Element]:[object Element]:[object Element]",
+    )?;
+    harness.assert_exists("#second-row")?;
+    Ok(())
+}
+
+#[test]
+fn table_rows_reject_non_table_elements_end_to_end() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html(
+        "<div id='bad'></div><script>document.getElementById('bad').rows.length;</script>",
+    )
+    .expect_err("non-table rows access should fail");
+
+    assert!(error.to_string().contains("table.rows"));
+    assert!(
+        error
+            .to_string()
+            .contains("supported table.rows host element")
+    );
+    Ok(())
+}
+
+#[test]
 fn document_embeds_are_not_available_on_elements_end_to_end() -> browser_tester_next::Result<()> {
     let error = Harness::from_html(
         "<div id='wrapper'><div id='not-doc'></div></div><script>document.getElementById('not-doc').embeds.length;</script>",
@@ -227,6 +257,30 @@ fn mutation_hardening_updates_live_collections_and_selectors_end_to_end()
     harness.assert_exists("option:checked")?;
     harness.assert_exists("#third")?;
     assert!(harness.assert_exists("#form").is_err());
+    Ok(())
+}
+
+#[test]
+fn select_selected_options_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><select id='mode'><option id='first' value='a' selected>A</option><option id='second' value='b'>B</option></select><div id='out'></div><script>const select = document.getElementById('mode'); const selected = select.selectedOptions; const before = selected.length; const first = selected.item(0); select.innerHTML = '<option id=\"third\" value=\"c\" selected>C</option><option id=\"fourth\" value=\"d\" selected>D</option>'; document.getElementById('out').textContent = String(before) + ':' + String(selected.length) + ':' + first.textContent + ':' + selected.item(0).textContent + ':' + selected.item(1).textContent + ':' + String(selected.namedItem('third')) + ':' + String(selected.namedItem('missing'));</script></main>",
+    )?;
+
+    harness.assert_text("#out", "1:2:A:C:D:[object Element]:null")?;
+    harness.assert_exists("#third")?;
+    harness.assert_exists("#fourth")?;
+    Ok(())
+}
+
+#[test]
+fn select_selected_options_reject_non_select_elements_end_to_end() -> browser_tester_next::Result<()>
+{
+    let error = Harness::from_html(
+        "<div id='wrapper'><div id='not-select'></div></div><script>document.getElementById('not-select').selectedOptions.length;</script>",
+    )
+    .expect_err("non-select selectedOptions access should fail");
+
+    assert!(error.to_string().contains("node is not a select element"));
     Ok(())
 }
 

@@ -1,22 +1,25 @@
 # Limitations
 
-The Zig rewrite currently provides the phase 0 scaffold plus the internal DOM bootstrap and selector slices of phase 1.
-It copies configuration into an owned `Session` and can parse HTML into an internal `DomStore`, but it does not yet expose public DOM read APIs, script execution, events, or runtime mocks.
+The Zig rewrite currently provides the phase 0 scaffold, the internal DOM bootstrap and selector slices of phase 1, and the phase 2 script runtime minimum slice.
+It copies configuration into an owned `Session`, can parse HTML into an internal `DomStore`, executes inline scripts for the `document.getElementById(...).textContent = ...` slice, and exposes `Harness.assertExists(...)` plus `Harness.dumpDom(...)`, but it does not yet expose public DOM query or mutation APIs, broader script runtime features, events, or runtime mocks.
 
 What exists today:
 
 - `HarnessBuilder`
 - `Harness`
 - `StorageSeed`
+- `Harness.assertExists(...)`
+- `Harness.dumpDom(...)`
 - copied URL, HTML, and local storage seeds
 - internal `DomStore` tree construction and `dumpDom()` support for tests
 - internal selector subset support for `#id`, tag, selector lists, and bounded attribute selectors
-- a small error surface for invalid URLs and allocation failure
+- inline script bootstrapping for the text-content mutation slice
+- a small error surface for invalid URLs, malformed HTML, script parse/runtime failures, and allocation failure
 
 What does not exist yet:
 
-- public DOM read APIs
-- script parsing and execution
+- public DOM query or mutation APIs
+- broader script parsing and execution
 - event dispatch
 - timers and microtasks
 - public mock families

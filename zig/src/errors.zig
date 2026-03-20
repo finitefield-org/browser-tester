@@ -1,7 +1,13 @@
 const std = @import("std");
 
 pub const Error = error{
+    InvalidSelector,
+    AssertionFailed,
+    DomError,
+    EventError,
     HtmlParse,
+    ScriptParse,
+    ScriptRuntime,
     InvalidUrl,
     OutOfMemory,
 };

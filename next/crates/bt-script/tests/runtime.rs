@@ -30,9 +30,13 @@ struct RecordingHost {
     html_collection_class_name_items_results: BTreeMap<HtmlCollectionTarget, Vec<ElementHandle>>,
     html_collection_form_elements_items_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
     html_collection_select_options_items_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
+    html_collection_select_selected_options_items_results:
+        BTreeMap<ElementHandle, Vec<ElementHandle>>,
     document_links_items_results: Vec<ElementHandle>,
     document_anchors_items_results: Vec<ElementHandle>,
     document_children_items_results: Vec<ElementHandle>,
+    table_rows_items_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
+    row_cells_items_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
     html_collection_named_item_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
     html_collection_tag_name_named_item_results:
         BTreeMap<(HtmlCollectionTarget, String), Option<ElementHandle>>,
@@ -44,9 +48,13 @@ struct RecordingHost {
         BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
     html_collection_select_options_named_item_results:
         BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
+    html_collection_select_selected_options_named_item_results:
+        BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
     document_links_named_item_results: BTreeMap<String, Option<ElementHandle>>,
     document_anchors_named_item_results: BTreeMap<String, Option<ElementHandle>>,
     document_children_named_item_results: BTreeMap<String, Option<ElementHandle>>,
+    table_rows_named_item_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
+    row_cells_named_item_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
     document_query_selector_results: BTreeMap<String, Option<ElementHandle>>,
     document_query_selector_all_results: BTreeMap<String, Vec<ElementHandle>>,
     document_get_elements_by_name_results: BTreeMap<String, Vec<ElementHandle>>,
@@ -59,18 +67,24 @@ struct RecordingHost {
     html_collection_class_name_items_calls: Vec<HtmlCollectionTarget>,
     html_collection_form_elements_items_calls: Vec<ElementHandle>,
     html_collection_select_options_items_calls: Vec<ElementHandle>,
+    html_collection_select_selected_options_items_calls: Vec<ElementHandle>,
     document_links_items_calls: usize,
     document_anchors_items_calls: usize,
     document_children_items_calls: usize,
+    table_rows_items_calls: Vec<ElementHandle>,
+    row_cells_items_calls: Vec<ElementHandle>,
     html_collection_named_item_calls: Vec<(ElementHandle, String)>,
     html_collection_tag_name_named_item_calls: Vec<(HtmlCollectionTarget, String)>,
     html_collection_tag_name_ns_named_item_calls: Vec<(HtmlCollectionTarget, String)>,
     html_collection_class_name_named_item_calls: Vec<(HtmlCollectionTarget, String)>,
     html_collection_form_elements_named_item_calls: Vec<(ElementHandle, String)>,
     html_collection_select_options_named_item_calls: Vec<(ElementHandle, String)>,
+    html_collection_select_selected_options_named_item_calls: Vec<(ElementHandle, String)>,
     document_links_named_item_calls: Vec<String>,
     document_anchors_named_item_calls: Vec<String>,
     document_children_named_item_calls: Vec<String>,
+    table_rows_named_item_calls: Vec<(ElementHandle, String)>,
+    row_cells_named_item_calls: Vec<(ElementHandle, String)>,
     document_query_selector_calls: Vec<String>,
     document_query_selector_all_calls: Vec<String>,
     document_get_elements_by_name_calls: Vec<String>,
@@ -160,6 +174,15 @@ impl RecordingHost {
             .insert(element, result);
     }
 
+    fn seed_html_collection_select_selected_options_items(
+        &mut self,
+        element: ElementHandle,
+        result: Vec<ElementHandle>,
+    ) {
+        self.html_collection_select_selected_options_items_results
+            .insert(element, result);
+    }
+
     fn seed_document_links_items(&mut self, result: Vec<ElementHandle>) {
         self.document_links_items_results = result;
     }
@@ -170,6 +193,14 @@ impl RecordingHost {
 
     fn seed_document_children_items(&mut self, result: Vec<ElementHandle>) {
         self.document_children_items_results = result;
+    }
+
+    fn seed_table_rows_items(&mut self, element: ElementHandle, result: Vec<ElementHandle>) {
+        self.table_rows_items_results.insert(element, result);
+    }
+
+    fn seed_row_cells_items(&mut self, element: ElementHandle, result: Vec<ElementHandle>) {
+        self.row_cells_items_results.insert(element, result);
     }
 
     fn seed_html_collection_named_item(
@@ -232,6 +263,16 @@ impl RecordingHost {
             .insert((element, name.into()), result);
     }
 
+    fn seed_html_collection_select_selected_options_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: impl Into<String>,
+        result: Option<ElementHandle>,
+    ) {
+        self.html_collection_select_selected_options_named_item_results
+            .insert((element, name.into()), result);
+    }
+
     fn seed_document_links_named_item(
         &mut self,
         name: impl Into<String>,
@@ -257,6 +298,26 @@ impl RecordingHost {
     ) {
         self.document_children_named_item_results
             .insert(name.into(), result);
+    }
+
+    fn seed_table_rows_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: impl Into<String>,
+        result: Option<ElementHandle>,
+    ) {
+        self.table_rows_named_item_results
+            .insert((element, name.into()), result);
+    }
+
+    fn seed_row_cells_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: impl Into<String>,
+        result: Option<ElementHandle>,
+    ) {
+        self.row_cells_named_item_results
+            .insert((element, name.into()), result);
     }
 
     fn seed_document_query_selector(
@@ -496,6 +557,33 @@ impl HostBindings for RecordingHost {
             .flatten())
     }
 
+    fn html_collection_select_selected_options_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.html_collection_select_selected_options_items_calls
+            .push(element);
+        Ok(self
+            .html_collection_select_selected_options_items_results
+            .get(&element)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn html_collection_select_selected_options_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.html_collection_select_selected_options_named_item_calls
+            .push((element, name.to_string()));
+        Ok(self
+            .html_collection_select_selected_options_named_item_results
+            .get(&(element, name.to_string()))
+            .copied()
+            .flatten())
+    }
+
     fn html_collection_document_links_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
         self.document_links_items_calls += 1;
         Ok(self.document_links_items_results.clone())
@@ -545,6 +633,58 @@ impl HostBindings for RecordingHost {
         Ok(self
             .document_children_named_item_results
             .get(name)
+            .copied()
+            .flatten())
+    }
+
+    fn html_collection_table_rows_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.table_rows_items_calls.push(element);
+        Ok(self
+            .table_rows_items_results
+            .get(&element)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn html_collection_table_rows_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.table_rows_named_item_calls
+            .push((element, name.to_string()));
+        Ok(self
+            .table_rows_named_item_results
+            .get(&(element, name.to_string()))
+            .copied()
+            .flatten())
+    }
+
+    fn html_collection_row_cells_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.row_cells_items_calls.push(element);
+        Ok(self
+            .row_cells_items_results
+            .get(&element)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn html_collection_row_cells_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.row_cells_named_item_calls
+            .push((element, name.to_string()));
+        Ok(self
+            .row_cells_named_item_results
+            .get(&(element, name.to_string()))
             .copied()
             .flatten())
     }
@@ -1409,6 +1549,60 @@ fn runtime_resolves_select_options_access() {
 }
 
 #[test]
+fn runtime_resolves_select_selected_options_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("mode", ElementHandle::new(1), "mode");
+    host.seed_element("first", ElementHandle::new(2), "A");
+    host.seed_element("second", ElementHandle::new(3), "B");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_html_collection_select_selected_options_items(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2), ElementHandle::new(3)],
+    );
+    host.seed_html_collection_select_selected_options_named_item(
+        ElementHandle::new(1),
+        "second",
+        Some(ElementHandle::new(3)),
+    );
+    host.seed_html_collection_select_selected_options_named_item(
+        ElementHandle::new(1),
+        "missing",
+        None,
+    );
+
+    runtime
+        .eval_program(
+            "const selected = document.getElementById('mode').selectedOptions; const named = selected.namedItem('second'); const before = selected.length; document.getElementById('out').textContent = String(before) + ':' + selected.item(0).textContent + ':' + selected.item(1).textContent + ':' + named.textContent + ':' + String(selected.namedItem('missing'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("select.selectedOptions should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("2:A:B:B:null")
+    );
+    assert_eq!(
+        host.html_collection_select_selected_options_items_calls,
+        vec![
+            ElementHandle::new(1),
+            ElementHandle::new(1),
+            ElementHandle::new(1),
+        ]
+    );
+    assert_eq!(
+        host.html_collection_select_selected_options_named_item_calls,
+        vec![
+            (ElementHandle::new(1), "second".to_string()),
+            (ElementHandle::new(1), "missing".to_string()),
+        ]
+    );
+}
+
+#[test]
 fn runtime_resolves_document_images_and_links_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -1563,6 +1757,60 @@ fn runtime_resolves_document_children_access() {
     assert_eq!(
         host.document_children_named_item_calls,
         vec!["root".to_string(), "missing".to_string()]
+    );
+}
+
+#[test]
+fn runtime_resolves_table_rows_and_row_cells_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("table", ElementHandle::new(1), "Table");
+    host.seed_element("body", ElementHandle::new(2), "Body");
+    host.seed_element("row", ElementHandle::new(3), "Row");
+    host.seed_element("cell", ElementHandle::new(4), "Cell");
+    host.seed_table_rows_items(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(3), ElementHandle::new(5)],
+    );
+    host.seed_table_rows_items(ElementHandle::new(2), vec![ElementHandle::new(3)]);
+    host.seed_row_cells_items(ElementHandle::new(3), vec![ElementHandle::new(4)]);
+    host.seed_table_rows_named_item(ElementHandle::new(1), "missing", None);
+    host.seed_table_rows_named_item(ElementHandle::new(2), "row", Some(ElementHandle::new(3)));
+    host.seed_row_cells_named_item(ElementHandle::new(3), "cell", Some(ElementHandle::new(4)));
+
+    runtime
+        .eval_program(
+            "const table = document.getElementById('table'); const body = document.getElementById('body'); const row = document.getElementById('row'); document.getElementById('cell').textContent = String(table.rows.length) + ':' + String(body.rows.length) + ':' + String(row.cells.length) + ':' + String(table.rows.item(0)) + ':' + String(body.rows.namedItem('row')) + ':' + String(row.cells.namedItem('cell')) + ':' + String(table.rows.namedItem('missing'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("table rows and row cells should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("2:1:1:[object Element]:[object Element]:[object Element]:null")
+    );
+    assert_eq!(
+        host.table_rows_items_calls,
+        vec![
+            ElementHandle::new(1),
+            ElementHandle::new(2),
+            ElementHandle::new(1)
+        ]
+    );
+    assert_eq!(host.row_cells_items_calls, vec![ElementHandle::new(3)]);
+    assert_eq!(
+        host.table_rows_named_item_calls,
+        vec![
+            (ElementHandle::new(2), "row".to_string()),
+            (ElementHandle::new(1), "missing".to_string())
+        ]
+    );
+    assert_eq!(
+        host.row_cells_named_item_calls,
+        vec![(ElementHandle::new(3), "cell".to_string())]
     );
 }
 

@@ -26,11 +26,10 @@ Delivered in this workspace:
 - HTML parser
 - DOM tree construction
 - selector subset
+- read-only assertions
 - DOM dump helpers
 
-Still to ship:
-
-- read-only assertions
+Phase 1 is complete in this workspace.
 
 ## Phase 2: Script Runtime
 
@@ -39,6 +38,8 @@ Still to ship:
 - evaluator
 - host bindings for `window`, `document`, and `Element`
 - inline script execution
+
+Phase 2 is complete in this workspace.
 
 ## Phase 3: Events and Forms
 

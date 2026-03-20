@@ -37,6 +37,7 @@ zig/
     harness.zig     # Harness and HarnessBuilder
     session.zig     # internal session state
     dom.zig         # internal HTML parsing and DOM tree storage
+    script.zig      # internal script runtime and host bindings
     errors.zig      # public error surface
   doc/
     architecture.md
@@ -58,7 +59,9 @@ zig/
 - `Result(T)`
 
 `Session` stays internal for now.
-It owns the copied configuration state, the internal DOM store, and is the future home for scheduler state, runtime state, and mock registry state.
+It owns the copied configuration state, the internal DOM store, the internal script runtime state, and is the future home for scheduler state and mock registry state.
+
+`Harness` now exposes `assertExists()` and `dumpDom()` for read-only inspection.
 
 ## High-Level Shape
 
@@ -67,8 +70,9 @@ flowchart LR
   T["Zig test"] --> H["Harness facade"]
   H --> B["HarnessBuilder"]
   H --> S["Session"]
-  S --> M["reserved mock space"]
   S --> D["DOM store / tree builder"]
+  S --> R["script runtime"]
+  S --> M["reserved mock space"]
 ```
 
 `Harness` is intentionally thin.
@@ -79,7 +83,7 @@ State lives in `Session`, and subsystem files own their internal data.
 - The public facade should stay narrow.
 - Long-lived state belongs to the subsystem that owns it.
 - `HarnessBuilder` only collects input and assembles an owned `Session`.
-- `Session` currently owns DOM state and will later own runtime, mock, and debug state.
+- `Session` currently owns DOM state and script runtime state, and will later own runtime, mock, and debug state.
 - Public methods should delegate inward instead of growing facade logic.
 
 ## Phase Plan
@@ -100,13 +104,15 @@ State lives in `Session`, and subsystem files own their internal data.
 - read-only assertions
 - DOM dump helpers
 
-The tree builder and selector subset slices are implemented internally now; public read-only inspection is still next.
+The tree builder, selector subset, and public read-only inspection slices are implemented in this workspace now.
 
 ### Phase 2
 
 - script lexer, parser, evaluator
 - `window`, `document`, and `Element` bindings
 - inline script bootstrapping
+
+The script runtime minimum slice is implemented in this workspace now.
 
 ### Phase 3
 
@@ -148,5 +154,4 @@ The tree builder and selector subset slices are implemented internally now; publ
 
 ## Current Status
 
-Phase 0 is delivered, and the internal DOM bootstrap and selector slices of Phase 1 are delivered as well.
-The remaining Phase 1 work is public read-only inspection.
+Phase 0, Phase 1, and Phase 2 are delivered in this workspace.
