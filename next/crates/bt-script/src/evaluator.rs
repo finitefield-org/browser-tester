@@ -39,6 +39,7 @@ fn as_string(value: &Value) -> String {
         Value::Element(_) => "[object Element]".to_string(),
         Value::ClassList(_) => "[object DOMTokenList]".to_string(),
         Value::Dataset(_) => "[object DOMStringMap]".to_string(),
+        Value::TemplateContent(_) => "[object DocumentFragment]".to_string(),
         Value::HtmlCollection(_) => "[object HTMLCollection]".to_string(),
         Value::StyleSheetList(_) => "[object StyleSheetList]".to_string(),
         Value::StyleSheet(_) => "[object CSSStyleSheet]".to_string(),
@@ -103,6 +104,12 @@ fn eval_assignment<H: HostBindings>(
                 (Value::Element(element), "outerHTML") => {
                     host.element_set_outer_html(element, &as_string(&value))
                 }
+                (Value::Element(_element), "insertAdjacentHTML") => Err(ScriptError::new(
+                    "insertAdjacentHTML() is a method, not an assignment target",
+                )),
+                (Value::TemplateContent(element), "innerHTML") => {
+                    host.element_set_inner_html(element, &as_string(&value))
+                }
                 (Value::Element(element), "value") => {
                     host.element_set_value(element, &as_string(&value))
                 }
@@ -116,6 +123,9 @@ fn eval_assignment<H: HostBindings>(
                     let attribute_name = dataset_attribute_name(property)?;
                     host.element_set_attribute(element, &attribute_name, &as_string(&value))
                 }
+                (Value::TemplateContent(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on template content value"
+                ))),
                 (Value::Element(_), _) => Err(ScriptError::new(format!(
                     "unsupported assignment target on element: {property}"
                 ))),
@@ -277,6 +287,12 @@ fn eval_member<H: HostBindings>(
                 tag_name: "embed".to_string(),
             }))
         }
+        Value::Document if property == "plugins" => {
+            Ok(Value::HtmlCollection(HtmlCollectionTarget::ByTagName {
+                scope: HtmlCollectionScope::Document,
+                tag_name: "embed".to_string(),
+            }))
+        }
         Value::Window if property == "document" => Ok(Value::Document),
         Value::Document if property == "defaultView" => Ok(Value::Window),
         Value::Element(element) if property == "textContent" => {
@@ -298,6 +314,15 @@ fn eval_member<H: HostBindings>(
             host.element_get_attribute(element, "class")?
                 .unwrap_or_default(),
         )),
+        Value::Element(element) if property == "content" => {
+            if host.element_tag_name(element)? == "template" {
+                Ok(Value::TemplateContent(element))
+            } else {
+                Err(ScriptError::new(
+                    "template.content is only supported on <template> elements",
+                ))
+            }
+        }
         Value::Element(element) if property == "classList" => Ok(Value::ClassList(element)),
         Value::Element(element) if property == "dataset" => Ok(Value::Dataset(element)),
         Value::Element(element) if property == "children" => Ok(Value::HtmlCollection(
@@ -391,6 +416,15 @@ fn eval_member<H: HostBindings>(
                 },
             )
         }
+        Value::TemplateContent(element) if property == "childNodes" => Ok(Value::NodeList(
+            NodeListTarget::ChildNodes(HtmlCollectionScope::Element(element)),
+        )),
+        Value::TemplateContent(element) if property == "children" => Ok(Value::HtmlCollection(
+            HtmlCollectionTarget::Children(element),
+        )),
+        Value::TemplateContent(element) if property == "innerHTML" => {
+            Ok(Value::String(host.element_inner_html(element)?))
+        }
         Value::Document => Err(unsupported_member_access(property, "document")),
         Value::Window => Err(unsupported_member_access(property, "window")),
         Value::String(_) => Err(unsupported_member_access(property, "string")),
@@ -407,6 +441,7 @@ fn eval_member<H: HostBindings>(
         Value::CollectionIterator(_) => Err(unsupported_member_access(property, "iterator")),
         Value::IteratorResult(_) => Err(unsupported_member_access(property, "iterator result")),
         Value::Function(_) => Err(unsupported_member_access(property, "function")),
+        Value::TemplateContent(_) => Err(unsupported_member_access(property, "template content")),
     }
 }
 
@@ -511,6 +546,7 @@ fn eval_method_call<H: HostBindings>(
             "prepend" => element_prepend(element, args, env, host),
             "before" => element_before(element, args, env, host),
             "after" => element_after(element, args, env, host),
+            "insertAdjacentHTML" => element_insert_adjacent_html(element, args, env, host),
             "remove" => element_remove(element, args, env, host),
             "querySelector" => {
                 query_selector(QuerySelectorTarget::Element(element), args, env, host)
@@ -586,6 +622,9 @@ fn eval_method_call<H: HostBindings>(
         },
         Value::Dataset(_) => Err(ScriptError::new(format!(
             "cannot call `{method}` on a dataset value"
+        ))),
+        Value::TemplateContent(_) => Err(ScriptError::new(format!(
+            "cannot call `{method}` on a template content value"
         ))),
         Value::NodeList(target) => match method {
             "item" => node_list_item(&target, args, env, host),
@@ -913,6 +952,24 @@ fn element_after<H: HostBindings>(
     Ok(Value::Undefined)
 }
 
+fn element_insert_adjacent_html<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [position_expr, html_expr] = args else {
+        return Err(ScriptError::new(
+            "insertAdjacentHTML() expects exactly two arguments",
+        ));
+    };
+
+    let position = as_string(&eval_expr(position_expr, env, host)?);
+    let html = as_string(&eval_expr(html_expr, env, host)?);
+    host.element_insert_adjacent_html(element, &position, &html)?;
+    Ok(Value::Undefined)
+}
+
 fn element_remove<H: HostBindings>(
     element: crate::ElementHandle,
     args: &[Expr],
@@ -1176,11 +1233,13 @@ fn html_collection_named_item<H: HostBindings>(
     };
 
     let name = as_string(&eval_expr(name_expr, env, host)?);
-    Ok(match html_collection_named_item_handle(collection, &name, host)? {
-        Some(HtmlCollectionNamedItem::Element(handle)) => Value::Element(handle),
-        Some(HtmlCollectionNamedItem::RadioNodeList(target)) => Value::RadioNodeList(target),
-        None => Value::Null,
-    })
+    Ok(
+        match html_collection_named_item_handle(collection, &name, host)? {
+            Some(HtmlCollectionNamedItem::Element(handle)) => Value::Element(handle),
+            Some(HtmlCollectionNamedItem::RadioNodeList(target)) => Value::RadioNodeList(target),
+            None => Value::Null,
+        },
+    )
 }
 
 fn html_collection_for_each<H: HostBindings>(
@@ -1319,18 +1378,15 @@ fn html_collection_named_item_handle<H: HostBindings>(
         HtmlCollectionTarget::Children(element) => host
             .html_collection_named_item(*element, name)
             .map(|value| value.map(HtmlCollectionNamedItem::Element)),
-        HtmlCollectionTarget::ByTagName { .. } => {
-            host.html_collection_tag_name_named_item(collection.clone(), name)
-                .map(|value| value.map(HtmlCollectionNamedItem::Element))
-        }
-        HtmlCollectionTarget::ByTagNameNs { .. } => {
-            host.html_collection_tag_name_ns_named_item(collection.clone(), name)
-                .map(|value| value.map(HtmlCollectionNamedItem::Element))
-        }
-        HtmlCollectionTarget::ByClassName { .. } => {
-            host.html_collection_class_name_named_item(collection.clone(), name)
-                .map(|value| value.map(HtmlCollectionNamedItem::Element))
-        }
+        HtmlCollectionTarget::ByTagName { .. } => host
+            .html_collection_tag_name_named_item(collection.clone(), name)
+            .map(|value| value.map(HtmlCollectionNamedItem::Element)),
+        HtmlCollectionTarget::ByTagNameNs { .. } => host
+            .html_collection_tag_name_ns_named_item(collection.clone(), name)
+            .map(|value| value.map(HtmlCollectionNamedItem::Element)),
+        HtmlCollectionTarget::ByClassName { .. } => host
+            .html_collection_class_name_named_item(collection.clone(), name)
+            .map(|value| value.map(HtmlCollectionNamedItem::Element)),
         HtmlCollectionTarget::FormElements(element) => {
             let items = host.html_collection_form_elements_named_items(*element, name)?;
             Ok(match items.len() {
@@ -1344,41 +1400,33 @@ fn html_collection_named_item_handle<H: HostBindings>(
                 )),
             })
         }
-        HtmlCollectionTarget::SelectOptions(element) => {
-            host.html_collection_select_options_named_item(*element, name)
-                .map(|value| value.map(HtmlCollectionNamedItem::Element))
-        }
-        HtmlCollectionTarget::SelectSelectedOptions(element) => {
-            host.html_collection_select_selected_options_named_item(*element, name)
-                .map(|value| value.map(HtmlCollectionNamedItem::Element))
-        }
+        HtmlCollectionTarget::SelectOptions(element) => host
+            .html_collection_select_options_named_item(*element, name)
+            .map(|value| value.map(HtmlCollectionNamedItem::Element)),
+        HtmlCollectionTarget::SelectSelectedOptions(element) => host
+            .html_collection_select_selected_options_named_item(*element, name)
+            .map(|value| value.map(HtmlCollectionNamedItem::Element)),
         HtmlCollectionTarget::DocumentLinks => host
             .html_collection_document_links_named_item(name)
             .map(|value| value.map(HtmlCollectionNamedItem::Element)),
-        HtmlCollectionTarget::DocumentAnchors => {
-            host.html_collection_document_anchors_named_item(name)
-                .map(|value| value.map(HtmlCollectionNamedItem::Element))
-        }
-        HtmlCollectionTarget::DocumentChildren => {
-            host.html_collection_document_children_named_item(name)
-                .map(|value| value.map(HtmlCollectionNamedItem::Element))
-        }
-        HtmlCollectionTarget::MapAreas(element) => {
-            host.html_collection_map_areas_named_item(*element, name)
-                .map(|value| value.map(HtmlCollectionNamedItem::Element))
-        }
-        HtmlCollectionTarget::TableTBodies(element) => {
-            host.html_collection_table_bodies_named_item(*element, name)
-                .map(|value| value.map(HtmlCollectionNamedItem::Element))
-        }
-        HtmlCollectionTarget::TableRows(element) => {
-            host.html_collection_table_rows_named_item(*element, name)
-                .map(|value| value.map(HtmlCollectionNamedItem::Element))
-        }
-        HtmlCollectionTarget::RowCells(element) => {
-            host.html_collection_row_cells_named_item(*element, name)
-                .map(|value| value.map(HtmlCollectionNamedItem::Element))
-        }
+        HtmlCollectionTarget::DocumentAnchors => host
+            .html_collection_document_anchors_named_item(name)
+            .map(|value| value.map(HtmlCollectionNamedItem::Element)),
+        HtmlCollectionTarget::DocumentChildren => host
+            .html_collection_document_children_named_item(name)
+            .map(|value| value.map(HtmlCollectionNamedItem::Element)),
+        HtmlCollectionTarget::MapAreas(element) => host
+            .html_collection_map_areas_named_item(*element, name)
+            .map(|value| value.map(HtmlCollectionNamedItem::Element)),
+        HtmlCollectionTarget::TableTBodies(element) => host
+            .html_collection_table_bodies_named_item(*element, name)
+            .map(|value| value.map(HtmlCollectionNamedItem::Element)),
+        HtmlCollectionTarget::TableRows(element) => host
+            .html_collection_table_rows_named_item(*element, name)
+            .map(|value| value.map(HtmlCollectionNamedItem::Element)),
+        HtmlCollectionTarget::RowCells(element) => host
+            .html_collection_row_cells_named_item(*element, name)
+            .map(|value| value.map(HtmlCollectionNamedItem::Element)),
     }
 }
 
@@ -1497,11 +1545,9 @@ fn node_list_items<H: HostBindings>(
     host: &mut H,
 ) -> Result<Vec<NodeListItem>> {
     match target {
-        NodeListTarget::Snapshot(nodes) => Ok(nodes
-            .iter()
-            .copied()
-            .map(NodeListItem::Element)
-            .collect()),
+        NodeListTarget::Snapshot(nodes) => {
+            Ok(nodes.iter().copied().map(NodeListItem::Element).collect())
+        }
         NodeListTarget::ByName(name) => Ok(host
             .document_get_elements_by_name(name)?
             .into_iter()
@@ -1602,6 +1648,7 @@ fn is_truthy(value: &Value) -> bool {
         | Value::Node(_)
         | Value::NodeList(_)
         | Value::RadioNodeList(_)
+        | Value::TemplateContent(_)
         | Value::CollectionIterator(_)
         | Value::IteratorResult(_)
         | Value::Document

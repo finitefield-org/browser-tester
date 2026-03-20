@@ -101,5 +101,7 @@ Phase 7 is complete in this workspace.
 - class and dataset views
 - tree mutation primitives
 - HTML serialization surfaces
+- HTML serialization broadening slice 1 (`insertAdjacentHTML`)
 
-The attribute reflection slice is implemented in this workspace now; class and dataset views, tree mutation primitives, and HTML serialization surfaces remain planned.
+The attribute reflection, class/dataset view, tree mutation, and HTML serialization slices are implemented in this workspace now.
+The next planned serialization slice is `template.content.innerHTML` and `DocumentFragment` serialization.

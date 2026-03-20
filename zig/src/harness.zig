@@ -438,6 +438,84 @@ test "regression: phase 8 attribute reflection methods resolve on the copied htm
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: phase 8 class and dataset views resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><button id='button' class='base' data-kind='App'>First</button><div id='out'></div><script>document.getElementById('button').className = 'primary secondary'; document.getElementById('button').classList.add('tertiary'); document.getElementById('button').classList.remove('secondary'); document.getElementById('button').dataset.userId = '42'; document.getElementById('out').textContent = String(document.getElementById('button').classList.length) + ':' + String(document.getElementById('button').classList.contains('primary')) + ':' + String(document.getElementById('button').classList.toggle('active')) + ':' + document.getElementById('button').className + ':' + document.getElementById('button').dataset.kind + ':' + document.getElementById('button').dataset.userId + ':' + String(document.getElementById('button').classList) + ':' + String(document.getElementById('button').dataset);</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "2:true:true:primary tertiary active:App:42:[object DOMTokenList]:[object DOMStringMap]");
+    try subject.assertExists(".active");
+    try subject.assertExists("[data-user-id]");
+    try subject.assertExists("[data-kind=App]");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 8 tree mutation primitives resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><section id='source'><button id='second'>Second</button><button id='third'>Third</button></section><button id='first'>First</button><div id='out'></div><script>document.getElementById('second').before(document.getElementById('first')); document.getElementById('second').after(document.getElementById('third')); document.getElementById('out').textContent = document.getElementById('source').textContent + ':' + String(document.querySelectorAll('#source > button').length) + ':' + document.querySelector('#first').textContent + ':' + document.querySelector('#third').textContent;</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "FirstSecondThird:3:First:Third");
+    try subject.assertExists("#source > #first");
+    try subject.assertExists("#source > #second");
+    try subject.assertExists("#source > #third");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 8 HTML serialization surfaces resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><section id='target'><button id='old' class='primary'>Old</button></section><div id='out'></div><script>document.getElementById('target').innerHTML = '<span id=\"first\">One</span><span id=\"second\">Two</span>'; document.getElementById('out').textContent = document.getElementById('target').innerHTML + '|' + document.getElementById('target').outerHTML + '|' + String(document.querySelector('#old'));</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "<span id=\"first\">One</span><span id=\"second\">Two</span>|<section id=\"target\"><span id=\"first\">One</span><span id=\"second\">Two</span></section>|null",
+    );
+    try subject.assertExists("#target > #first");
+    try subject.assertExists("#target > #second");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 8 insertAdjacentHTML surfaces resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><section id='target'><button id='old' class='primary'>Old</button></section></main><div id='out'></div><script>document.getElementById('target').insertAdjacentHTML('beforebegin', '<aside id=\"before\">Before</aside>'); document.getElementById('target').insertAdjacentHTML('afterbegin', '<span id=\"first\">First</span>'); document.getElementById('target').insertAdjacentHTML('beforeend', '<span id=\"last\">Last</span>'); document.getElementById('target').insertAdjacentHTML('afterend', '<aside id=\"after\">After</aside>'); document.getElementById('out').textContent = document.getElementById('root').innerHTML + '|' + document.getElementById('target').innerHTML + '|' + String(document.querySelectorAll('#target > span').length) + ':' + String(document.querySelector('#before')) + ':' + String(document.querySelector('#after'));</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "<aside id=\"before\">Before</aside><section id=\"target\"><span id=\"first\">First</span><button class=\"primary\" id=\"old\">Old</button><span id=\"last\">Last</span></section><aside id=\"after\">After</aside>|<span id=\"first\">First</span><button class=\"primary\" id=\"old\">Old</button><span id=\"last\">Last</span>|2:[object Element]:[object Element]",
+    );
+    try subject.assertExists("#before");
+    try subject.assertExists("#after");
+    try subject.assertExists("#target > #first");
+    try subject.assertExists("#target > #last");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
 test "regression: phase 3 actions resolve expanded selectors on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<main id='root'><input id='agree' type='checkbox'></main><div id='out'></div><script>document.getElementById('agree').addEventListener('change', () => { document.getElementById('out').textContent = String(document.getElementById('agree').checked); });</script>";

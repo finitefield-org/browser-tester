@@ -7,8 +7,9 @@ use bt_dom::{
     SVG_NAMESPACE_URI,
 };
 use bt_script::{
-    ElementHandle, EventPhase, HostBindings, HtmlCollectionScope, HtmlCollectionTarget, ListenerTarget,
-    NodeHandle, ScriptError, ScriptEventHandle, ScriptFunction, ScriptRuntime, ScriptValue,
+    ElementHandle, EventPhase, HostBindings, HtmlCollectionScope, HtmlCollectionTarget,
+    ListenerTarget, NodeHandle, ScriptError, ScriptEventHandle, ScriptFunction, ScriptRuntime,
+    ScriptValue,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1514,9 +1515,11 @@ impl Session {
         let target_id = element_data.attributes.get("id").cloned();
         let root = self.dom.document_id();
         let mut collected = Vec::new();
-        self.collect_descendant_elements_matching(root, &mut collected, &|element: &ElementData| {
-            element.tag_name == "label"
-        });
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| element.tag_name == "label",
+        );
 
         let mut labels = Vec::new();
         for label_id in collected {
@@ -1598,7 +1601,8 @@ impl Session {
             &mut collected,
             &|element: &ElementData| Self::is_form_control_element(element),
         );
-        Ok(self.named_items_in_nodes(&collected, name)
+        Ok(self
+            .named_items_in_nodes(&collected, name)
             .into_iter()
             .map(Self::node_id_to_handle)
             .collect())
@@ -1717,9 +1721,11 @@ impl Session {
     fn document_style_sheets(&self) -> Result<Vec<ElementHandle>, ScriptError> {
         let root = self.dom.document_id();
         let mut collected = Vec::new();
-        self.collect_descendant_elements_matching(root, &mut collected, &|element: &ElementData| {
-            Self::is_document_style_sheet_element(element)
-        });
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| Self::is_document_style_sheet_element(element),
+        );
         Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
     }
 
@@ -1796,11 +1802,15 @@ impl Session {
         };
 
         let NodeKind::Element(element) = &node.kind else {
-            return Err(ScriptError::new("node is not a supported map.areas host element"));
+            return Err(ScriptError::new(
+                "node is not a supported map.areas host element",
+            ));
         };
 
         if element.tag_name != "map" {
-            return Err(ScriptError::new("node is not a supported map.areas host element"));
+            return Err(ScriptError::new(
+                "node is not a supported map.areas host element",
+            ));
         }
 
         let mut collected = Vec::new();
@@ -1823,11 +1833,15 @@ impl Session {
         };
 
         let NodeKind::Element(element) = &node.kind else {
-            return Err(ScriptError::new("node is not a supported map.areas host element"));
+            return Err(ScriptError::new(
+                "node is not a supported map.areas host element",
+            ));
         };
 
         if element.tag_name != "map" {
-            return Err(ScriptError::new("node is not a supported map.areas host element"));
+            return Err(ScriptError::new(
+                "node is not a supported map.areas host element",
+            ));
         }
 
         let mut collected = Vec::new();
@@ -1846,16 +1860,21 @@ impl Session {
         };
 
         let NodeKind::Element(element) = &node.kind else {
-            return Err(ScriptError::new("node is not a supported table.tBodies host element"));
+            return Err(ScriptError::new(
+                "node is not a supported table.tBodies host element",
+            ));
         };
 
         if element.tag_name != "table" {
-            return Err(ScriptError::new("node is not a supported table.tBodies host element"));
+            return Err(ScriptError::new(
+                "node is not a supported table.tBodies host element",
+            ));
         }
 
-        let collected = self.direct_child_elements_matching(node_id, &|element: &ElementData| {
-            element.tag_name == "tbody"
-        })?;
+        let collected = self
+            .direct_child_elements_matching(node_id, &|element: &ElementData| {
+                element.tag_name == "tbody"
+            })?;
         Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
     }
 
@@ -1870,11 +1889,15 @@ impl Session {
         };
 
         let NodeKind::Element(element) = &node.kind else {
-            return Err(ScriptError::new("node is not a supported table.tBodies host element"));
+            return Err(ScriptError::new(
+                "node is not a supported table.tBodies host element",
+            ));
         };
 
         if element.tag_name != "table" {
-            return Err(ScriptError::new("node is not a supported table.tBodies host element"));
+            return Err(ScriptError::new(
+                "node is not a supported table.tBodies host element",
+            ));
         }
 
         let bodies = self.table_bodies(table)?;
@@ -2099,8 +2122,7 @@ impl Session {
 
     fn is_labelable_element(element: &ElementData) -> bool {
         match element.tag_name.as_str() {
-            "button" | "fieldset" | "meter" | "output" | "progress" | "select"
-            | "textarea" => true,
+            "button" | "fieldset" | "meter" | "output" | "progress" | "select" | "textarea" => true,
             "input" => !element
                 .attributes
                 .get("type")
@@ -2557,9 +2579,7 @@ impl HostBindings for Session {
         Session::document_anchors_named_item(self, name)
     }
 
-    fn html_collection_document_children_items(
-        &mut self,
-    ) -> bt_script::Result<Vec<ElementHandle>> {
+    fn html_collection_document_children_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
         Session::document_children(self)
     }
 
@@ -2691,6 +2711,18 @@ impl HostBindings for Session {
             .map_err(ScriptError::new)
     }
 
+    fn element_insert_adjacent_html(
+        &mut self,
+        element: ElementHandle,
+        position: &str,
+        value: &str,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .insert_adjacent_html(node_id, position, value)
+            .map_err(ScriptError::new)
+    }
+
     fn element_value(&mut self, element: ElementHandle) -> bt_script::Result<String> {
         let node_id = self.node_id_for_handle(element)?;
         let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
@@ -2730,6 +2762,19 @@ impl HostBindings for Session {
             .collect();
 
         Ok(children)
+    }
+
+    fn element_tag_name(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+        let node_id = self.node_id_for_handle(element)?;
+        let Some(record) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &record.kind else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        Ok(element.tag_name.clone())
     }
 
     fn element_labels(&mut self, element: ElementHandle) -> bt_script::Result<Vec<ElementHandle>> {

@@ -259,6 +259,167 @@ pub const DomStore = struct {
         return result;
     }
 
+    pub fn innerHtml(self: *const DomStore, allocator: std.mem.Allocator, node_id: NodeId) errors.Result([]u8) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        switch (node.kind) {
+            .document, .element => {},
+            else => return error.DomError,
+        }
+
+        var output: std.ArrayList(u8) = .empty;
+        errdefer output.deinit(allocator);
+
+        const raw_text_context = switch (node.kind) {
+            .element => |element| isRawTextElement(element.tag_name),
+            else => false,
+        };
+
+        for (node.children.items) |child_id| {
+            try self.serializeHtmlNodeWithContext(child_id, &output, allocator, raw_text_context);
+        }
+
+        const result = try allocator.dupe(u8, output.items);
+        output.deinit(allocator);
+        return result;
+    }
+
+    pub fn setInnerHtml(self: *DomStore, node_id: NodeId, html: []const u8) errors.Result(void) {
+        const node = self.nodeAtMut(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |*element| element,
+            else => return error.DomError,
+        };
+        if (isVoidElement(element.tag_name)) {
+            return error.DomError;
+        }
+
+        var fragment_store = try DomStore.init(self.allocator);
+        defer fragment_store.deinit();
+
+        const fragment_root = try self.parseHtmlFragmentIntoStore(&fragment_store, node_id, html);
+        const fragment_children = fragment_store.childIds(fragment_root);
+
+        const old_children = node.children.items;
+        for (old_children) |old_child| {
+            if (self.nodeAtMut(old_child)) |child_record| {
+                child_record.parent = null;
+            }
+        }
+        node.children.items.len = 0;
+
+        try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, node_id, 0);
+        return;
+    }
+
+    pub fn outerHtml(self: *const DomStore, allocator: std.mem.Allocator, node_id: NodeId) errors.Result([]u8) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        switch (node.kind) {
+            .element => {},
+            else => return error.DomError,
+        }
+
+        var output: std.ArrayList(u8) = .empty;
+        errdefer output.deinit(allocator);
+
+        try self.serializeHtmlNode(node_id, &output, allocator);
+        const result = try allocator.dupe(u8, output.items);
+        output.deinit(allocator);
+        return result;
+    }
+
+    pub fn setOuterHtml(self: *DomStore, node_id: NodeId, html: []const u8) errors.Result(void) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        switch (node.kind) {
+            .element => {},
+            .document => return error.DomError,
+            else => return error.DomError,
+        }
+
+        const parent_id = parentOf(self, node_id) orelse return;
+        const insertion_index = try self.childIndex(parent_id, node_id);
+
+        var fragment_store = try DomStore.init(self.allocator);
+        defer fragment_store.deinit();
+
+        const fragment_root = try self.parseHtmlFragmentIntoStore(&fragment_store, parent_id, html);
+        const fragment_children = fragment_store.childIds(fragment_root);
+
+        try self.removeNode(node_id);
+        try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, parent_id, insertion_index);
+        return;
+    }
+
+    pub fn insertAdjacentHtml(
+        self: *DomStore,
+        node_id: NodeId,
+        position: []const u8,
+        html: []const u8,
+    ) errors.Result(void) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |*element| element,
+            else => return error.DomError,
+        };
+
+        if (std.mem.eql(u8, position, "beforebegin")) {
+            const parent_id = parentOf(self, node_id) orelse return error.DomError;
+            const insertion_index = try self.childIndex(parent_id, node_id);
+
+            var fragment_store = try DomStore.init(self.allocator);
+            defer fragment_store.deinit();
+
+            const fragment_root = try self.parseHtmlFragmentIntoStore(&fragment_store, parent_id, html);
+            const fragment_children = fragment_store.childIds(fragment_root);
+            try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, parent_id, insertion_index);
+            return;
+        }
+
+        if (std.mem.eql(u8, position, "afterbegin")) {
+            if (isVoidElement(element.tag_name)) {
+                return error.DomError;
+            }
+
+            var fragment_store = try DomStore.init(self.allocator);
+            defer fragment_store.deinit();
+
+            const fragment_root = try self.parseHtmlFragmentIntoStore(&fragment_store, node_id, html);
+            const fragment_children = fragment_store.childIds(fragment_root);
+            try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, node_id, 0);
+            return;
+        }
+
+        if (std.mem.eql(u8, position, "beforeend")) {
+            if (isVoidElement(element.tag_name)) {
+                return error.DomError;
+            }
+
+            const insertion_index = try self.childCount(node_id);
+
+            var fragment_store = try DomStore.init(self.allocator);
+            defer fragment_store.deinit();
+
+            const fragment_root = try self.parseHtmlFragmentIntoStore(&fragment_store, node_id, html);
+            const fragment_children = fragment_store.childIds(fragment_root);
+            try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, node_id, insertion_index);
+            return;
+        }
+
+        if (std.mem.eql(u8, position, "afterend")) {
+            const parent_id = parentOf(self, node_id) orelse return error.DomError;
+            const insertion_index = try self.childIndex(parent_id, node_id) + 1;
+
+            var fragment_store = try DomStore.init(self.allocator);
+            defer fragment_store.deinit();
+
+            const fragment_root = try self.parseHtmlFragmentIntoStore(&fragment_store, parent_id, html);
+            const fragment_children = fragment_store.childIds(fragment_root);
+            try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, parent_id, insertion_index);
+            return;
+        }
+
+        return error.DomError;
+    }
+
     pub fn textContent(
         self: *const DomStore,
         allocator: std.mem.Allocator,
@@ -572,6 +733,126 @@ pub const DomStore = struct {
         return;
     }
 
+    pub fn appendChild(self: *DomStore, parent: NodeId, child: NodeId) errors.Result(NodeId) {
+        try self.insertChildrenAt(parent, try self.childCount(parent), &.{child});
+        return child;
+    }
+
+    pub fn insertBefore(
+        self: *DomStore,
+        parent: NodeId,
+        child: NodeId,
+        reference: ?NodeId,
+    ) errors.Result(NodeId) {
+        if (reference) |reference_id| {
+            if (sameNodeId(child, reference_id)) return error.DomError;
+            try self.insertChildrenBefore(parent, reference_id, &.{child});
+            return child;
+        }
+
+        return try self.appendChild(parent, child);
+    }
+
+    pub fn replaceChild(
+        self: *DomStore,
+        parent: NodeId,
+        new_child: NodeId,
+        old_child: NodeId,
+    ) errors.Result(NodeId) {
+        if (sameNodeId(new_child, old_child)) return old_child;
+        const old_parent = parentOf(self, old_child) orelse return error.DomError;
+        if (!sameNodeId(old_parent, parent)) return error.DomError;
+
+        try self.insertChildrenBefore(parent, old_child, &.{new_child});
+        try self.removeNode(old_child);
+        return old_child;
+    }
+
+    pub fn replaceChildren(
+        self: *DomStore,
+        parent: NodeId,
+        children: []const NodeId,
+    ) errors.Result(void) {
+        try self.validateMutationChildren(parent, children);
+
+        const parent_record = self.nodeAtMut(parent) orelse return error.DomError;
+        const old_children = try self.allocator.dupe(NodeId, parent_record.children.items);
+        defer self.allocator.free(old_children);
+
+        try self.insertChildrenAt(parent, 0, children);
+
+        var index = old_children.len;
+        while (index > 0) {
+            index -= 1;
+            const old_child = old_children[index];
+            if (!sliceContainsNodeId(children, old_child)) {
+                try self.removeNode(old_child);
+            }
+        }
+        return;
+    }
+
+    pub fn appendChildren(
+        self: *DomStore,
+        parent: NodeId,
+        children: []const NodeId,
+    ) errors.Result(void) {
+        try self.insertChildrenAt(parent, try self.childCount(parent), children);
+        return;
+    }
+
+    pub fn prependChildren(
+        self: *DomStore,
+        parent: NodeId,
+        children: []const NodeId,
+    ) errors.Result(void) {
+        try self.insertChildrenAt(parent, 0, children);
+        return;
+    }
+
+    pub fn insertChildrenBefore(
+        self: *DomStore,
+        parent: NodeId,
+        reference: NodeId,
+        children: []const NodeId,
+    ) errors.Result(void) {
+        const reference_parent = parentOf(self, reference) orelse return;
+        if (!sameNodeId(reference_parent, parent)) return error.DomError;
+        try self.insertChildrenAt(parent, try self.childIndex(parent, reference), children);
+        return;
+    }
+
+    pub fn insertChildrenAfter(
+        self: *DomStore,
+        parent: NodeId,
+        reference: NodeId,
+        children: []const NodeId,
+    ) errors.Result(void) {
+        const reference_parent = parentOf(self, reference) orelse return;
+        if (!sameNodeId(reference_parent, parent)) return error.DomError;
+        const index = try self.childIndex(parent, reference);
+        try self.insertChildrenAt(parent, index + 1, children);
+        return;
+    }
+
+    pub fn removeNode(self: *DomStore, node_id: NodeId) errors.Result(void) {
+        if (sameNodeId(node_id, self.documentId())) {
+            return error.DomError;
+        }
+
+        const parent_id = parentOf(self, node_id) orelse return;
+        const parent_index = try self.childIndex(parent_id, node_id);
+        const parent_record = self.nodeAtMut(parent_id) orelse return error.DomError;
+        if (parent_index >= parent_record.children.items.len or !sameNodeId(parent_record.children.items[parent_index], node_id)) {
+            return error.DomError;
+        }
+        _ = parent_record.children.orderedRemove(parent_index);
+
+        const record = self.nodeAtMut(node_id) orelse return error.DomError;
+        record.parent = null;
+        return;
+    }
+
     fn dumpNode(
         self: *const DomStore,
         node_id: NodeId,
@@ -648,6 +929,214 @@ pub const DomStore = struct {
                 try output.appendSlice(allocator, text);
             },
             .comment => {},
+        }
+    }
+
+    fn parseHtmlFragmentIntoStore(
+        self: *const DomStore,
+        fragment_store: *DomStore,
+        context_parent: NodeId,
+        html: []const u8,
+    ) errors.Result(NodeId) {
+        const context_tag = try self.fragmentContextTagName(context_parent);
+        const context_tag_copy = try duplicateString(fragment_store, context_tag);
+        const fragment_root = try fragment_store.addElement(fragment_store.documentId(), context_tag_copy, .{});
+
+        var parser = HtmlParser.init(html);
+        try parser.parseFragmentInto(fragment_store, fragment_root);
+        return fragment_root;
+    }
+
+    fn fragmentContextTagName(self: *const DomStore, context_parent: NodeId) errors.Result([]const u8) {
+        const node = self.nodeAt(context_parent) orelse return error.DomError;
+        return switch (node.kind) {
+            .document => "div",
+            .element => |element| element.tag_name,
+            else => return error.DomError,
+        };
+    }
+
+    fn cloneFragmentChildrenInto(
+        self: *DomStore,
+        fragment_store: *const DomStore,
+        fragment_children: []const NodeId,
+        parent: NodeId,
+        insertion_index: usize,
+    ) errors.Result(void) {
+        var next_index = insertion_index;
+        for (fragment_children) |child_id| {
+            _ = try self.cloneSubtreeAt(fragment_store, child_id, parent, next_index);
+            next_index += 1;
+        }
+    }
+
+    fn cloneSubtreeAt(
+        self: *DomStore,
+        source: *const DomStore,
+        source_node_id: NodeId,
+        parent: NodeId,
+        insertion_index: usize,
+    ) errors.Result(NodeId) {
+        const source_node = source.nodeAt(source_node_id) orelse return error.DomError;
+        const created = switch (source_node.kind) {
+            .document => return error.DomError,
+            .text => |text| try self.addText(parent, text),
+            .comment => |comment| try self.addComment(parent, comment),
+            .element => |element| blk: {
+                var attributes: std.ArrayListUnmanaged(Attribute) = .{};
+                for (element.attributes.items) |attribute| {
+                    try attributes.append(self.arena.allocator(), .{
+                        .name = try duplicateString(self, attribute.name),
+                        .value = try duplicateString(self, attribute.value),
+                    });
+                }
+                const node_id = try self.addElement(parent, try duplicateString(self, element.tag_name), attributes);
+                break :blk node_id;
+            },
+        };
+
+        try self.moveAppendedChildToIndex(parent, created, insertion_index);
+
+        if (source_node.kind == .element) {
+            const source_children = source_node.children.items;
+            var child_index: usize = 0;
+            while (child_index < source_children.len) : (child_index += 1) {
+                _ = try self.cloneSubtreeAt(source, source_children[child_index], created, child_index);
+            }
+        }
+
+        return created;
+    }
+
+    fn moveAppendedChildToIndex(
+        self: *DomStore,
+        parent: NodeId,
+        child: NodeId,
+        insertion_index: usize,
+    ) errors.Result(void) {
+        const arena_alloc = self.arena.allocator();
+        const parent_record = self.nodeAtMut(parent) orelse return error.DomError;
+        if (parent_record.children.items.len == 0) return error.DomError;
+
+        const last_index = parent_record.children.items.len - 1;
+        if (!sameNodeId(parent_record.children.items[last_index], child)) {
+            return error.DomError;
+        }
+
+        const moved = parent_record.children.orderedRemove(last_index);
+        const target_index = if (insertion_index > parent_record.children.items.len) parent_record.children.items.len else insertion_index;
+        try parent_record.children.insert(arena_alloc, target_index, moved);
+    }
+
+    fn serializeHtmlNode(
+        self: *const DomStore,
+        node_id: NodeId,
+        output: *std.ArrayList(u8),
+        allocator: std.mem.Allocator,
+    ) errors.Result(void) {
+        try self.serializeHtmlNodeWithContext(node_id, output, allocator, false);
+    }
+
+    fn serializeHtmlNodeWithContext(
+        self: *const DomStore,
+        node_id: NodeId,
+        output: *std.ArrayList(u8),
+        allocator: std.mem.Allocator,
+        raw_text_context: bool,
+    ) errors.Result(void) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        switch (node.kind) {
+            .document => {
+                for (node.children.items) |child_id| {
+                    try self.serializeHtmlNodeWithContext(child_id, output, allocator, raw_text_context);
+                }
+            },
+            .text => |text| {
+                if (raw_text_context) {
+                    try output.appendSlice(allocator, text);
+                } else {
+                    try appendEscapedHtmlText(output, allocator, text);
+                }
+            },
+            .comment => |comment| {
+                try output.appendSlice(allocator, "<!--");
+                try output.appendSlice(allocator, comment);
+                try output.appendSlice(allocator, "-->");
+            },
+            .element => |element| {
+                try output.appendSlice(allocator, "<");
+                try output.appendSlice(allocator, element.tag_name);
+                try self.serializeHtmlAttributes(&element, output, allocator);
+
+                if (isVoidElement(element.tag_name)) {
+                    if (node.children.items.len > 0) {
+                        return error.DomError;
+                    }
+                    try output.appendSlice(allocator, ">");
+                    return;
+                }
+
+                try output.appendSlice(allocator, ">");
+                const child_raw_text_context = isRawTextElement(element.tag_name);
+                for (node.children.items) |child_id| {
+                    try self.serializeHtmlNodeWithContext(child_id, output, allocator, child_raw_text_context);
+                }
+                try output.appendSlice(allocator, "</");
+                try output.appendSlice(allocator, element.tag_name);
+                try output.appendSlice(allocator, ">");
+            },
+        }
+    }
+
+    fn serializeHtmlAttributes(
+        self: *const DomStore,
+        element: *const ElementData,
+        output: *std.ArrayList(u8),
+        allocator: std.mem.Allocator,
+    ) errors.Result(void) {
+        _ = self;
+        if (element.attributes.items.len == 0) {
+            return;
+        }
+
+        var indices: std.ArrayList(usize) = .empty;
+        defer indices.deinit(allocator);
+        for (0..element.attributes.items.len) |index| {
+            try indices.append(allocator, index);
+        }
+
+        var index: usize = 0;
+        while (index < indices.items.len) : (index += 1) {
+            var smallest = index;
+            var scan = index + 1;
+            while (scan < indices.items.len) : (scan += 1) {
+                if (lessThanBytes(
+                    element.attributes.items[indices.items[scan]].name,
+                    element.attributes.items[indices.items[smallest]].name,
+                )) {
+                    smallest = scan;
+                }
+            }
+            if (smallest != index) {
+                const temp = indices.items[index];
+                indices.items[index] = indices.items[smallest];
+                indices.items[smallest] = temp;
+            }
+        }
+
+        for (indices.items) |attr_index| {
+            const attribute = element.attributes.items[attr_index];
+            try output.appendSlice(allocator, " ");
+            try output.appendSlice(allocator, attribute.name);
+            if (attribute.value.len == 0) {
+                continue;
+            }
+
+            const quote: u8 = if (std.mem.indexOfScalar(u8, attribute.value, '"') == null) '"' else if (std.mem.indexOfScalar(u8, attribute.value, '\'') == null) '\'' else return error.DomError;
+            try output.append(allocator, '=');
+            try output.append(allocator, quote);
+            try output.appendSlice(allocator, attribute.value);
+            try output.append(allocator, quote);
         }
     }
 
@@ -780,6 +1269,138 @@ pub const DomStore = struct {
         return null;
     }
 
+    fn ensureMutationParent(self: *const DomStore, parent: NodeId) errors.Result(void) {
+        const node = self.nodeAt(parent) orelse return error.DomError;
+        switch (node.kind) {
+            .document, .element => return,
+            else => return error.DomError,
+        }
+    }
+
+    fn childCount(self: *const DomStore, parent: NodeId) errors.Result(usize) {
+        try self.ensureMutationParent(parent);
+        const node = self.nodeAt(parent) orelse return error.DomError;
+        return node.children.items.len;
+    }
+
+    fn childIndex(self: *const DomStore, parent: NodeId, child: NodeId) errors.Result(usize) {
+        try self.ensureMutationParent(parent);
+        const node = self.nodeAt(parent) orelse return error.DomError;
+        for (node.children.items, 0..) |candidate, index| {
+            if (sameNodeId(candidate, child)) {
+                return index;
+            }
+        }
+        return error.DomError;
+    }
+
+    fn validateMutationChildren(self: *const DomStore, parent: NodeId, children: []const NodeId) errors.Result(void) {
+        try self.ensureMutationParent(parent);
+
+        for (children, 0..) |child, index| {
+            const node = self.nodeAt(child) orelse return error.DomError;
+            if (sameNodeId(child, self.documentId())) return error.DomError;
+            if (sameNodeId(child, parent)) return error.DomError;
+            switch (node.kind) {
+                .document => return error.DomError,
+                else => {},
+            }
+
+            for (children[0..index]) |previous| {
+                if (sameNodeId(previous, child)) return error.DomError;
+            }
+
+            var ancestor = parentOf(self, parent);
+            while (ancestor) |ancestor_id| {
+                if (sameNodeId(ancestor_id, child)) return error.DomError;
+                ancestor = parentOf(self, ancestor_id);
+            }
+        }
+
+        return;
+    }
+
+    fn insertChildrenAt(
+        self: *DomStore,
+        parent: NodeId,
+        insertion_index: usize,
+        children: []const NodeId,
+    ) errors.Result(void) {
+        try self.validateMutationChildren(parent, children);
+
+        if (children.len == 0) {
+            return;
+        }
+
+        const parent_len = try self.childCount(parent);
+        const insertion_point = if (insertion_index > parent_len) parent_len else insertion_index;
+        var adjusted_insertion_index = insertion_point;
+        var moved_before_insertion: usize = 0;
+
+        const ChildMove = struct {
+            old_parent: NodeId,
+            old_index: usize,
+            child: NodeId,
+        };
+
+        var pending: std.ArrayList(ChildMove) = .empty;
+        defer pending.deinit(self.allocator);
+
+        for (children) |child| {
+            const old_parent = parentOf(self, child) orelse continue;
+            const old_index = try self.childIndex(old_parent, child);
+            if (sameNodeId(old_parent, parent) and old_index < insertion_point) {
+                moved_before_insertion += 1;
+            }
+            try pending.append(self.allocator, .{
+                .old_parent = old_parent,
+                .old_index = old_index,
+                .child = child,
+            });
+        }
+
+        if (moved_before_insertion > adjusted_insertion_index) {
+            adjusted_insertion_index = 0;
+        } else {
+            adjusted_insertion_index -= moved_before_insertion;
+        }
+
+        while (pending.items.len > 0) {
+            var chosen_index: usize = 0;
+            var chosen_move = pending.items[0];
+            for (pending.items[1..], 1..) |move, index| {
+                if (move.old_index > chosen_move.old_index) {
+                    chosen_index = index;
+                    chosen_move = move;
+                }
+            }
+
+            _ = pending.swapRemove(chosen_index);
+
+            const old_parent_record = self.nodeAtMut(chosen_move.old_parent) orelse return error.DomError;
+            if (chosen_move.old_index >= old_parent_record.children.items.len or !sameNodeId(old_parent_record.children.items[chosen_move.old_index], chosen_move.child)) {
+                return error.DomError;
+            }
+            _ = old_parent_record.children.orderedRemove(chosen_move.old_index);
+
+            const moved_record = self.nodeAtMut(chosen_move.child) orelse return error.DomError;
+            moved_record.parent = null;
+        }
+
+        var insertion_pos = adjusted_insertion_index;
+        const arena_alloc = self.arena.allocator();
+        for (children) |child| {
+            const parent_record = self.nodeAtMut(parent) orelse return error.DomError;
+            try parent_record.children.insert(arena_alloc, insertion_pos, child);
+
+            const record = self.nodeAtMut(child) orelse return error.DomError;
+            record.parent = parent;
+            insertion_pos += 1;
+        }
+
+        return;
+    }
+
     fn addElement(
         self: *DomStore,
         parent: NodeId,
@@ -797,7 +1418,7 @@ pub const DomStore = struct {
                 .attributes = attributes,
             } },
         });
-        try self.appendChild(parent, node_id);
+        try self.attachNode(parent, node_id);
         return node_id;
     }
 
@@ -811,7 +1432,7 @@ pub const DomStore = struct {
             .children = .{},
             .kind = .{ .text = text_copy },
         });
-        try self.appendChild(parent, node_id);
+        try self.attachNode(parent, node_id);
         return node_id;
     }
 
@@ -825,11 +1446,11 @@ pub const DomStore = struct {
             .children = .{},
             .kind = .{ .comment = text_copy },
         });
-        try self.appendChild(parent, node_id);
+        try self.attachNode(parent, node_id);
         return node_id;
     }
 
-    fn appendChild(self: *DomStore, parent: NodeId, child: NodeId) errors.Result(void) {
+    fn attachNode(self: *DomStore, parent: NodeId, child: NodeId) errors.Result(void) {
         const parent_index: usize = @intCast(parent.index);
         if (parent_index >= self.nodes.items.len) return error.HtmlParse;
         const arena_alloc = self.arena.allocator();
@@ -910,13 +1531,29 @@ const HtmlParser = struct {
         var stack: std.ArrayListUnmanaged(NodeId) = .{};
         const arena_alloc = store.arena.allocator();
         try stack.append(arena_alloc, store.documentId());
+        try self.parseIntoWithStack(store, &stack, 1);
+    }
 
+    fn parseFragmentInto(self: *HtmlParser, store: *DomStore, parent: NodeId) errors.Result(void) {
+        var stack: std.ArrayListUnmanaged(NodeId) = .{};
+        const arena_alloc = store.arena.allocator();
+        try stack.append(arena_alloc, store.documentId());
+        try stack.append(arena_alloc, parent);
+        try self.parseIntoWithStack(store, &stack, 2);
+    }
+
+    fn parseIntoWithStack(
+        self: *HtmlParser,
+        store: *DomStore,
+        stack: *std.ArrayListUnmanaged(NodeId),
+        expected_stack_len: usize,
+    ) errors.Result(void) {
         while (self.pos < self.bytes.len) {
             const current_parent = stack.items[stack.items.len - 1];
             if (store.tagNameForNode(current_parent)) |tag_name| {
                 if (isRawTextElement(tag_name)) {
                     const rest = self.input[self.pos..];
-                    const closing_tag = try std.fmt.allocPrint(arena_alloc, "</{s}>", .{tag_name});
+                    const closing_tag = try std.fmt.allocPrint(store.arena.allocator(), "</{s}>", .{tag_name});
                     if (findCaseInsensitive(rest, closing_tag)) |offset| {
                         if (offset > 0) {
                             _ = try store.addText(current_parent, rest[0..offset]);
@@ -940,7 +1577,7 @@ const HtmlParser = struct {
                 }
 
                 if (self.startsWith("</")) {
-                    try self.parseClosingTag(store, &stack);
+                    try self.parseClosingTag(store, stack, expected_stack_len);
                     continue;
                 }
 
@@ -949,14 +1586,14 @@ const HtmlParser = struct {
                     continue;
                 }
 
-                try self.parseStartTag(store, &stack);
+                try self.parseStartTag(store, stack);
                 continue;
             }
 
             try self.parseText(store, current_parent);
         }
 
-        if (stack.items.len != 1) {
+        if (stack.items.len != expected_stack_len) {
             return error.HtmlParse;
         }
 
@@ -1047,7 +1684,12 @@ const HtmlParser = struct {
         }
     }
 
-    fn parseClosingTag(self: *HtmlParser, store: *DomStore, stack: *std.ArrayListUnmanaged(NodeId)) errors.Result(void) {
+    fn parseClosingTag(
+        self: *HtmlParser,
+        store: *DomStore,
+        stack: *std.ArrayListUnmanaged(NodeId),
+        min_stack_len: usize,
+    ) errors.Result(void) {
         self.pos += 2;
         self.skipWhitespace();
         if (self.pos >= self.bytes.len or !isTagNameByte(self.currentByte().?)) {
@@ -1059,7 +1701,7 @@ const HtmlParser = struct {
         if (self.currentByte() != '>') return error.HtmlParse;
         self.pos += 1;
 
-        if (stack.items.len <= 1) {
+        if (stack.items.len <= min_stack_len) {
             return error.HtmlParse;
         }
 
@@ -1260,6 +1902,31 @@ fn writeEscapedAttr(
             else => try output.append(allocator, byte),
         }
     }
+}
+
+fn appendEscapedHtmlText(
+    output: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    value: []const u8,
+) errors.Result(void) {
+    for (value) |byte| {
+        switch (byte) {
+            '&' => try output.appendSlice(allocator, "&amp;"),
+            '<' => try output.appendSlice(allocator, "&lt;"),
+            '>' => try output.appendSlice(allocator, "&gt;"),
+            else => try output.append(allocator, byte),
+        }
+    }
+}
+
+fn lessThanBytes(left: []const u8, right: []const u8) bool {
+    const limit = if (left.len < right.len) left.len else right.len;
+    var index: usize = 0;
+    while (index < limit) : (index += 1) {
+        if (left[index] < right[index]) return true;
+        if (left[index] > right[index]) return false;
+    }
+    return left.len < right.len;
 }
 
 fn appendSelectorChains(
@@ -1536,6 +2203,17 @@ fn skipSelectorWhitespace(selector: []const u8, pos: *usize) bool {
 fn parentOf(self: *const DomStore, node_id: NodeId) ?NodeId {
     const node = self.nodeAt(node_id) orelse return null;
     return node.parent;
+}
+
+fn sameNodeId(left: NodeId, right: NodeId) bool {
+    return left.index == right.index and left.generation == right.generation;
+}
+
+fn sliceContainsNodeId(nodes: []const NodeId, needle: NodeId) bool {
+    for (nodes) |candidate| {
+        if (sameNodeId(candidate, needle)) return true;
+    }
+    return false;
 }
 
 fn collectSelectorMatches(
@@ -2192,6 +2870,192 @@ test "phase eight: attribute reflection updates selectors and form state" {
     const mode_value = try store.valueForNode(allocator, mode);
     defer allocator.free(mode_value);
     try std.testing.expectEqualStrings("b", mode_value);
+}
+
+test "phase eight: tree mutation primitives preserve order in DomStore" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml("<main id='root'><section id='target'><span id='placeholder'>Placeholder</span></section><button id='first'>First</button><button id='second'>Second</button><button id='third'>Third</button></main>");
+
+    const target = store.findElementById("target").?;
+    const first = store.findElementById("first").?;
+    const second = store.findElementById("second").?;
+    const third = store.findElementById("third").?;
+    const placeholder = store.findElementById("placeholder").?;
+
+    try store.appendChildren(target, &.{ first, second });
+    try store.prependChildren(target, &.{third});
+    try store.replaceChildren(target, &.{ first, placeholder, second });
+
+    const target_text = try store.textContent(allocator, target);
+    defer allocator.free(target_text);
+    try std.testing.expectEqualStrings("FirstPlaceholderSecond", target_text);
+
+    const target_buttons = try store.select(allocator, "#target > button");
+    defer allocator.free(target_buttons);
+    try std.testing.expectEqual(@as(usize, 2), target_buttons.len);
+    try std.testing.expectEqual(first, target_buttons[0]);
+    try std.testing.expectEqual(second, target_buttons[1]);
+
+    const placeholder_nodes = try store.select(allocator, "#target > #placeholder");
+    defer allocator.free(placeholder_nodes);
+    try std.testing.expectEqual(@as(usize, 1), placeholder_nodes.len);
+}
+
+test "phase eight: HTML serialization surfaces round-trip fragments in DomStore" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml("<main id='root'><section id='target'><button id='old' class='primary'>Old</button></section><div id='out'></div><script id='script'>const raw = \"<span id='first'>One</span><span id='second'>Two</span>\";</script></main>");
+
+    const target = store.findElementById("target").?;
+    const script = store.findElementById("script").?;
+
+    const before = try store.innerHtml(allocator, target);
+    defer allocator.free(before);
+    try std.testing.expectEqualStrings("<button class=\"primary\" id=\"old\">Old</button>", before);
+
+    const script_html = try store.innerHtml(allocator, script);
+    defer allocator.free(script_html);
+    try std.testing.expectEqualStrings("const raw = \"<span id='first'>One</span><span id='second'>Two</span>\";", script_html);
+
+    try store.setInnerHtml(target, "<span id=\"first\">One</span><span id=\"second\">Two</span>");
+
+    const after = try store.innerHtml(allocator, target);
+    defer allocator.free(after);
+    try std.testing.expectEqualStrings("<span id=\"first\">One</span><span id=\"second\">Two</span>", after);
+
+    const outer = try store.outerHtml(allocator, target);
+    defer allocator.free(outer);
+    try std.testing.expectEqualStrings("<section id=\"target\"><span id=\"first\">One</span><span id=\"second\">Two</span></section>", outer);
+
+    const old_nodes = try store.select(allocator, "#old");
+    defer allocator.free(old_nodes);
+    try std.testing.expectEqual(@as(usize, 0), old_nodes.len);
+
+    try store.setOuterHtml(target, "<article id=\"replacement\"><em id=\"inner\">Inner</em></article>");
+
+    const replacement = store.findElementById("replacement").?;
+    const replacement_html = try store.outerHtml(allocator, replacement);
+    defer allocator.free(replacement_html);
+    try std.testing.expectEqualStrings("<article id=\"replacement\"><em id=\"inner\">Inner</em></article>", replacement_html);
+
+    const replacement_nodes = try store.select(allocator, "#replacement");
+    defer allocator.free(replacement_nodes);
+    try std.testing.expectEqual(@as(usize, 1), replacement_nodes.len);
+
+    const inner_nodes = try store.select(allocator, "#inner");
+    defer allocator.free(inner_nodes);
+    try std.testing.expectEqual(@as(usize, 1), inner_nodes.len);
+}
+
+test "phase eight: HTML serialization surfaces support insertAdjacentHTML positions in DomStore" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml("<main id='root'><section id='target'><button id='old' class='primary'>Old</button></section></main>");
+
+    const target = store.findElementById("target").?;
+    try store.insertAdjacentHtml(target, "beforebegin", "<aside id=\"before\">Before</aside>");
+    try store.insertAdjacentHtml(target, "afterbegin", "<span id=\"first\">First</span>");
+    try store.insertAdjacentHtml(target, "beforeend", "<span id=\"last\">Last</span>");
+    try store.insertAdjacentHtml(target, "afterend", "<aside id=\"after\">After</aside>");
+
+    const root = store.findElementById("root").?;
+    const root_html = try store.innerHtml(allocator, root);
+    defer allocator.free(root_html);
+    try std.testing.expectEqualStrings(
+        "<aside id=\"before\">Before</aside><section id=\"target\"><span id=\"first\">First</span><button class=\"primary\" id=\"old\">Old</button><span id=\"last\">Last</span></section><aside id=\"after\">After</aside>",
+        root_html,
+    );
+
+    const target_html = try store.innerHtml(allocator, target);
+    defer allocator.free(target_html);
+    try std.testing.expectEqualStrings(
+        "<span id=\"first\">First</span><button class=\"primary\" id=\"old\">Old</button><span id=\"last\">Last</span>",
+        target_html,
+    );
+
+    const before_nodes = try store.select(allocator, "#before");
+    defer allocator.free(before_nodes);
+    try std.testing.expectEqual(@as(usize, 1), before_nodes.len);
+
+    const after_nodes = try store.select(allocator, "#after");
+    defer allocator.free(after_nodes);
+    try std.testing.expectEqual(@as(usize, 1), after_nodes.len);
+}
+
+test "failure: HTML serialization surfaces reject malformed fragments in DomStore" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml("<main id='root'><section id='target'></section></main>");
+
+    const target = store.findElementById("target").?;
+    try std.testing.expectError(error.HtmlParse, store.setInnerHtml(target, "<span></main>"));
+}
+
+test "failure: HTML serialization surfaces reject insertAdjacentHTML positions in DomStore" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml("<main id='root'><section id='target'></section></main>");
+
+    const target = store.findElementById("target").?;
+    try std.testing.expectError(error.DomError, store.insertAdjacentHtml(target, "middle", "<span id='bad'>Bad</span>"));
+}
+
+test "failure: HTML serialization surfaces reject insertAdjacentHTML on void elements in DomStore" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml("<main id='root'><img id='image'><section id='target'></section></main>");
+
+    const image = store.findElementById("image").?;
+    try std.testing.expectError(error.DomError, store.insertAdjacentHtml(image, "beforeend", "<span id='bad'>Bad</span>"));
+}
+
+test "failure: HTML serialization surfaces reject detached insertAdjacentHTML in DomStore" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml("<main id='root'><section id='target'><span id='old'>Old</span></section></main>");
+
+    const target = store.findElementById("target").?;
+    try store.setOuterHtml(target, "<section id=\"replacement\"></section>");
+    try std.testing.expectError(error.DomError, store.insertAdjacentHtml(target, "beforebegin", "<aside id='before'>Before</aside>"));
+}
+
+test "failure: HTML serialization surfaces reject lossy attribute serialization in DomStore" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml("<main id='root'><div id='target'></div></main>");
+
+    const target = store.findElementById("target").?;
+    try store.setAttribute(target, "data-label", "a'b\"c");
+    try std.testing.expectError(error.DomError, store.outerHtml(allocator, target));
+}
+
+test "failure: tree mutation rejects ancestor cycles in DomStore" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml("<main id='root'><section id='child'><span id='grandchild'>x</span></section></main>");
+
+    const root = store.findElementById("root").?;
+    const child = store.findElementById("child").?;
+    try std.testing.expectError(error.DomError, store.appendChild(child, root));
 }
 
 test "phase eight: empty attribute names are rejected explicitly" {

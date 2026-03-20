@@ -173,6 +173,8 @@ const Value = union(enum) {
     number: f64,
     string: []const u8,
     element: dom.NodeId,
+    class_list: dom.NodeId,
+    dataset: dom.NodeId,
     node_list: NodeList,
     event: *ScriptEvent,
     function: ScriptFunction,
@@ -683,6 +685,24 @@ fn evalAssignment(
     const object = try evalExpr(allocator, host, bindings, target.object);
     switch (object) {
         .element => |element| {
+            if (std.mem.eql(u8, target.property, "innerHTML")) {
+                const html = try asString(allocator, value);
+                try host.domStoreMut().setInnerHtml(element, html);
+                return;
+            }
+
+            if (std.mem.eql(u8, target.property, "outerHTML")) {
+                const html = try asString(allocator, value);
+                try host.domStoreMut().setOuterHtml(element, html);
+                return;
+            }
+
+            if (std.mem.eql(u8, target.property, "className")) {
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "class", text);
+                return;
+            }
+
             if (std.mem.eql(u8, target.property, "textContent")) {
                 const text = try asString(allocator, value);
                 try host.domStoreMut().setTextContent(element, text);
@@ -700,8 +720,23 @@ fn evalAssignment(
                 return;
             }
 
+            if (std.mem.eql(u8, target.property, "classList")) {
+                return error.ScriptRuntime;
+            }
+
+            if (std.mem.eql(u8, target.property, "dataset")) {
+                return error.ScriptRuntime;
+            }
+
             return error.ScriptRuntime;
         },
+        .dataset => |element| {
+            const attribute_name = try datasetAttributeName(allocator, target.property);
+            const text = try asString(allocator, value);
+            try host.domStoreMut().setAttribute(element, attribute_name, text);
+            return;
+        },
+        .class_list => return error.ScriptRuntime,
         else => return error.ScriptRuntime,
     }
 }
@@ -760,6 +795,24 @@ fn evalMember(
         else
             error.ScriptRuntime,
         .element => |element| blk: {
+            if (std.mem.eql(u8, member.property, "innerHTML")) {
+                const html = try host.domStore().innerHtml(allocator, element);
+                break :blk Value{ .string = html };
+            }
+            if (std.mem.eql(u8, member.property, "outerHTML")) {
+                const html = try host.domStore().outerHtml(allocator, element);
+                break :blk Value{ .string = html };
+            }
+            if (std.mem.eql(u8, member.property, "className")) {
+                const class_name = (try host.domStore().getAttribute(element, "class")) orelse "";
+                break :blk Value{ .string = class_name };
+            }
+            if (std.mem.eql(u8, member.property, "classList")) {
+                break :blk Value{ .class_list = element };
+            }
+            if (std.mem.eql(u8, member.property, "dataset")) {
+                break :blk Value{ .dataset = element };
+            }
             if (std.mem.eql(u8, member.property, "textContent")) {
                 const text = try host.domStore().textContent(allocator, element);
                 break :blk Value{ .string = text };
@@ -772,6 +825,25 @@ fn evalMember(
                 break :blk Value{ .boolean = host.domStore().checkedForNode(element) orelse false };
             }
             break :blk error.ScriptRuntime;
+        },
+        .class_list => blk: {
+            if (std.mem.eql(u8, member.property, "length")) {
+                var tokens = try classListTokens(allocator, host, object.class_list);
+                defer tokens.deinit(allocator);
+                break :blk Value{ .number = @floatFromInt(tokens.items.len) };
+            }
+            break :blk error.ScriptRuntime;
+        },
+        .dataset => blk: {
+            const attribute_name = try datasetAttributeName(allocator, member.property);
+            const value = host.domStore().getAttribute(object.dataset, attribute_name) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            if (value) |text| {
+                break :blk Value{ .string = text };
+            }
+            break :blk Value{ .undefined_value = {} };
         },
         .node_list => |list| blk: {
             if (std.mem.eql(u8, member.property, "length")) {
@@ -937,6 +1009,35 @@ fn evalMethodCall(
                 else => return error.ScriptRuntime,
             };
             break :blk Value{ .boolean = present };
+        } else if (std.mem.eql(u8, method, "insertAdjacentHTML")) blk: {
+            if (args.len != 2) return error.ScriptRuntime;
+            const position_value = try evalExpr(allocator, host, bindings, args[0]);
+            const position = try asString(allocator, position_value);
+            const html_value = try evalExpr(allocator, host, bindings, args[1]);
+            const html = try asString(allocator, html_value);
+            host.domStoreMut().insertAdjacentHtml(element, position, html) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "appendChild")) blk: {
+            break :blk try elementAppendChild(allocator, host, bindings, element, args);
+        } else if (std.mem.eql(u8, method, "insertBefore")) blk: {
+            break :blk try elementInsertBefore(allocator, host, bindings, element, args);
+        } else if (std.mem.eql(u8, method, "replaceChild")) blk: {
+            break :blk try elementReplaceChild(allocator, host, bindings, element, args);
+        } else if (std.mem.eql(u8, method, "replaceChildren")) blk: {
+            break :blk try elementReplaceChildren(allocator, host, bindings, element, args);
+        } else if (std.mem.eql(u8, method, "append")) blk: {
+            break :blk try elementAppend(allocator, host, bindings, element, args);
+        } else if (std.mem.eql(u8, method, "prepend")) blk: {
+            break :blk try elementPrepend(allocator, host, bindings, element, args);
+        } else if (std.mem.eql(u8, method, "before")) blk: {
+            break :blk try elementBefore(allocator, host, bindings, element, args);
+        } else if (std.mem.eql(u8, method, "after")) blk: {
+            break :blk try elementAfter(allocator, host, bindings, element, args);
+        } else if (std.mem.eql(u8, method, "remove")) blk: {
+            break :blk try elementRemove(allocator, host, bindings, element, args);
         } else if (std.mem.eql(u8, method, "querySelector")) blk: {
             if (args.len != 1) return error.ScriptRuntime;
             const selector_value = try evalExpr(allocator, host, bindings, args[0]);
@@ -982,6 +1083,111 @@ fn evalMethodCall(
         } else if (std.mem.eql(u8, method, "addEventListener")) blk: {
             break :blk try registerListener(allocator, host, bindings, .{ .element = element }, args);
         } else error.ScriptRuntime,
+        .class_list => |element| if (std.mem.eql(u8, method, "contains")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const token_value = try evalExpr(allocator, host, bindings, args[0]);
+            const token = try validateClassListToken(allocator, token_value);
+            var tokens = try classListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            break :blk Value{ .boolean = classListContains(tokens.items, token) };
+        } else if (std.mem.eql(u8, method, "add")) blk: {
+            if (args.len == 0) return error.ScriptRuntime;
+            var tokens = try classListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+
+            var changed = false;
+            for (args) |arg| {
+                const token_value = try evalExpr(allocator, host, bindings, arg);
+                const token = try validateClassListToken(allocator, token_value);
+                if (!classListContains(tokens.items, token)) {
+                    try tokens.append(allocator, token);
+                    changed = true;
+                }
+            }
+
+            if (changed) {
+                try writeClassListTokens(allocator, host, element, tokens.items);
+            }
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "remove")) blk: {
+            if (args.len == 0) return error.ScriptRuntime;
+            var tokens = try classListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+
+            const original_len = tokens.items.len;
+            for (args) |arg| {
+                const token_value = try evalExpr(allocator, host, bindings, arg);
+                const token = try validateClassListToken(allocator, token_value);
+                var index: usize = 0;
+                while (index < tokens.items.len) : (index += 1) {
+                    if (std.mem.eql(u8, tokens.items[index], token)) {
+                        _ = tokens.orderedRemove(index);
+                        break;
+                    }
+                }
+            }
+
+            if (tokens.items.len != original_len) {
+                try writeClassListTokens(allocator, host, element, tokens.items);
+            }
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "toggle")) blk: {
+            if (args.len != 1 and args.len != 2) return error.ScriptRuntime;
+            const token_value = try evalExpr(allocator, host, bindings, args[0]);
+            const token = try validateClassListToken(allocator, token_value);
+            const force: ?bool = if (args.len == 2) force_value_blk: {
+                const force_value = try evalExpr(allocator, host, bindings, args[1]);
+                break :force_value_blk isTruthy(force_value);
+            } else null;
+
+            var tokens = try classListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            const present = classListContains(tokens.items, token);
+            const now_present = if (force) |forced| present_blk: {
+                if (forced) {
+                    if (!present) {
+                        try tokens.append(allocator, token);
+                        try writeClassListTokens(allocator, host, element, tokens.items);
+                    }
+                    break :present_blk true;
+                }
+
+                if (present) {
+                    var index: usize = 0;
+                    while (index < tokens.items.len) : (index += 1) {
+                        if (std.mem.eql(u8, tokens.items[index], token)) {
+                            _ = tokens.orderedRemove(index);
+                            break;
+                        }
+                    }
+                    try writeClassListTokens(allocator, host, element, tokens.items);
+                }
+                break :present_blk false;
+            } else present_blk: {
+                if (present) {
+                    var index: usize = 0;
+                    while (index < tokens.items.len) : (index += 1) {
+                        if (std.mem.eql(u8, tokens.items[index], token)) {
+                            _ = tokens.orderedRemove(index);
+                            break;
+                        }
+                    }
+                    try writeClassListTokens(allocator, host, element, tokens.items);
+                    break :present_blk false;
+                }
+
+                try tokens.append(allocator, token);
+                try writeClassListTokens(allocator, host, element, tokens.items);
+                break :present_blk true;
+            };
+
+            break :blk Value{ .boolean = now_present };
+        } else if (std.mem.eql(u8, method, "item")) blk: {
+            break :blk error.ScriptRuntime;
+        } else if (std.mem.eql(u8, method, "length")) blk: {
+            break :blk error.ScriptRuntime;
+        } else error.ScriptRuntime,
+        .dataset => |_| error.ScriptRuntime,
         .node_list => |list| if (std.mem.eql(u8, method, "item")) blk: {
             if (args.len != 1) return error.ScriptRuntime;
             const index_value = try evalExpr(allocator, host, bindings, args[0]);
@@ -1036,6 +1242,205 @@ fn registerListener(
     return Value{ .undefined_value = {} };
 }
 
+fn elementAppendChild(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    element: dom.NodeId,
+    args: []*Expr,
+) errors.Result(Value) {
+    if (args.len != 1) return error.ScriptRuntime;
+
+    const child = try evalElementHandle(allocator, host, bindings, args[0]);
+    const appended = host.domStoreMut().appendChild(element, child) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+    return Value{ .element = appended };
+}
+
+fn elementInsertBefore(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    element: dom.NodeId,
+    args: []*Expr,
+) errors.Result(Value) {
+    if (args.len != 2) return error.ScriptRuntime;
+
+    const child = try evalElementHandle(allocator, host, bindings, args[0]);
+    const reference = try evalOptionalElementHandle(allocator, host, bindings, args[1]);
+    const inserted = host.domStoreMut().insertBefore(element, child, reference) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+    return Value{ .element = inserted };
+}
+
+fn elementReplaceChild(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    element: dom.NodeId,
+    args: []*Expr,
+) errors.Result(Value) {
+    if (args.len != 2) return error.ScriptRuntime;
+
+    const new_child = try evalElementHandle(allocator, host, bindings, args[0]);
+    const old_child = try evalElementHandle(allocator, host, bindings, args[1]);
+    const replaced = host.domStoreMut().replaceChild(element, new_child, old_child) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+    return Value{ .element = replaced };
+}
+
+fn elementReplaceChildren(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    element: dom.NodeId,
+    args: []*Expr,
+) errors.Result(Value) {
+    var children = try evalElementArguments(allocator, host, bindings, args);
+    defer children.deinit(allocator);
+    host.domStoreMut().replaceChildren(element, children.items) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+    return Value{ .undefined_value = {} };
+}
+
+fn elementAppend(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    element: dom.NodeId,
+    args: []*Expr,
+) errors.Result(Value) {
+    var children = try evalElementArguments(allocator, host, bindings, args);
+    defer children.deinit(allocator);
+    host.domStoreMut().appendChildren(element, children.items) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+    return Value{ .undefined_value = {} };
+}
+
+fn elementPrepend(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    element: dom.NodeId,
+    args: []*Expr,
+) errors.Result(Value) {
+    var children = try evalElementArguments(allocator, host, bindings, args);
+    defer children.deinit(allocator);
+    host.domStoreMut().prependChildren(element, children.items) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+    return Value{ .undefined_value = {} };
+}
+
+fn elementBefore(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    element: dom.NodeId,
+    args: []*Expr,
+) errors.Result(Value) {
+    var children = try evalElementArguments(allocator, host, bindings, args);
+    defer children.deinit(allocator);
+
+    const node = host.domStore().nodeAt(element) orelse return error.ScriptRuntime;
+    const parent = node.parent orelse return Value{ .undefined_value = {} };
+    host.domStoreMut().insertChildrenBefore(parent, element, children.items) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+    return Value{ .undefined_value = {} };
+}
+
+fn elementAfter(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    element: dom.NodeId,
+    args: []*Expr,
+) errors.Result(Value) {
+    var children = try evalElementArguments(allocator, host, bindings, args);
+    defer children.deinit(allocator);
+
+    const node = host.domStore().nodeAt(element) orelse return error.ScriptRuntime;
+    const parent = node.parent orelse return Value{ .undefined_value = {} };
+    host.domStoreMut().insertChildrenAfter(parent, element, children.items) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+    return Value{ .undefined_value = {} };
+}
+
+fn elementRemove(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    element: dom.NodeId,
+    args: []*Expr,
+) errors.Result(Value) {
+    _ = allocator;
+    _ = bindings;
+    if (args.len != 0) return error.ScriptRuntime;
+    host.domStoreMut().removeNode(element) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+    return Value{ .undefined_value = {} };
+}
+
+fn evalElementHandle(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    expr: *Expr,
+) errors.Result(dom.NodeId) {
+    const value = try evalExpr(allocator, host, bindings, expr);
+    return switch (value) {
+        .element => |element| element,
+        else => error.ScriptRuntime,
+    };
+}
+
+fn evalOptionalElementHandle(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    expr: *Expr,
+) errors.Result(?dom.NodeId) {
+    const value = try evalExpr(allocator, host, bindings, expr);
+    return switch (value) {
+        .element => |element| element,
+        .null_value, .undefined_value => null,
+        else => error.ScriptRuntime,
+    };
+}
+
+fn evalElementArguments(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    args: []*Expr,
+) errors.Result(std.ArrayList(dom.NodeId)) {
+    var children: std.ArrayList(dom.NodeId) = .empty;
+    errdefer children.deinit(allocator);
+
+    for (args) |expr| {
+        try children.append(allocator, try evalElementHandle(allocator, host, bindings, expr));
+    }
+
+    return children;
+}
+
 fn evalBinaryAdd(
     allocator: std.mem.Allocator,
     host: anytype,
@@ -1076,6 +1481,8 @@ fn asString(allocator: std.mem.Allocator, value: Value) errors.Result([]const u8
         .number => |number| try std.fmt.allocPrint(allocator, "{d}", .{number}),
         .string => |text| text,
         .element => "[object Element]",
+        .class_list => "[object DOMTokenList]",
+        .dataset => "[object DOMStringMap]",
         .node_list => "[object NodeList]",
         .event => "[object Event]",
         .document => "[object Document]",
@@ -1098,8 +1505,94 @@ fn isTruthy(value: Value) bool {
         .boolean => |flag| flag,
         .number => |number| number != 0,
         .string => |text| text.len != 0,
-        .element, .node_list, .event, .document, .window, .function => true,
+        .element, .class_list, .dataset, .node_list, .event, .document, .window, .function => true,
     };
+}
+
+fn classListTokens(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    element: dom.NodeId,
+) errors.Result(std.ArrayList([]const u8)) {
+    var tokens: std.ArrayList([]const u8) = .empty;
+    errdefer tokens.deinit(allocator);
+
+    const class_value = (try host.domStore().getAttribute(element, "class")) orelse "";
+    var iter = std.mem.tokenizeAny(u8, class_value, " \t\r\n\x0c");
+    while (iter.next()) |candidate| {
+        if (classListContains(tokens.items, candidate)) continue;
+        try tokens.append(allocator, candidate);
+    }
+
+    return tokens;
+}
+
+fn classListContains(tokens: []const []const u8, token: []const u8) bool {
+    for (tokens) |candidate| {
+        if (std.mem.eql(u8, candidate, token)) return true;
+    }
+    return false;
+}
+
+fn validateClassListToken(
+    allocator: std.mem.Allocator,
+    value: Value,
+) errors.Result([]const u8) {
+    const token = try asString(allocator, value);
+    const trimmed = std.mem.trim(u8, token, " \t\r\n\x0c");
+    if (trimmed.len == 0 or trimmed.len != token.len) return error.ScriptRuntime;
+    for (trimmed) |byte| {
+        if (isWhitespaceByte(byte)) return error.ScriptRuntime;
+    }
+    return trimmed;
+}
+
+fn writeClassListTokens(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    element: dom.NodeId,
+    tokens: []const []const u8,
+) errors.Result(void) {
+    var joined: std.ArrayList(u8) = .empty;
+    errdefer joined.deinit(allocator);
+
+    for (tokens, 0..) |token, index| {
+        if (index > 0) {
+            try joined.appendSlice(allocator, " ");
+        }
+        try joined.appendSlice(allocator, token);
+    }
+
+    host.domStoreMut().setAttribute(element, "class", joined.items) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+    return;
+}
+
+fn datasetAttributeName(
+    allocator: std.mem.Allocator,
+    property: []const u8,
+) errors.Result([]const u8) {
+    const trimmed = std.mem.trim(u8, property, " \t\r\n\x0c");
+    if (trimmed.len == 0) return error.ScriptRuntime;
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, "data-");
+
+    for (trimmed) |byte| {
+        switch (byte) {
+            'A'...'Z' => {
+                try out.append(allocator, '-');
+                try out.append(allocator, std.ascii.toLower(byte));
+            },
+            'a'...'z', '0'...'9', '_', '$' => try out.append(allocator, byte),
+            else => return error.ScriptRuntime,
+        }
+    }
+
+    return try allocator.dupe(u8, out.items);
 }
 
 fn asNodeListIndex(value: Value) errors.Result(usize) {

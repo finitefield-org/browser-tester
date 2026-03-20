@@ -339,6 +339,159 @@ test "contract: Harness.fromHtml runs attribute reflection methods during bootst
     try subject.assertValue("#mode", "b");
 }
 
+test "contract: Harness.fromHtml runs class and dataset views during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><button id='button' class='base' data-kind='App'>First</button><div id='out'></div><script>document.getElementById('button').className = 'primary secondary'; document.getElementById('button').classList.add('tertiary'); document.getElementById('button').classList.remove('secondary'); document.getElementById('button').dataset.userId = '42'; document.getElementById('out').textContent = String(document.getElementById('button').classList.length) + ':' + String(document.getElementById('button').classList.contains('primary')) + ':' + String(document.getElementById('button').classList.toggle('active')) + ':' + document.getElementById('button').className + ':' + document.getElementById('button').dataset.kind + ':' + document.getElementById('button').dataset.userId + ':' + String(document.getElementById('button').classList) + ':' + String(document.getElementById('button').dataset);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "2:true:true:primary tertiary active:App:42:[object DOMTokenList]:[object DOMStringMap]");
+    try subject.assertExists(".active");
+    try subject.assertExists("[data-user-id]");
+    try subject.assertExists("[data-kind=App]");
+}
+
+test "contract: Harness.fromHtml runs tree mutation append, prepend, and remove during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><section id='target'></section><button id='first'>First</button><button id='second'>Second</button><button id='third'>Third</button><div id='out'></div><script>document.getElementById('target').append(document.getElementById('first'), document.getElementById('second')); document.getElementById('target').prepend(document.getElementById('third')); document.getElementById('first').remove(); document.getElementById('out').textContent = document.getElementById('target').textContent + ':' + String(document.querySelectorAll('#target > button').length) + ':' + document.querySelector('#target > #third').textContent + ':' + document.querySelector('#target > #second').textContent;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "ThirdSecond:2:Third:Second");
+    try subject.assertExists("#target > #third");
+    try subject.assertExists("#target > #second");
+    try std.testing.expectError(error.AssertionFailed, subject.assertExists("#first"));
+}
+
+test "contract: Harness.fromHtml runs tree mutation insertBefore and replaceChild during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><section id='target'><button id='second'>Second</button><button id='third'>Third</button></section><button id='first'>First</button><button id='extra'>Extra</button><div id='out'></div><script>document.getElementById('target').insertBefore(document.getElementById('first'), document.getElementById('second')); document.getElementById('target').replaceChild(document.getElementById('extra'), document.getElementById('second')); document.getElementById('first').remove(); document.getElementById('out').textContent = document.getElementById('target').textContent + ':' + String(document.querySelectorAll('#target > button').length) + ':' + document.querySelector('#target > #extra').textContent + ':' + document.querySelector('#target > #third').textContent;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "ExtraThird:2:Extra:Third");
+    try subject.assertExists("#target > #extra");
+    try subject.assertExists("#target > #third");
+    try std.testing.expectError(error.AssertionFailed, subject.assertExists("#second"));
+    try std.testing.expectError(error.AssertionFailed, subject.assertExists("#first"));
+}
+
+test "contract: Harness.fromHtml runs tree mutation replaceChildren with existing children during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><section id='target'><span id='placeholder'>Placeholder</span></section><button id='first'>First</button><button id='second'>Second</button><div id='out'></div><script>document.getElementById('target').replaceChildren(document.getElementById('first'), document.getElementById('placeholder'), document.getElementById('second')); document.getElementById('out').textContent = document.getElementById('target').textContent + ':' + String(document.querySelectorAll('#target > button').length) + ':' + document.querySelector('#target > #placeholder').textContent;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "FirstPlaceholderSecond:2:Placeholder");
+    try subject.assertExists("#target > #first");
+    try subject.assertExists("#target > #placeholder");
+    try subject.assertExists("#target > #second");
+}
+
+test "contract: Harness.fromHtml runs tree mutation before and after during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><section id='source'><button id='second'>Second</button><button id='third'>Third</button></section><button id='first'>First</button><div id='out'></div><script>document.getElementById('second').before(document.getElementById('first')); document.getElementById('second').after(document.getElementById('third')); document.getElementById('out').textContent = document.getElementById('source').textContent + ':' + String(document.querySelectorAll('#source > button').length) + ':' + document.querySelector('#first').textContent + ':' + document.querySelector('#third').textContent;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "FirstSecondThird:3:First:Third");
+    try subject.assertExists("#source > #first");
+    try subject.assertExists("#source > #second");
+    try subject.assertExists("#source > #third");
+}
+
+test "contract: Harness.fromHtml runs innerHTML and outerHTML serialization during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><section id='target'><button id='old' class='primary'>Old</button></section><div id='out'></div><script>document.getElementById('out').textContent = document.getElementById('target').innerHTML + '|' + document.getElementById('target').outerHTML + '|'; document.getElementById('target').innerHTML = '<span id=\"first\">One</span><span id=\"second\">Two</span>'; document.getElementById('out').textContent += document.getElementById('target').innerHTML + '|' + document.getElementById('target').outerHTML + '|' + String(document.querySelector('#old'));</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "<button class=\"primary\" id=\"old\">Old</button>|<section id=\"target\"><button class=\"primary\" id=\"old\">Old</button></section>|<span id=\"first\">One</span><span id=\"second\">Two</span>|<section id=\"target\"><span id=\"first\">One</span><span id=\"second\">Two</span></section>|null",
+    );
+    try subject.assertExists("#target > #first");
+    try subject.assertExists("#target > #second");
+    try std.testing.expectError(error.AssertionFailed, subject.assertExists("#old"));
+}
+
+test "contract: Harness.fromHtml runs outerHTML replacement during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><section id='target'><span id='old'>Old</span></section><div id='out'></div><script>document.getElementById('target').outerHTML = '<article id=\"replacement\"><em id=\"inner\">Inner</em></article>'; document.getElementById('out').textContent = String(document.querySelector('#target')) + '|' + document.getElementById('replacement').outerHTML + '|' + document.getElementById('inner').textContent;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "null|<article id=\"replacement\"><em id=\"inner\">Inner</em></article>|Inner");
+    try subject.assertExists("#replacement");
+    try subject.assertExists("#replacement > #inner");
+    try std.testing.expectError(error.AssertionFailed, subject.assertExists("#target"));
+}
+
+test "contract: Harness.fromHtml runs insertAdjacentHTML during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><section id='target'><button id='old' class='primary'>Old</button></section></main><div id='out'></div><script>document.getElementById('target').insertAdjacentHTML('beforebegin', '<aside id=\"before\">Before</aside>'); document.getElementById('target').insertAdjacentHTML('afterbegin', '<span id=\"first\">First</span>'); document.getElementById('target').insertAdjacentHTML('beforeend', '<span id=\"last\">Last</span>'); document.getElementById('target').insertAdjacentHTML('afterend', '<aside id=\"after\">After</aside>'); document.getElementById('out').textContent = document.getElementById('root').innerHTML + '|' + document.getElementById('target').innerHTML + '|' + String(document.querySelectorAll('#target > span').length) + ':' + String(document.querySelector('#before')) + ':' + String(document.querySelector('#after'));</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "<aside id=\"before\">Before</aside><section id=\"target\"><span id=\"first\">First</span><button class=\"primary\" id=\"old\">Old</button><span id=\"last\">Last</span></section><aside id=\"after\">After</aside>|<span id=\"first\">First</span><button class=\"primary\" id=\"old\">Old</button><span id=\"last\">Last</span>|2:[object Element]:[object Element]",
+    );
+    try subject.assertExists("#before");
+    try subject.assertExists("#after");
+    try subject.assertExists("#target > #first");
+    try subject.assertExists("#target > #last");
+}
+
+test "failure: Harness.fromHtml rejects unsupported insertAdjacentHTML positions" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><section id='target'></section></main><script>document.getElementById('target').insertAdjacentHTML('middle', '<span id=\"bad\">Bad</span>');</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects insertAdjacentHTML on void elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><img id='image'></main><script>document.getElementById('image').insertAdjacentHTML('beforeend', '<span id=\"bad\">Bad</span>');</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects detached insertAdjacentHTML" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><section id='target'><span id='old'>Old</span></section><section id='replacement'></section></main><script>document.getElementById('target').replaceChild(document.getElementById('replacement'), document.getElementById('old')).insertAdjacentHTML('beforebegin', '<aside id=\"before\">Before</aside>');</script>",
+        ),
+    );
+}
+
 test "failure: Harness.fromHtml rejects unsupported script query selectors" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -361,6 +514,39 @@ test "failure: Harness.fromHtml rejects unsupported querySelectorAll syntax" {
     );
 }
 
+test "failure: Harness.fromHtml rejects malformed innerHTML fragments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.HtmlParse,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><section id='target'></section><script>document.getElementById('target').innerHTML = '<span></main>';</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects lossy outerHTML serialization" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.DomError,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='target'></div><script>document.getElementById('target').setAttribute('data-label', 'a\\'b\"c'); document.getElementById('target').outerHTML;</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects tree mutation ancestor cycles" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><section id='child'><span id='grandchild'>x</span></section></main><script>document.getElementById('child').appendChild(document.getElementById('root'));</script>",
+        ),
+    );
+}
+
 test "failure: Harness.fromHtml rejects empty attribute names in inline scripts" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -368,6 +554,17 @@ test "failure: Harness.fromHtml rejects empty attribute names in inline scripts"
         Harness.fromHtml(
             allocator,
             "<main id='root'><button id='button'></button><script>document.getElementById('button').setAttribute('', 'x');</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects whitespace classList tokens in inline scripts" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<button id='button' class='base'></button><script>document.getElementById('button').classList.add('bad token');</script>",
         ),
     );
 }

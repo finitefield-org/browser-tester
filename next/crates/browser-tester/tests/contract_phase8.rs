@@ -118,6 +118,16 @@ fn document_embeds_are_live_end_to_end() -> browser_tester_next::Result<()> {
 }
 
 #[test]
+fn document_plugins_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><embed id='first-embed'><embed name='second-embed'></main><div id='out'></div><script>const plugins = document.plugins; const before = plugins.length; const first = plugins.namedItem('first-embed'); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(plugins.length) + ':' + String(first) + ':' + String(plugins.namedItem('missing'));</script>",
+    )?;
+
+    harness.assert_text("#out", "2:0:[object Element]:null")?;
+    Ok(())
+}
+
+#[test]
 fn document_anchors_are_live_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><a name='first'>First</a><a id='ignored'>Ignored</a></main><div id='out'></div><script>const anchors = document.anchors; const before = anchors.length; const first = anchors.namedItem('first'); const root = document.getElementById('root'); root.innerHTML = root.innerHTML + '<a name=\"second\">Second</a>'; document.getElementById('out').textContent = String(before) + ':' + String(anchors.length) + ':' + first.textContent + ':' + anchors.namedItem('second').textContent + ':' + String(anchors.namedItem('missing'));</script>",
@@ -152,6 +162,53 @@ fn child_nodes_are_live_end_to_end() -> browser_tester_next::Result<()> {
         "4:#comment:8:[object Node]:main:1:#text:3:Hello:span:1:World:#comment:8:",
     )?;
     Ok(())
+}
+
+#[test]
+fn template_content_child_nodes_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<template id='tpl'><span id='inner'>Inner</span></template><div id='out'></div><script>const tpl = document.getElementById('tpl'); const content = tpl.content; const nodes = content.childNodes; const children = content.children; const before = nodes.length; tpl.innerHTML += '<!--tail--><span id=\"second\">Second</span>'; document.getElementById('out').textContent = String(content) + ':' + String(before) + ':' + String(nodes.length) + ':' + nodes.item(1).nodeName + ':' + String(children.length) + ':' + String(children.namedItem('second').textContent);</script>",
+    )?;
+
+    harness.assert_text("#out", "[object DocumentFragment]:1:3:#comment:2:Second")?;
+    Ok(())
+}
+
+#[test]
+fn template_content_inner_html_is_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<template id='tpl'><span id='inner'>Inner</span></template><div id='out'></div><script>const tpl = document.getElementById('tpl'); const content = tpl.content; const before = content.innerHTML; content.innerHTML = '<!--tail--><span id=\"second\">Second</span>'; document.getElementById('out').textContent = before + '|' + content.innerHTML + '|' + String(content.childNodes.length) + ':' + content.childNodes.item(0).nodeName + ':' + String(content.children.length) + ':' + content.children.namedItem('second').textContent;</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "<span id=\"inner\">Inner</span>|<!--tail--><span id=\"second\">Second</span>|2:#comment:1:Second",
+    )?;
+    harness.assert_exists("#second")?;
+    Ok(())
+}
+
+#[test]
+fn template_content_rejects_non_template_elements_end_to_end() {
+    let error = Harness::from_html(
+        "<div id='box'></div><script>document.getElementById('box').content;</script>",
+    )
+    .expect_err("template.content should reject non-template elements");
+
+    let message = error.to_string();
+    assert!(message.contains("template.content"));
+    assert!(message.contains("template"));
+}
+
+#[test]
+fn template_content_rejects_outer_html_end_to_end() {
+    let error = Harness::from_html(
+        "<template id='tpl'></template><script>document.getElementById('tpl').content.outerHTML;</script>",
+    )
+    .expect_err("template.content.outerHTML should remain unsupported");
+
+    assert!(error.to_string().contains("template content"));
+    assert!(error.to_string().contains("outerHTML"));
 }
 
 #[test]
@@ -198,8 +255,21 @@ fn document_embeds_are_not_available_on_elements_end_to_end() -> browser_tester_
 }
 
 #[test]
-fn document_style_sheets_are_not_available_on_elements_end_to_end() -> browser_tester_next::Result<()>
-{
+fn document_plugins_are_not_available_on_elements_end_to_end() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html(
+        "<div id='wrapper'><div id='not-doc'></div></div><script>document.getElementById('not-doc').plugins.length;</script>",
+    )
+    .expect_err("non-document plugins access should fail");
+
+    assert!(error.to_string().contains("unsupported member access"));
+    assert!(error.to_string().contains("`plugins`"));
+    assert!(error.to_string().contains("element value"));
+    Ok(())
+}
+
+#[test]
+fn document_style_sheets_are_not_available_on_elements_end_to_end()
+-> browser_tester_next::Result<()> {
     let error = Harness::from_html(
         "<div id='wrapper'><div id='not-doc'></div></div><script>document.getElementById('not-doc').styleSheets.length;</script>",
     )
@@ -283,6 +353,72 @@ fn html_serialization_surfaces_support_outer_html_replacement_end_to_end()
 }
 
 #[test]
+fn html_serialization_surfaces_support_insert_adjacent_html_end_to_end()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><section id='target'><button id='old' class='primary'>Old</button></section></main><div id='out'></div><script>const target = document.getElementById('target'); target.insertAdjacentHTML('beforebegin', '<aside id=\"before\">Before</aside>'); target.insertAdjacentHTML('afterbegin', '<span id=\"first\">First</span>'); target.insertAdjacentHTML('beforeend', '<span id=\"last\">Last</span>'); target.insertAdjacentHTML('afterend', '<aside id=\"after\">After</aside>'); document.getElementById('out').textContent = document.getElementById('root').innerHTML + '|' + target.innerHTML + '|' + String(target.children.length) + ':' + String(document.querySelector('#before')) + ':' + String(document.querySelector('#after'));</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "<aside id=\"before\">Before</aside><section id=\"target\"><span id=\"first\">First</span><button class=\"primary\" id=\"old\">Old</button><span id=\"last\">Last</span></section><aside id=\"after\">After</aside>|<span id=\"first\">First</span><button class=\"primary\" id=\"old\">Old</button><span id=\"last\">Last</span>|3:[object Element]:[object Element]",
+    )?;
+    harness.assert_exists("#before")?;
+    harness.assert_exists("#after")?;
+    harness.assert_exists("#target > #first")?;
+    harness.assert_exists("#target > #last")?;
+    Ok(())
+}
+
+#[test]
+fn html_serialization_surfaces_use_namespace_aware_names_end_to_end()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><svg id='icon' viewbox='0 0 10 10'><foreignobject id='foreign'><div id='html'>Text</div></foreignobject></svg><math id='formula' definitionurl='https://example.com'><mi id='symbol'>x</mi></math><div id='out'></div><script>const icon = document.getElementById('icon'); const formula = document.getElementById('formula'); document.getElementById('out').textContent = icon.outerHTML + '|' + formula.outerHTML;</script></main>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "<svg id=\"icon\" viewBox=\"0 0 10 10\"><foreignObject id=\"foreign\"><div id=\"html\">Text</div></foreignObject></svg>|<math definitionURL=\"https://example.com\" id=\"formula\"><mi id=\"symbol\">x</mi></math>",
+    )?;
+    harness.assert_exists("svg > foreignobject")?;
+    harness.assert_exists("math > mi")?;
+    Ok(())
+}
+
+#[test]
+fn html_serialization_surfaces_reject_insert_adjacent_html_positions_end_to_end()
+-> browser_tester_next::Result<()> {
+    let error = Harness::from_html(
+        "<main id='root'><img id='image'><section id='target'></section></main><script>document.getElementById('target').insertAdjacentHTML('middle', '<span id=\"bad\">Bad</span>');</script>",
+    )
+    .expect_err("invalid insertAdjacentHTML positions should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported insertAdjacentHTML position")
+    );
+    Ok(())
+}
+
+#[test]
+fn html_serialization_surfaces_reject_insert_adjacent_html_on_void_elements_end_to_end()
+-> browser_tester_next::Result<()> {
+    let error = Harness::from_html(
+        "<main id='root'><img id='image'></main><script>document.getElementById('image').insertAdjacentHTML('beforeend', '<span id=\"bad\">Bad</span>');</script>",
+    )
+    .expect_err("void elements should reject insertAdjacentHTML beforeend");
+
+    assert!(
+        error
+            .to_string()
+            .contains("insertAdjacentHTML is not supported on void elements")
+    );
+    Ok(())
+}
+
+#[test]
 fn mutation_hardening_updates_live_collections_and_selectors_end_to_end()
 -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
@@ -315,17 +451,13 @@ fn element_labels_are_live_end_to_end() -> browser_tester_next::Result<()> {
         "<main id='root'><label id='explicit-label' for='control'>Explicit</label><input id='control' value='A'><label id='implicit-label'><input id='inner-control' value='B'>Implicit</label><div id='wrapper'></div><div id='out'></div><script>const control = document.getElementById('control'); const labels = control.labels; const inner = document.getElementById('inner-control').labels; const before = labels.length; document.getElementById('wrapper').innerHTML = '<label id=\"second-label\" for=\"control\">Second</label>'; document.getElementById('out').textContent = String(before) + ':' + String(labels.length) + ':' + labels.item(0).getAttribute('id') + ':' + labels.item(1).textContent + ':' + String(inner.length) + ':' + inner.item(0).getAttribute('id');</script></main>",
     )?;
 
-    harness.assert_text(
-        "#out",
-        "1:2:explicit-label:Second:1:implicit-label",
-    )?;
+    harness.assert_text("#out", "1:2:explicit-label:Second:1:implicit-label")?;
     harness.assert_exists("#second-label")?;
     Ok(())
 }
 
 #[test]
-fn fieldset_elements_and_datalist_options_are_live_end_to_end() -> browser_tester_next::Result<()>
-{
+fn fieldset_elements_and_datalist_options_are_live_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><fieldset id='fieldset'><input name='first' value='Ada'><textarea name='bio'>Bio</textarea></fieldset><datalist id='list'><option name='alpha' value='a'>A</option><option id='second' value='b'>B</option></datalist><div id='out'></div><script>const elements = document.getElementById('fieldset').elements; const options = document.getElementById('list').options; const beforeElements = elements.length; const beforeOptions = options.length; const first = elements.item(0); const namedElement = elements.namedItem('first'); const namedOption = options.namedItem('second'); document.getElementById('fieldset').textContent = 'gone'; document.getElementById('list').textContent = 'gone'; document.getElementById('out').textContent = String(beforeElements) + ':' + String(elements.length) + ':' + String(beforeOptions) + ':' + String(options.length) + ':' + first.value + ':' + namedElement.value + ':' + namedOption.textContent + ':' + String(options.namedItem('missing'));</script></main>",
     )?;
@@ -354,7 +486,11 @@ fn labels_reject_non_labelable_elements_end_to_end() -> browser_tester_next::Res
     )
     .expect_err("non-labelable labels access should fail");
 
-    assert!(error.to_string().contains("node is not a labelable element"));
+    assert!(
+        error
+            .to_string()
+            .contains("node is not a labelable element")
+    );
     Ok(())
 }
 
@@ -393,7 +529,11 @@ fn map_areas_reject_non_map_elements_end_to_end() -> browser_tester_next::Result
     .expect_err("non-map areas access should fail");
 
     assert!(error.to_string().contains("map.areas"));
-    assert!(error.to_string().contains("supported map.areas host element"));
+    assert!(
+        error
+            .to_string()
+            .contains("supported map.areas host element")
+    );
     Ok(())
 }
 

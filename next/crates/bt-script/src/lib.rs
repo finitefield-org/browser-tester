@@ -285,6 +285,7 @@ pub enum ScriptValue {
     Element(ElementHandle),
     ClassList(ElementHandle),
     Dataset(ElementHandle),
+    TemplateContent(ElementHandle),
     HtmlCollection(HtmlCollectionTarget),
     StyleSheetList(StyleSheetListTarget),
     StyleSheet(StyleSheetTarget),
@@ -394,6 +395,10 @@ pub trait HostBindings {
 
     fn element_children(&mut self, _element: ElementHandle) -> Result<Vec<ElementHandle>> {
         Err(ScriptError::phase_not_ready("element.children"))
+    }
+
+    fn element_tag_name(&mut self, _element: ElementHandle) -> Result<String> {
+        Err(ScriptError::phase_not_ready("element.tagName"))
     }
 
     fn element_labels(&mut self, _element: ElementHandle) -> Result<Vec<ElementHandle>> {
@@ -635,6 +640,15 @@ pub trait HostBindings {
 
     fn element_set_outer_html(&mut self, _element: ElementHandle, _value: &str) -> Result<()> {
         Err(ScriptError::phase_not_ready("element.outerHTML assignment"))
+    }
+
+    fn element_insert_adjacent_html(
+        &mut self,
+        _element: ElementHandle,
+        _position: &str,
+        _value: &str,
+    ) -> Result<()> {
+        Err(ScriptError::phase_not_ready("element.insertAdjacentHTML"))
     }
 
     fn element_value(&mut self, _element: ElementHandle) -> Result<String> {

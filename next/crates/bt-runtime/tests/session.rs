@@ -565,6 +565,61 @@ fn session_resolves_child_nodes_through_inline_scripts() {
 }
 
 #[test]
+fn session_resolves_template_content_live_collections_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<template id='tpl'><span id='inner'>Inner</span></template><div id='out'></div><script>const tpl = document.getElementById('tpl'); const content = tpl.content; const nodes = content.childNodes; const children = content.children; const before = nodes.length; tpl.innerHTML += '<!--tail--><span id=\"second\">Second</span>'; document.getElementById('out').textContent = String(content) + ':' + String(before) + ':' + String(nodes.length) + ':' + nodes.item(1).nodeName + ':' + String(children.length) + ':' + String(children.namedItem('second').textContent);</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("template content markup should parse");
+
+    let out_id = session
+        .dom()
+        .indexes()
+        .id_index
+        .get("out")
+        .copied()
+        .expect("out element should exist");
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "[object DocumentFragment]:1:3:#comment:2:Second"
+    );
+}
+
+#[test]
+fn session_resolves_template_content_inner_html_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<template id='tpl'><span id='inner'>Inner</span></template><div id='out'></div><script>const tpl = document.getElementById('tpl'); const content = tpl.content; const before = content.innerHTML; content.innerHTML = '<!--tail--><span id=\"second\">Second</span>'; document.getElementById('out').textContent = before + '|' + content.innerHTML + '|' + String(content.childNodes.length) + ':' + content.childNodes.item(0).nodeName + ':' + String(content.children.length) + ':' + content.children.namedItem('second').textContent;</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("template content innerHTML should parse");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "<span id=\"inner\">Inner</span>|<!--tail--><span id=\"second\">Second</span>|2:#comment:1:Second"
+    );
+    assert_eq!(session.dom().select("#second").unwrap().len(), 1);
+}
+
+#[test]
+fn session_serializes_namespace_aware_names_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<main id='root'><svg id='icon' viewbox='0 0 10 10'><foreignobject id='foreign'><div id='html'>Text</div></foreignobject></svg><math id='formula' definitionurl='https://example.com'><mi id='symbol'>x</mi></math><div id='out'></div><script>const icon = document.getElementById('icon'); const formula = document.getElementById('formula'); document.getElementById('out').textContent = icon.outerHTML + '|' + formula.outerHTML;</script></main>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("namespace-aware serialization should parse");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "<svg id=\"icon\" viewBox=\"0 0 10 10\"><foreignObject id=\"foreign\"><div id=\"html\">Text</div></foreignObject></svg>|<math definitionURL=\"https://example.com\" id=\"formula\"><mi id=\"symbol\">x</mi></math>"
+    );
+}
+
+#[test]
 fn session_resolves_table_rows_and_row_cells_through_inline_scripts() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -724,6 +779,25 @@ fn session_resolves_document_embeds_through_inline_scripts() {
 }
 
 #[test]
+fn session_resolves_document_plugins_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><embed id='first-embed'><embed name='second-embed'></div><div id='out'></div><script>const plugins = document.plugins; const before = plugins.length; const first = plugins.namedItem('first-embed'); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(plugins.length) + ':' + String(first) + ':' + String(plugins.namedItem('missing'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute document.plugins scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "2:0:[object Element]:null"
+    );
+}
+
+#[test]
 fn session_resolves_document_all_through_inline_scripts() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -834,6 +908,24 @@ fn session_reports_document_embeds_on_non_elements_explicitly() {
 }
 
 #[test]
+fn session_reports_document_plugins_on_non_elements_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><div id='not-doc'></div></div><script>document.getElementById('not-doc').plugins.length;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-document plugins access should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(error.to_string().contains("unsupported member access"));
+    assert!(error.to_string().contains("`plugins`"));
+    assert!(error.to_string().contains("element value"));
+}
+
+#[test]
 fn session_reports_document_style_sheets_on_non_elements_explicitly() {
     let error = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -863,7 +955,11 @@ fn session_reports_labels_on_non_labelable_elements_explicitly() {
     })
     .expect_err("non-labelable labels access should fail explicitly");
 
-    assert!(error.to_string().contains("node is not a labelable element"));
+    assert!(
+        error
+            .to_string()
+            .contains("node is not a labelable element")
+    );
 }
 
 #[test]
@@ -1007,6 +1103,49 @@ fn session_resolves_element_closest_through_inline_scripts() {
     assert_eq!(
         session.dom().text_content_for_node(out_id),
         "ROOTSECTIONCHILD:CHILD:SECTIONCHILD:null"
+    );
+}
+
+#[test]
+fn session_resolves_insert_adjacent_html_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><section id='target'><button id='old' class='primary'>Old</button></section></main><div id='out'></div><script>const target = document.getElementById('target'); target.insertAdjacentHTML('beforebegin', '<aside id=\"before\">Before</aside>'); target.insertAdjacentHTML('afterbegin', '<span id=\"first\">First</span>'); target.insertAdjacentHTML('beforeend', '<span id=\"last\">Last</span>'); target.insertAdjacentHTML('afterend', '<aside id=\"after\">After</aside>'); document.getElementById('out').textContent = document.getElementById('root').innerHTML + '|' + target.innerHTML + '|' + String(target.children.length) + ':' + String(document.querySelector('#before')) + ':' + String(document.querySelector('#after'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute insertAdjacentHTML scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "<aside id=\"before\">Before</aside><section id=\"target\"><span id=\"first\">First</span><button class=\"primary\" id=\"old\">Old</button><span id=\"last\">Last</span></section><aside id=\"after\">After</aside>|<span id=\"first\">First</span><button class=\"primary\" id=\"old\">Old</button><span id=\"last\">Last</span>|3:[object Element]:[object Element]"
+    );
+    assert_eq!(session.dom().select("#before").unwrap().len(), 1);
+    assert_eq!(session.dom().select("#after").unwrap().len(), 1);
+    assert_eq!(session.dom().select("#target > #first").unwrap().len(), 1);
+    assert_eq!(session.dom().select("#target > #last").unwrap().len(), 1);
+}
+
+#[test]
+fn session_rejects_insert_adjacent_html_on_detached_nodes_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><section id='target'><span id='old'>Old</span></section></main><script>const target = document.getElementById('target'); target.outerHTML = '<section id=\"replacement\"></section>'; target.insertAdjacentHTML('beforebegin', '<aside id=\"before\">Before</aside>');</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("detached insertAdjacentHTML should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(
+        error
+            .to_string()
+            .contains("insertAdjacentHTML(beforebegin)")
     );
 }
 

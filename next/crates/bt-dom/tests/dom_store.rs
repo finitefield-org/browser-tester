@@ -1053,6 +1053,86 @@ fn html_serialization_surfaces_round_trip_fragment_parse_and_serialize() {
 }
 
 #[test]
+fn html_serialization_surfaces_use_namespace_aware_names() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<div id='root'><svg id='icon' viewbox='0 0 10 10'><foreignobject id='foreign'><div id='html'>Text</div></foreignobject></svg><math id='formula' definitionurl='https://example.com'><mi id='symbol'>x</mi></math></div>",
+        )
+        .expect("HTML should parse");
+
+    let root_id = store.select("#root").unwrap()[0];
+    assert_eq!(
+        store.inner_html_for_node(root_id).unwrap(),
+        "<svg id=\"icon\" viewBox=\"0 0 10 10\"><foreignObject id=\"foreign\"><div id=\"html\">Text</div></foreignObject></svg><math definitionURL=\"https://example.com\" id=\"formula\"><mi id=\"symbol\">x</mi></math>"
+    );
+    assert_eq!(
+        store.outer_html_for_node(root_id).unwrap(),
+        "<div id=\"root\"><svg id=\"icon\" viewBox=\"0 0 10 10\"><foreignObject id=\"foreign\"><div id=\"html\">Text</div></foreignObject></svg><math definitionURL=\"https://example.com\" id=\"formula\"><mi id=\"symbol\">x</mi></math></div>"
+    );
+}
+
+#[test]
+fn html_serialization_surfaces_support_insert_adjacent_html_positions() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><section id='target'><button id='old' class='primary'>Old</button></section></main>",
+        )
+        .expect("HTML should parse");
+
+    let root_id = store.select("#root").unwrap()[0];
+    let target_id = store.select("#target").unwrap()[0];
+
+    store
+        .insert_adjacent_html(
+            target_id,
+            "beforebegin",
+            "<aside id='before'>Before</aside>",
+        )
+        .expect("beforebegin should succeed");
+    store
+        .insert_adjacent_html(target_id, "afterbegin", "<span id='first'>First</span>")
+        .expect("afterbegin should succeed");
+    store
+        .insert_adjacent_html(target_id, "beforeend", "<span id='last'>Last</span>")
+        .expect("beforeend should succeed");
+    store
+        .insert_adjacent_html(target_id, "afterend", "<aside id='after'>After</aside>")
+        .expect("afterend should succeed");
+
+    assert_eq!(
+        store.outer_html_for_node(root_id).unwrap(),
+        "<main id=\"root\"><aside id=\"before\">Before</aside><section id=\"target\"><span id=\"first\">First</span><button class=\"primary\" id=\"old\">Old</button><span id=\"last\">Last</span></section><aside id=\"after\">After</aside></main>"
+    );
+    assert_eq!(store.select("#target > #first").unwrap().len(), 1);
+    assert_eq!(store.select("#target > #last").unwrap().len(), 1);
+    assert_eq!(store.select("#before").unwrap().len(), 1);
+    assert_eq!(store.select("#after").unwrap().len(), 1);
+}
+
+#[test]
+fn html_serialization_surfaces_reject_insert_adjacent_html_positions() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html("<main id='root'><img id='image'><section id='target'></section></main>")
+        .expect("HTML should parse");
+
+    let image_id = store.select("#image").unwrap()[0];
+    let target_id = store.select("#target").unwrap()[0];
+
+    let invalid_position = store
+        .insert_adjacent_html(target_id, "middle", "<span id='bad'>Bad</span>")
+        .expect_err("invalid positions should fail");
+    assert!(invalid_position.contains("unsupported insertAdjacentHTML position"));
+
+    let void_error = store
+        .insert_adjacent_html(image_id, "beforeend", "<span id='bad'>Bad</span>")
+        .expect_err("void elements should reject afterbegin/beforeend");
+    assert!(void_error.contains("insertAdjacentHTML is not supported on void elements"));
+}
+
+#[test]
 fn mutation_hardening_rebuilds_live_collections_after_tree_mutation() {
     let mut store = DomStore::new_empty();
     store

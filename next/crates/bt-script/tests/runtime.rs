@@ -21,10 +21,12 @@ impl HostBindings for NoopHost {
 struct RecordingHost {
     elements: BTreeMap<String, ElementHandle>,
     text_content: BTreeMap<ElementHandle, String>,
+    inner_html: BTreeMap<ElementHandle, String>,
     values: BTreeMap<ElementHandle, String>,
     checked: BTreeMap<ElementHandle, bool>,
     attributes: BTreeMap<(ElementHandle, String), String>,
     element_children_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
+    element_tag_name_results: BTreeMap<ElementHandle, String>,
     element_labels_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
     html_collection_tag_name_items_results: BTreeMap<HtmlCollectionTarget, Vec<ElementHandle>>,
     html_collection_tag_name_ns_items_results: BTreeMap<HtmlCollectionTarget, Vec<ElementHandle>>,
@@ -76,6 +78,10 @@ struct RecordingHost {
     element_query_selector_all_results: BTreeMap<(ElementHandle, String), Vec<ElementHandle>>,
     element_closest_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
     element_children_calls: Vec<ElementHandle>,
+    element_tag_name_calls: Vec<ElementHandle>,
+    element_inner_html_calls: Vec<ElementHandle>,
+    element_set_inner_html_calls: Vec<(ElementHandle, String)>,
+    element_insert_adjacent_html_calls: Vec<(ElementHandle, String, String)>,
     element_labels_calls: Vec<ElementHandle>,
     html_collection_tag_name_items_calls: Vec<HtmlCollectionTarget>,
     html_collection_tag_name_ns_items_calls: Vec<HtmlCollectionTarget>,
@@ -152,6 +158,15 @@ impl RecordingHost {
 
     fn seed_element_children(&mut self, element: ElementHandle, result: Vec<ElementHandle>) {
         self.element_children_results.insert(element, result);
+    }
+
+    fn seed_element_tag_name(&mut self, element: ElementHandle, tag_name: impl Into<String>) {
+        self.element_tag_name_results
+            .insert(element, tag_name.into());
+    }
+
+    fn seed_element_inner_html(&mut self, element: ElementHandle, html: impl Into<String>) {
+        self.inner_html.insert(element, html.into());
     }
 
     fn seed_element_labels(&mut self, element: ElementHandle, result: Vec<ElementHandle>) {
@@ -246,11 +261,7 @@ impl RecordingHost {
         self.document_children_items_results = result;
     }
 
-    fn seed_node_child_nodes_items(
-        &mut self,
-        scope: HtmlCollectionScope,
-        result: Vec<NodeHandle>,
-    ) {
+    fn seed_node_child_nodes_items(&mut self, scope: HtmlCollectionScope, result: Vec<NodeHandle>) {
         self.node_child_nodes_items_results.insert(scope, result);
     }
 
@@ -510,10 +521,16 @@ impl HostBindings for RecordingHost {
             .unwrap_or_default())
     }
 
-    fn element_labels(
-        &mut self,
-        element: ElementHandle,
-    ) -> bt_script::Result<Vec<ElementHandle>> {
+    fn element_tag_name(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+        self.element_tag_name_calls.push(element);
+        Ok(self
+            .element_tag_name_results
+            .get(&element)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn element_labels(&mut self, element: ElementHandle) -> bt_script::Result<Vec<ElementHandle>> {
         self.element_labels_calls.push(element);
         Ok(self
             .element_labels_results
@@ -888,6 +905,22 @@ impl HostBindings for RecordingHost {
         Ok(())
     }
 
+    fn element_inner_html(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+        self.element_inner_html_calls.push(element);
+        Ok(self.inner_html.get(&element).cloned().unwrap_or_default())
+    }
+
+    fn element_set_inner_html(
+        &mut self,
+        element: ElementHandle,
+        value: &str,
+    ) -> bt_script::Result<()> {
+        self.element_set_inner_html_calls
+            .push((element, value.to_string()));
+        self.inner_html.insert(element, value.to_string());
+        Ok(())
+    }
+
     fn element_value(&mut self, element: ElementHandle) -> bt_script::Result<String> {
         Ok(self
             .values
@@ -1116,6 +1149,20 @@ impl HostBindings for RecordingHost {
             .get(&(element, selector.to_string()))
             .copied()
             .flatten())
+    }
+
+    fn element_insert_adjacent_html(
+        &mut self,
+        element: ElementHandle,
+        position: &str,
+        value: &str,
+    ) -> bt_script::Result<()> {
+        self.element_insert_adjacent_html_calls.push((
+            element,
+            position.to_string(),
+            value.to_string(),
+        ));
+        Ok(())
     }
 
     fn register_event_listener_with_capture(
@@ -1453,6 +1500,30 @@ fn runtime_resolves_html_collection_children_access() {
             ElementHandle::new(1),
             ElementHandle::new(1),
         ]
+    );
+}
+
+#[test]
+fn runtime_dispatches_insert_adjacent_html() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "document.getElementById('root').insertAdjacentHTML('beforeend', '<span id=\"child\">Child</span>');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("insertAdjacentHTML should dispatch through host bindings");
+
+    assert_eq!(
+        host.element_insert_adjacent_html_calls,
+        vec![(
+            ElementHandle::new(1),
+            "beforeend".to_string(),
+            "<span id=\"child\">Child</span>".to_string(),
+        )]
     );
 }
 
@@ -1847,11 +1918,7 @@ fn runtime_resolves_fieldset_elements_and_datalist_options_access() {
         "second-control",
         Some(ElementHandle::new(3)),
     );
-    host.seed_html_collection_form_elements_named_item(
-        ElementHandle::new(1),
-        "missing",
-        None,
-    );
+    host.seed_html_collection_form_elements_named_item(ElementHandle::new(1), "missing", None);
     host.seed_html_collection_select_options_items(
         ElementHandle::new(4),
         vec![ElementHandle::new(5), ElementHandle::new(6)],
@@ -1978,10 +2045,7 @@ fn runtime_resolves_element_labels_access() {
         ElementHandle::new(1),
         vec![ElementHandle::new(2), ElementHandle::new(7)],
     );
-    host.seed_element_labels(
-        ElementHandle::new(4),
-        vec![ElementHandle::new(3)],
-    );
+    host.seed_element_labels(ElementHandle::new(4), vec![ElementHandle::new(3)]);
 
     runtime
         .eval_program(
@@ -2317,7 +2381,11 @@ fn runtime_resolves_child_nodes_access() {
     );
     assert_eq!(
         host.node_text_content_calls,
-        vec![NodeHandle::new(20), NodeHandle::new(21), NodeHandle::new(22)]
+        vec![
+            NodeHandle::new(20),
+            NodeHandle::new(21),
+            NodeHandle::new(22)
+        ]
     );
 }
 
@@ -2422,6 +2490,105 @@ fn runtime_resolves_document_scripts_access() {
             (scripts_collection, "missing".to_string()),
         ]
     );
+}
+
+#[test]
+fn runtime_resolves_template_content_child_nodes_and_children_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("tpl", ElementHandle::new(3), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(3), "template");
+    host.seed_element("inner", ElementHandle::new(40), "Inner");
+    host.seed_node_child_nodes_items(
+        HtmlCollectionScope::Element(ElementHandle::new(3)),
+        vec![
+            NodeHandle::new(30),
+            NodeHandle::new(31),
+            NodeHandle::new(32),
+        ],
+    );
+    host.seed_element_children(ElementHandle::new(3), vec![ElementHandle::new(40)]);
+    host.seed_html_collection_named_item(
+        ElementHandle::new(3),
+        "inner",
+        Some(ElementHandle::new(40)),
+    );
+    host.seed_node_name(NodeHandle::new(30), "#text");
+    host.seed_node_type(NodeHandle::new(30), 3);
+    host.seed_node_text_content(NodeHandle::new(30), "Before");
+    host.seed_node_name(NodeHandle::new(31), "span");
+    host.seed_node_type(NodeHandle::new(31), 1);
+    host.seed_node_text_content(NodeHandle::new(31), "Inner");
+    host.seed_node_name(NodeHandle::new(32), "#comment");
+    host.seed_node_type(NodeHandle::new(32), 8);
+    host.seed_node_text_content(NodeHandle::new(32), "");
+
+    runtime
+        .eval_program(
+            "const tpl = document.getElementById('tpl'); const content = tpl.content; const nodes = content.childNodes; const children = content.children; const first = nodes.item(0); const second = nodes.item(1); const third = nodes.item(2); document.getElementById('inner'); document.getElementById('out').textContent = String(content) + ':' + String(nodes.length) + ':' + first.nodeName + ':' + String(first.nodeType) + ':' + second.nodeName + ':' + String(second.nodeType) + ':' + third.nodeName + ':' + String(third.nodeType) + ':' + String(children.length) + ':' + children.item(0).textContent + ':' + String(children.namedItem('inner'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("template content collections should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("[object DocumentFragment]:3:#text:3:span:1:#comment:8:1:Inner:[object Element]")
+    );
+    assert_eq!(
+        host.node_child_nodes_items_calls,
+        vec![
+            HtmlCollectionScope::Element(ElementHandle::new(3)),
+            HtmlCollectionScope::Element(ElementHandle::new(3)),
+            HtmlCollectionScope::Element(ElementHandle::new(3)),
+            HtmlCollectionScope::Element(ElementHandle::new(3))
+        ]
+    );
+    assert_eq!(host.element_tag_name_calls, vec![ElementHandle::new(3)]);
+    assert_eq!(
+        host.element_children_calls,
+        vec![ElementHandle::new(3), ElementHandle::new(3)]
+    );
+}
+
+#[test]
+fn runtime_resolves_template_content_inner_html_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("tpl", ElementHandle::new(3), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(3), "template");
+    host.seed_element_inner_html(ElementHandle::new(3), "<span id='inner'>Inner</span>");
+
+    runtime
+        .eval_program(
+            "const tpl = document.getElementById('tpl'); const content = tpl.content; const before = content.innerHTML; content.innerHTML = '<!--tail--><span id=\"second\">Second</span>'; document.getElementById('out').textContent = before + ':' + content.innerHTML;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("template content innerHTML should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("<span id='inner'>Inner</span>:<!--tail--><span id=\"second\">Second</span>")
+    );
+    assert_eq!(
+        host.element_inner_html_calls,
+        vec![ElementHandle::new(3), ElementHandle::new(3)]
+    );
+    assert_eq!(
+        host.element_set_inner_html_calls,
+        vec![(
+            ElementHandle::new(3),
+            "<!--tail--><span id=\"second\">Second</span>".to_string(),
+        )]
+    );
+    assert_eq!(host.element_tag_name_calls, vec![ElementHandle::new(3)]);
 }
 
 #[test]

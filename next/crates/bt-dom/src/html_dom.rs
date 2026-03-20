@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -616,19 +617,11 @@ impl DomStore {
             ));
         }
 
-        let (fragment_store, fragment_root) =
-            self.parse_html_fragment_for_context(self.fragment_context_for_parent(node_id)?, html)?;
-        let fragment_children = fragment_store.nodes()[fragment_root.index() as usize]
-            .children
-            .clone();
+        let (fragment_store, fragment_children) = self.fragment_children_for_html(node_id, html)?;
 
         self.set_text_content(node_id, "")?;
 
-        let mut insertion_index = 0usize;
-        for child in fragment_children {
-            self.clone_subtree_at(&fragment_store, child, node_id, insertion_index)?;
-            insertion_index += 1;
-        }
+        self.clone_fragment_children_into(&fragment_store, &fragment_children, node_id, 0)?;
 
         self.rebuild_indexes();
         self.rebuild_form_controls();
@@ -647,18 +640,115 @@ impl DomStore {
             .child_index(parent_id, node_id)
             .ok_or_else(|| format!("node {:?} is not present in its parent", node_id))?;
 
-        let (fragment_store, fragment_root) = self
-            .parse_html_fragment_for_context(self.fragment_context_for_parent(parent_id)?, html)?;
-        let fragment_children = fragment_store.nodes()[fragment_root.index() as usize]
-            .children
-            .clone();
+        let (fragment_store, fragment_children) =
+            self.fragment_children_for_html(parent_id, html)?;
 
         self.remove_node(node_id)?;
 
-        let mut insertion_index = insertion_index;
-        for child in fragment_children {
-            self.clone_subtree_at(&fragment_store, child, parent_id, insertion_index)?;
-            insertion_index += 1;
+        self.clone_fragment_children_into(
+            &fragment_store,
+            &fragment_children,
+            parent_id,
+            insertion_index,
+        )?;
+
+        self.rebuild_indexes();
+        self.rebuild_form_controls();
+        Ok(())
+    }
+
+    pub fn insert_adjacent_html(
+        &mut self,
+        node_id: NodeId,
+        position: &str,
+        html: &str,
+    ) -> Result<(), String> {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return Err(format!("invalid node id: {:?}", node_id));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(format!(
+                "node {:?} does not support insertAdjacentHTML",
+                node_id
+            ));
+        };
+
+        match position {
+            "beforebegin" => {
+                let Some(parent_id) = self.parent_of(node_id) else {
+                    return Err(format!(
+                        "node {:?} has no parent for insertAdjacentHTML(beforebegin)",
+                        node_id
+                    ));
+                };
+                let insertion_index = self
+                    .child_index(parent_id, node_id)
+                    .ok_or_else(|| format!("node {:?} is not present in its parent", node_id))?;
+                let (fragment_store, fragment_children) =
+                    self.fragment_children_for_html(parent_id, html)?;
+                self.clone_fragment_children_into(
+                    &fragment_store,
+                    &fragment_children,
+                    parent_id,
+                    insertion_index,
+                )?;
+            }
+            "afterbegin" => {
+                if is_void_element(element.tag_name.as_str()) {
+                    return Err(format!(
+                        "insertAdjacentHTML is not supported on void elements like <{}>",
+                        element.tag_name
+                    ));
+                }
+
+                let (fragment_store, fragment_children) =
+                    self.fragment_children_for_html(node_id, html)?;
+                self.clone_fragment_children_into(&fragment_store, &fragment_children, node_id, 0)?;
+            }
+            "beforeend" => {
+                if is_void_element(element.tag_name.as_str()) {
+                    return Err(format!(
+                        "insertAdjacentHTML is not supported on void elements like <{}>",
+                        element.tag_name
+                    ));
+                }
+
+                let insertion_index = self.child_count(node_id)?;
+                let (fragment_store, fragment_children) =
+                    self.fragment_children_for_html(node_id, html)?;
+                self.clone_fragment_children_into(
+                    &fragment_store,
+                    &fragment_children,
+                    node_id,
+                    insertion_index,
+                )?;
+            }
+            "afterend" => {
+                let Some(parent_id) = self.parent_of(node_id) else {
+                    return Err(format!(
+                        "node {:?} has no parent for insertAdjacentHTML(afterend)",
+                        node_id
+                    ));
+                };
+                let insertion_index = self
+                    .child_index(parent_id, node_id)
+                    .ok_or_else(|| format!("node {:?} is not present in its parent", node_id))?
+                    + 1;
+                let (fragment_store, fragment_children) =
+                    self.fragment_children_for_html(parent_id, html)?;
+                self.clone_fragment_children_into(
+                    &fragment_store,
+                    &fragment_children,
+                    parent_id,
+                    insertion_index,
+                )?;
+            }
+            _ => {
+                return Err(format!(
+                    "unsupported insertAdjacentHTML position `{position}`"
+                ));
+            }
         }
 
         self.rebuild_indexes();
@@ -1000,6 +1090,37 @@ impl DomStore {
         Ok((fragment_store, fragment_root))
     }
 
+    fn fragment_children_for_html(
+        &self,
+        context_parent: NodeId,
+        html: &str,
+    ) -> Result<(DomStore, Vec<NodeId>), String> {
+        let (fragment_store, fragment_root) = self.parse_html_fragment_for_context(
+            self.fragment_context_for_parent(context_parent)?,
+            html,
+        )?;
+        let fragment_children = fragment_store.nodes()[fragment_root.index() as usize]
+            .children
+            .clone();
+        Ok((fragment_store, fragment_children))
+    }
+
+    fn clone_fragment_children_into(
+        &mut self,
+        fragment_store: &DomStore,
+        fragment_children: &[NodeId],
+        parent: NodeId,
+        insertion_index: usize,
+    ) -> Result<(), String> {
+        let mut insertion_index = insertion_index;
+        for child in fragment_children {
+            self.clone_subtree_at(fragment_store, *child, parent, insertion_index)?;
+            insertion_index += 1;
+        }
+
+        Ok(())
+    }
+
     fn clone_subtree_at(
         &mut self,
         source: &DomStore,
@@ -1078,10 +1199,11 @@ impl DomStore {
                 Ok(())
             }
             NodeKind::Element(element) => {
+                let tag_name = self.serialized_element_name(element);
                 output.push('<');
-                output.push_str(&element.tag_name);
+                output.push_str(tag_name.as_ref());
 
-                let attributes = self.serialize_html_attributes(&element.attributes)?;
+                let attributes = self.serialize_html_attributes(element)?;
                 if !attributes.is_empty() {
                     output.push(' ');
                     output.push_str(&attributes);
@@ -1104,7 +1226,7 @@ impl DomStore {
                     self.serialize_html_node_with_context(*child, output, child_raw_text_context)?;
                 }
                 output.push_str("</");
-                output.push_str(&element.tag_name);
+                output.push_str(tag_name.as_ref());
                 output.push('>');
                 Ok(())
             }
@@ -1125,14 +1247,12 @@ impl DomStore {
         }
     }
 
-    fn serialize_html_attributes(
-        &self,
-        attributes: &BTreeMap<String, String>,
-    ) -> Result<String, String> {
+    fn serialize_html_attributes(&self, element: &ElementData) -> Result<String, String> {
         let mut parts = Vec::new();
-        for (name, value) in attributes {
+        for (name, value) in &element.attributes {
+            let name = self.serialized_attribute_name(element, name);
             if value.is_empty() {
-                parts.push(name.clone());
+                parts.push(name.into_owned());
                 continue;
             }
 
@@ -1148,6 +1268,27 @@ impl DomStore {
         }
 
         Ok(parts.join(" "))
+    }
+
+    fn serialized_element_name<'a>(&self, element: &'a ElementData) -> Cow<'a, str> {
+        if element.namespace_uri == SVG_NAMESPACE_URI {
+            Cow::Borrowed(adjust_svg_element_name(element.local_name.as_str()))
+        } else {
+            Cow::Borrowed(element.local_name.as_str())
+        }
+    }
+
+    fn serialized_attribute_name<'a>(&self, element: &ElementData, name: &'a str) -> Cow<'a, str> {
+        if element.namespace_uri == SVG_NAMESPACE_URI {
+            Cow::Borrowed(adjust_svg_attribute_name(name))
+        } else if element.namespace_uri == MATHML_NAMESPACE_URI {
+            match name {
+                "definitionurl" => Cow::Borrowed("definitionURL"),
+                _ => Cow::Borrowed(name),
+            }
+        } else {
+            Cow::Borrowed(name)
+        }
     }
 
     fn ensure_mutation_parent(&self, parent: NodeId) -> Result<(), String> {
@@ -3324,6 +3465,113 @@ fn is_void_element(tag_name: &str) -> bool {
             | "track"
             | "wbr"
     )
+}
+
+fn adjust_svg_element_name(name: &str) -> &str {
+    match name {
+        "altglyph" => "altGlyph",
+        "altglyphdef" => "altGlyphDef",
+        "altglyphitem" => "altGlyphItem",
+        "animatecolor" => "animateColor",
+        "animatemotion" => "animateMotion",
+        "animatetransform" => "animateTransform",
+        "clippath" => "clipPath",
+        "feblend" => "feBlend",
+        "fecolormatrix" => "feColorMatrix",
+        "fecomponenttransfer" => "feComponentTransfer",
+        "fecomposite" => "feComposite",
+        "feconvolvematrix" => "feConvolveMatrix",
+        "fediffuselighting" => "feDiffuseLighting",
+        "fedisplacementmap" => "feDisplacementMap",
+        "fedistantlight" => "feDistantLight",
+        "fedropshadow" => "feDropShadow",
+        "feflood" => "feFlood",
+        "fefunca" => "feFuncA",
+        "fefuncb" => "feFuncB",
+        "fefuncg" => "feFuncG",
+        "fefuncr" => "feFuncR",
+        "fegaussianblur" => "feGaussianBlur",
+        "feimage" => "feImage",
+        "femerge" => "feMerge",
+        "femergenode" => "feMergeNode",
+        "femorphology" => "feMorphology",
+        "feoffset" => "feOffset",
+        "fepointlight" => "fePointLight",
+        "fespecularlighting" => "feSpecularLighting",
+        "fespotlight" => "feSpotLight",
+        "fetile" => "feTile",
+        "feturbulence" => "feTurbulence",
+        "foreignobject" => "foreignObject",
+        "glyphref" => "glyphRef",
+        "lineargradient" => "linearGradient",
+        "radialgradient" => "radialGradient",
+        "textpath" => "textPath",
+        _ => name,
+    }
+}
+
+fn adjust_svg_attribute_name(name: &str) -> &str {
+    match name {
+        "attributename" => "attributeName",
+        "attributetype" => "attributeType",
+        "basefrequency" => "baseFrequency",
+        "baseprofile" => "baseProfile",
+        "calcmode" => "calcMode",
+        "clippathunits" => "clipPathUnits",
+        "diffuseconstant" => "diffuseConstant",
+        "edgemode" => "edgeMode",
+        "filterunits" => "filterUnits",
+        "glyphref" => "glyphRef",
+        "gradienttransform" => "gradientTransform",
+        "gradientunits" => "gradientUnits",
+        "kernelmatrix" => "kernelMatrix",
+        "kernelunitlength" => "kernelUnitLength",
+        "keypoints" => "keyPoints",
+        "keysplines" => "keySplines",
+        "keytimes" => "keyTimes",
+        "lengthadjust" => "lengthAdjust",
+        "limitingconeangle" => "limitingConeAngle",
+        "markerheight" => "markerHeight",
+        "markerunits" => "markerUnits",
+        "markerwidth" => "markerWidth",
+        "maskcontentunits" => "maskContentUnits",
+        "maskunits" => "maskUnits",
+        "numoctaves" => "numOctaves",
+        "pathlength" => "pathLength",
+        "patterncontentunits" => "patternContentUnits",
+        "patterntransform" => "patternTransform",
+        "patternunits" => "patternUnits",
+        "pointsatx" => "pointsAtX",
+        "pointsaty" => "pointsAtY",
+        "pointsatz" => "pointsAtZ",
+        "preservealpha" => "preserveAlpha",
+        "preserveaspectratio" => "preserveAspectRatio",
+        "primitiveunits" => "primitiveUnits",
+        "refx" => "refX",
+        "refy" => "refY",
+        "repeatcount" => "repeatCount",
+        "repeatdur" => "repeatDur",
+        "requiredextensions" => "requiredExtensions",
+        "requiredfeatures" => "requiredFeatures",
+        "specularconstant" => "specularConstant",
+        "specularexponent" => "specularExponent",
+        "spreadmethod" => "spreadMethod",
+        "startoffset" => "startOffset",
+        "stddeviation" => "stdDeviation",
+        "stitchtiles" => "stitchTiles",
+        "surfacescale" => "surfaceScale",
+        "systemlanguage" => "systemLanguage",
+        "tablevalues" => "tableValues",
+        "targetx" => "targetX",
+        "targety" => "targetY",
+        "textlength" => "textLength",
+        "viewbox" => "viewBox",
+        "viewtarget" => "viewTarget",
+        "xchannelselector" => "xChannelSelector",
+        "ychannelselector" => "yChannelSelector",
+        "zoomandpan" => "zoomAndPan",
+        _ => name,
+    }
 }
 
 fn is_raw_text_element(tag_name: &str) -> bool {

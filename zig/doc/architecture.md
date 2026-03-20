@@ -69,6 +69,7 @@ It owns the copied configuration state, the internal DOM store, the internal scr
 Inline scripts and event handlers also reuse that selector engine through `document.querySelector()`, `element.querySelector()`, `Element.matches()`, and `Element.closest()`.
 Collection lookups reuse it through `document.querySelectorAll()` and `element.querySelectorAll()`, which return minimal `NodeList` snapshots with `length` and `item(index)`.
 Inline scripts also use attribute reflection methods like `getAttribute()`, `setAttribute()`, `removeAttribute()`, `hasAttribute()`, and `toggleAttribute()`, which update the shared DOM attribute store and keep selectors plus form-control getters in sync.
+Inline scripts also use class and dataset views on `Element` through `className`, `classList`, and `dataset`, which stay aligned with the same shared attribute store.
 
 ## High-Level Shape
 
@@ -167,10 +168,12 @@ The query selector and collection slices are implemented in this workspace now; 
 - DOM mutation and reflection expansion
 - attribute reflection
 - class and dataset views
+- tree mutation primitives
 - HTML serialization surfaces
+- HTML serialization broadening slice 1 (`insertAdjacentHTML`)
 
-The attribute reflection slice is implemented in this workspace now; the other phase 8 slices remain planned.
+The attribute reflection, class/dataset view, tree mutation, and HTML serialization slices are implemented in this workspace now. The next serialization slice is `template.content.innerHTML` and `DocumentFragment` serialization.
 
 ## Current Status
 
-Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, Phase 5, and Phase 6 are delivered in this workspace, the Phase 7 query selector and collection slices are delivered as well, and the Phase 8 attribute reflection slice is delivered.
+Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, Phase 5, and Phase 6 are delivered in this workspace, the Phase 7 query selector and collection slices are delivered as well, and the Phase 8 attribute reflection, class/dataset view, tree mutation, and HTML serialization slices are delivered. HTML serialization broadening slice 1 (`insertAdjacentHTML`) is also delivered; `template.content.innerHTML` remains planned.
