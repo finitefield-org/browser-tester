@@ -117,6 +117,145 @@ impl DomStore {
         output
     }
 
+    pub fn get_attribute(&self, node_id: NodeId, name: &str) -> Result<Option<String>, String> {
+        let name = normalize_attribute_name(name)?;
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return Err(format!("invalid node id: {:?}", node_id));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(format!("node {:?} is not an element", node_id));
+        };
+
+        Ok(element.attributes.get(&name).cloned())
+    }
+
+    pub fn has_attribute(&self, node_id: NodeId, name: &str) -> Result<bool, String> {
+        let name = normalize_attribute_name(name)?;
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return Err(format!("invalid node id: {:?}", node_id));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(format!("node {:?} is not an element", node_id));
+        };
+
+        Ok(element.attributes.contains_key(&name))
+    }
+
+    pub fn set_attribute(
+        &mut self,
+        node_id: NodeId,
+        name: &str,
+        value: impl Into<String>,
+    ) -> Result<(), String> {
+        let name = normalize_attribute_name(name)?;
+        let rebuild_indexes = attribute_affects_indexes(&name);
+        let rebuild_form_controls = attribute_affects_form_controls(&name);
+        let value = value.into();
+        {
+            let Some(node) = self.nodes.get_mut(node_id.index() as usize) else {
+                return Err(format!("invalid node id: {:?}", node_id));
+            };
+            let NodeKind::Element(element) = &mut node.kind else {
+                return Err(format!("node {:?} is not an element", node_id));
+            };
+            element.attributes.insert(name, value);
+        }
+
+        if rebuild_indexes {
+            self.rebuild_indexes();
+        }
+        if rebuild_form_controls {
+            self.rebuild_form_controls();
+        }
+        Ok(())
+    }
+
+    pub fn remove_attribute(&mut self, node_id: NodeId, name: &str) -> Result<bool, String> {
+        let name = normalize_attribute_name(name)?;
+        let rebuild_indexes = attribute_affects_indexes(&name);
+        let rebuild_form_controls = attribute_affects_form_controls(&name);
+        let removed = {
+            let Some(node) = self.nodes.get_mut(node_id.index() as usize) else {
+                return Err(format!("invalid node id: {:?}", node_id));
+            };
+            let NodeKind::Element(element) = &mut node.kind else {
+                return Err(format!("node {:?} is not an element", node_id));
+            };
+            element.attributes.remove(&name).is_some()
+        };
+
+        if removed {
+            if rebuild_indexes {
+                self.rebuild_indexes();
+            }
+            if rebuild_form_controls {
+                self.rebuild_form_controls();
+            }
+        }
+        Ok(removed)
+    }
+
+    pub fn toggle_attribute(
+        &mut self,
+        node_id: NodeId,
+        name: &str,
+        force: Option<bool>,
+    ) -> Result<bool, String> {
+        let name = normalize_attribute_name(name)?;
+        let rebuild_indexes = attribute_affects_indexes(&name);
+        let rebuild_form_controls = attribute_affects_form_controls(&name);
+        let (changed, now_present) = {
+            let Some(node) = self.nodes.get_mut(node_id.index() as usize) else {
+                return Err(format!("invalid node id: {:?}", node_id));
+            };
+            let NodeKind::Element(element) = &mut node.kind else {
+                return Err(format!("node {:?} is not an element", node_id));
+            };
+
+            let has_attr = element.attributes.contains_key(&name);
+            match force {
+                Some(true) => {
+                    if has_attr {
+                        (false, true)
+                    } else {
+                        element.attributes.insert(name, String::new());
+                        (true, true)
+                    }
+                }
+                Some(false) => {
+                    if has_attr {
+                        element.attributes.remove(&name);
+                        (true, false)
+                    } else {
+                        (false, false)
+                    }
+                }
+                None => {
+                    if has_attr {
+                        element.attributes.remove(&name);
+                        (true, false)
+                    } else {
+                        element.attributes.insert(name, String::new());
+                        (true, true)
+                    }
+                }
+            }
+        };
+
+        if changed {
+            if rebuild_indexes {
+                self.rebuild_indexes();
+            }
+            if rebuild_form_controls {
+                self.rebuild_form_controls();
+            }
+        }
+
+        Ok(now_present)
+    }
+
     pub fn set_text_content(&mut self, node_id: NodeId, value: &str) -> Result<(), String> {
         let node_index = node_id.index() as usize;
         let old_children = {
@@ -140,15 +279,13 @@ impl DomStore {
         };
 
         let removed_nodes = self.collect_subtree_nodes(old_children.iter().copied());
-        for removed_id in removed_nodes {
+        for removed_id in &removed_nodes {
             if let Some(record) = self.nodes.get_mut(removed_id.index() as usize) {
                 record.parent = None;
             }
-            self.side_tables.form_controls.remove(&removed_id);
-            self.side_tables.selection.remove(&removed_id);
-            self.side_tables.file_inputs.remove(&removed_id);
-            self.side_tables.dialogs.remove(&removed_id);
-            self.side_tables.layout_stub.remove(&removed_id);
+        }
+        for removed_id in removed_nodes {
+            self.remove_subtree_side_tables(removed_id);
         }
 
         if !value.is_empty() {
@@ -428,6 +565,284 @@ impl DomStore {
         Ok(())
     }
 
+    pub fn inner_html_for_node(&self, node_id: NodeId) -> Result<String, String> {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return Err(format!("invalid node id: {:?}", node_id));
+        };
+
+        match &node.kind {
+            NodeKind::Document | NodeKind::Element(_) => {
+                let mut output = String::new();
+                let raw_text_context = matches!(
+                    &node.kind,
+                    NodeKind::Element(element) if is_raw_text_element(element.tag_name.as_str())
+                );
+                for child in &node.children {
+                    self.serialize_html_node_with_context(*child, &mut output, raw_text_context)?;
+                }
+                Ok(output)
+            }
+            _ => Err(format!("node {:?} does not support innerHTML", node_id)),
+        }
+    }
+
+    pub fn outer_html_for_node(&self, node_id: NodeId) -> Result<String, String> {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return Err(format!("invalid node id: {:?}", node_id));
+        };
+
+        match &node.kind {
+            NodeKind::Element(_) => {
+                let mut output = String::new();
+                self.serialize_html_node(node_id, &mut output)?;
+                Ok(output)
+            }
+            _ => Err(format!("node {:?} does not support outerHTML", node_id)),
+        }
+    }
+
+    pub fn set_inner_html(&mut self, node_id: NodeId, html: &str) -> Result<(), String> {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return Err(format!("invalid node id: {:?}", node_id));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(format!("node {:?} does not support innerHTML", node_id));
+        };
+        if is_void_element(element.tag_name.as_str()) {
+            return Err(format!(
+                "innerHTML is not supported on void elements like <{}>",
+                element.tag_name
+            ));
+        }
+
+        let (fragment_store, fragment_root) =
+            self.parse_html_fragment_for_context(self.fragment_context_for_parent(node_id)?, html)?;
+        let fragment_children = fragment_store.nodes()[fragment_root.index() as usize]
+            .children
+            .clone();
+
+        self.set_text_content(node_id, "")?;
+
+        let mut insertion_index = 0usize;
+        for child in fragment_children {
+            self.clone_subtree_at(&fragment_store, child, node_id, insertion_index)?;
+            insertion_index += 1;
+        }
+
+        self.rebuild_indexes();
+        self.rebuild_form_controls();
+        Ok(())
+    }
+
+    pub fn set_outer_html(&mut self, node_id: NodeId, html: &str) -> Result<(), String> {
+        if node_id == self.document_id {
+            return Err("document node does not support outerHTML".to_string());
+        }
+
+        let Some(parent_id) = self.parent_of(node_id) else {
+            return Ok(());
+        };
+        let insertion_index = self
+            .child_index(parent_id, node_id)
+            .ok_or_else(|| format!("node {:?} is not present in its parent", node_id))?;
+
+        let (fragment_store, fragment_root) = self.parse_html_fragment_for_context(
+            self.fragment_context_for_parent(parent_id)?,
+            html,
+        )?;
+        let fragment_children = fragment_store.nodes()[fragment_root.index() as usize]
+            .children
+            .clone();
+
+        self.remove_node(node_id)?;
+
+        let mut insertion_index = insertion_index;
+        for child in fragment_children {
+            self.clone_subtree_at(&fragment_store, child, parent_id, insertion_index)?;
+            insertion_index += 1;
+        }
+
+        self.rebuild_indexes();
+        self.rebuild_form_controls();
+        Ok(())
+    }
+
+    pub fn append_child(&mut self, parent: NodeId, child: NodeId) -> Result<(), String> {
+        self.append_children(parent, [child])
+    }
+
+    pub fn append_children<I>(&mut self, parent: NodeId, children: I) -> Result<(), String>
+    where
+        I: IntoIterator<Item = NodeId>,
+    {
+        let children = children.into_iter().collect::<Vec<_>>();
+        let insertion_index = self.child_count(parent)?;
+        self.insert_children_at(parent, insertion_index, &children)?;
+        Ok(())
+    }
+
+    pub fn prepend_children<I>(&mut self, parent: NodeId, children: I) -> Result<(), String>
+    where
+        I: IntoIterator<Item = NodeId>,
+    {
+        let children = children.into_iter().collect::<Vec<_>>();
+        self.insert_children_at(parent, 0, &children)?;
+        Ok(())
+    }
+
+    pub fn insert_before(
+        &mut self,
+        parent: NodeId,
+        child: NodeId,
+        reference: NodeId,
+    ) -> Result<(), String> {
+        self.insert_children_before(parent, reference, [child])
+    }
+
+    pub fn insert_children_before<I>(
+        &mut self,
+        parent: NodeId,
+        reference: NodeId,
+        children: I,
+    ) -> Result<(), String>
+    where
+        I: IntoIterator<Item = NodeId>,
+    {
+        let children = children.into_iter().collect::<Vec<_>>();
+        if children.iter().any(|child| *child == reference) {
+            return Err("a node cannot be inserted relative to itself".to_string());
+        }
+
+        let reference_parent = self.parent_of(reference);
+        if reference_parent != Some(parent) {
+            return Err(format!(
+                "reference node {:?} is not a child of {:?}",
+                reference, parent
+            ));
+        }
+
+        let reference_index = self.child_index(parent, reference).ok_or_else(|| {
+            format!(
+                "reference node {:?} is not a child of {:?}",
+                reference, parent
+            )
+        })?;
+        self.insert_children_at(parent, reference_index, &children)?;
+        Ok(())
+    }
+
+    pub fn insert_children_after<I>(
+        &mut self,
+        parent: NodeId,
+        reference: NodeId,
+        children: I,
+    ) -> Result<(), String>
+    where
+        I: IntoIterator<Item = NodeId>,
+    {
+        let children = children.into_iter().collect::<Vec<_>>();
+        if children.iter().any(|child| *child == reference) {
+            return Err("a node cannot be inserted relative to itself".to_string());
+        }
+
+        let reference_parent = self.parent_of(reference);
+        if reference_parent != Some(parent) {
+            return Err(format!(
+                "reference node {:?} is not a child of {:?}",
+                reference, parent
+            ));
+        }
+
+        let reference_index = self.child_index(parent, reference).ok_or_else(|| {
+            format!(
+                "reference node {:?} is not a child of {:?}",
+                reference, parent
+            )
+        })?;
+        self.insert_children_at(parent, reference_index + 1, &children)?;
+        Ok(())
+    }
+
+    pub fn replace_child(
+        &mut self,
+        parent: NodeId,
+        new_child: NodeId,
+        old_child: NodeId,
+    ) -> Result<(), String> {
+        if new_child == old_child {
+            return Ok(());
+        }
+
+        self.insert_children_before(parent, old_child, [new_child])?;
+        self.remove_node(old_child)?;
+        Ok(())
+    }
+
+    pub fn replace_children<I>(&mut self, parent: NodeId, children: I) -> Result<(), String>
+    where
+        I: IntoIterator<Item = NodeId>,
+    {
+        self.ensure_mutation_parent(parent)?;
+
+        let children = children.into_iter().collect::<Vec<_>>();
+        self.validate_mutation_children(parent, &children)?;
+
+        let old_children = self
+            .nodes
+            .get(parent.index() as usize)
+            .map(|node| node.children.clone())
+            .ok_or_else(|| format!("invalid node id: {:?}", parent))?;
+
+        {
+            let Some(parent_node) = self.nodes.get_mut(parent.index() as usize) else {
+                return Err(format!("invalid node id: {:?}", parent));
+            };
+            parent_node.children.clear();
+        }
+
+        for old_child in &old_children {
+            if let Some(record) = self.nodes.get_mut(old_child.index() as usize) {
+                record.parent = None;
+            }
+        }
+        for old_child in old_children {
+            self.remove_subtree_side_tables(old_child);
+        }
+
+        self.insert_children_at(parent, 0, &children)?;
+        Ok(())
+    }
+
+    pub fn remove_node(&mut self, node_id: NodeId) -> Result<(), String> {
+        if node_id == self.document_id {
+            return Err("document node cannot be removed".to_string());
+        }
+
+        let Some(parent_id) = self.parent_of(node_id) else {
+            return Ok(());
+        };
+        let Some(parent_index) = self.child_index(parent_id, node_id) else {
+            return Err(format!("node {:?} is not present in its parent", node_id));
+        };
+        {
+            let Some(parent_node) = self.nodes.get_mut(parent_id.index() as usize) else {
+                return Err(format!("invalid node id: {:?}", parent_id));
+            };
+            parent_node.children.remove(parent_index);
+        }
+        {
+            let Some(node) = self.nodes.get_mut(node_id.index() as usize) else {
+                return Err(format!("invalid node id: {:?}", node_id));
+            };
+            node.parent = None;
+        }
+        self.remove_subtree_side_tables(node_id);
+        self.rebuild_indexes();
+        self.rebuild_form_controls();
+        Ok(())
+    }
+
     fn add_node(&mut self, parent: NodeId, kind: NodeKind) -> NodeId {
         let id = NodeId::new(self.nodes.len() as u32, 0);
         self.nodes.push(NodeRecord {
@@ -523,6 +938,369 @@ impl DomStore {
 
     fn add_comment(&mut self, parent: NodeId, value: String) -> NodeId {
         self.add_node(parent, NodeKind::Comment(value))
+    }
+
+    fn insert_node_at(
+        &mut self,
+        parent: NodeId,
+        insertion_index: usize,
+        kind: NodeKind,
+    ) -> Result<NodeId, String> {
+        self.ensure_mutation_parent(parent)?;
+        let id = NodeId::new(self.nodes.len() as u32, 0);
+        self.nodes.push(NodeRecord {
+            id,
+            parent: Some(parent),
+            children: Vec::new(),
+            kind,
+        });
+
+        let Some(parent_node) = self.nodes.get_mut(parent.index() as usize) else {
+            return Err(format!("invalid node id: {:?}", parent));
+        };
+        let insertion_index = insertion_index.min(parent_node.children.len());
+        parent_node.children.insert(insertion_index, id);
+        Ok(id)
+    }
+
+    fn fragment_context_for_parent(&self, parent: NodeId) -> Result<ElementData, String> {
+        let Some(node) = self.nodes.get(parent.index() as usize) else {
+            return Err(format!("invalid node id: {:?}", parent));
+        };
+
+        match &node.kind {
+            NodeKind::Document => Ok(ElementData {
+                tag_name: "div".to_string(),
+                local_name: "div".to_string(),
+                namespace_uri: HTML_NAMESPACE_URI.to_string(),
+                attributes: BTreeMap::new(),
+            }),
+            NodeKind::Element(element) => Ok(ElementData {
+                tag_name: element.tag_name.clone(),
+                local_name: element.local_name.clone(),
+                namespace_uri: element.namespace_uri.clone(),
+                attributes: BTreeMap::new(),
+            }),
+            _ => Err(format!("node {:?} cannot act as an HTML fragment context", parent)),
+        }
+    }
+
+    fn parse_html_fragment_for_context(
+        &self,
+        context: ElementData,
+        html: &str,
+    ) -> Result<(DomStore, NodeId), String> {
+        let mut fragment_store = DomStore::new_empty();
+        let fragment_document_id = fragment_store.document_id;
+        let fragment_root = fragment_store.add_node(fragment_document_id, NodeKind::Element(context));
+        let mut parser = HtmlParser::new(html);
+        parser.parse_fragment_into(&mut fragment_store, fragment_root)?;
+        Ok((fragment_store, fragment_root))
+    }
+
+    fn clone_subtree_at(
+        &mut self,
+        source: &DomStore,
+        source_node_id: NodeId,
+        parent: NodeId,
+        insertion_index: usize,
+    ) -> Result<NodeId, String> {
+        let Some(source_node) = source.nodes.get(source_node_id.index() as usize) else {
+            return Err(format!("invalid node id: {:?}", source_node_id));
+        };
+
+        match &source_node.kind {
+            NodeKind::Document => Err("document node cannot be cloned".to_string()),
+            NodeKind::Text(text) => self.insert_node_at(
+                parent,
+                insertion_index,
+                NodeKind::Text(TextData {
+                    value: text.value.clone(),
+                }),
+            ),
+            NodeKind::Comment(comment) => self.insert_node_at(
+                parent,
+                insertion_index,
+                NodeKind::Comment(comment.clone()),
+            ),
+            NodeKind::Element(element) => {
+                let node_id = self.insert_node_at(
+                    parent,
+                    insertion_index,
+                    NodeKind::Element(ElementData {
+                        tag_name: element.tag_name.clone(),
+                        local_name: element.local_name.clone(),
+                        namespace_uri: element.namespace_uri.clone(),
+                        attributes: element.attributes.clone(),
+                    }),
+                )?;
+
+                let mut child_index = 0usize;
+                for child in &source_node.children {
+                    self.clone_subtree_at(source, *child, node_id, child_index)?;
+                    child_index += 1;
+                }
+
+                Ok(node_id)
+            }
+        }
+    }
+
+    fn remove_subtree_side_tables(&mut self, root: NodeId) {
+        for removed_id in self.collect_subtree_nodes([root]) {
+            self.side_tables.form_controls.remove(&removed_id);
+            self.side_tables.selection.remove(&removed_id);
+            self.side_tables.file_inputs.remove(&removed_id);
+            self.side_tables.dialogs.remove(&removed_id);
+            self.side_tables.layout_stub.remove(&removed_id);
+        }
+    }
+
+    fn serialize_html_node(&self, node_id: NodeId, output: &mut String) -> Result<(), String> {
+        self.serialize_html_node_with_context(node_id, output, false)
+    }
+
+    fn serialize_html_node_with_context(
+        &self,
+        node_id: NodeId,
+        output: &mut String,
+        raw_text_context: bool,
+    ) -> Result<(), String> {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return Err(format!("invalid node id: {:?}", node_id));
+        };
+
+        match &node.kind {
+            NodeKind::Document => {
+                for child in &node.children {
+                    self.serialize_html_node_with_context(*child, output, raw_text_context)?;
+                }
+                Ok(())
+            }
+            NodeKind::Element(element) => {
+                output.push('<');
+                output.push_str(&element.tag_name);
+
+                let attributes = self.serialize_html_attributes(&element.attributes)?;
+                if !attributes.is_empty() {
+                    output.push(' ');
+                    output.push_str(&attributes);
+                }
+
+                if is_void_element(element.tag_name.as_str()) {
+                    if !node.children.is_empty() {
+                        return Err(format!(
+                            "cannot serialize void element <{}> with children",
+                            element.tag_name
+                        ));
+                    }
+                    output.push('>');
+                    return Ok(());
+                }
+
+                output.push('>');
+                let child_raw_text_context = is_raw_text_element(element.tag_name.as_str());
+                for child in &node.children {
+                    self.serialize_html_node_with_context(
+                        *child,
+                        output,
+                        child_raw_text_context,
+                    )?;
+                }
+                output.push_str("</");
+                output.push_str(&element.tag_name);
+                output.push('>');
+                Ok(())
+            }
+            NodeKind::Text(text) => {
+                if raw_text_context {
+                    output.push_str(&text.value);
+                } else {
+                    output.push_str(&escape_html_text(&text.value));
+                }
+                Ok(())
+            }
+            NodeKind::Comment(comment) => {
+                output.push_str("<!--");
+                output.push_str(comment);
+                output.push_str("-->");
+                Ok(())
+            }
+        }
+    }
+
+    fn serialize_html_attributes(&self, attributes: &BTreeMap<String, String>) -> Result<String, String> {
+        let mut parts = Vec::new();
+        for (name, value) in attributes {
+            if value.is_empty() {
+                parts.push(name.clone());
+                continue;
+            }
+
+            if !value.contains('\"') {
+                parts.push(format!(r#"{name}="{}""#, value));
+            } else if !value.contains('\'') {
+                parts.push(format!("{name}='{value}'"));
+            } else {
+                return Err(format!(
+                    "cannot serialize attribute `{name}` because the value contains both quote types"
+                ));
+            }
+        }
+
+        Ok(parts.join(" "))
+    }
+
+    fn ensure_mutation_parent(&self, parent: NodeId) -> Result<(), String> {
+        let Some(node) = self.nodes.get(parent.index() as usize) else {
+            return Err(format!("invalid node id: {:?}", parent));
+        };
+
+        match &node.kind {
+            NodeKind::Document | NodeKind::Element(_) => Ok(()),
+            _ => Err(format!("node {:?} cannot contain children", parent)),
+        }
+    }
+
+    fn child_index(&self, parent: NodeId, child: NodeId) -> Option<usize> {
+        let parent = self.nodes.get(parent.index() as usize)?;
+        parent
+            .children
+            .iter()
+            .position(|candidate| *candidate == child)
+    }
+
+    fn validate_mutation_children(
+        &self,
+        parent: NodeId,
+        children: &[NodeId],
+    ) -> Result<(), String> {
+        let mut seen = BTreeSet::new();
+
+        for child in children {
+            if !seen.insert(*child) {
+                return Err("duplicate child in mutation arguments".to_string());
+            }
+
+            let Some(node) = self.nodes.get(child.index() as usize) else {
+                return Err(format!("invalid node id: {:?}", child));
+            };
+
+            if *child == self.document_id {
+                return Err("document node cannot be inserted".to_string());
+            }
+
+            if *child == parent {
+                return Err(format!("node {:?} cannot be inserted into itself", parent));
+            }
+
+            if matches!(node.kind, NodeKind::Document) {
+                return Err("document node cannot be inserted".to_string());
+            }
+
+            if self
+                .collect_subtree_nodes([*child])
+                .into_iter()
+                .any(|descendant| descendant == parent)
+            {
+                return Err(format!(
+                    "cannot insert node {:?} into its descendant {:?}",
+                    child, parent
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn insert_children_at(
+        &mut self,
+        parent: NodeId,
+        insertion_index: usize,
+        children: &[NodeId],
+    ) -> Result<(), String> {
+        self.ensure_mutation_parent(parent)?;
+
+        if children.is_empty() {
+            return Ok(());
+        }
+
+        self.validate_mutation_children(parent, children)?;
+
+        let parent_len = self.child_count(parent)?;
+        let insertion_index = insertion_index.min(parent_len);
+        let mut adjusted_insertion_index = insertion_index;
+        let mut removals_by_parent: BTreeMap<NodeId, Vec<(usize, NodeId)>> = BTreeMap::new();
+
+        for child in children {
+            let Some(old_parent) = self.parent_of(*child) else {
+                continue;
+            };
+            let Some(old_index) = self.child_index(old_parent, *child) else {
+                continue;
+            };
+
+            if old_parent == parent && old_index < insertion_index {
+                adjusted_insertion_index -= 1;
+            }
+
+            removals_by_parent
+                .entry(old_parent)
+                .or_default()
+                .push((old_index, *child));
+        }
+
+        for (old_parent, mut removals) in removals_by_parent {
+            removals.sort_by_key(|(index, _)| std::cmp::Reverse(*index));
+            for (old_index, child) in removals {
+                {
+                    let Some(parent_node) = self.nodes.get_mut(old_parent.index() as usize) else {
+                        return Err(format!("invalid node id: {:?}", old_parent));
+                    };
+                    if parent_node.children.get(old_index) != Some(&child) {
+                        return Err(format!(
+                            "node {:?} is not present in its parent {:?}",
+                            child, old_parent
+                        ));
+                    }
+                    parent_node.children.remove(old_index);
+                }
+                let Some(record) = self.nodes.get_mut(child.index() as usize) else {
+                    return Err(format!("invalid node id: {:?}", child));
+                };
+                record.parent = None;
+            }
+        }
+
+        let mut insertion_index = adjusted_insertion_index;
+        for child in children {
+            {
+                let Some(parent_node) = self.nodes.get_mut(parent.index() as usize) else {
+                    return Err(format!("invalid node id: {:?}", parent));
+                };
+                parent_node.children.insert(insertion_index, *child);
+            }
+            let Some(record) = self.nodes.get_mut(child.index() as usize) else {
+                return Err(format!("invalid node id: {:?}", child));
+            };
+            record.parent = Some(parent);
+            insertion_index += 1;
+        }
+
+        self.rebuild_indexes();
+        self.rebuild_form_controls();
+        Ok(())
+    }
+
+    fn child_count(&self, parent: NodeId) -> Result<usize, String> {
+        let Some(node) = self.nodes.get(parent.index() as usize) else {
+            return Err(format!("invalid node id: {:?}", parent));
+        };
+
+        match &node.kind {
+            NodeKind::Document | NodeKind::Element(_) => Ok(node.children.len()),
+            _ => Err(format!("node {:?} cannot contain children", parent)),
+        }
     }
 
     fn is_option_node(&self, node_id: NodeId) -> bool {
@@ -2153,8 +2931,45 @@ impl<'a> HtmlParser<'a> {
     }
 
     fn parse_into(&mut self, store: &mut DomStore) -> Result<(), String> {
-        let mut stack = vec![store.document_id];
+        self.parse_into_with_stack(store, vec![store.document_id], 1)
+    }
+
+    fn parse_fragment_into(&mut self, store: &mut DomStore, parent: NodeId) -> Result<(), String> {
+        self.parse_into_with_stack(store, vec![store.document_id, parent], 2)
+    }
+
+    fn parse_into_with_stack(
+        &mut self,
+        store: &mut DomStore,
+        mut stack: Vec<NodeId>,
+        expected_stack_len: usize,
+    ) -> Result<(), String> {
         while self.pos < self.bytes.len() {
+            let current_parent = *stack
+                .last()
+                .expect("document root should always be on stack");
+            if let Some(raw_text_tag) = store
+                .tag_name_for(current_parent)
+                .filter(|tag| is_raw_text_element(tag))
+                .map(|tag| tag.to_string())
+            {
+                let closing_tag = format!("</{}>", raw_text_tag);
+                let rest = &self.input[self.pos..];
+                if let Some(offset) = find_case_insensitive(rest, &closing_tag) {
+                    if offset > 0 {
+                        store.add_text(current_parent, rest[..offset].to_string());
+                        self.pos += offset;
+                        continue;
+                    }
+                } else {
+                    if !rest.is_empty() {
+                        store.add_text(current_parent, rest.to_string());
+                    }
+                    self.pos = self.bytes.len();
+                    break;
+                }
+            }
+
             if self.bytes[self.pos] == b'<' {
                 if self.starts_with_bytes(b"<!--") {
                     let parent = *stack
@@ -2184,7 +2999,7 @@ impl<'a> HtmlParser<'a> {
             self.parse_text(store, parent)?;
         }
 
-        if stack.len() != 1 {
+        if stack.len() != expected_stack_len {
             let open_id = *stack
                 .last()
                 .expect("document root should always be on stack");
@@ -2432,6 +3247,13 @@ fn format_attributes(attributes: &BTreeMap<String, String>) -> String {
     parts.join(" ")
 }
 
+fn escape_html_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 fn escape_text(value: &str) -> String {
     value
         .replace('\\', "\\\\")
@@ -2452,6 +3274,22 @@ fn escape_attr(value: &str) -> String {
 
 fn is_simple_name_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
+}
+
+fn normalize_attribute_name(name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("attribute name must not be empty".to_string());
+    }
+    Ok(trimmed.to_ascii_lowercase())
+}
+
+fn attribute_affects_indexes(name: &str) -> bool {
+    matches!(name, "id" | "class" | "name")
+}
+
+fn attribute_affects_form_controls(name: &str) -> bool {
+    matches!(name, "value" | "checked" | "selected" | "type")
 }
 
 fn element_namespace_for_root(tag_name: &str) -> &'static str {
@@ -2487,6 +3325,27 @@ fn is_void_element(tag_name: &str) -> bool {
             | "track"
             | "wbr"
     )
+}
+
+fn is_raw_text_element(tag_name: &str) -> bool {
+    matches!(tag_name, "script" | "style")
+}
+
+fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    let haystack_bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    if needle_bytes.is_empty() {
+        return Some(0);
+    }
+
+    haystack_bytes
+        .windows(needle_bytes.len())
+        .position(|window| {
+            window
+                .iter()
+                .zip(needle_bytes.iter())
+                .all(|(hay, nee)| hay.eq_ignore_ascii_case(nee))
+        })
 }
 
 fn is_text_input_type(input_type: Option<&str>) -> bool {

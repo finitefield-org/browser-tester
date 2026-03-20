@@ -149,6 +149,28 @@ fn session_resolves_attribute_value_selectors_through_inline_scripts() {
 }
 
 #[test]
+fn session_resolves_class_views_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><button id='button' class='base' data-kind='App'>First</button><div id='out'></div><script>const button = document.getElementById('button'); button.className = 'primary secondary'; const before = button.classList.length; const contains = button.classList.contains('primary'); button.classList.add('tertiary'); button.classList.remove('secondary'); const toggled = button.classList.toggle('active'); button.dataset.userId = '42'; document.getElementById('out').textContent = button.className + ':' + String(before) + ':' + String(contains) + ':' + String(toggled) + ':' + button.dataset.kind + ':' + button.dataset.userId + ':' + String(button.classList) + ':' + String(button.dataset);</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute class view scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "primary tertiary active:2:true:true:App:42:[object DOMTokenList]:[object DOMStringMap]"
+    );
+    assert_eq!(session.dom().select(".active").unwrap().len(), 1);
+    assert_eq!(session.dom().select("[data-user-id]").unwrap().len(), 1);
+    assert_eq!(session.dom().select("[data-kind=App]").unwrap().len(), 1);
+}
+
+#[test]
 fn session_resolves_not_selectors_through_inline_scripts() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),

@@ -188,6 +188,8 @@ pub enum ScriptValue {
     Number(f64),
     String(String),
     Element(ElementHandle),
+    ClassList(ElementHandle),
+    Dataset(ElementHandle),
     HtmlCollection(HtmlCollectionTarget),
     NodeList(NodeListTarget),
     Document,
@@ -389,6 +391,22 @@ pub trait HostBindings {
         ))
     }
 
+    fn element_inner_html(&mut self, _element: ElementHandle) -> Result<String> {
+        Err(ScriptError::phase_not_ready("element.innerHTML"))
+    }
+
+    fn element_set_inner_html(&mut self, _element: ElementHandle, _value: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready("element.innerHTML assignment"))
+    }
+
+    fn element_outer_html(&mut self, _element: ElementHandle) -> Result<String> {
+        Err(ScriptError::phase_not_ready("element.outerHTML"))
+    }
+
+    fn element_set_outer_html(&mut self, _element: ElementHandle, _value: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready("element.outerHTML assignment"))
+    }
+
     fn element_value(&mut self, _element: ElementHandle) -> Result<String> {
         Err(ScriptError::phase_not_ready("element.value"))
     }
@@ -403,6 +421,110 @@ pub trait HostBindings {
 
     fn element_set_checked(&mut self, _element: ElementHandle, _checked: bool) -> Result<()> {
         Err(ScriptError::phase_not_ready("element.checked assignment"))
+    }
+
+    fn element_get_attribute(
+        &mut self,
+        _element: ElementHandle,
+        _name: &str,
+    ) -> Result<Option<String>> {
+        Err(ScriptError::phase_not_ready("element.getAttribute"))
+    }
+
+    fn element_set_attribute(
+        &mut self,
+        _element: ElementHandle,
+        _name: &str,
+        _value: &str,
+    ) -> Result<()> {
+        Err(ScriptError::phase_not_ready("element.setAttribute"))
+    }
+
+    fn element_remove_attribute(&mut self, _element: ElementHandle, _name: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready("element.removeAttribute"))
+    }
+
+    fn element_has_attribute(&mut self, _element: ElementHandle, _name: &str) -> Result<bool> {
+        Err(ScriptError::phase_not_ready("element.hasAttribute"))
+    }
+
+    fn element_toggle_attribute(
+        &mut self,
+        _element: ElementHandle,
+        _name: &str,
+        _force: Option<bool>,
+    ) -> Result<bool> {
+        Err(ScriptError::phase_not_ready("element.toggleAttribute"))
+    }
+
+    fn element_append_child(
+        &mut self,
+        _parent: ElementHandle,
+        _child: ElementHandle,
+    ) -> Result<()> {
+        Err(ScriptError::phase_not_ready("element.appendChild"))
+    }
+
+    fn element_insert_before(
+        &mut self,
+        _parent: ElementHandle,
+        _child: ElementHandle,
+        _reference: Option<ElementHandle>,
+    ) -> Result<()> {
+        Err(ScriptError::phase_not_ready("element.insertBefore"))
+    }
+
+    fn element_replace_child(
+        &mut self,
+        _parent: ElementHandle,
+        _new_child: ElementHandle,
+        _old_child: ElementHandle,
+    ) -> Result<()> {
+        Err(ScriptError::phase_not_ready("element.replaceChild"))
+    }
+
+    fn element_replace_children(
+        &mut self,
+        _parent: ElementHandle,
+        _children: Vec<ElementHandle>,
+    ) -> Result<()> {
+        Err(ScriptError::phase_not_ready("element.replaceChildren"))
+    }
+
+    fn element_append(
+        &mut self,
+        _element: ElementHandle,
+        _children: Vec<ElementHandle>,
+    ) -> Result<()> {
+        Err(ScriptError::phase_not_ready("element.append"))
+    }
+
+    fn element_prepend(
+        &mut self,
+        _element: ElementHandle,
+        _children: Vec<ElementHandle>,
+    ) -> Result<()> {
+        Err(ScriptError::phase_not_ready("element.prepend"))
+    }
+
+    fn element_before(
+        &mut self,
+        _element: ElementHandle,
+        _children: Vec<ElementHandle>,
+    ) -> Result<()> {
+        Err(ScriptError::phase_not_ready("element.before"))
+    }
+
+    fn element_after(
+        &mut self,
+        _element: ElementHandle,
+        _children: Vec<ElementHandle>,
+    ) -> Result<()> {
+        Err(ScriptError::phase_not_ready("element.after"))
+    }
+
+    fn element_remove(&mut self, _element: ElementHandle) -> Result<()> {
+        Err(ScriptError::phase_not_ready("element.remove"))
     }
 
     fn element_query_selector(

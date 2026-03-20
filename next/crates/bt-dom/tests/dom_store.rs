@@ -221,6 +221,138 @@ fn only_child_and_only_of_type_pseudo_classes_match_expected_nodes() {
 }
 
 #[test]
+fn attribute_reflection_mutation_updates_indexes_and_form_controls() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root' class='alpha beta' name='root-name' data-flag><input id='agree' type='checkbox'><input id='name' type='text' value='Alice'><select id='mode'><option id='opt-a' value='a'>A</option><option id='opt-b' value='b' selected>B</option></select><button id='btn'>Go</button></main>",
+        )
+        .expect("HTML should parse");
+
+    let root_id = store.select("#root").unwrap()[0];
+    let agree_id = store.select("#agree").unwrap()[0];
+    let name_id = store.select("#name").unwrap()[0];
+    let mode_id = store.select("#mode").unwrap()[0];
+    let opt_a_id = store.select("#opt-a").unwrap()[0];
+    let btn_id = store.select("#btn").unwrap()[0];
+
+    assert_eq!(
+        store.get_attribute(root_id, "id").unwrap(),
+        Some("root".to_string())
+    );
+    assert_eq!(
+        store.get_attribute(root_id, "DATA-FLAG").unwrap(),
+        Some(String::new())
+    );
+    assert!(store.has_attribute(root_id, "data-flag").unwrap());
+    assert_eq!(store.get_attribute(root_id, "missing").unwrap(), None);
+    assert!(!store.has_attribute(root_id, "missing").unwrap());
+
+    store
+        .set_attribute(root_id, "ID", "renamed")
+        .expect("set id should succeed");
+    assert_eq!(store.select("#renamed").unwrap(), vec![root_id]);
+    assert!(store.select("#root").unwrap().is_empty());
+    assert_eq!(
+        store.get_attribute(root_id, "id").unwrap(),
+        Some("renamed".to_string())
+    );
+
+    store
+        .set_attribute(root_id, "class", "gamma delta")
+        .expect("set class should succeed");
+    assert_eq!(store.select(".gamma").unwrap(), vec![root_id]);
+    assert!(store.select(".alpha").unwrap().is_empty());
+
+    store
+        .set_attribute(root_id, "name", "new-name")
+        .expect("set name should succeed");
+    assert!(
+        store
+            .indexes()
+            .name_index
+            .get("new-name")
+            .is_some_and(|nodes| nodes.contains(&root_id))
+    );
+    assert!(store.indexes().name_index.get("root-name").is_none());
+
+    store
+        .set_attribute(name_id, "value", "Bob")
+        .expect("set value should succeed");
+    assert_eq!(store.value_for_node(name_id), "Bob");
+
+    store
+        .set_attribute(agree_id, "checked", "")
+        .expect("set checked should succeed");
+    assert_eq!(store.checked_for_node(agree_id), Some(true));
+    assert_eq!(store.select("input:checked").unwrap(), vec![agree_id]);
+
+    let toggled = store
+        .toggle_attribute(agree_id, "checked", None)
+        .expect("toggle checked should succeed");
+    assert!(!toggled);
+    assert_eq!(store.checked_for_node(agree_id), Some(false));
+    assert!(store.select("input:checked").unwrap().is_empty());
+
+    let forced = store
+        .toggle_attribute(agree_id, "checked", Some(true))
+        .expect("force checked should succeed");
+    assert!(forced);
+    assert_eq!(store.checked_for_node(agree_id), Some(true));
+
+    store
+        .set_attribute(opt_a_id, "selected", "")
+        .expect("set selected should succeed");
+    assert_eq!(store.value_for_node(mode_id), "a");
+
+    let removed = store
+        .remove_attribute(root_id, "class")
+        .expect("remove class should succeed");
+    assert!(removed);
+    assert!(store.select(".gamma").unwrap().is_empty());
+
+    assert!(!store.has_attribute(btn_id, "disabled").unwrap());
+    let disabled = store
+        .toggle_attribute(btn_id, "disabled", None)
+        .expect("toggle disabled should succeed");
+    assert!(disabled);
+    assert!(store.has_attribute(btn_id, "disabled").unwrap());
+    assert_eq!(store.select("[disabled]").unwrap(), vec![btn_id]);
+}
+
+#[test]
+fn attribute_reflection_rejects_invalid_nodes_and_names() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html("<main id='root'>text</main>")
+        .expect("HTML should parse");
+
+    let invalid = NodeId::new(999, 0);
+    assert!(store.get_attribute(invalid, "id").is_err());
+    assert!(store.set_attribute(invalid, "id", "x").is_err());
+
+    let document_id = store.document_id();
+    assert!(store.get_attribute(document_id, "id").is_err());
+    assert!(store.set_attribute(document_id, "id", "x").is_err());
+
+    let text_id = store
+        .nodes()
+        .iter()
+        .find_map(|node| match node.kind {
+            NodeKind::Text(_) => Some(node.id),
+            _ => None,
+        })
+        .expect("text node should exist");
+    assert!(store.has_attribute(text_id, "id").is_err());
+    assert!(store.remove_attribute(text_id, "id").is_err());
+
+    let root_id = store.select("#root").unwrap()[0];
+    assert!(store.set_attribute(root_id, "", "x").is_err());
+    assert!(store.get_attribute(root_id, " ").is_err());
+    assert!(store.toggle_attribute(root_id, " ", None).is_err());
+}
+
+#[test]
 fn first_last_and_nth_of_type_pseudo_classes_match_expected_nodes() {
     let mut store = DomStore::new_empty();
     store
@@ -781,6 +913,65 @@ fn file_input_selections_are_seeded_and_mutable() {
 }
 
 #[test]
+fn tree_mutation_moves_children_and_rebuilds_indexes() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><section id='source'><button id='first' class='primary'>First</button><button id='second'>Second</button></section><section id='target'><span id='placeholder'>Placeholder</span></section></main>",
+        )
+        .expect("HTML should parse");
+
+    let root_id = store.select("#root").unwrap()[0];
+    let source_id = store.select("#source").unwrap()[0];
+    let target_id = store.select("#target").unwrap()[0];
+    let first_id = store.select("#first").unwrap()[0];
+    let second_id = store.select("#second").unwrap()[0];
+
+    store
+        .replace_children(target_id, [first_id, second_id])
+        .expect("replaceChildren should move existing nodes");
+    store
+        .remove_node(source_id)
+        .expect("remove should detach the empty source subtree");
+
+    assert_eq!(
+        store.select("#target > button").unwrap(),
+        vec![first_id, second_id]
+    );
+    assert_eq!(store.select(".primary").unwrap(), vec![first_id]);
+    assert!(store.select("#source").unwrap().is_empty());
+    assert_eq!(
+        store.dump_dom(),
+        "#document\n  <main id=\"root\">\n    <section id=\"target\">\n      <button class=\"primary\" id=\"first\">\n        \"First\"\n      </button>\n      <button id=\"second\">\n        \"Second\"\n      </button>\n    </section>\n  </main>"
+    );
+    assert_eq!(root_id, NodeId::new(1, 0));
+}
+
+#[test]
+fn tree_mutation_rejects_cycles_explicitly() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><section id='child'><span id='grandchild'>x</span></section></main>",
+        )
+        .expect("HTML should parse");
+
+    let root_id = store.select("#root").unwrap()[0];
+    let child_id = store.select("#child").unwrap()[0];
+    let grandchild_id = store.select("#grandchild").unwrap()[0];
+
+    let append_error = store
+        .append_child(child_id, root_id)
+        .expect_err("ancestor insertion should fail");
+    assert!(append_error.contains("cannot insert"));
+
+    let insert_error = store
+        .insert_before(child_id, child_id, grandchild_id)
+        .expect_err("self insertion should fail");
+    assert!(insert_error.contains("inserted into itself") || insert_error.contains("cannot"));
+}
+
+#[test]
 fn non_file_inputs_reject_file_selection_mutation() {
     let mut store = DomStore::new_empty();
     store.bootstrap_html("<input id='name'>").unwrap();
@@ -804,4 +995,126 @@ fn non_form_controls_reject_form_state_mutation() {
         .expect_err("divs are not form controls");
 
     assert!(error.contains("supported form control"));
+}
+
+#[test]
+fn html_serialization_surfaces_round_trip_fragment_parse_and_serialize() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><section id='target'><button id='old' class='primary'>Old</button></section><div id='out'></div><script>const raw = \"<span id='first'>One</span><span id='second'>Two</span>\";</script></main>",
+        )
+        .expect("HTML should parse");
+
+    let target_id = store.select("#target").unwrap()[0];
+    let script_id = store.select("script").unwrap()[0];
+    assert!(
+        store
+            .inner_html_for_node(script_id)
+            .unwrap()
+            .contains("const raw = \"<span id='first'>One</span><span id='second'>Two</span>\";")
+    );
+    assert_eq!(
+        store.inner_html_for_node(target_id).unwrap(),
+        "<button class=\"primary\" id=\"old\">Old</button>"
+    );
+
+    store
+        .set_inner_html(
+            target_id,
+            "<span id=\"first\">One</span><span id=\"second\">Two</span>",
+        )
+        .expect("innerHTML mutation should succeed");
+
+    assert_eq!(
+        store.inner_html_for_node(target_id).unwrap(),
+        "<span id=\"first\">One</span><span id=\"second\">Two</span>"
+    );
+    assert_eq!(
+        store.outer_html_for_node(target_id).unwrap(),
+        "<section id=\"target\"><span id=\"first\">One</span><span id=\"second\">Two</span></section>"
+    );
+    assert_eq!(store.select("#target > #first").unwrap().len(), 1);
+    assert_eq!(store.select("#target > #second").unwrap().len(), 1);
+
+    store
+        .set_outer_html(
+            target_id,
+            "<article id=\"replacement\"><em id=\"inner\">Inner</em></article>",
+        )
+        .expect("outerHTML mutation should succeed");
+
+    assert!(store.select("#target").unwrap().is_empty());
+    let replacement_id = store.select("#replacement").unwrap()[0];
+    assert_eq!(
+        store.outer_html_for_node(replacement_id).unwrap(),
+        "<article id=\"replacement\"><em id=\"inner\">Inner</em></article>"
+    );
+}
+
+#[test]
+fn mutation_hardening_rebuilds_live_collections_after_tree_mutation() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><form id='form'><input id='first' name='first' value='one'></form><select id='mode'><option value='a'>A</option></select></main>",
+        )
+        .expect("HTML should parse");
+
+    let form_id = store.select("#form").unwrap()[0];
+    let select_id = store.select("#mode").unwrap()[0];
+    assert_eq!(store.select("form").unwrap().len(), 1);
+    assert_eq!(store.select("input").unwrap().len(), 1);
+    assert_eq!(store.select("select > option").unwrap().len(), 1);
+
+    store
+        .set_outer_html(form_id, "<div id='form-replacement'></div>")
+        .expect("replacing a form should succeed");
+    store
+        .set_inner_html(
+            select_id,
+            "<option id='second' value='b' selected>B</option><option id='third' value='c'>C</option>",
+        )
+        .expect("replacing select contents should succeed");
+
+    assert_eq!(store.select("form").unwrap().len(), 0);
+    assert_eq!(store.select("input").unwrap().len(), 0);
+    assert_eq!(store.select("#form-replacement").unwrap().len(), 1);
+    assert_eq!(store.select("select > option").unwrap().len(), 2);
+    assert_eq!(store.select("option:checked").unwrap().len(), 1);
+    assert_eq!(store.select("option:checked").unwrap()[0], store.select("#second").unwrap()[0]);
+}
+
+#[test]
+fn html_serialization_surfaces_reject_malformed_fragments_explicitly() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html("<main id='root'><section id='target'></section></main>")
+        .expect("HTML should parse");
+
+    let target_id = store.select("#target").unwrap()[0];
+    let error = store
+        .set_inner_html(target_id, "<span></main>")
+        .expect_err("malformed fragments should fail explicitly");
+
+    assert!(error.contains("mismatched closing tag"));
+}
+
+#[test]
+fn html_serialization_surfaces_reject_lossy_attribute_serialization_explicitly() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html("<main id='root'><section id='target'></section></main>")
+        .expect("HTML should parse");
+
+    let target_id = store.select("#target").unwrap()[0];
+    store
+        .set_attribute(target_id, "data-label", "a'b\"c")
+        .expect("attribute mutation should succeed");
+
+    let error = store
+        .outer_html_for_node(target_id)
+        .expect_err("lossy serialization should fail explicitly");
+
+    assert!(error.contains("contains both quote types"));
 }

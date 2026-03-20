@@ -1939,6 +1939,42 @@ impl HostBindings for Session {
             .map_err(ScriptError::new)
     }
 
+    fn element_inner_html(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .inner_html_for_node(node_id)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_set_inner_html(
+        &mut self,
+        element: ElementHandle,
+        value: &str,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .set_inner_html(node_id, value)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_outer_html(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .outer_html_for_node(node_id)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_set_outer_html(
+        &mut self,
+        element: ElementHandle,
+        value: &str,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .set_outer_html(node_id, value)
+            .map_err(ScriptError::new)
+    }
+
     fn element_value(&mut self, element: ElementHandle) -> bt_script::Result<String> {
         let node_id = self.node_id_for_handle(element)?;
         let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
@@ -2034,6 +2070,208 @@ impl HostBindings for Session {
         self.dom
             .set_form_control_checked(node_id, checked)
             .map_err(ScriptError::new)
+    }
+
+    fn element_get_attribute(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<String>> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .get_attribute(node_id, name)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_set_attribute(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+        value: &str,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .set_attribute(node_id, name, value)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_remove_attribute(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .remove_attribute(node_id, name)
+            .map_err(ScriptError::new)?;
+        Ok(())
+    }
+
+    fn element_has_attribute(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<bool> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .has_attribute(node_id, name)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_toggle_attribute(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+        force: Option<bool>,
+    ) -> bt_script::Result<bool> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .toggle_attribute(node_id, name, force)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_append_child(
+        &mut self,
+        parent: ElementHandle,
+        child: ElementHandle,
+    ) -> bt_script::Result<()> {
+        let parent_id = self.node_id_for_handle(parent)?;
+        let child_id = self.node_id_for_handle(child)?;
+        self.dom
+            .append_child(parent_id, child_id)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_insert_before(
+        &mut self,
+        parent: ElementHandle,
+        child: ElementHandle,
+        reference: Option<ElementHandle>,
+    ) -> bt_script::Result<()> {
+        let parent_id = self.node_id_for_handle(parent)?;
+        let child_id = self.node_id_for_handle(child)?;
+        match reference {
+            Some(reference) => {
+                let reference_id = self.node_id_for_handle(reference)?;
+                self.dom
+                    .insert_before(parent_id, child_id, reference_id)
+                    .map_err(ScriptError::new)
+            }
+            None => self
+                .dom
+                .append_child(parent_id, child_id)
+                .map_err(ScriptError::new),
+        }
+    }
+
+    fn element_replace_child(
+        &mut self,
+        parent: ElementHandle,
+        new_child: ElementHandle,
+        old_child: ElementHandle,
+    ) -> bt_script::Result<()> {
+        let parent_id = self.node_id_for_handle(parent)?;
+        let new_child_id = self.node_id_for_handle(new_child)?;
+        let old_child_id = self.node_id_for_handle(old_child)?;
+        self.dom
+            .replace_child(parent_id, new_child_id, old_child_id)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_replace_children(
+        &mut self,
+        parent: ElementHandle,
+        children: Vec<ElementHandle>,
+    ) -> bt_script::Result<()> {
+        let parent_id = self.node_id_for_handle(parent)?;
+        let children = children
+            .into_iter()
+            .map(|child| self.node_id_for_handle(child))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.dom
+            .replace_children(parent_id, children)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_append(
+        &mut self,
+        element: ElementHandle,
+        children: Vec<ElementHandle>,
+    ) -> bt_script::Result<()> {
+        let parent_id = self.node_id_for_handle(element)?;
+        let children = children
+            .into_iter()
+            .map(|child| self.node_id_for_handle(child))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.dom
+            .append_children(parent_id, children)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_prepend(
+        &mut self,
+        element: ElementHandle,
+        children: Vec<ElementHandle>,
+    ) -> bt_script::Result<()> {
+        let parent_id = self.node_id_for_handle(element)?;
+        let children = children
+            .into_iter()
+            .map(|child| self.node_id_for_handle(child))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.dom
+            .prepend_children(parent_id, children)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_before(
+        &mut self,
+        element: ElementHandle,
+        children: Vec<ElementHandle>,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        let Some(parent_id) = self
+            .dom
+            .nodes()
+            .get(node_id.index() as usize)
+            .and_then(|node| node.parent)
+        else {
+            return Ok(());
+        };
+        let children = children
+            .into_iter()
+            .map(|child| self.node_id_for_handle(child))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.dom
+            .insert_children_before(parent_id, node_id, children)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_after(
+        &mut self,
+        element: ElementHandle,
+        children: Vec<ElementHandle>,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        let Some(parent_id) = self
+            .dom
+            .nodes()
+            .get(node_id.index() as usize)
+            .and_then(|node| node.parent)
+        else {
+            return Ok(());
+        };
+        let children = children
+            .into_iter()
+            .map(|child| self.node_id_for_handle(child))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.dom
+            .insert_children_after(parent_id, node_id, children)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_remove(&mut self, element: ElementHandle) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom.remove_node(node_id).map_err(ScriptError::new)
     }
 
     fn element_query_selector(

@@ -1036,10 +1036,11 @@ README は次だけを書く。
 
 注記:
 
-- この workspace では Phase 0 から Phase 6 まで完了済み
+- この workspace では Phase 0 から Phase 8 まで完了済み
 - Phase 7 の script DOM query expansion は slice 1 の `querySelector`、slice 2 の `matches`、slice 3 の `closest`、slice 4 の selector hardening まで実装済み
 - 追加の selector backlog slices として sibling combinators (`A + B`, `A ~ B`) も実装済み
 - 追加の selector / collection backlog slice として `querySelectorAll` と minimal `NodeList`、selector lists、bounded pseudo-classes（`not(<compound selector>)`, `is(<compound selector>, ...)`, `where(<compound selector>, ...)`, `root`, `empty`, `only-child`, `only-of-type`, `first-of-type`, `last-of-type`, `nth-child(<positive integer>)`, `nth-child(odd)`, `nth-child(even)`, `nth-child(an+b)`, `nth-last-child(<positive integer>)`, `nth-last-child(odd)`, `nth-last-child(even)`, `nth-last-child(an+b)`, `nth-of-type(<positive integer>)`, `nth-of-type(odd)`, `nth-of-type(even)`, `nth-of-type(an+b)`, `nth-last-of-type(<positive integer>)`, `nth-last-of-type(odd)`, `nth-last-of-type(even)`, `nth-last-of-type(an+b)` を含む）、`Element.children` / minimal `HTMLCollection`（`namedItem()` 含む）、`getElementsByTagName` / live `HTMLCollection`、`getElementsByTagNameNS` / live `HTMLCollection`、`getElementsByClassName` / live `HTMLCollection`、`getElementsByName` / live `NodeList`、`document.forms` / `form.elements` / live `HTMLCollection`、`select.options` / live `HTMLCollection`、`document.images` / `document.links` / live `HTMLCollection`、`document.all` / live `HTMLCollection` も実装済み
+- Phase 8 は DOM mutation と reflection expansion を対象にしていたが、slice 1 から slice 5 まで完了済み
 
 ## Phase 6: Selector Expansion
 
@@ -1158,6 +1159,49 @@ README は次だけを書く。
 
 - なし
 
+## Phase 8: DOM Mutation and Reflection Expansion
+
+目的:
+
+- inline script から attribute / class / tree mutation を deterministic に使えるようにする
+- selectors / collections が mutation 後も一致したまま追従するようにする
+- `Harness` は薄い facade のまま保ち、既存 API で足りないときだけ公開面を増やす
+
+担当:
+
+- `bt-dom` が attribute reflection / tree mutation / index updates を所有する
+- `bt-script` が mutation method dispatch と return wrapping を所有する
+- `bt-runtime` が runtime wiring と side effect regression を所有する
+
+スライス:
+
+1. attribute reflection (implemented)
+   - `getAttribute`, `setAttribute`, `removeAttribute`, `hasAttribute`, `toggleAttribute`
+   - `id`, `class`, `name`, `checked`, `disabled`, `selected`, `value` reflection
+2. class and dataset views (implemented)
+   - `className`
+   - `classList`
+   - `dataset`
+3. tree mutation primitives (implemented)
+   - `append`, `prepend`, `before`, `after`, `remove`
+   - `appendChild`, `insertBefore`, `replaceChild`, `replaceChildren`
+4. HTML serialization surfaces (implemented)
+   - `innerHTML`
+   - `outerHTML`
+   - bounded fragment insertion paths that reuse the existing HTML parser
+5. mutation hardening and regression coverage (implemented)
+   - selectors and collections stay consistent after mutation
+   - unsupported or lossy mutation semantics fail explicitly
+
+完了条件:
+
+- common DOM mutation flows work in inline scripts
+- selectors and collections observe mutations deterministically
+- docs, contract tests, and regression tests agree
+- bounded HTML serialization surfaces round-trip the implemented subset
+- mutation hardening and regression tests keep selector and collection state deterministic
+- no new `Harness` API is added unless the scenario cannot already be expressed
+
 ## Phase 7 以後の進め方
 
 運用ルール:
@@ -1169,6 +1213,7 @@ README は次だけを書く。
 5. 既存 API で足りない場合だけ `Harness` に公開する
 6. 公開面が変わる変更では README / capability matrix / mock guide も同じ変更で更新する
 - `querySelectorAll` と minimal `NodeList` は既に実装済みで、selector lists と bounded pseudo-classes も実装済み、`Element.children` / minimal `HTMLCollection`（`namedItem()` 含む）と `getElementsByTagName` / `getElementsByTagNameNS` / `getElementsByClassName` / live `HTMLCollection`、`getElementsByName` / live `NodeList`、`document.forms` / `form.elements` / live `HTMLCollection`、`select.options` / live `HTMLCollection`、`document.images` / `document.links` / `document.all` / live `HTMLCollection` も実装済み
+- Phase 8 is complete in this workspace; slices 1 (attribute reflection), 2 (class / dataset views), 3 (tree mutation primitives), 4 (HTML serialization surfaces), and 5 (mutation hardening and regression coverage) are already implemented
 
 新しい named phase を切る条件:
 

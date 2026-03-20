@@ -23,6 +23,7 @@ struct RecordingHost {
     text_content: BTreeMap<ElementHandle, String>,
     values: BTreeMap<ElementHandle, String>,
     checked: BTreeMap<ElementHandle, bool>,
+    attributes: BTreeMap<(ElementHandle, String), String>,
     element_children_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
     html_collection_tag_name_items_results: BTreeMap<HtmlCollectionTarget, Vec<ElementHandle>>,
     html_collection_tag_name_ns_items_results: BTreeMap<HtmlCollectionTarget, Vec<ElementHandle>>,
@@ -91,6 +92,15 @@ impl RecordingHost {
 
     fn seed_checked(&mut self, handle: ElementHandle, checked: bool) {
         self.checked.insert(handle, checked);
+    }
+
+    fn seed_attribute(
+        &mut self,
+        handle: ElementHandle,
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) {
+        self.attributes.insert((handle, name.into()), value.into());
     }
 
     fn seed_element_children(&mut self, element: ElementHandle, result: Vec<ElementHandle>) {
@@ -505,6 +515,74 @@ impl HostBindings for RecordingHost {
         Ok(())
     }
 
+    fn element_get_attribute(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<String>> {
+        Ok(self.attributes.get(&(element, name.to_string())).cloned())
+    }
+
+    fn element_set_attribute(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+        value: &str,
+    ) -> bt_script::Result<()> {
+        self.attributes
+            .insert((element, name.to_string()), value.to_string());
+        Ok(())
+    }
+
+    fn element_remove_attribute(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<()> {
+        self.attributes.remove(&(element, name.to_string()));
+        Ok(())
+    }
+
+    fn element_has_attribute(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<bool> {
+        Ok(self.attributes.contains_key(&(element, name.to_string())))
+    }
+
+    fn element_toggle_attribute(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+        force: Option<bool>,
+    ) -> bt_script::Result<bool> {
+        let key = (element, name.to_string());
+        let has_attr = self.attributes.contains_key(&key);
+        let now_present = match force {
+            Some(true) => {
+                if !has_attr {
+                    self.attributes.insert(key.clone(), String::new());
+                }
+                true
+            }
+            Some(false) => {
+                self.attributes.remove(&key);
+                false
+            }
+            None => {
+                if has_attr {
+                    self.attributes.remove(&key);
+                    false
+                } else {
+                    self.attributes.insert(key.clone(), String::new());
+                    true
+                }
+            }
+        };
+        Ok(now_present)
+    }
+
     fn document_query_selector(
         &mut self,
         selector: &str,
@@ -734,6 +812,85 @@ fn runtime_reads_and_writes_form_control_state() {
             .get(&ElementHandle::new(3))
             .map(String::as_str),
         Some("Alice:true")
+    );
+}
+
+#[test]
+fn runtime_supports_attribute_reflection_methods() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "");
+    host.seed_attribute(ElementHandle::new(1), "data-flag", "");
+
+    runtime
+        .eval_program(
+            "const root = document.getElementById('root'); const before = root.hasAttribute('data-flag'); const removed = root.toggleAttribute('data-flag'); const missing = root.hasAttribute('data-flag'); const forced = root.toggleAttribute('data-flag', true); root.setAttribute('data-label', 'Hello'); const label = root.getAttribute('data-label'); root.removeAttribute('data-label'); document.getElementById('root').textContent = String(before) + ':' + String(removed) + ':' + String(missing) + ':' + String(forced) + ':' + label + ':' + String(root.getAttribute('data-label'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("attribute reflection should dispatch through host bindings");
+
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "data-flag".to_string()))
+            .map(String::as_str),
+        Some("")
+    );
+    assert!(
+        !host
+            .attributes
+            .contains_key(&(ElementHandle::new(1), "data-label".to_string()))
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("true:false:false:true:Hello:null")
+    );
+}
+
+#[test]
+fn runtime_supports_classname_classlist_and_dataset_views() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "class", "primary secondary");
+    host.seed_attribute(ElementHandle::new(1), "data-kind", "App");
+
+    runtime
+        .eval_program(
+            "const root = document.getElementById('root'); const before = root.classList.length; const contains = root.classList.contains('primary'); root.classList.add('tertiary'); root.classList.remove('secondary'); const toggled = root.classList.toggle('active'); root.dataset.userId = '42'; document.getElementById('out').textContent = root.className + ':' + String(before) + ':' + String(contains) + ':' + String(toggled) + ':' + root.dataset.kind + ':' + root.dataset.userId + ':' + String(root.classList) + ':' + String(root.dataset);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("class and dataset views should dispatch through host bindings");
+
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "class".to_string()))
+            .map(String::as_str),
+        Some("primary tertiary active")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "data-kind".to_string()))
+            .map(String::as_str),
+        Some("App")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "data-user-id".to_string()))
+            .map(String::as_str),
+        Some("42")
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some(
+            "primary tertiary active:2:true:true:App:42:[object DOMTokenList]:[object DOMStringMap]"
+        )
     );
 }
 

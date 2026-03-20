@@ -6,8 +6,8 @@ For day-to-day implementation sequencing inside each phase, also see [implementa
 
 Status note:
 
-- Phases 0 through 6 are complete in this workspace.
-- Phase 7 is complete in this workspace; slices 1 through 4 are delivered, sibling selectors (`A + B`, `A ~ B`), selector lists (`A, B`), and a small pseudo-class slice are also delivered as backlog slices, and post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support plus `Element.children`, `getElementsByTagName`, `getElementsByTagNameNS`, `getElementsByClassName`, `getElementsByName`, `document.forms` / `form.elements`, `select.options`, `document.images` / `document.links`, and `document.all` collection support. Future selector work should stay backlog-driven.
+- Phases 0 through 7 are complete in this workspace.
+- Phase 8 is now scoped as DOM mutation and reflection expansion. Phase 7 is complete in this workspace; slices 1 through 4 are delivered, sibling selectors (`A + B`, `A ~ B`), selector lists (`A, B`), and a small pseudo-class slice are also delivered as backlog slices, and post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support plus `Element.children`, `getElementsByTagName`, `getElementsByTagNameNS`, `getElementsByClassName`, `getElementsByName`, `document.forms` / `form.elements`, `select.options`, `document.images` / `document.links`, and `document.all` collection support. Future selector work should stay backlog-driven. Phase 8 slices 1 through 5 are delivered; the phase is complete in this workspace.
 
 ## Phase 0: Skeleton
 
@@ -198,11 +198,62 @@ Exit criteria:
 - unsupported syntax still fails explicitly
 - docs, contract tests, and regression tests agree
 
+## Phase 8: DOM Mutation and Reflection Expansion
+
+Delivered in this workspace:
+
+- attribute reflection (delivered)
+- class and dataset views (delivered)
+- tree mutation primitives (delivered)
+- HTML serialization surfaces (delivered)
+- mutation hardening and regression coverage (delivered)
+
+Purpose:
+
+- make common DOM mutation flows usable from inline script without broadening the public `Harness`
+- keep selectors, collections, and event/default-action surfaces deterministic after mutations
+- avoid turning the rewrite into a broad browser-compatibility project
+
+Ownership:
+
+- `bt-dom` owns DOM mutation state, attribute reflection, and tree/index updates
+- `bt-script` owns method dispatch and return-value wrapping for the mutation methods
+- `bt-runtime` owns runtime wiring and regression visibility for side effects
+
+Suggested slices:
+
+1. attribute reflection (delivered)
+   - `getAttribute`, `setAttribute`, `removeAttribute`, `hasAttribute`, `toggleAttribute`
+   - reflected ID, class, name, checked, disabled, selected, and value state
+2. class and dataset views (delivered)
+   - `className`
+   - `classList`
+   - `dataset`
+3. tree mutation primitives (delivered)
+   - `append`, `prepend`, `before`, `after`, `remove`
+   - `appendChild`, `insertBefore`, `replaceChild`, `replaceChildren`
+4. HTML serialization surfaces (delivered)
+   - `innerHTML`
+   - `outerHTML`
+   - bounded fragment insertion paths that reuse the existing HTML parser
+5. mutation hardening and regression coverage (delivered)
+   - selectors and collections stay consistent after mutation
+   - unsupported or lossy mutation semantics fail explicitly
+
+Exit criteria:
+
+- common DOM mutation flows work in inline scripts
+- selectors and collections observe mutations deterministically
+- unsupported or lossy mutation semantics fail explicitly
+- no new `Harness` API is added unless the scenario cannot already be expressed
+- docs, contract tests, and regression tests agree
+
 ## After Phase 7
 
 Operating rule:
 
 - future selector work should stay backlog-driven and narrow
+- Phase 8 is complete in this workspace; future DOM mutation work should remain backlog-driven
 - `querySelectorAll` with minimal `NodeList` support is available, `Element.children`, `getElementsByTagName`, `getElementsByTagNameNS`, `getElementsByClassName`, `getElementsByName`, `document.forms` / `form.elements`, `select.options`, `document.images`, `document.links`, and `document.all` collection support are also available, and selector lists plus the bounded pseudo-class subset are also available through the bounded engine
 
 ## After Phase 7: Rolling Capability Delivery

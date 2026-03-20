@@ -1,6 +1,6 @@
 # Capability Matrix
 
-This matrix defines what `next/` already exposes, what is only scaffolded, and what is intentionally out of scope.
+This matrix defines what `next/` already exposes, what is only scaffolded, what is planned, and what is intentionally out of scope.
 
 | Capability | Level | Phase | Status | Notes |
 | --- | --- | --- | --- | --- |
@@ -31,9 +31,12 @@ This matrix defines what `next/` already exposes, what is only scaffolded, and w
 | Script DOM query slice 10 (`document.images`, `document.links`) | Stable Core | post-7 | Available | Document-scoped image and link collections expose live `HTMLCollection` semantics with `length`, `item()`, and `namedItem()`; `document.links` filters `a[href]` and `area[href]` descendants. |
 | Script DOM query slice 11 (`document.all`) | Stable Core | post-7 | Available | Document-scoped all-elements collection exposes live `HTMLCollection` semantics with `length`, `item()`, and `namedItem()` through the same bounded collection surface. |
 | Script DOM query hardening (bounded pseudo-class subset) | Stable Core | 7 | Available | Unsupported selector syntax remains explicit, selector lists are supported, and only the bounded pseudo-class subset is available. |
+| Attribute reflection slice 1 (`getAttribute`, `setAttribute`, `removeAttribute`, `hasAttribute`, `toggleAttribute`) | Stable Core | 8 | Available | Element attribute reflection is wired through inline script, updates reflected ID, class, name, checked, disabled, selected, and value state, and keeps selector and collection views consistent after mutation. |
+| Class and dataset views slice 2 (`className`, `classList`, `dataset`) | Stable Core | 8 | Available | Element class and dataset views are wired through inline script, keep selector and collection views consistent after mutation, and reflect through the shared attribute store. |
+| DOM mutation and reflection expansion | Stable Core | 8 | Available | Attribute reflection, class / dataset views, tree mutation primitives, bounded HTML serialization surfaces (`innerHTML`, `outerHTML`), and mutation hardening / regression coverage are delivered; selectors and collections stay deterministic after mutation. |
 | `assert_exists` and DOM assertions | Stable Core | 1 | Available | `assert_exists` queries the DOM and includes a dump in failure messages. |
 | Script lexer / parser / evaluator | Stable Core | 2 | Available | Minimal statement/expression support powers inline DOM mutation, selector lookup, ancestor-walk lookup, and listener registration. |
-| Window/document/Element host bindings | Stable Core | 2 | Available | `document.getElementById`, `document.querySelector`, `element.querySelector`, `getElementsByTagNameNS`, `Element.matches`, `Element.closest`, `textContent` mutation, and listener registration are wired through `Session`. |
+| Window/document/Element host bindings | Stable Core | 2 | Available | `document.getElementById`, `document.querySelector`, `element.querySelector`, `className`, `classList`, `dataset`, `getAttribute`, `setAttribute`, `removeAttribute`, `hasAttribute`, `toggleAttribute`, `getElementsByTagNameNS`, `Element.matches`, `Element.closest`, `textContent` mutation, and listener registration are wired through `Session`. |
 | Inline script execution | Stable Core | 2 | Available | Inline `<script>` blocks execute during session bootstrap in document order. |
 | Event dispatch and default actions | Stable Core | 3 | Available | Target-phase dispatch, ancestor bubbling, capture listeners, checkbox toggles, cancelable submit/click default actions, and form actions (`click`, `type_text`, `set_checked`, `set_select_value`, `focus`, `blur`, `submit`, `dispatch`) are available. |
 | Fetch mock response and failure injection | Stable Test Mocks | 4 | Available | Response rules, error rules, and call capture are wired through `Harness::fetch(...)`. |
@@ -49,3 +52,4 @@ This matrix defines what `next/` already exposes, what is only scaffolded, and w
 - A capability does not become stable merely because code exists.
 - Any new stable `Harness` API requires a matrix update before or with the implementation.
 - Any new test-only mock must document response injection, error injection, call or artifact capture, and reset behavior.
+- `Planned` rows describe the next named milestone and are not user-facing guarantees.

@@ -137,6 +137,51 @@ fn session_resolves_selectors_with_hex_escapes_regression() {
 }
 
 #[test]
+fn session_reflects_attributes_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><button id='button'>First</button><input id='name'><input id='agree' type='checkbox'><select id='mode'><option value='a'>A</option><option id='selected' value='b'>B</option></select><div id='out'></div><script>const button = document.getElementById('button'); button.setAttribute('class', 'primary'); button.toggleAttribute('data-flag'); const name = document.getElementById('name'); name.setAttribute('value', 'Alice'); const agree = document.getElementById('agree'); agree.setAttribute('checked', ''); document.getElementById('selected').setAttribute('selected', ''); document.getElementById('out').textContent = String(document.querySelectorAll('.primary').length) + ':' + String(document.querySelectorAll('[data-flag]').length) + ':' + String(button.getAttribute('data-label')) + ':' + name.value + ':' + String(agree.checked) + ':' + document.querySelector('option:checked').value;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("attribute reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "1:1:null:Alice:true:b"
+    );
+    assert_eq!(session.dom().select(".primary").unwrap().len(), 1);
+    assert_eq!(session.dom().select("[data-flag]").unwrap().len(), 1);
+    assert_eq!(session.dom().select("input:checked").unwrap().len(), 1);
+    assert_eq!(session.dom().select("option:checked").unwrap().len(), 1);
+}
+
+#[test]
+fn session_reflects_class_views_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><button id='button' class='base' data-kind='App'>First</button><div id='out'></div><script>const button = document.getElementById('button'); button.className = 'primary secondary'; const before = button.classList.length; const contains = button.classList.contains('primary'); button.classList.add('tertiary'); button.classList.remove('secondary'); const toggled = button.classList.toggle('active'); button.dataset.userId = '42'; document.getElementById('out').textContent = button.className + ':' + String(before) + ':' + String(contains) + ':' + String(toggled) + ':' + button.dataset.kind + ':' + button.dataset.userId + ':' + String(button.classList) + ':' + String(button.dataset);</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("class views should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "primary tertiary active:2:true:true:App:42:[object DOMTokenList]:[object DOMStringMap]"
+    );
+    assert_eq!(session.dom().select(".active").unwrap().len(), 1);
+    assert_eq!(session.dom().select("[data-user-id]").unwrap().len(), 1);
+    assert_eq!(session.dom().select("[data-kind=App]").unwrap().len(), 1);
+}
+
+#[test]
 fn session_rejects_out_of_range_hex_escape_selectors_explicitly() {
     let error = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -575,4 +620,112 @@ fn session_rejects_select_options_on_non_select_elements_explicitly() {
 
     assert!(error.to_string().contains("Script error"));
     assert!(error.to_string().contains("node is not a select element"));
+}
+
+#[test]
+fn session_reorders_nodes_with_before_and_after_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><section id='source'><button id='second'>Second</button><button id='third'>Third</button></section><button id='first'>First</button><div id='out'></div><script>const source = document.getElementById('source'); const first = document.getElementById('first'); const second = document.getElementById('second'); const third = document.getElementById('third'); second.before(first); second.after(third); document.getElementById('out').textContent = String(source.children.length) + ':' + source.children.item(0).textContent + ':' + source.children.item(1).textContent + ':' + source.children.item(2).textContent + ':' + String(document.querySelectorAll('#source > button').length) + ':' + document.querySelector('#first').textContent + ':' + document.querySelector('#third').textContent;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("before/after tree mutation should remain available");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "3:First:Second:Third:3:First:Third"
+    );
+}
+
+#[test]
+fn session_rejects_tree_mutation_cycles_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><section id='child'><span id='grandchild'>x</span></section></main><script>document.getElementById('child').appendChild(document.getElementById('root'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("ancestor insertion should fail explicitly");
+
+    assert!(error.to_string().contains("cannot insert"));
+}
+
+#[test]
+fn session_serializes_inner_html_and_outer_html_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><section id='target'><button id='old' class='primary'>Old</button></section><div id='out'></div><script>const target = document.getElementById('target'); const before = target.innerHTML; target.innerHTML = '<span id=\"first\">One</span><span id=\"second\">Two</span>'; const after = target.innerHTML; const replacement = document.getElementById('root').querySelector('#target'); replacement.outerHTML = '<article id=\"replacement\"><em id=\"inner\">Inner</em></article>'; document.getElementById('out').textContent = before + '|' + after + '|' + String(document.querySelector('#target')) + ':' + document.getElementById('replacement').outerHTML + ':' + document.getElementById('inner').textContent;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("HTML serialization surfaces should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "<button class=\"primary\" id=\"old\">Old</button>|<span id=\"first\">One</span><span id=\"second\">Two</span>|null:<article id=\"replacement\"><em id=\"inner\">Inner</em></article>:Inner"
+    );
+    assert!(session.dom().select("#old").unwrap().is_empty());
+    assert_eq!(session.dom().select("#replacement").unwrap().len(), 1);
+    assert_eq!(session.dom().select("#inner").unwrap().len(), 1);
+}
+
+#[test]
+fn session_mutation_hardening_updates_live_collections_and_selectors_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><form id='form'><input id='first' name='first' value='one'></form><select id='mode'><option value='a'>A</option></select><div id='out'></div><script>const form = document.getElementById('form'); const select = document.getElementById('mode'); const formsBefore = document.forms.length; const inputsBefore = document.querySelectorAll('input').length; form.outerHTML = '<div id=\"form-replacement\"></div>'; select.innerHTML = '<option id=\"second\" value=\"b\" selected>B</option><option id=\"third\" value=\"c\">C</option>'; document.getElementById('out').textContent = formsBefore + ':' + document.forms.length + ':' + inputsBefore + ':' + document.querySelectorAll('input').length + ':' + select.options.length + ':' + document.querySelector('option:checked').value;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("mutation hardening should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "1:0:1:0:2:b");
+    assert_eq!(session.dom().select("#form-replacement").unwrap().len(), 1);
+    assert_eq!(session.dom().select("#third").unwrap().len(), 1);
+    assert!(session.dom().select("#form").unwrap().is_empty());
+    assert_eq!(session.dom().select("option:checked").unwrap().len(), 1);
+}
+
+#[test]
+fn session_rejects_lossy_outer_html_serialization_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='target'></div><div id='out'></div><script>const target = document.getElementById('target'); target.setAttribute('data-label', \"a'b\\\"c\"); document.getElementById('out').textContent = String(target.outerHTML);</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("lossy serialization should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(error.to_string().contains("contains both quote types"));
+}
+
+#[test]
+fn session_rejects_malformed_html_fragment_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><section id='target'></section><script>document.getElementById('target').innerHTML = '<span></main>';</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("malformed innerHTML fragments should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(error.to_string().contains("mismatched closing tag"));
 }

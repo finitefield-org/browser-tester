@@ -36,6 +36,8 @@ fn as_string(value: &Value) -> String {
         }
         Value::String(value) => value.clone(),
         Value::Element(_) => "[object Element]".to_string(),
+        Value::ClassList(_) => "[object DOMTokenList]".to_string(),
+        Value::Dataset(_) => "[object DOMStringMap]".to_string(),
         Value::HtmlCollection(_) => "[object HTMLCollection]".to_string(),
         Value::NodeList(_) => "[object NodeList]".to_string(),
         Value::Document => "[object Document]".to_string(),
@@ -88,14 +90,30 @@ fn eval_assignment<H: HostBindings>(
                 (Value::Element(element), "textContent") => {
                     host.element_set_text_content(element, &as_string(&value))
                 }
+                (Value::Element(element), "innerHTML") => {
+                    host.element_set_inner_html(element, &as_string(&value))
+                }
+                (Value::Element(element), "outerHTML") => {
+                    host.element_set_outer_html(element, &as_string(&value))
+                }
                 (Value::Element(element), "value") => {
                     host.element_set_value(element, &as_string(&value))
                 }
                 (Value::Element(element), "checked") => {
                     host.element_set_checked(element, is_truthy(&value))
                 }
+                (Value::Element(element), "className") => {
+                    host.element_set_attribute(element, "class", &as_string(&value))
+                }
+                (Value::Dataset(element), property) => {
+                    let attribute_name = dataset_attribute_name(property)?;
+                    host.element_set_attribute(element, &attribute_name, &as_string(&value))
+                }
                 (Value::Element(_), _) => Err(ScriptError::new(format!(
                     "unsupported assignment target on element: {property}"
+                ))),
+                (Value::ClassList(_), property) => Err(ScriptError::new(format!(
+                    "unsupported assignment target on class list value: {property}"
                 ))),
                 (Value::NodeList(_), property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on node list value"
@@ -209,12 +227,24 @@ fn eval_member<H: HostBindings>(
         Value::Element(element) if property == "textContent" => {
             Ok(Value::String(host.element_text_content(element)?))
         }
+        Value::Element(element) if property == "innerHTML" => {
+            Ok(Value::String(host.element_inner_html(element)?))
+        }
+        Value::Element(element) if property == "outerHTML" => {
+            Ok(Value::String(host.element_outer_html(element)?))
+        }
         Value::Element(element) if property == "value" => {
             Ok(Value::String(host.element_value(element)?))
         }
         Value::Element(element) if property == "checked" => {
             Ok(Value::Boolean(host.element_checked(element)?))
         }
+        Value::Element(element) if property == "className" => Ok(Value::String(
+            host.element_get_attribute(element, "class")?
+                .unwrap_or_default(),
+        )),
+        Value::Element(element) if property == "classList" => Ok(Value::ClassList(element)),
+        Value::Element(element) if property == "dataset" => Ok(Value::Dataset(element)),
         Value::Element(element) if property == "children" => Ok(Value::HtmlCollection(
             HtmlCollectionTarget::Children(element),
         )),
@@ -244,11 +274,25 @@ fn eval_member<H: HostBindings>(
             let length = html_collection_items(&collection, host)?.len();
             Ok(Value::Number(length as f64))
         }
+        Value::ClassList(element) if property == "length" => {
+            let length = class_list_tokens(element, host)?.len();
+            Ok(Value::Number(length as f64))
+        }
         Value::NodeList(target) if property == "length" => {
             let length = node_list_items(&target, host)?.len();
             Ok(Value::Number(length as f64))
         }
         Value::Element(_) => Err(unsupported_member_access(property, "element")),
+        Value::ClassList(_) => Err(unsupported_member_access(property, "class list")),
+        Value::Dataset(element) => {
+            let attribute_name = dataset_attribute_name(property)?;
+            Ok(
+                match host.element_get_attribute(element, &attribute_name)? {
+                    Some(value) => Value::String(value),
+                    None => Value::Undefined,
+                },
+            )
+        }
         Value::Document => Err(unsupported_member_access(property, "document")),
         Value::Window => Err(unsupported_member_access(property, "window")),
         Value::String(_) => Err(unsupported_member_access(property, "string")),
@@ -350,6 +394,20 @@ fn eval_method_call<H: HostBindings>(
             ))),
         },
         Value::Element(element) => match method {
+            "getAttribute" => element_get_attribute(element, args, env, host),
+            "setAttribute" => element_set_attribute(element, args, env, host),
+            "removeAttribute" => element_remove_attribute(element, args, env, host),
+            "hasAttribute" => element_has_attribute(element, args, env, host),
+            "toggleAttribute" => element_toggle_attribute(element, args, env, host),
+            "appendChild" => element_append_child(element, args, env, host),
+            "insertBefore" => element_insert_before(element, args, env, host),
+            "replaceChild" => element_replace_child(element, args, env, host),
+            "replaceChildren" => element_replace_children(element, args, env, host),
+            "append" => element_append(element, args, env, host),
+            "prepend" => element_prepend(element, args, env, host),
+            "before" => element_before(element, args, env, host),
+            "after" => element_after(element, args, env, host),
+            "remove" => element_remove(element, args, env, host),
             "querySelector" => {
                 query_selector(QuerySelectorTarget::Element(element), args, env, host)
             }
@@ -398,6 +456,18 @@ fn eval_method_call<H: HostBindings>(
                 "unsupported HTMLCollection method: {other}"
             ))),
         },
+        Value::ClassList(element) => match method {
+            "contains" => class_list_contains(element, args, env, host),
+            "add" => class_list_add(element, args, env, host),
+            "remove" => class_list_remove(element, args, env, host),
+            "toggle" => class_list_toggle(element, args, env, host),
+            other => Err(ScriptError::new(format!(
+                "unsupported class list method: {other}"
+            ))),
+        },
+        Value::Dataset(_) => Err(ScriptError::new(format!(
+            "cannot call `{method}` on a dataset value"
+        ))),
         Value::NodeList(target) => match method {
             "item" => node_list_item(&target, args, env, host),
             other => Err(ScriptError::new(format!(
@@ -499,6 +569,265 @@ fn query_selector_all<H: HostBindings>(
     };
 
     Ok(Value::NodeList(NodeListTarget::Snapshot(matches)))
+}
+
+fn element_get_attribute<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [name_expr] = args else {
+        return Err(ScriptError::new(
+            "getAttribute() expects exactly one argument",
+        ));
+    };
+
+    let name = as_string(&eval_expr(name_expr, env, host)?);
+    let value = host.element_get_attribute(element, &name)?;
+    Ok(value.map(Value::String).unwrap_or(Value::Null))
+}
+
+fn element_set_attribute<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [name_expr, value_expr] = args else {
+        return Err(ScriptError::new(
+            "setAttribute() expects exactly two arguments",
+        ));
+    };
+
+    let name = as_string(&eval_expr(name_expr, env, host)?);
+    let value = as_string(&eval_expr(value_expr, env, host)?);
+    host.element_set_attribute(element, &name, &value)?;
+    Ok(Value::Undefined)
+}
+
+fn element_remove_attribute<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [name_expr] = args else {
+        return Err(ScriptError::new(
+            "removeAttribute() expects exactly one argument",
+        ));
+    };
+
+    let name = as_string(&eval_expr(name_expr, env, host)?);
+    host.element_remove_attribute(element, &name)?;
+    Ok(Value::Undefined)
+}
+
+fn element_has_attribute<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [name_expr] = args else {
+        return Err(ScriptError::new(
+            "hasAttribute() expects exactly one argument",
+        ));
+    };
+
+    let name = as_string(&eval_expr(name_expr, env, host)?);
+    Ok(Value::Boolean(host.element_has_attribute(element, &name)?))
+}
+
+fn element_toggle_attribute<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let (name_expr, force_expr) = match args {
+        [name_expr] => (name_expr, None),
+        [name_expr, force_expr] => (name_expr, Some(force_expr)),
+        _ => {
+            return Err(ScriptError::new(
+                "toggleAttribute() expects one or two arguments",
+            ));
+        }
+    };
+
+    let name = as_string(&eval_expr(name_expr, env, host)?);
+    let force = match force_expr {
+        Some(expr) => Some(is_truthy(&eval_expr(expr, env, host)?)),
+        None => None,
+    };
+    Ok(Value::Boolean(
+        host.element_toggle_attribute(element, &name, force)?,
+    ))
+}
+
+fn element_append_child<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [child_expr] = args else {
+        return Err(ScriptError::new(
+            "appendChild() expects exactly one argument",
+        ));
+    };
+
+    let child = eval_element_handle(child_expr, env, host, "appendChild")?;
+    host.element_append_child(element, child)?;
+    Ok(Value::Element(child))
+}
+
+fn element_insert_before<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [child_expr, reference_expr] = args else {
+        return Err(ScriptError::new(
+            "insertBefore() expects exactly two arguments",
+        ));
+    };
+
+    let child = eval_element_handle(child_expr, env, host, "insertBefore")?;
+    let reference = eval_optional_element_handle(reference_expr, env, host, "insertBefore")?;
+    host.element_insert_before(element, child, reference)?;
+    Ok(Value::Element(child))
+}
+
+fn element_replace_child<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [new_child_expr, old_child_expr] = args else {
+        return Err(ScriptError::new(
+            "replaceChild() expects exactly two arguments",
+        ));
+    };
+
+    let new_child = eval_element_handle(new_child_expr, env, host, "replaceChild")?;
+    let old_child = eval_element_handle(old_child_expr, env, host, "replaceChild")?;
+    host.element_replace_child(element, new_child, old_child)?;
+    Ok(Value::Element(old_child))
+}
+
+fn element_replace_children<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let children = eval_element_arguments(args, env, host, "replaceChildren")?;
+    host.element_replace_children(element, children)?;
+    Ok(Value::Undefined)
+}
+
+fn element_append<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let children = eval_element_arguments(args, env, host, "append")?;
+    host.element_append(element, children)?;
+    Ok(Value::Undefined)
+}
+
+fn element_prepend<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let children = eval_element_arguments(args, env, host, "prepend")?;
+    host.element_prepend(element, children)?;
+    Ok(Value::Undefined)
+}
+
+fn element_before<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let children = eval_element_arguments(args, env, host, "before")?;
+    host.element_before(element, children)?;
+    Ok(Value::Undefined)
+}
+
+fn element_after<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let children = eval_element_arguments(args, env, host, "after")?;
+    host.element_after(element, children)?;
+    Ok(Value::Undefined)
+}
+
+fn element_remove<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    _env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new("remove() expects no arguments"));
+    }
+
+    host.element_remove(element)?;
+    Ok(Value::Undefined)
+}
+
+fn eval_element_handle<H: HostBindings>(
+    expr: &Expr,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+    method: &str,
+) -> Result<crate::ElementHandle> {
+    match eval_expr(expr, env, host)? {
+        Value::Element(element) => Ok(element),
+        _ => Err(ScriptError::new(format!(
+            "{method}() expects element arguments"
+        ))),
+    }
+}
+
+fn eval_optional_element_handle<H: HostBindings>(
+    expr: &Expr,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+    method: &str,
+) -> Result<Option<crate::ElementHandle>> {
+    let value = eval_expr(expr, env, host)?;
+    match value {
+        Value::Element(element) => Ok(Some(element)),
+        Value::Null | Value::Undefined => Ok(None),
+        _ => Err(ScriptError::new(format!(
+            "{method}() expects an element or null reference"
+        ))),
+    }
+}
+
+fn eval_element_arguments<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+    method: &str,
+) -> Result<Vec<crate::ElementHandle>> {
+    let mut children = Vec::new();
+    for expr in args {
+        children.push(eval_element_handle(expr, env, host, method)?);
+    }
+    Ok(children)
 }
 
 fn get_elements_by_tag_name<H: HostBindings>(
@@ -748,6 +1077,8 @@ fn is_truthy(value: &Value) -> bool {
         Value::Number(value) => *value != 0.0,
         Value::String(value) => !value.is_empty(),
         Value::Element(_)
+        | Value::ClassList(_)
+        | Value::Dataset(_)
         | Value::HtmlCollection(_)
         | Value::NodeList(_)
         | Value::Document
@@ -765,6 +1096,199 @@ fn index_from_value(value: &Value) -> Option<usize> {
         Value::String(value) => value.parse::<usize>().ok(),
         _ => None,
     }
+}
+
+fn class_list_tokens<H: HostBindings>(
+    element: crate::ElementHandle,
+    host: &mut H,
+) -> Result<Vec<String>> {
+    let class_value = host
+        .element_get_attribute(element, "class")?
+        .unwrap_or_default();
+    Ok(normalize_class_list_tokens(
+        class_value.split_ascii_whitespace().map(str::to_string),
+    ))
+}
+
+fn normalize_class_list_tokens<I>(tokens: I) -> Vec<String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut unique = Vec::new();
+    for token in tokens {
+        if !unique.iter().any(|candidate| candidate == &token) {
+            unique.push(token);
+        }
+    }
+    unique
+}
+
+fn validate_class_list_token(token: &str) -> Result<String> {
+    let trimmed = token.trim();
+    if trimmed.is_empty() || trimmed != token || trimmed.chars().any(char::is_whitespace) {
+        return Err(ScriptError::new(
+            "classList token must be a non-empty string without whitespace",
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn write_class_list_tokens<H: HostBindings>(
+    element: crate::ElementHandle,
+    tokens: &[String],
+    host: &mut H,
+) -> Result<()> {
+    host.element_set_attribute(element, "class", &tokens.join(" "))
+}
+
+fn class_list_contains<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [token_expr] = args else {
+        return Err(ScriptError::new(
+            "classList.contains() expects exactly one argument",
+        ));
+    };
+
+    let token = validate_class_list_token(&as_string(&eval_expr(token_expr, env, host)?))?;
+    let tokens = class_list_tokens(element, host)?;
+    Ok(Value::Boolean(
+        tokens.iter().any(|candidate| candidate == &token),
+    ))
+}
+
+fn class_list_add<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.is_empty() {
+        return Err(ScriptError::new(
+            "classList.add() expects at least one argument",
+        ));
+    }
+
+    let mut tokens = class_list_tokens(element, host)?;
+    let mut changed = false;
+    for expr in args {
+        let token = validate_class_list_token(&as_string(&eval_expr(expr, env, host)?))?;
+        if !tokens.iter().any(|candidate| candidate == &token) {
+            tokens.push(token);
+            changed = true;
+        }
+    }
+    if changed {
+        write_class_list_tokens(element, &tokens, host)?;
+    }
+    Ok(Value::Undefined)
+}
+
+fn class_list_remove<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.is_empty() {
+        return Err(ScriptError::new(
+            "classList.remove() expects at least one argument",
+        ));
+    }
+
+    let mut tokens = class_list_tokens(element, host)?;
+    let original_len = tokens.len();
+    for expr in args {
+        let token = validate_class_list_token(&as_string(&eval_expr(expr, env, host)?))?;
+        tokens.retain(|candidate| candidate != &token);
+    }
+    if tokens.len() != original_len {
+        write_class_list_tokens(element, &tokens, host)?;
+    }
+    Ok(Value::Undefined)
+}
+
+fn class_list_toggle<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let (token_expr, force_expr) = match args {
+        [token_expr] => (token_expr, None),
+        [token_expr, force_expr] => (token_expr, Some(force_expr)),
+        _ => {
+            return Err(ScriptError::new(
+                "classList.toggle() expects one or two arguments",
+            ));
+        }
+    };
+
+    let token = validate_class_list_token(&as_string(&eval_expr(token_expr, env, host)?))?;
+    let force = match force_expr {
+        Some(expr) => Some(is_truthy(&eval_expr(expr, env, host)?)),
+        None => None,
+    };
+
+    let mut tokens = class_list_tokens(element, host)?;
+    let present = tokens.iter().any(|candidate| candidate == &token);
+    let now_present = match force {
+        Some(true) => {
+            if !present {
+                tokens.push(token);
+                write_class_list_tokens(element, &tokens, host)?;
+            }
+            true
+        }
+        Some(false) => {
+            if present {
+                tokens.retain(|candidate| candidate != &token);
+                write_class_list_tokens(element, &tokens, host)?;
+            }
+            false
+        }
+        None => {
+            if present {
+                tokens.retain(|candidate| candidate != &token);
+                write_class_list_tokens(element, &tokens, host)?;
+                false
+            } else {
+                tokens.push(token);
+                write_class_list_tokens(element, &tokens, host)?;
+                true
+            }
+        }
+    };
+
+    Ok(Value::Boolean(now_present))
+}
+
+fn dataset_attribute_name(property: &str) -> Result<String> {
+    let trimmed = property.trim();
+    if trimmed.is_empty() {
+        return Err(ScriptError::new("dataset property name must not be empty"));
+    }
+
+    let mut attribute = String::from("data-");
+    for ch in trimmed.chars() {
+        match ch {
+            'A'..='Z' => {
+                attribute.push('-');
+                attribute.push(ch.to_ascii_lowercase());
+            }
+            'a'..='z' | '0'..='9' | '_' | '$' => attribute.push(ch),
+            _ => {
+                return Err(ScriptError::new(format!(
+                    "unsupported dataset property name: {property}"
+                )));
+            }
+        }
+    }
+
+    Ok(attribute)
 }
 
 fn unsupported_member_access(property: &str, kind: &str) -> ScriptError {

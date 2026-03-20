@@ -1,6 +1,6 @@
 # Implementation Guide
 
-This document explains how to actually build out the `next/` rewrite from its current Phase 6-complete baseline with Phase 7 slices 1 through 4 already delivered, plus sibling selector backlog slices (`A + B`, `A ~ B`), selector lists (`A, B`), bounded attribute selectors (`[attr=value]`, `[attr^=value]`, `[attr$=value]`, `[attr*=value]`, `[attr~=value]`, `[attr|=value]`) plus optional `i` / `s` flags, bounded pseudo-classes including `:not(...)`, `:is(...)`, `:root`, `:empty`, `:only-child`, `:only-of-type`, `:first-of-type`, `:last-of-type`, `:nth-child(<positive integer>)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`, `:nth-last-child(<positive integer>)`, `:nth-last-child(odd)`, `:nth-last-child(even)`, `:nth-last-child(an+b)`, `:nth-of-type(<positive integer>)`, `:nth-of-type(odd)`, `:nth-of-type(even)`, `:nth-of-type(an+b)`, `:nth-last-of-type(<positive integer>)`, `:nth-last-of-type(odd)`, `:nth-last-of-type(even)`, and `:nth-last-of-type(an+b)`, and post-Phase-7 collection slices for `querySelectorAll` / minimal `NodeList`, `Element.children` / minimal `HTMLCollection`, `getElementsByTagName` / live `HTMLCollection`, `getElementsByTagNameNS` / live `HTMLCollection`, `getElementsByClassName` / live `HTMLCollection`, `getElementsByName` / live `NodeList`, `document.forms` / `form.elements` live `HTMLCollection`, `select.options` live `HTMLCollection`, `document.images` / `document.links` live `HTMLCollection`, and `document.all` live `HTMLCollection`.
+This document explains how to actually build out the `next/` rewrite from its current Phase 6-complete baseline with Phase 7 slices 1 through 4 already delivered, plus sibling selector backlog slices (`A + B`, `A ~ B`), selector lists (`A, B`), bounded attribute selectors (`[attr=value]`, `[attr^=value]`, `[attr$=value]`, `[attr*=value]`, `[attr~=value]`, `[attr|=value]`) plus optional `i` / `s` flags, bounded pseudo-classes including `:not(...)`, `:is(...)`, `:root`, `:empty`, `:only-child`, `:only-of-type`, `:first-of-type`, `:last-of-type`, `:nth-child(<positive integer>)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`, `:nth-last-child(<positive integer>)`, `:nth-last-child(odd)`, `:nth-last-child(even)`, `:nth-last-child(an+b)`, `:nth-of-type(<positive integer>)`, `:nth-of-type(odd)`, `:nth-of-type(even)`, `:nth-of-type(an+b)`, `:nth-last-of-type(<positive integer>)`, `:nth-last-of-type(odd)`, `:nth-last-of-type(even)`, and `:nth-last-of-type(an+b)`, and post-Phase-7 collection slices for `querySelectorAll` / minimal `NodeList`, `Element.children` / minimal `HTMLCollection`, `getElementsByTagName` / live `HTMLCollection`, `getElementsByTagNameNS` / live `HTMLCollection`, `getElementsByClassName` / live `HTMLCollection`, `getElementsByName` / live `NodeList`, `document.forms` / `form.elements` live `HTMLCollection`, `select.options` live `HTMLCollection`, `document.images` / `document.links` live `HTMLCollection`, and `document.all` live `HTMLCollection`. Phase 8 is the next named milestone and scopes DOM mutation and reflection expansion.
 
 Use it together with:
 
@@ -570,6 +570,55 @@ Tests already in place:
 - `length`, `item()`, and `namedItem()` work for namespace-aware collections
 - detached scoped subtree behavior stays explicit through regression coverage
 - arity mismatches fail explicitly
+
+### Phase 8: DOM Mutation and Reflection Expansion
+
+Goal:
+
+- make common DOM mutation and reflection flows work from inline script without broadening the public surface unnecessarily
+- keep selectors, collections, and event/default-action behavior deterministic after mutation
+
+Primary owners:
+
+- `bt-dom`
+- `bt-script`
+- `bt-runtime`
+
+Delivered slices:
+
+1. attribute reflection (delivered in this workspace)
+   - `getAttribute`, `setAttribute`, `removeAttribute`, `hasAttribute`, `toggleAttribute`
+   - reflected ID, class, name, checked, disabled, selected, and value state
+2. class and dataset views (delivered in this workspace)
+   - `className`
+   - `classList`
+   - `dataset`
+3. tree mutation primitives (delivered in this workspace)
+   - `append`, `prepend`, `before`, `after`, `remove`
+   - `appendChild`, `insertBefore`, `replaceChild`, `replaceChildren`
+4. HTML serialization surfaces (delivered in this workspace)
+   - `innerHTML`
+   - `outerHTML`
+   - bounded fragment insertion paths that reuse the existing HTML parser
+5. mutation hardening and regression coverage (delivered)
+   - selectors and collections stay consistent after mutation
+   - unsupported or lossy mutation semantics fail explicitly
+
+Tests already in place:
+
+- tree mutation preserves document order, parent/child links, and explicit errors on invalid moves
+- HTML serialization surfaces round-trip the bounded HTML subset
+
+Tests in place for the delivered slices:
+
+- serialization surfaces round-trip the bounded HTML subset
+- failure-path tests cover unsupported or lossy mutation semantics and mutation hardening regressions
+
+Do not add yet:
+
+- broad browser compatibility
+- unrelated rendering or layout behavior
+- broad collection or CSS parser expansion just because mutation exists
 
 ## Decision Flow for Each Change
 
