@@ -5,10 +5,11 @@ The rewrite follows [`next.md`](../next.md) and keeps the public surface small w
 
 Current state:
 
-- phase 0 scaffold only
+- phase 0 scaffold plus the internal phase 1 DOM bootstrap and selector slices
 - `Harness` and `HarnessBuilder` are available
-- `Session` stays internal and owns the copied configuration state
-- deterministic DOM, script, event, timer, and mock runtime pieces are planned but not yet implemented
+- `Session` stays internal and owns the copied configuration state plus the DOM store
+- `DomStore` builds, selects, and dumps HTML trees for tests, but it is not part of the public API
+- deterministic selector, script, event, timer, and mock runtime pieces are still planned
 
 ## Quick Start
 
@@ -49,4 +50,3 @@ pub fn main() !void {
 - [Limitations](doc/limitations.md)
 - [Roadmap](doc/roadmap.md)
 - [Publish Checklist](doc/publish-checklist.md)
-

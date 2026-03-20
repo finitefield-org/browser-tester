@@ -49,32 +49,16 @@ pub const HarnessBuilder = struct {
             return error.InvalidUrl;
         }
 
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
-        errdefer arena.deinit();
-
-        const arena_alloc = arena.allocator();
-        const url_copy = try arena_alloc.dupe(u8, url_source);
-        const html_copy = if (self.html_value) |html_source|
-            try arena_alloc.dupe(u8, html_source)
-        else
-            null;
-        const storage_copy = try arena_alloc.alloc(session.StorageSeed, self.local_storage.items.len);
-        for (self.local_storage.items, 0..) |entry, i| {
-            storage_copy[i] = .{
-                .key = try arena_alloc.dupe(u8, entry.key),
-                .value = try arena_alloc.dupe(u8, entry.value),
-            };
-        }
-
-        return Harness{
-            .session = session.Session{
-                .arena = arena,
-                .config = .{
-                    .url = url_copy,
-                    .html = html_copy,
-                    .local_storage = storage_copy,
-                },
+        const session_instance = try session.Session.init(
+            self.allocator,
+            .{
+                .url = url_source,
+                .html = self.html_value,
+                .local_storage = self.local_storage.items,
             },
+        );
+        return Harness{
+            .session = session_instance,
         };
     }
 };

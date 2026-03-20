@@ -27,6 +27,8 @@ The safest order for turning the phase 0 scaffold into a usable runtime is:
 7. deterministic mocks
 8. hardening and publication work
 
+The DOM bootstrap and selector subset slices are already landed in this workspace, so the remaining phase 1 work is the read-only inspection surface.
+
 This order keeps the public facade thin and avoids implementing user actions before the DOM and selector layers are trustworthy.
 
 ## Public API Rules
@@ -46,4 +48,3 @@ When a capability becomes public, aim to add:
 - documentation updates in the same change
 
 Large regression fixtures should wait until the capability is stable enough to benefit from them.
-

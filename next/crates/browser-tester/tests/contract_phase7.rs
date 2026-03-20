@@ -169,6 +169,16 @@ fn script_document_images_and_links_are_live_end_to_end() -> browser_tester_next
 }
 
 #[test]
+fn script_document_applets_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<div id='root'><applet id='first-applet' name='first-applet'>First</applet><applet name='second-applet'>Second</applet></div><div id='out'></div><script>const applets = document.applets; const before = applets.length; const first = applets.namedItem('first-applet'); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(applets.length) + ':' + String(first) + ':' + String(applets.namedItem('missing'));</script>",
+    )?;
+
+    harness.assert_text("#out", "2:0:[object Element]:null")?;
+    Ok(())
+}
+
+#[test]
 fn script_document_all_is_live_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<div id='root'><span id='first'>First</span><span id='second'>Second</span></div><div id='out'></div><script>const all = document.all; const before = all.length; const named = all.namedItem('second'); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(all.length) + ':' + String(named) + ':' + String(all.namedItem('missing'));</script>",

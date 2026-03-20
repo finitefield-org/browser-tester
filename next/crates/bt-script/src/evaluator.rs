@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::syntax::{AssignTarget, Expr, Program, Statement};
 use crate::{
     CollectionIteratorHandle, HostBindings, HtmlCollectionScope, HtmlCollectionTarget,
-    IteratorResult, ListenerTarget, NodeListTarget, Result, ScriptError, ScriptValue as Value,
+    ListenerTarget, NodeListTarget, Result, ScriptError, ScriptValue as Value,
 };
 
 pub(crate) fn eval_program<H: HostBindings>(program: &Program, host: &mut H) -> Result<()> {
@@ -239,6 +239,15 @@ fn eval_member<H: HostBindings>(
         Value::Document if property == "anchors" => {
             Ok(Value::HtmlCollection(HtmlCollectionTarget::DocumentAnchors))
         }
+        Value::Document if property == "applets" => {
+            Ok(Value::HtmlCollection(HtmlCollectionTarget::ByTagName {
+                scope: HtmlCollectionScope::Document,
+                tag_name: "applet".to_string(),
+            }))
+        }
+        Value::Document if property == "children" => Ok(Value::HtmlCollection(
+            HtmlCollectionTarget::DocumentChildren,
+        )),
         Value::Document if property == "embeds" => {
             Ok(Value::HtmlCollection(HtmlCollectionTarget::ByTagName {
                 scope: HtmlCollectionScope::Document,
@@ -300,9 +309,7 @@ fn eval_member<H: HostBindings>(
         Value::IteratorResult(result) if property == "value" => {
             Ok(result.value().unwrap_or(Value::Undefined))
         }
-        Value::IteratorResult(result) if property == "done" => {
-            Ok(Value::Boolean(result.done()))
-        }
+        Value::IteratorResult(result) if property == "done" => Ok(Value::Boolean(result.done())),
         Value::ClassList(element) if property == "length" => {
             let length = class_list_tokens(element, host)?.len();
             Ok(Value::Number(length as f64))
@@ -517,6 +524,9 @@ fn eval_method_call<H: HostBindings>(
                 "unsupported iterator method: {other}"
             ))),
         },
+        Value::IteratorResult(_) => Err(ScriptError::new(format!(
+            "cannot call `{method}` on an iterator result value"
+        ))),
         Value::String(_) => Err(ScriptError::new(format!(
             "unsupported method call on string value: {method}"
         ))),
@@ -1123,6 +1133,7 @@ fn html_collection_items<H: HostBindings>(
         }
         HtmlCollectionTarget::DocumentLinks => host.html_collection_document_links_items(),
         HtmlCollectionTarget::DocumentAnchors => host.html_collection_document_anchors_items(),
+        HtmlCollectionTarget::DocumentChildren => host.html_collection_document_children_items(),
     }
 }
 
@@ -1151,6 +1162,9 @@ fn html_collection_named_item_handle<H: HostBindings>(
         HtmlCollectionTarget::DocumentLinks => host.html_collection_document_links_named_item(name),
         HtmlCollectionTarget::DocumentAnchors => {
             host.html_collection_document_anchors_named_item(name)
+        }
+        HtmlCollectionTarget::DocumentChildren => {
+            host.html_collection_document_children_named_item(name)
         }
     }
 }
@@ -1241,7 +1255,7 @@ fn for_each_over_items<H: HostBindings>(
 }
 
 fn collection_iterator_next(iterator: &CollectionIteratorHandle) -> Result<Value> {
-    Ok(Value::IteratorResult(iterator.next_result()))
+    Ok(Value::IteratorResult(Box::new(iterator.next_result())))
 }
 
 fn collection_iterator(items: Vec<Value>) -> Value {

@@ -41,3 +41,11 @@ test "contract: Harness.fromHtmlWithUrlAndLocalStorage keeps explicit configurat
     try std.testing.expectEqualStrings("theme", subject.localStorage()[0].key);
     try std.testing.expectEqualStrings("dark", subject.localStorage()[0].value);
 }
+
+test "failure: malformed html is rejected" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.HtmlParse,
+        Harness.fromHtml(allocator, "<main><span></main>"),
+    );
+}

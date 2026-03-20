@@ -66,6 +66,7 @@ pub enum HtmlCollectionTarget {
     SelectOptions(ElementHandle),
     DocumentLinks,
     DocumentAnchors,
+    DocumentChildren,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -243,7 +244,7 @@ pub enum ScriptValue {
     HtmlCollection(HtmlCollectionTarget),
     NodeList(NodeListTarget),
     CollectionIterator(CollectionIteratorHandle),
-    IteratorResult(IteratorResult),
+    IteratorResult(Box<IteratorResult>),
     Document,
     Window,
     Event(ScriptEventHandle),
@@ -444,18 +445,15 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("document.anchors"))
     }
 
-    fn collection_iterator_values(
-        &mut self,
-        _target: &HtmlCollectionTarget,
-    ) -> Result<Vec<ElementHandle>> {
-        Err(ScriptError::phase_not_ready("collection.values"))
+    fn html_collection_document_children_items(&mut self) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("document.children"))
     }
 
-    fn collection_iterator_keys(
+    fn html_collection_document_children_named_item(
         &mut self,
-        _target: &HtmlCollectionTarget,
-    ) -> Result<Vec<ElementHandle>> {
-        Err(ScriptError::phase_not_ready("collection.keys"))
+        _name: &str,
+    ) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("document.children"))
     }
 
     fn element_text_content(&mut self, _element: ElementHandle) -> Result<String> {

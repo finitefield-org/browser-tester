@@ -36,6 +36,7 @@ zig/
     root.zig        # public facade
     harness.zig     # Harness and HarnessBuilder
     session.zig     # internal session state
+    dom.zig         # internal HTML parsing and DOM tree storage
     errors.zig      # public error surface
   doc/
     architecture.md
@@ -57,7 +58,7 @@ zig/
 - `Result(T)`
 
 `Session` stays internal for now.
-It owns the copied configuration state and is the future home for scheduler state, runtime state, and mock registry state.
+It owns the copied configuration state, the internal DOM store, and is the future home for scheduler state, runtime state, and mock registry state.
 
 ## High-Level Shape
 
@@ -67,7 +68,7 @@ flowchart LR
   H --> B["HarnessBuilder"]
   H --> S["Session"]
   S --> M["reserved mock space"]
-  S --> D["future DOM/runtime/script"]
+  S --> D["DOM store / tree builder"]
 ```
 
 `Harness` is intentionally thin.
@@ -78,7 +79,7 @@ State lives in `Session`, and subsystem files own their internal data.
 - The public facade should stay narrow.
 - Long-lived state belongs to the subsystem that owns it.
 - `HarnessBuilder` only collects input and assembles an owned `Session`.
-- `Session` will later own DOM, runtime, mock, and debug state.
+- `Session` currently owns DOM state and will later own runtime, mock, and debug state.
 - Public methods should delegate inward instead of growing facade logic.
 
 ## Phase Plan
@@ -98,6 +99,8 @@ State lives in `Session`, and subsystem files own their internal data.
 - selector subset
 - read-only assertions
 - DOM dump helpers
+
+The tree builder and selector subset slices are implemented internally now; public read-only inspection is still next.
 
 ### Phase 2
 
@@ -145,6 +148,5 @@ State lives in `Session`, and subsystem files own their internal data.
 
 ## Current Status
 
-Phase 0 is the only delivered phase in this workspace.
-The rest of the roadmap is intentionally documented before implementation so future changes have an explicit home.
-
+Phase 0 is delivered, and the internal DOM bootstrap and selector slices of Phase 1 are delivered as well.
+The remaining Phase 1 work is public read-only inspection.

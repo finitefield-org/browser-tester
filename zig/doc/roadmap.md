@@ -15,17 +15,22 @@ Delivered in this workspace:
 
 Exit criteria:
 
-- build an empty session without DOM behavior
+- build the owned session snapshot from captured configuration
 - keep URL, HTML, and local storage seed configuration
 - compile and test the workspace
 
 ## Phase 1: DOM Core
 
+Delivered in this workspace:
+
 - HTML parser
 - DOM tree construction
 - selector subset
-- read-only assertions
 - DOM dump helpers
+
+Still to ship:
+
+- read-only assertions
 
 ## Phase 2: Script Runtime
 
@@ -78,4 +83,3 @@ Exit criteria:
 - class and dataset views
 - tree mutation primitives
 - HTML serialization surfaces
-

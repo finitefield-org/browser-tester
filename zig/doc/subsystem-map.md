@@ -28,6 +28,7 @@ Choose this layer when the question is:
 Owns:
 
 - copied configuration state
+- internal DOM store
 - future long-lived runtime state
 - the reserved mock registry slot
 
@@ -47,12 +48,13 @@ Owns:
 - node identifiers
 - DOM tree storage
 - HTML parsing
+- DOM dump helpers
 - selector matching
 - DOM indexes and side tables
 
 Location:
 
-- future `src/dom.zig` or equivalent files
+- `src/dom.zig`
 
 Choose this layer when the question is:
 
@@ -104,4 +106,3 @@ Choose this layer when the question is:
 3. Do not let script-runtime types leak into DOM or runtime data models.
 4. Add a new public API only after deciding whether it belongs on `Harness`, a debug view, or a mock family.
 5. Add a new mock in runtime, then wire it through the public facade without bypassing the registry.
-

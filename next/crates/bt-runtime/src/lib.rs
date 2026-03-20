@@ -1587,6 +1587,58 @@ impl Session {
         Ok(self.first_named_item_in_nodes(&collected, name))
     }
 
+    fn document_children(&self) -> Result<Vec<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let Some(node) = self.dom.nodes().get(root.index() as usize) else {
+            return Err(ScriptError::new("invalid document node"));
+        };
+
+        let children = node
+            .children
+            .iter()
+            .copied()
+            .filter(|child_id| {
+                matches!(
+                    self.dom
+                        .nodes()
+                        .get(child_id.index() as usize)
+                        .map(|node| &node.kind),
+                    Some(NodeKind::Element(_))
+                )
+            })
+            .map(Self::node_id_to_handle)
+            .collect();
+
+        Ok(children)
+    }
+
+    fn document_children_named_item(
+        &self,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let Some(node) = self.dom.nodes().get(root.index() as usize) else {
+            return Err(ScriptError::new("invalid document node"));
+        };
+
+        let children: Vec<NodeId> = node
+            .children
+            .iter()
+            .copied()
+            .filter(|child_id| {
+                matches!(
+                    self.dom
+                        .nodes()
+                        .get(child_id.index() as usize)
+                        .map(|node| &node.kind),
+                    Some(NodeKind::Element(_))
+                )
+            })
+            .collect();
+
+        Ok(self.first_named_item_in_nodes(&children, name))
+    }
+
     fn document_anchors(&self) -> Result<Vec<ElementHandle>, ScriptError> {
         let root = self.dom.document_id();
         let mut collected = Vec::new();
@@ -1773,6 +1825,7 @@ impl HostBindings for Session {
             HtmlCollectionTarget::SelectOptions(element) => self.select_options(element),
             HtmlCollectionTarget::DocumentLinks => self.document_links(),
             HtmlCollectionTarget::DocumentAnchors => self.document_anchors(),
+            HtmlCollectionTarget::DocumentChildren => self.document_children(),
         }
     }
 
@@ -1809,6 +1862,7 @@ impl HostBindings for Session {
             }
             HtmlCollectionTarget::DocumentLinks => self.document_links_named_item(name),
             HtmlCollectionTarget::DocumentAnchors => self.document_anchors_named_item(name),
+            HtmlCollectionTarget::DocumentChildren => self.document_children_named_item(name),
         }
     }
 
@@ -1833,6 +1887,7 @@ impl HostBindings for Session {
             HtmlCollectionTarget::SelectOptions(element) => self.select_options(element),
             HtmlCollectionTarget::DocumentLinks => self.document_links(),
             HtmlCollectionTarget::DocumentAnchors => self.document_anchors(),
+            HtmlCollectionTarget::DocumentChildren => self.document_children(),
         }
     }
 
@@ -1869,6 +1924,7 @@ impl HostBindings for Session {
             }
             HtmlCollectionTarget::DocumentLinks => self.document_links_named_item(name),
             HtmlCollectionTarget::DocumentAnchors => self.document_anchors_named_item(name),
+            HtmlCollectionTarget::DocumentChildren => self.document_children_named_item(name),
         }
     }
 
@@ -1958,6 +2014,17 @@ impl HostBindings for Session {
         name: &str,
     ) -> bt_script::Result<Option<ElementHandle>> {
         self.document_anchors_named_item(name)
+    }
+
+    fn html_collection_document_children_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
+        self.document_children()
+    }
+
+    fn html_collection_document_children_named_item(
+        &mut self,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.document_children_named_item(name)
     }
 
     fn element_text_content(&mut self, element: ElementHandle) -> bt_script::Result<String> {

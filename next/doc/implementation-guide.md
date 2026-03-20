@@ -488,11 +488,11 @@ Do not add yet:
 
 - broader collection APIs
 
-### Slice 16: Document Images, Links, Embeds, and Anchors
+### Slice 16: Specialized Document Live Collections
 
 Goal:
 
-- make `document.images`, `document.links`, `document.embeds`, and `document.anchors` available in inline scripts through minimal live HTMLCollection surfaces
+- make `document.children`, `document.images`, `document.links`, `document.embeds`, and `document.anchors` available in inline scripts through minimal live HTMLCollection surfaces
 
 Primary owners:
 
@@ -501,6 +501,8 @@ Primary owners:
 
 Delivered in this workspace:
 
+- `document.children`
+- live child-element collection semantics on the document node
 - `document.images`
 - `document.links`
 - `document.embeds`
@@ -514,10 +516,13 @@ Delivered in this workspace:
 
 Tests already in place:
 
+- `document.children` reflects DOM mutations in inline scripts
+- `length`, `item()`, and `namedItem()` work for document children
 - image, link, embed, and anchor collections reflect DOM mutations in inline scripts
 - `length`, `item()`, and `namedItem()` work for document images, links, embeds, and anchors
 - `document.all` reflects DOM mutations in inline scripts
 - `length`, `item()`, and `namedItem()` work for document.all
+- non-window `children` access fails explicitly
 - non-document `images` access fails explicitly
 - non-document `anchors` access fails explicitly
 
@@ -633,7 +638,10 @@ Use these when the next user-visible gap lands:
 | Collection API slice 1 (`NodeList.forEach`, `HTMLCollection.forEach`) | 1. `NodeList.forEach` / `HTMLCollection.forEach` (delivered) | `bt-script` | public contract, owning-crate regression, callback execution smoke test |
 | Collection API slice 2 (`document.scripts`) | 1. `document.scripts` (delivered) | `bt-script` + `bt-runtime` | public contract, owning-crate regression, live collection hardening |
 | Collection API slice 3 (`document.anchors`) | 1. `document.anchors` (delivered) | `bt-script` + `bt-runtime` | public contract, owning-crate regression, live collection hardening |
-| Collection API broadening remainder (iterator-style helpers, specialized live collections) | 1. iterator-style helpers 2. additional specialized live collections beyond the bounded set | `bt-script` + `bt-runtime` | public contract, owning-crate regression, unsupported-method failure |
+| Collection API slice 4 (`NodeList.keys()`, `NodeList.values()`, `HTMLCollection.keys()`, `HTMLCollection.values()`) | 1. iterator-style helpers (delivered) | `bt-script` | public contract, owning-crate regression, snapshot iterator hardening |
+| Collection API slice 5 (`document.applets`) | 1. `document.applets` (delivered) | `bt-script` + `bt-runtime` | public contract, owning-crate regression, live collection hardening |
+| Collection API slice 6 (`document.children`) | 1. `document.children` (delivered) | `bt-script` + `bt-runtime` | public contract, owning-crate regression, live collection hardening |
+| Collection API broadening remainder (specialized live collections) | 1. additional specialized live collections beyond `document.children` | `bt-script` + `bt-runtime` | public contract, owning-crate regression, unsupported-method failure |
 | Selector grammar broadening | 1. `:scope` 2. `:has(...)` 3. structural selector expansion with richer nested selector handling | `bt-dom` | public contract, DOM matcher regression, explicit unsupported syntax |
 | HTML serialization broadening | 1. `insertAdjacentHTML` 2. `DocumentFragment` / `template.content` serialization 3. namespace-aware serialization compatibility | `bt-dom` + `bt-script` + `bt-runtime` | round-trip success, lossy / malformed failure, runtime regression |
 

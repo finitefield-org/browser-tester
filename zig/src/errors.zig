@@ -1,6 +1,7 @@
 const std = @import("std");
 
 pub const Error = error{
+    HtmlParse,
     InvalidUrl,
     OutOfMemory,
 };
