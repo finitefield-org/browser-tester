@@ -67,7 +67,7 @@ It owns the copied configuration state, the internal DOM store, the internal scr
 `Harness` now exposes `assertExists()`, `assertValue()`, `assertChecked()`, and `dumpDom()` for read-only inspection, plus `nowMs()`, `advanceTime()`, `flush()`, `mocksMut()`, `fetch()`, `alert()`, `confirm()`, `prompt()`, `readClipboard()`, `writeClipboard()`, `captureDownload()`, `navigate()`, and `setFiles()` for deterministic runtime control, and `click()`, `typeText()`, `setChecked()`, `setSelectValue()`, `focus()`, `blur()`, `submit()`, and `dispatch()` for user-like actions.
 `assertExists()` and the action methods resolve through the shared DOM selector engine, which now covers class selectors, compound simple selectors, descendant combinators, and child combinators.
 Inline scripts and event handlers also reuse that selector engine through `document.querySelector()`, `element.querySelector()`, `Element.matches()`, and `Element.closest()`.
-Collection lookups reuse it through `document.querySelectorAll()` and `element.querySelectorAll()`, which return minimal `NodeList` snapshots with `length` and `item(index)`.
+Collection lookups reuse it through `document.querySelectorAll()` and `element.querySelectorAll()`, which return minimal `NodeList` snapshots with `length`, `item(index)`, and `forEach(callback[, thisArg])`; `document.scripts` exposes a live `HTMLCollection` surface with `length`, `item(index)`, and `namedItem(name)`.
 Inline scripts also use attribute reflection methods like `getAttribute()`, `setAttribute()`, `removeAttribute()`, `hasAttribute()`, and `toggleAttribute()`, which update the shared DOM attribute store and keep selectors plus form-control getters in sync.
 Inline scripts also use class and dataset views on `Element` through `className`, `classList`, and `dataset`, which stay aligned with the same shared attribute store.
 
@@ -171,9 +171,10 @@ The query selector and collection slices are implemented in this workspace now; 
 - tree mutation primitives
 - HTML serialization surfaces
 - HTML serialization broadening slice 1 (`insertAdjacentHTML`)
+- HTML serialization broadening slice 2 (`template.content.innerHTML` / `DocumentFragment` serialization)
 
-The attribute reflection, class/dataset view, tree mutation, and HTML serialization slices are implemented in this workspace now. The next serialization slice is `template.content.innerHTML` and `DocumentFragment` serialization.
+The attribute reflection, class/dataset view, tree mutation, HTML serialization, and namespace-aware serialization slices are implemented in this workspace now, and collection API broadening slices 1 (`NodeList.forEach`) and 2 (`document.scripts`) are implemented as well. The next named work is collection API broadening slice 3 (`document.anchors`).
 
 ## Current Status
 
-Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, Phase 5, and Phase 6 are delivered in this workspace, the Phase 7 query selector and collection slices are delivered as well, and the Phase 8 attribute reflection, class/dataset view, tree mutation, and HTML serialization slices are delivered. HTML serialization broadening slice 1 (`insertAdjacentHTML`) is also delivered; `template.content.innerHTML` remains planned.
+Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, Phase 5, and Phase 6 are delivered in this workspace, the Phase 7 query selector and collection slices are delivered as well, and the Phase 8 attribute reflection, class/dataset view, tree mutation, HTML serialization, and namespace-aware serialization slices are delivered. HTML serialization broadening slice 1 (`insertAdjacentHTML`) and slice 2 (`template.content.innerHTML` / `DocumentFragment` serialization) are also delivered; collection API broadening slices 1 (`NodeList.forEach`) and 2 (`document.scripts`) are delivered, and the next named work is collection API broadening slice 3 (`document.anchors`).

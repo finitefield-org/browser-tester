@@ -324,6 +324,31 @@ test "contract: Harness.fromHtml runs script querySelectorAll during bootstrap" 
     try subject.assertValue("#out", "2:First:Second:2:null");
 }
 
+test "contract: Harness.fromHtml runs NodeList.forEach during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><button id='first'>First</button><button id='second'>Second</button></main><div id='out'></div><script>document.querySelectorAll('button').forEach((item, index, list) => { document.getElementById('out').textContent += String(index) + ':' + item.textContent + ':' + String(list.length) + ';'; item.remove(); }, null);</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "0:First:2;1:Second:2;");
+}
+
+test "contract: Harness.fromHtml runs document.scripts during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><script id='first-script'></script><script name='named-script'></script></main><div id='out'></div><script>document.getElementById('out').textContent = String(document.scripts.length) + ':' + String(document.scripts.item(0)) + ':' + String(document.scripts.namedItem('first-script')) + ':' + String(document.scripts.namedItem('named-script')) + ':' + String(document.scripts.namedItem('missing')) + ':'; document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent += String(document.scripts.length) + ':' + String(document.scripts.namedItem('first-script')) + ':' + String(document.scripts.namedItem('named-script')) + ':' + String(document.scripts.namedItem('missing'));</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "3:[object Element]:[object Element]:[object Element]:null:1:null:null:null",
+    );
+}
+
 test "contract: Harness.fromHtml runs attribute reflection methods during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -459,6 +484,38 @@ test "contract: Harness.fromHtml runs insertAdjacentHTML during bootstrap" {
     try subject.assertExists("#target > #last");
 }
 
+test "contract: Harness.fromHtml runs template.content.innerHTML during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<template id='tpl'><span id='inner'>Inner</span></template><div id='out'></div><script>document.getElementById('out').textContent = String(document.getElementById('tpl').content) + '|' + document.getElementById('tpl').content.innerHTML; document.getElementById('tpl').content.innerHTML = '<!--tail--><span id=\"second\">Second</span>'; document.getElementById('out').textContent += '|' + String(document.getElementById('tpl').content) + '|' + document.getElementById('tpl').content.innerHTML;</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "[object DocumentFragment]|<span id=\"inner\">Inner</span>|[object DocumentFragment]|<!--tail--><span id=\"second\">Second</span>",
+    );
+    try subject.assertExists("#second");
+    try std.testing.expectError(error.AssertionFailed, subject.assertExists("#inner"));
+}
+
+test "contract: Harness.fromHtml runs namespace-aware serialization during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><svg id='icon' viewbox='0 0 10 10'><foreignobject id='foreign'><div id='html'>Text</div></foreignobject></svg><math id='formula' definitionurl='https://example.com'><mi id='symbol'>x</mi></math><div id='out'></div><script>document.getElementById('out').textContent = document.getElementById('icon').outerHTML + '|' + document.getElementById('formula').outerHTML;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "<svg id=\"icon\" viewBox=\"0 0 10 10\"><foreignObject id=\"foreign\"><div id=\"html\">Text</div></foreignObject></svg>|<math definitionURL=\"https://example.com\" id=\"formula\"><mi id=\"symbol\">x</mi></math>",
+    );
+    try subject.assertExists("#foreign");
+    try subject.assertExists("#symbol");
+}
+
 test "failure: Harness.fromHtml rejects unsupported insertAdjacentHTML positions" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -466,6 +523,39 @@ test "failure: Harness.fromHtml rejects unsupported insertAdjacentHTML positions
         Harness.fromHtml(
             allocator,
             "<main id='root'><section id='target'></section></main><script>document.getElementById('target').insertAdjacentHTML('middle', '<span id=\"bad\">Bad</span>');</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects template.content on non-template elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<div id='box'></div><script>document.getElementById('box').content;</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects malformed template.content.innerHTML fragments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.HtmlParse,
+        Harness.fromHtml(
+            allocator,
+            "<template id='tpl'></template><script>document.getElementById('tpl').content.innerHTML = '<span></main>';</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects template.content.outerHTML access" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<template id='tpl'></template><script>document.getElementById('tpl').content.outerHTML;</script>",
         ),
     );
 }
@@ -510,6 +600,28 @@ test "failure: Harness.fromHtml rejects unsupported querySelectorAll syntax" {
         Harness.fromHtml(
             allocator,
             "<main id='root'></main><script>document.querySelectorAll('main + span');</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects non-function NodeList.forEach callbacks" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><button>First</button></main><script>document.querySelectorAll('button').forEach(123);</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects invalid document.scripts item indices" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><script id='first-script'></script></main><script>document.scripts.item('bad');</script>",
         ),
     );
 }

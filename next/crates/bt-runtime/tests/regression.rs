@@ -80,6 +80,26 @@ fn session_rejects_unsupported_selector_syntax_in_closest_explicitly() {
 }
 
 #[test]
+fn session_rejects_unsupported_has_selector_syntax_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><section id='child' class='child'></section></main><script>document.querySelector('main:has(:nth-child(2 of))');</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("malformed nth-child of selector syntax should remain unsupported");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported selector `main:has(:nth-child(2 of))`")
+    );
+}
+
+#[test]
 fn session_resolves_selectors_with_quoted_commas_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),

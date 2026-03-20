@@ -28,6 +28,12 @@ pub const NodeKind = union(enum) {
     comment: []const u8,
 };
 
+const SerializationNamespace = enum {
+    html,
+    svg,
+    mathml,
+};
+
 pub const NodeRecord = struct {
     id: NodeId,
     parent: ?NodeId,
@@ -1064,9 +1070,12 @@ pub const DomStore = struct {
                 try output.appendSlice(allocator, "-->");
             },
             .element => |element| {
+                const namespace = self.serializationNamespaceForNode(node_id);
+                const tag_name = serializedElementName(namespace, element.tag_name);
+
                 try output.appendSlice(allocator, "<");
-                try output.appendSlice(allocator, element.tag_name);
-                try self.serializeHtmlAttributes(&element, output, allocator);
+                try output.appendSlice(allocator, tag_name);
+                try self.serializeHtmlAttributes(namespace, &element, output, allocator);
 
                 if (isVoidElement(element.tag_name)) {
                     if (node.children.items.len > 0) {
@@ -1082,7 +1091,7 @@ pub const DomStore = struct {
                     try self.serializeHtmlNodeWithContext(child_id, output, allocator, child_raw_text_context);
                 }
                 try output.appendSlice(allocator, "</");
-                try output.appendSlice(allocator, element.tag_name);
+                try output.appendSlice(allocator, tag_name);
                 try output.appendSlice(allocator, ">");
             },
         }
@@ -1090,6 +1099,7 @@ pub const DomStore = struct {
 
     fn serializeHtmlAttributes(
         self: *const DomStore,
+        namespace: SerializationNamespace,
         element: *const ElementData,
         output: *std.ArrayList(u8),
         allocator: std.mem.Allocator,
@@ -1127,7 +1137,7 @@ pub const DomStore = struct {
         for (indices.items) |attr_index| {
             const attribute = element.attributes.items[attr_index];
             try output.appendSlice(allocator, " ");
-            try output.appendSlice(allocator, attribute.name);
+            try output.appendSlice(allocator, serializedAttributeName(namespace, element, attribute.name));
             if (attribute.value.len == 0) {
                 continue;
             }
@@ -1245,6 +1255,18 @@ pub const DomStore = struct {
         for (node.children.items) |child_id| {
             try self.collectSubtreeNodes(child_id, output, allocator);
         }
+    }
+
+    fn serializationNamespaceForNode(self: *const DomStore, node_id: NodeId) SerializationNamespace {
+        const node = self.nodeAt(node_id) orelse return .html;
+        const parent_id = node.parent orelse return .html;
+        const parent = self.nodeAt(parent_id) orelse return .html;
+        const parent_namespace = self.serializationNamespaceForNode(parent_id);
+
+        return switch (node.kind) {
+            .element => |element| serializationNamespaceForChild(parent, parent_namespace, element.tag_name),
+            else => parent_namespace,
+        };
     }
 
     fn findElementByIdInSubtree(self: *const DomStore, node_id: NodeId, id: []const u8) ?NodeId {
@@ -2209,6 +2231,191 @@ fn sameNodeId(left: NodeId, right: NodeId) bool {
     return left.index == right.index and left.generation == right.generation;
 }
 
+fn serializationNamespaceForChild(
+    parent: *const NodeRecord,
+    parent_namespace: SerializationNamespace,
+    child_tag: []const u8,
+) SerializationNamespace {
+    switch (parent.kind) {
+        .document => return namespaceForHtmlChild(child_tag),
+        .element => |parent_element| switch (parent_namespace) {
+            .html => return namespaceForHtmlChild(child_tag),
+            .svg => {
+                if (std.mem.eql(u8, parent_element.tag_name, "foreignobject")) {
+                    return namespaceForHtmlChild(child_tag);
+                }
+                return namespaceForSvgChild(child_tag);
+            },
+            .mathml => {
+                if (std.mem.eql(u8, parent_element.tag_name, "annotation-xml") and isMathMlHtmlIntegrationPoint(parent_element)) {
+                    return namespaceForHtmlChild(child_tag);
+                }
+                return namespaceForMathMlChild(child_tag);
+            },
+        },
+        else => return namespaceForHtmlChild(child_tag),
+    }
+}
+
+fn namespaceForHtmlChild(child_tag: []const u8) SerializationNamespace {
+    if (std.mem.eql(u8, child_tag, "svg")) return .svg;
+    if (std.mem.eql(u8, child_tag, "math")) return .mathml;
+    return .html;
+}
+
+fn namespaceForSvgChild(child_tag: []const u8) SerializationNamespace {
+    if (std.mem.eql(u8, child_tag, "svg")) return .svg;
+    if (std.mem.eql(u8, child_tag, "math")) return .mathml;
+    return .svg;
+}
+
+fn namespaceForMathMlChild(child_tag: []const u8) SerializationNamespace {
+    if (std.mem.eql(u8, child_tag, "svg")) return .svg;
+    if (std.mem.eql(u8, child_tag, "math")) return .mathml;
+    return .mathml;
+}
+
+fn isMathMlHtmlIntegrationPoint(element: ElementData) bool {
+    if (!std.mem.eql(u8, element.tag_name, "annotation-xml")) {
+        return false;
+    }
+
+    const encoding = elementAttributeValue(element, "encoding") orelse return false;
+    return std.mem.eql(u8, encoding, "text/html") or std.mem.eql(u8, encoding, "application/xhtml+xml");
+}
+
+fn serializedElementName(namespace: SerializationNamespace, name: []const u8) []const u8 {
+    return switch (namespace) {
+        .html => name,
+        .svg => adjustSvgElementName(name),
+        .mathml => name,
+    };
+}
+
+fn serializedAttributeName(namespace: SerializationNamespace, element: *const ElementData, name: []const u8) []const u8 {
+    _ = element;
+    return switch (namespace) {
+        .html => name,
+        .svg => adjustSvgAttributeName(name),
+        .mathml => if (std.mem.eql(u8, name, "definitionurl")) "definitionURL" else name,
+    };
+}
+
+fn adjustSvgElementName(name: []const u8) []const u8 {
+    const mappings = [_]struct { from: []const u8, to: []const u8 }{
+        .{ .from = "altglyph", .to = "altGlyph" },
+        .{ .from = "altglyphdef", .to = "altGlyphDef" },
+        .{ .from = "altglyphitem", .to = "altGlyphItem" },
+        .{ .from = "animatecolor", .to = "animateColor" },
+        .{ .from = "animatemotion", .to = "animateMotion" },
+        .{ .from = "animatetransform", .to = "animateTransform" },
+        .{ .from = "clippath", .to = "clipPath" },
+        .{ .from = "feblend", .to = "feBlend" },
+        .{ .from = "fecolormatrix", .to = "feColorMatrix" },
+        .{ .from = "fecomponenttransfer", .to = "feComponentTransfer" },
+        .{ .from = "fecomposite", .to = "feComposite" },
+        .{ .from = "feconvolvematrix", .to = "feConvolveMatrix" },
+        .{ .from = "fediffuselighting", .to = "feDiffuseLighting" },
+        .{ .from = "fedisplacementmap", .to = "feDisplacementMap" },
+        .{ .from = "fedistantlight", .to = "feDistantLight" },
+        .{ .from = "fedropshadow", .to = "feDropShadow" },
+        .{ .from = "feflood", .to = "feFlood" },
+        .{ .from = "fefunca", .to = "feFuncA" },
+        .{ .from = "fefuncb", .to = "feFuncB" },
+        .{ .from = "fefuncg", .to = "feFuncG" },
+        .{ .from = "fefuncr", .to = "feFuncR" },
+        .{ .from = "fegaussianblur", .to = "feGaussianBlur" },
+        .{ .from = "feimage", .to = "feImage" },
+        .{ .from = "femerge", .to = "feMerge" },
+        .{ .from = "femergenode", .to = "feMergeNode" },
+        .{ .from = "femorphology", .to = "feMorphology" },
+        .{ .from = "feoffset", .to = "feOffset" },
+        .{ .from = "fepointlight", .to = "fePointLight" },
+        .{ .from = "fespecularlighting", .to = "feSpecularLighting" },
+        .{ .from = "fespotlight", .to = "feSpotLight" },
+        .{ .from = "fetile", .to = "feTile" },
+        .{ .from = "feturbulence", .to = "feTurbulence" },
+        .{ .from = "foreignobject", .to = "foreignObject" },
+        .{ .from = "glyphref", .to = "glyphRef" },
+        .{ .from = "lineargradient", .to = "linearGradient" },
+        .{ .from = "radialgradient", .to = "radialGradient" },
+        .{ .from = "textpath", .to = "textPath" },
+    };
+
+    for (mappings) |mapping| {
+        if (std.mem.eql(u8, name, mapping.from)) return mapping.to;
+    }
+    return name;
+}
+
+fn adjustSvgAttributeName(name: []const u8) []const u8 {
+    const mappings = [_]struct { from: []const u8, to: []const u8 }{
+        .{ .from = "attributename", .to = "attributeName" },
+        .{ .from = "attributetype", .to = "attributeType" },
+        .{ .from = "basefrequency", .to = "baseFrequency" },
+        .{ .from = "baseprofile", .to = "baseProfile" },
+        .{ .from = "calcmode", .to = "calcMode" },
+        .{ .from = "clippathunits", .to = "clipPathUnits" },
+        .{ .from = "diffuseconstant", .to = "diffuseConstant" },
+        .{ .from = "edgemode", .to = "edgeMode" },
+        .{ .from = "filterunits", .to = "filterUnits" },
+        .{ .from = "glyphref", .to = "glyphRef" },
+        .{ .from = "gradienttransform", .to = "gradientTransform" },
+        .{ .from = "gradientunits", .to = "gradientUnits" },
+        .{ .from = "kernelmatrix", .to = "kernelMatrix" },
+        .{ .from = "kernelunitlength", .to = "kernelUnitLength" },
+        .{ .from = "keypoints", .to = "keyPoints" },
+        .{ .from = "keysplines", .to = "keySplines" },
+        .{ .from = "keytimes", .to = "keyTimes" },
+        .{ .from = "lengthadjust", .to = "lengthAdjust" },
+        .{ .from = "limitingconeangle", .to = "limitingConeAngle" },
+        .{ .from = "markerheight", .to = "markerHeight" },
+        .{ .from = "markerunits", .to = "markerUnits" },
+        .{ .from = "markerwidth", .to = "markerWidth" },
+        .{ .from = "maskcontentunits", .to = "maskContentUnits" },
+        .{ .from = "maskunits", .to = "maskUnits" },
+        .{ .from = "numoctaves", .to = "numOctaves" },
+        .{ .from = "pathlength", .to = "pathLength" },
+        .{ .from = "patterncontentunits", .to = "patternContentUnits" },
+        .{ .from = "patterntransform", .to = "patternTransform" },
+        .{ .from = "patternunits", .to = "patternUnits" },
+        .{ .from = "pointsatx", .to = "pointsAtX" },
+        .{ .from = "pointsaty", .to = "pointsAtY" },
+        .{ .from = "pointsatz", .to = "pointsAtZ" },
+        .{ .from = "preservealpha", .to = "preserveAlpha" },
+        .{ .from = "preserveaspectratio", .to = "preserveAspectRatio" },
+        .{ .from = "primitiveunits", .to = "primitiveUnits" },
+        .{ .from = "refx", .to = "refX" },
+        .{ .from = "refy", .to = "refY" },
+        .{ .from = "repeatcount", .to = "repeatCount" },
+        .{ .from = "repeatdur", .to = "repeatDur" },
+        .{ .from = "requiredextensions", .to = "requiredExtensions" },
+        .{ .from = "requiredfeatures", .to = "requiredFeatures" },
+        .{ .from = "specularconstant", .to = "specularConstant" },
+        .{ .from = "specularexponent", .to = "specularExponent" },
+        .{ .from = "spreadmethod", .to = "spreadMethod" },
+        .{ .from = "startoffset", .to = "startOffset" },
+        .{ .from = "stddeviation", .to = "stdDeviation" },
+        .{ .from = "stitchtiles", .to = "stitchTiles" },
+        .{ .from = "surfacescale", .to = "surfaceScale" },
+        .{ .from = "systemlanguage", .to = "systemLanguage" },
+        .{ .from = "tablevalues", .to = "tableValues" },
+        .{ .from = "targetx", .to = "targetX" },
+        .{ .from = "targety", .to = "targetY" },
+        .{ .from = "textlength", .to = "textLength" },
+        .{ .from = "viewbox", .to = "viewBox" },
+        .{ .from = "viewtarget", .to = "viewTarget" },
+        .{ .from = "xchannelselector", .to = "xChannelSelector" },
+        .{ .from = "ychannelselector", .to = "yChannelSelector" },
+        .{ .from = "zoomandpan", .to = "zoomAndPan" },
+    };
+
+    for (mappings) |mapping| {
+        if (std.mem.eql(u8, name, mapping.from)) return mapping.to;
+    }
+    return name;
+}
+
 fn sliceContainsNodeId(nodes: []const NodeId, needle: NodeId) bool {
     for (nodes) |candidate| {
         if (sameNodeId(candidate, needle)) return true;
@@ -2987,6 +3194,30 @@ test "phase eight: HTML serialization surfaces support insertAdjacentHTML positi
     const after_nodes = try store.select(allocator, "#after");
     defer allocator.free(after_nodes);
     try std.testing.expectEqual(@as(usize, 1), after_nodes.len);
+}
+
+test "phase eight: HTML serialization surfaces use namespace-aware names in DomStore" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml("<main id='root'><svg id='icon' viewbox='0 0 10 10'><foreignobject id='foreign'><div id='html'>Text</div></foreignobject></svg><math id='formula' definitionurl='https://example.com'><mi id='symbol'>x</mi></math></main>");
+
+    const icon = store.findElementById("icon").?;
+    const icon_html = try store.outerHtml(allocator, icon);
+    defer allocator.free(icon_html);
+    try std.testing.expectEqualStrings(
+        "<svg id=\"icon\" viewBox=\"0 0 10 10\"><foreignObject id=\"foreign\"><div id=\"html\">Text</div></foreignObject></svg>",
+        icon_html,
+    );
+
+    const formula = store.findElementById("formula").?;
+    const formula_html = try store.outerHtml(allocator, formula);
+    defer allocator.free(formula_html);
+    try std.testing.expectEqualStrings(
+        "<math definitionURL=\"https://example.com\" id=\"formula\"><mi id=\"symbol\">x</mi></math>",
+        formula_html,
+    );
 }
 
 test "failure: HTML serialization surfaces reject malformed fragments in DomStore" {

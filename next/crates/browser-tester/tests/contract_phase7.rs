@@ -264,6 +264,16 @@ fn script_is_pseudo_class_works_end_to_end() -> browser_tester_next::Result<()> 
 }
 
 #[test]
+fn script_has_pseudo_class_works_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><section id='first' class='child'>First</section><section id='child' class='child'><div class='grandchild'>Grand</div></section></main><div id='out'></div><script>const docMatch = document.querySelector('main:has(#child)'); const directMatch = document.querySelector('main:has(> .child)'); const nthMatch = document.querySelector('main:has(:nth-child(2 of .child))'); const root = document.getElementById('root'); const section = document.getElementById('child'); const nested = document.querySelector('main:has(section .grandchild)'); const closest = section.closest('main:has(> .child)'); document.getElementById('out').textContent = docMatch.getAttribute('id') + ':' + directMatch.getAttribute('id') + ':' + nthMatch.getAttribute('id') + ':' + String(root.matches('main:has(> .child)')) + ':' + String(section.matches(':has(.grandchild)')) + ':' + closest.getAttribute('id') + ':' + nested.getAttribute('id');</script>",
+    )?;
+
+    harness.assert_text("#out", "root:root:root:true:true:root:root")?;
+    Ok(())
+}
+
+#[test]
 fn script_where_pseudo_class_works_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root' class='app' data-kind='APP READY' lang='EN-US'><button id='first' class='primary'>First</button><button id='disabled' class='primary' disabled>Disabled</button><button id='enabled' class='secondary'>Enabled</button></main><div id='out'></div><script>const all = document.querySelectorAll('button:where(.primary, .secondary)'); const filtered = document.querySelectorAll('button:where(:disabled, .secondary)'); const bounded = document.querySelectorAll('button:where(main > .secondary, :disabled)'); const second = document.getElementById('enabled'); const root = second.closest('main:where([lang|=en i], .blocked)'); document.getElementById('out').textContent = String(all.length) + ':' + String(filtered.length) + ':' + String(second.matches('button:where(.secondary, .blocked)')) + ':' + String(root.matches('main:where([lang|=en i], .blocked)')) + ':' + document.querySelector('button:where(.primary, .secondary):not(:disabled)').textContent + ':' + String(bounded.length) + ':' + bounded.item(0).textContent;</script>",
@@ -300,6 +310,16 @@ fn script_element_closest_works_end_to_end() -> browser_tester_next::Result<()> 
     )?;
 
     harness.assert_text("#out", "ROOTSECTIONCHILD:CHILD:SECTIONCHILD:null")?;
+    Ok(())
+}
+
+#[test]
+fn script_scope_pseudo_class_works_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><section id='section'><div id='child'>Child</div></section></main><div id='out'></div><script>const docScope = document.querySelector(':scope'); const root = document.getElementById('root'); const section = root.querySelector(':scope > section'); const missing = root.querySelector(':scope'); const matches = root.matches(':scope'); const closest = document.getElementById('child').closest(':scope'); document.getElementById('out').textContent = docScope.getAttribute('id') + ':' + section.getAttribute('id') + ':' + String(missing) + ':' + String(matches) + ':' + closest.getAttribute('id');</script>",
+    )?;
+
+    harness.assert_text("#out", "root:section:null:true:child")?;
     Ok(())
 }
 
@@ -421,6 +441,18 @@ fn unsupported_element_closest_selector_fails_explicitly() {
     let message = error.to_string();
     assert!(message.contains("Script error"));
     assert!(message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`"));
+}
+
+#[test]
+fn unsupported_script_scope_has_selector_fails_explicitly() {
+    let error = Harness::from_html(
+        "<main id='root'><section id='child' class='child'></section></main><script>document.querySelector('main:has(:nth-child(2 of))');</script>",
+    )
+    .expect_err("malformed nth-child of selector syntax should remain unsupported");
+
+    let message = error.to_string();
+    assert!(message.contains("Script error"));
+    assert!(message.contains("unsupported selector `main:has(:nth-child(2 of))`"));
 }
 
 #[test]

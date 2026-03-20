@@ -419,6 +419,39 @@ test "regression: phase 7 querySelectorAll methods resolve on the copied html sn
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: phase 9 NodeList.forEach resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><button id='first'>First</button><button id='second'>Second</button></main><div id='out'></div><script>document.querySelectorAll('button').forEach((item, index, list) => { document.getElementById('out').textContent += String(index) + ':' + item.textContent + ':' + String(list.length) + ';'; item.remove(); }, null);</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "0:First:2;1:Second:2;");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 9 document.scripts resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><script id='first-script'></script><script name='named-script'></script></main><div id='out'></div><script>document.getElementById('out').textContent = String(document.scripts.length) + ':' + String(document.scripts.item(0)) + ':' + String(document.scripts.namedItem('first-script')) + ':' + String(document.scripts.namedItem('named-script')) + ':' + String(document.scripts.namedItem('missing')) + ':'; document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent += String(document.scripts.length) + ':' + String(document.scripts.namedItem('first-script')) + ':' + String(document.scripts.namedItem('named-script')) + ':' + String(document.scripts.namedItem('missing'));</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "3:[object Element]:[object Element]:[object Element]:null:1:null:null:null",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
 test "regression: phase 8 attribute reflection methods resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<main id='root'><button id='button'>First</button><input id='name'><input id='agree' type='checkbox'><select id='mode'><option value='a'>A</option><option id='selected' value='b'>B</option></select><div id='out'></div><script>document.getElementById('button').setAttribute('class', 'primary'); document.getElementById('out').textContent = String(document.querySelectorAll('.primary').length) + ':' + String(document.getElementById('button').hasAttribute('data-flag')) + ':'; document.getElementById('out').textContent += String(document.getElementById('button').toggleAttribute('data-flag')) + ':' + String(document.querySelectorAll('[data-flag]').length) + ':'; document.getElementById('out').textContent += String(document.getElementById('button').toggleAttribute('data-flag', false)) + ':' + String(document.querySelectorAll('[data-flag]').length) + ':'; document.getElementById('button').setAttribute('data-label', 'Hello'); document.getElementById('out').textContent += String(document.getElementById('button').getAttribute('data-label')) + ':'; document.getElementById('button').removeAttribute('data-label'); document.getElementById('out').textContent += String(document.getElementById('button').getAttribute('data-label')) + ':'; document.getElementById('name').setAttribute('value', 'Alice'); document.getElementById('agree').setAttribute('checked', ''); document.getElementById('selected').setAttribute('selected', ''); document.getElementById('out').textContent += document.getElementById('name').value + ':' + String(document.getElementById('agree').checked) + ':' + document.getElementById('mode').value;</script></main>";
@@ -513,6 +546,46 @@ test "regression: phase 8 insertAdjacentHTML surfaces resolve on the copied html
     try subject.assertExists("#after");
     try subject.assertExists("#target > #first");
     try subject.assertExists("#target > #last");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 8 template.content surfaces resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<template id='tpl'><span id='inner'>Inner</span></template><div id='out'></div><script>document.getElementById('out').textContent = String(document.getElementById('tpl').content) + '|' + document.getElementById('tpl').content.innerHTML; document.getElementById('tpl').content.innerHTML = '<!--tail--><span id=\"second\">Second</span>'; document.getElementById('out').textContent += '|' + String(document.getElementById('tpl').content) + '|' + document.getElementById('tpl').content.innerHTML;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "[object DocumentFragment]|<span id=\"inner\">Inner</span>|[object DocumentFragment]|<!--tail--><span id=\"second\">Second</span>",
+    );
+    try subject.assertExists("#second");
+    try std.testing.expectError(error.AssertionFailed, subject.assertExists("#inner"));
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 8 namespace-aware serialization surfaces resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><svg id='icon' viewbox='0 0 10 10'><foreignobject id='foreign'><div id='html'>Text</div></foreignobject></svg><math id='formula' definitionurl='https://example.com'><mi id='symbol'>x</mi></math><div id='out'></div><script>document.getElementById('out').textContent = document.getElementById('icon').outerHTML + '|' + document.getElementById('formula').outerHTML;</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "<svg id=\"icon\" viewBox=\"0 0 10 10\"><foreignObject id=\"foreign\"><div id=\"html\">Text</div></foreignObject></svg>|<math definitionURL=\"https://example.com\" id=\"formula\"><mi id=\"symbol\">x</mi></math>",
+    );
+    try subject.assertExists("#foreign");
+    try subject.assertExists("#symbol");
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 

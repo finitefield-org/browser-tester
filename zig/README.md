@@ -5,16 +5,16 @@ The rewrite follows [`next.md`](../next.md) and keeps the public surface small w
 
 Current state:
 
-- phase 0 scaffold plus the internal phase 1 DOM bootstrap slice, the phase 2 script runtime minimum slice, the phase 3 event/default-action and form-control slice, the phase 4 deterministic mock and fake-clock slice, the phase 5 hardening suite, the phase 6 selector expansion slice, the phase 7 script DOM query and collection slices (`document.querySelector`, `document.querySelectorAll`, `element.querySelector`, `element.querySelectorAll`, `Element.matches`, and `Element.closest`), the phase 8 attribute reflection slice (`getAttribute`, `setAttribute`, `removeAttribute`, `hasAttribute`, and `toggleAttribute`), the phase 8 class and dataset views slice (`className`, `classList`, and `dataset`), and the phase 8 tree mutation primitives slice (`appendChild`, `insertBefore`, `replaceChild`, `replaceChildren`, `append`, `prepend`, `before`, `after`, and `remove`)
-- script-side HTML serialization surfaces (`innerHTML`, `outerHTML`, and `insertAdjacentHTML`) are available through inline scripts, with bounded fragment parsing on setters, deterministic serialization on getters, and position-aware fragment insertion; `template.content.innerHTML` remains planned
+- phase 0 scaffold plus the internal phase 1 DOM bootstrap slice, the phase 2 script runtime minimum slice, the phase 3 event/default-action and form-control slice, the phase 4 deterministic mock and fake-clock slice, the phase 5 hardening suite, the phase 6 selector expansion slice, the phase 7 script DOM query and collection slices (`document.querySelector`, `document.querySelectorAll`, `element.querySelector`, `element.querySelectorAll`, `Element.matches`, and `Element.closest`), the phase 8 attribute reflection slice (`getAttribute`, `setAttribute`, `removeAttribute`, `hasAttribute`, and `toggleAttribute`), the phase 8 class and dataset views slice (`className`, `classList`, and `dataset`), the phase 8 tree mutation primitives slice (`appendChild`, `insertBefore`, `replaceChild`, `replaceChildren`, `append`, `prepend`, `before`, `after`, and `remove`), and the phase 8 collection API broadening slice 2 (`document.scripts`)
+- script-side HTML serialization surfaces (`innerHTML`, `outerHTML`, `insertAdjacentHTML`, and `template.content.innerHTML`) are available through inline scripts, with bounded fragment parsing on setters, deterministic serialization on getters, position-aware fragment insertion, `DocumentFragment`-style stringification for template content, and namespace-aware SVG / MathML name adjustments during serialization
 - `Harness.assertExists(...)`, `Harness.assertValue(...)`, `Harness.assertChecked(...)`, and `Harness.dumpDom(...)` are available for inspection
 - `Harness.nowMs(...)`, `Harness.advanceTime(...)`, `Harness.flush(...)`, `Harness.mocksMut(...)`, `Harness.fetch(...)`, `Harness.alert(...)`, `Harness.confirm(...)`, `Harness.prompt(...)`, `Harness.readClipboard(...)`, `Harness.writeClipboard(...)`, `Harness.captureDownload(...)`, `Harness.navigate(...)`, and `Harness.setFiles(...)` are available for deterministic runtime and mock control
 - `Harness.click(...)`, `Harness.typeText(...)`, `Harness.setChecked(...)`, `Harness.setSelectValue(...)`, `Harness.focus(...)`, `Harness.blur(...)`, `Harness.submit(...)`, and `Harness.dispatch(...)` are available for user-like actions
-- inline `<script>` bootstrapping runs during `Harness.fromHtml(...)` construction for the `document.getElementById(...).textContent = ...` slice, and script-side selector lookups can reuse the shared DOM selector engine through `querySelector`, `querySelectorAll`, `matches`, and `closest`, with minimal `NodeList` snapshots for collection queries; attribute reflection methods update the shared DOM attribute store and keep selector and form-control views in sync, and `className` / `classList` / `dataset` stay aligned with the same store
+- inline `<script>` bootstrapping runs during `Harness.fromHtml(...)` construction for the `document.getElementById(...).textContent = ...` slice, and script-side selector lookups can reuse the shared DOM selector engine through `querySelector`, `querySelectorAll`, `matches`, and `closest`, with minimal `NodeList` snapshots for collection queries including `forEach(callback[, thisArg])` and a live `document.scripts` HTMLCollection surface with `length`, `item(index)`, and `namedItem(name)`; attribute reflection methods update the shared DOM attribute store and keep selector and form-control views in sync, and `className` / `classList` / `dataset` stay aligned with the same store
 - `Harness` and `HarnessBuilder` are available
 - `Session` stays internal and owns the copied configuration state plus the DOM store, script runtime state, event listener registry, focus state, fake clock state, and mock registry
 - `DomStore` builds, selects, serializes, and dumps HTML trees for tests, including class selectors and descendant/child combinators, but it is not part of the public API
-- phase 8 HTML serialization surfaces (`innerHTML`, `outerHTML`, and `insertAdjacentHTML`) are available, while broader serialization slices like `template.content.innerHTML` remain planned
+- phase 8 HTML serialization surfaces (`innerHTML`, `outerHTML`, `insertAdjacentHTML`, and `template.content.innerHTML`) are available, including namespace-aware serialization compatibility; broader collection and selector grammar slices remain planned
 
 ## Quick Start
 
@@ -123,6 +123,27 @@ pub fn main() !void {
     try harness.assertExists("#after");
     try harness.assertExists("#target > #first");
     try harness.assertExists("#target > #second");
+}
+```
+
+## Template Content Example
+
+```zig
+const std = @import("std");
+const bt = @import("browser_tester_zig");
+
+pub fn main() !void {
+    var harness = try bt.Harness.fromHtml(
+        std.heap.page_allocator,
+        "<template id='tpl'><span id='inner'>Inner</span></template><div id='out'></div><script>document.getElementById('out').textContent = String(document.getElementById('tpl').content) + '|' + document.getElementById('tpl').content.innerHTML; document.getElementById('tpl').content.innerHTML = '<span id=\"second\">Second</span>'; document.getElementById('out').textContent += '|' + document.getElementById('tpl').content.innerHTML;</script>",
+    );
+    defer harness.deinit();
+
+    try harness.assertValue(
+        "#out",
+        "[object DocumentFragment]|<span id=\"inner\">Inner</span>|<span id=\"second\">Second</span>",
+    );
+    try harness.assertExists("#second");
 }
 ```
 

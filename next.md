@@ -531,8 +531,12 @@ pub enum NodeKind {
 - `:nth-last-of-type(odd)`
 - `:nth-last-of-type(even)`
 - `:nth-last-of-type(an+b)`
+- `:nth-child(... of <selector-list>)`
+- `:nth-last-child(... of <selector-list>)`
 - `:is(...)`
 - `:not(...)`
+- `:scope`
+- `:has(...)`
 - `:where(...)`
 
 ### 10.2 やらないこと
@@ -1229,7 +1233,7 @@ README は次だけを書く。
 - `querySelectorAll` と minimal `NodeList` は既に実装済みで、`NodeList.forEach` / `HTMLCollection.forEach` と `NodeList.keys()` / `NodeList.values()` / `HTMLCollection.keys()` / `HTMLCollection.values()`、`document.scripts` も実装済み、selector lists と bounded pseudo-classes も実装済み、`Element.children` / minimal `HTMLCollection`（`namedItem()` 含む）と `document.childNodes` / live `NodeList`、`template.content` / live fragment-like collections と `template.content.innerHTML`、`document.children` / live `HTMLCollection`、`table.rows` / `tbody.rows` / `thead.rows` / `tfoot.rows` / `tr.cells` / live `HTMLCollection`、`getElementsByTagName` / `getElementsByTagNameNS` / `getElementsByClassName` / live `HTMLCollection`、`getElementsByName` / live `NodeList`、`document.forms` / `form.elements` / live `HTMLCollection`（多重一致時は `RadioNodeList`）、`select.options` / `select.selectedOptions` / live `HTMLCollection`、`fieldset.elements` / `datalist.options` / live `HTMLCollection`、`map.areas` / `table.tBodies` / live `HTMLCollection`、`document.images` / `document.links` / `document.embeds` / `document.plugins` / `document.anchors` / `document.applets` / `document.styleSheets` / `document.all` / live `HTMLCollection`、`element.labels` on labelable form controls / fieldset / live `NodeList` support も実装済み
 - backlog slices は次の 3 つに整理する
   - collection API broadening: slices 1 (`NodeList.forEach` / `HTMLCollection.forEach`), 2 (`document.scripts`), 3 (`document.anchors`), 4 (iterator-style helpers), 5 (`document.applets`), 6 (`document.children`), 7 (`table.rows` / `tbody.rows` / `thead.rows` / `tfoot.rows` / `tr.cells`), 8 (`select.selectedOptions`), 9 (`fieldset.elements` / `datalist.options` / `map.areas` / `table.tBodies`), 10 (`element.labels` on labelable form controls / fieldset), and 11 (`document.styleSheets`) are delivered, and the remaining slices are additional specialized live collections beyond `document.styleSheets`, `document.children`, `template.content`, `table.rows` / `tr.cells`, `select.selectedOptions`, `fieldset.elements`, `datalist.options`, `map.areas`, `table.tBodies`, and `element.labels`; `form.elements.namedItem()` can surface `RadioNodeList` for multi-match groups
-  - selector grammar broadening: `:scope` -> `:has(...)` -> structural selector expansion with richer nested selector handling
+  - selector grammar broadening: `:scope`, `:has(...)`, structural selector expansion, and bounded `:nth-child(... of <selector-list>)` / `:nth-last-child(... of <selector-list>)` are delivered; broader CSS parsing beyond the bounded selector engine remains deferred until needed by a specific user-visible gap
   - HTML serialization broadening: `insertAdjacentHTML` (delivered) -> `template.content.innerHTML` / `DocumentFragment` serialization (delivered) -> namespace-aware serialization compatibility (delivered)
 - Phase 8 is complete in this workspace; slices 1 (attribute reflection), 2 (class / dataset views), 3 (tree mutation primitives), 4 (HTML serialization surfaces), and 5 (mutation hardening and regression coverage) are already implemented
 

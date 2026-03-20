@@ -173,9 +173,11 @@ const Value = union(enum) {
     number: f64,
     string: []const u8,
     element: dom.NodeId,
+    template_content: dom.NodeId,
     class_list: dom.NodeId,
     dataset: dom.NodeId,
     node_list: NodeList,
+    document_scripts,
     event: *ScriptEvent,
     function: ScriptFunction,
     document,
@@ -730,6 +732,21 @@ fn evalAssignment(
 
             return error.ScriptRuntime;
         },
+        .template_content => |element| {
+            if (std.mem.eql(u8, target.property, "innerHTML")) {
+                const html = try asString(allocator, value);
+                try host.domStoreMut().setInnerHtml(element, html);
+                return;
+            }
+
+            if (std.mem.eql(u8, target.property, "textContent")) {
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setTextContent(element, text);
+                return;
+            }
+
+            return error.ScriptRuntime;
+        },
         .dataset => |element| {
             const attribute_name = try datasetAttributeName(allocator, target.property);
             const text = try asString(allocator, value);
@@ -786,15 +803,27 @@ fn evalMember(
 ) errors.Result(Value) {
     const object = try evalExpr(allocator, host, bindings, member.object);
     return switch (object) {
-        .document => if (std.mem.eql(u8, member.property, "defaultView"))
-            Value{ .window = {} }
-        else
-            error.ScriptRuntime,
+        .document => blk: {
+            if (std.mem.eql(u8, member.property, "defaultView")) {
+                break :blk Value{ .window = {} };
+            }
+            if (std.mem.eql(u8, member.property, "scripts")) {
+                break :blk Value{ .document_scripts = {} };
+            }
+            break :blk error.ScriptRuntime;
+        },
         .window => if (std.mem.eql(u8, member.property, "document"))
             Value{ .document = {} }
         else
             error.ScriptRuntime,
         .element => |element| blk: {
+            if (std.mem.eql(u8, member.property, "content")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "template")) {
+                    break :blk Value{ .template_content = element };
+                }
+                break :blk error.ScriptRuntime;
+            }
             if (std.mem.eql(u8, member.property, "innerHTML")) {
                 const html = try host.domStore().innerHtml(allocator, element);
                 break :blk Value{ .string = html };
@@ -826,11 +855,30 @@ fn evalMember(
             }
             break :blk error.ScriptRuntime;
         },
+        .template_content => |element| blk: {
+            if (std.mem.eql(u8, member.property, "innerHTML")) {
+                const html = try host.domStore().innerHtml(allocator, element);
+                break :blk Value{ .string = html };
+            }
+            if (std.mem.eql(u8, member.property, "textContent")) {
+                const text = try host.domStore().textContent(allocator, element);
+                break :blk Value{ .string = text };
+            }
+            break :blk error.ScriptRuntime;
+        },
         .class_list => blk: {
             if (std.mem.eql(u8, member.property, "length")) {
                 var tokens = try classListTokens(allocator, host, object.class_list);
                 defer tokens.deinit(allocator);
                 break :blk Value{ .number = @floatFromInt(tokens.items.len) };
+            }
+            break :blk error.ScriptRuntime;
+        },
+        .document_scripts => blk: {
+            if (std.mem.eql(u8, member.property, "length")) {
+                const scripts = try documentScriptsItems(allocator, host);
+                defer allocator.free(scripts);
+                break :blk Value{ .number = @floatFromInt(scripts.len) };
             }
             break :blk error.ScriptRuntime;
         },
@@ -1083,6 +1131,27 @@ fn evalMethodCall(
         } else if (std.mem.eql(u8, method, "addEventListener")) blk: {
             break :blk try registerListener(allocator, host, bindings, .{ .element = element }, args);
         } else error.ScriptRuntime,
+        .document_scripts => if (std.mem.eql(u8, method, "item")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const index_value = try evalExpr(allocator, host, bindings, args[0]);
+            const index = try asNodeListIndex(index_value);
+            const scripts = try documentScriptsItems(allocator, host);
+            defer allocator.free(scripts);
+            if (index >= scripts.len) {
+                break :blk Value{ .null_value = {} };
+            }
+            break :blk Value{ .element = scripts[index] };
+        } else if (std.mem.eql(u8, method, "namedItem")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const name_value = try evalExpr(allocator, host, bindings, args[0]);
+            const name = try asString(allocator, name_value);
+            const match = try documentScriptsNamedItem(allocator, host, name);
+            if (match) |element_id| {
+                break :blk Value{ .element = element_id };
+            }
+            break :blk Value{ .null_value = {} };
+        } else error.ScriptRuntime,
+        .template_content => |_| error.ScriptRuntime,
         .class_list => |element| if (std.mem.eql(u8, method, "contains")) blk: {
             if (args.len != 1) return error.ScriptRuntime;
             const token_value = try evalExpr(allocator, host, bindings, args[0]);
@@ -1196,6 +1265,8 @@ fn evalMethodCall(
                 break :blk Value{ .null_value = {} };
             }
             break :blk Value{ .element = list.items[index] };
+        } else if (std.mem.eql(u8, method, "forEach")) blk: {
+            break :blk try nodeListForEach(allocator, host, bindings, list, args);
         } else error.ScriptRuntime,
         .event => |event| if (std.mem.eql(u8, method, "preventDefault")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
@@ -1213,6 +1284,108 @@ fn evalMethodCall(
         .null_value, .undefined_value => error.ScriptRuntime,
         .boolean, .number, .string, .function => error.ScriptRuntime,
     };
+}
+
+fn nodeListForEach(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    list: NodeList,
+    args: []*Expr,
+) errors.Result(Value) {
+    const callback_expr: *Expr = switch (args.len) {
+        1, 2 => args[0],
+        else => return error.ScriptRuntime,
+    };
+    const this_arg_expr: ?*Expr = if (args.len == 2) args[1] else null;
+
+    const callback_value = try evalExpr(allocator, host, bindings, callback_expr);
+    const callback = switch (callback_value) {
+        .function => |function| function,
+        else => return error.ScriptRuntime,
+    };
+
+    if (this_arg_expr) |expr| {
+        _ = try evalExpr(allocator, host, bindings, expr);
+    }
+
+    for (list.items, 0..) |item, index| {
+        const positional = [_]Value{
+            .{ .element = item },
+            .{ .number = @floatFromInt(index) },
+            .{ .node_list = list },
+        };
+        var function_bindings = try functionBindings(allocator, callback, positional[0..]);
+        defer function_bindings.deinit(allocator);
+
+        const source_name = try std.fmt.allocPrint(allocator, "nodelist:forEach:{d}", .{index});
+        defer allocator.free(source_name);
+
+        try executeScriptSource(
+            allocator,
+            host,
+            callback.body_source,
+            source_name,
+            function_bindings.items,
+        );
+    }
+
+    return Value{ .undefined_value = {} };
+}
+
+fn documentScriptsItems(
+    allocator: std.mem.Allocator,
+    host: anytype,
+) errors.Result([]dom.NodeId) {
+    const scripts = host.domStore().select(allocator, "script") catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+    return scripts;
+}
+
+fn documentScriptsNamedItem(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    name: []const u8,
+) errors.Result(?dom.NodeId) {
+    const scripts = try documentScriptsItems(allocator, host);
+    defer allocator.free(scripts);
+
+    for (scripts) |script_id| {
+        const id = (try host.domStore().getAttribute(script_id, "id")) orelse "";
+        if (std.mem.eql(u8, id, name)) {
+            return script_id;
+        }
+
+        const script_name = (try host.domStore().getAttribute(script_id, "name")) orelse "";
+        if (std.mem.eql(u8, script_name, name)) {
+            return script_id;
+        }
+    }
+
+    return null;
+}
+
+fn functionBindings(
+    allocator: std.mem.Allocator,
+    function: ScriptFunction,
+    positional: []const Value,
+) errors.Result(std.ArrayList(Binding)) {
+    var bindings_out: std.ArrayList(Binding) = .empty;
+    errdefer bindings_out.deinit(allocator);
+
+    for (function.params, 0..) |param, index| {
+        try bindings_out.append(allocator, .{
+            .name = param,
+            .value = if (index < positional.len)
+                positional[index]
+            else
+                Value{ .undefined_value = {} },
+        });
+    }
+
+    return bindings_out;
 }
 
 fn registerListener(
@@ -1481,9 +1654,11 @@ fn asString(allocator: std.mem.Allocator, value: Value) errors.Result([]const u8
         .number => |number| try std.fmt.allocPrint(allocator, "{d}", .{number}),
         .string => |text| text,
         .element => "[object Element]",
+        .template_content => "[object DocumentFragment]",
         .class_list => "[object DOMTokenList]",
         .dataset => "[object DOMStringMap]",
         .node_list => "[object NodeList]",
+        .document_scripts => "[object HTMLCollection]",
         .event => "[object Event]",
         .document => "[object Document]",
         .window => "[object Window]",
@@ -1505,7 +1680,7 @@ fn isTruthy(value: Value) bool {
         .boolean => |flag| flag,
         .number => |number| number != 0,
         .string => |text| text.len != 0,
-        .element, .class_list, .dataset, .node_list, .event, .document, .window, .function => true,
+        .element, .template_content, .class_list, .dataset, .node_list, .document_scripts, .event, .document, .window, .function => true,
     };
 }
 

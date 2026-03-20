@@ -102,6 +102,7 @@ Phase 7 is complete in this workspace.
 - tree mutation primitives
 - HTML serialization surfaces
 - HTML serialization broadening slice 1 (`insertAdjacentHTML`)
+- HTML serialization broadening slice 2 (`template.content.innerHTML` / `DocumentFragment` serialization)
 
-The attribute reflection, class/dataset view, tree mutation, and HTML serialization slices are implemented in this workspace now.
-The next planned serialization slice is `template.content.innerHTML` and `DocumentFragment` serialization.
+The attribute reflection, class/dataset view, tree mutation, HTML serialization, and namespace-aware serialization slices are implemented in this workspace now, and collection API broadening slices 1 (`NodeList.forEach`) and 2 (`document.scripts`) are implemented as well.
+The next named work is collection API broadening slice 3 (`document.anchors`).

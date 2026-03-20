@@ -195,6 +195,53 @@ fn root_and_empty_pseudo_classes_match_expected_nodes() {
 }
 
 #[test]
+fn scope_pseudo_class_matches_scoped_root_and_descendants() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><section id='first' class='child'>First</section><section id='section' class='child'><div id='child'>child</div></section></main>",
+        )
+        .expect("HTML should parse");
+
+    let root_id = store.select("#root").unwrap()[0];
+    let first_child_id = store.select("#first").unwrap()[0];
+    let section_id = store.select("#section").unwrap()[0];
+    let child_id = store.select("#child").unwrap()[0];
+
+    assert_eq!(store.select(":scope").unwrap(), vec![root_id]);
+    assert_eq!(
+        store.select(":scope > section").unwrap(),
+        vec![first_child_id, section_id]
+    );
+    assert_eq!(store.select("#root:scope").unwrap(), vec![root_id]);
+    assert!(store.select("#child:scope").unwrap().is_empty());
+    assert_eq!(store.select("main:has(> .child)").unwrap(), vec![root_id]);
+    assert_eq!(
+        store.select("main:has(:nth-child(2 of .child))").unwrap(),
+        vec![root_id]
+    );
+    assert!(store.select("main:has(:nth-child(2 of))").is_err());
+
+    // Keep the fixture live for descendant lookups through scoped selectors.
+    assert_eq!(
+        store.select(":scope section > div").unwrap(),
+        vec![child_id]
+    );
+    assert_eq!(
+        store.select("section:nth-child(2 of .child)").unwrap(),
+        vec![section_id]
+    );
+    assert_eq!(
+        store.select("section:nth-last-child(1 of .child)").unwrap(),
+        vec![section_id]
+    );
+    assert_eq!(
+        store.select("section:nth-child(1 of .child)").unwrap(),
+        vec![first_child_id]
+    );
+}
+
+#[test]
 fn only_child_and_only_of_type_pseudo_classes_match_expected_nodes() {
     let mut store = DomStore::new_empty();
     store

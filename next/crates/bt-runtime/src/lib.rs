@@ -1226,7 +1226,11 @@ impl Session {
         scope: Option<NodeId>,
         selector: &str,
     ) -> Result<Vec<ElementHandle>, ScriptError> {
-        let matches = self.dom.select(selector).map_err(ScriptError::new)?;
+        let scope_root = scope.or_else(|| self.dom.root_element_id());
+        let matches = self
+            .dom
+            .select_with_scope(selector, scope_root)
+            .map_err(ScriptError::new)?;
         Ok(matches
             .into_iter()
             .filter(|node_id| match scope {
@@ -1242,7 +1246,10 @@ impl Session {
         node_id: NodeId,
         selector: &str,
     ) -> Result<bool, ScriptError> {
-        let matches = self.dom.select(selector).map_err(ScriptError::new)?;
+        let matches = self
+            .dom
+            .select_with_scope(selector, Some(node_id))
+            .map_err(ScriptError::new)?;
         Ok(matches.contains(&node_id))
     }
 
@@ -1251,7 +1258,10 @@ impl Session {
         node_id: NodeId,
         selector: &str,
     ) -> Result<Option<ElementHandle>, ScriptError> {
-        let matches = self.dom.select(selector).map_err(ScriptError::new)?;
+        let matches = self
+            .dom
+            .select_with_scope(selector, Some(node_id))
+            .map_err(ScriptError::new)?;
         let mut current = Some(node_id);
 
         while let Some(candidate) = current {

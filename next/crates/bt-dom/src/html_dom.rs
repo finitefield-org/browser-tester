@@ -54,6 +54,12 @@ struct SelectorChain {
     relations: Vec<SelectorCombinator>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SelectorRelativeSelector {
+    combinator: Option<SelectorCombinator>,
+    chain: SelectorChain,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SelectorCombinator {
     Descendant,
@@ -64,6 +70,7 @@ enum SelectorCombinator {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SelectorPseudoClass {
+    Scope,
     Root,
     Empty,
     OnlyChild,
@@ -79,6 +86,7 @@ enum SelectorPseudoClass {
     Is(Vec<SelectorChain>),
     Where(Vec<SelectorChain>),
     Not(Vec<SelectorChain>),
+    Has(Vec<SelectorRelativeSelector>),
     Checked,
     Disabled,
     Enabled,
@@ -88,6 +96,7 @@ enum SelectorPseudoClass {
 struct SelectorNthChildPattern {
     step: isize,
     offset: isize,
+    of_selectors: Option<Vec<SelectorChain>>,
 }
 
 impl DomStore {
@@ -103,13 +112,21 @@ impl DomStore {
     }
 
     pub fn select(&self, selector: &str) -> Result<Vec<NodeId>, String> {
+        self.select_with_scope(selector, self.root_element_id())
+    }
+
+    pub fn select_with_scope(
+        &self,
+        selector: &str,
+        scope_root: Option<NodeId>,
+    ) -> Result<Vec<NodeId>, String> {
         let selector = selector.trim();
         if selector.is_empty() {
             return Err("selector must not be empty".to_string());
         }
 
         let chains = Self::parse_selector_list(selector)?;
-        Ok(self.select_by_selector_chains(&chains))
+        Ok(self.select_by_selector_chains(&chains, scope_root))
     }
 
     pub fn dump_dom(&self) -> String {
@@ -1673,7 +1690,7 @@ impl DomStore {
         }
     }
 
-    fn select_by_chain(&self, chain: &SelectorChain) -> Vec<NodeId> {
+    fn select_by_chain(&self, chain: &SelectorChain, scope_root: Option<NodeId>) -> Vec<NodeId> {
         let Some(last) = chain.parts.last() else {
             return Vec::new();
         };
@@ -1681,20 +1698,24 @@ impl DomStore {
         let candidates = self.selector_candidates(last);
         let mut results: Vec<NodeId> = candidates
             .into_iter()
-            .filter(|node_id| self.matches_selector_chain(*node_id, chain))
+            .filter(|node_id| self.matches_selector_chain(*node_id, chain, scope_root))
             .collect();
         results.dedup();
         results
     }
 
-    fn select_by_selector_chains(&self, chains: &[SelectorChain]) -> Vec<NodeId> {
+    fn select_by_selector_chains(
+        &self,
+        chains: &[SelectorChain],
+        scope_root: Option<NodeId>,
+    ) -> Vec<NodeId> {
         match chains {
             [] => Vec::new(),
-            [single] => self.select_by_chain(single),
+            [single] => self.select_by_chain(single, scope_root),
             _ => {
                 let mut matched = BTreeSet::new();
                 for chain in chains {
-                    matched.extend(self.select_by_chain(chain));
+                    matched.extend(self.select_by_chain(chain, scope_root));
                 }
 
                 self.nodes
@@ -1747,11 +1768,22 @@ impl DomStore {
             .unwrap_or_default()
     }
 
-    fn matches_selector_chain(&self, node_id: NodeId, chain: &SelectorChain) -> bool {
+    fn matches_selector_chain(
+        &self,
+        node_id: NodeId,
+        chain: &SelectorChain,
+        scope_root: Option<NodeId>,
+    ) -> bool {
         let Some(last_index) = chain.parts.len().checked_sub(1) else {
             return false;
         };
-        self.matches_selector_chain_part(node_id, &chain.parts, &chain.relations, last_index)
+        self.matches_selector_chain_part(
+            node_id,
+            &chain.parts,
+            &chain.relations,
+            last_index,
+            scope_root,
+        )
     }
 
     fn matches_selector_chain_part(
@@ -1760,8 +1792,9 @@ impl DomStore {
         parts: &[SelectorQuery],
         relations: &[SelectorCombinator],
         index: usize,
+        scope_root: Option<NodeId>,
     ) -> bool {
-        if !self.matches_selector_query(node_id, &parts[index]) {
+        if !self.matches_selector_query(node_id, &parts[index], scope_root) {
             return false;
         }
 
@@ -1774,13 +1807,19 @@ impl DomStore {
                 let Some(parent_id) = self.parent_of(node_id) else {
                     return false;
                 };
-                self.matches_selector_chain_part(parent_id, parts, relations, index - 1)
+                self.matches_selector_chain_part(parent_id, parts, relations, index - 1, scope_root)
             }
             SelectorCombinator::AdjacentSibling => {
                 let Some(previous_sibling) = self.previous_element_sibling_of(node_id) else {
                     return false;
                 };
-                self.matches_selector_chain_part(previous_sibling, parts, relations, index - 1)
+                self.matches_selector_chain_part(
+                    previous_sibling,
+                    parts,
+                    relations,
+                    index - 1,
+                    scope_root,
+                )
             }
             SelectorCombinator::GeneralSibling => {
                 let mut sibling = self.previous_element_sibling_of(node_id);
@@ -1790,6 +1829,7 @@ impl DomStore {
                         parts,
                         relations,
                         index - 1,
+                        scope_root,
                     ) {
                         return true;
                     }
@@ -1800,7 +1840,13 @@ impl DomStore {
             SelectorCombinator::Descendant => {
                 let mut ancestor = self.parent_of(node_id);
                 while let Some(ancestor_id) = ancestor {
-                    if self.matches_selector_chain_part(ancestor_id, parts, relations, index - 1) {
+                    if self.matches_selector_chain_part(
+                        ancestor_id,
+                        parts,
+                        relations,
+                        index - 1,
+                        scope_root,
+                    ) {
                         return true;
                     }
                     ancestor = self.parent_of(ancestor_id);
@@ -1810,7 +1856,12 @@ impl DomStore {
         }
     }
 
-    fn matches_selector_query(&self, node_id: NodeId, query: &SelectorQuery) -> bool {
+    fn matches_selector_query(
+        &self,
+        node_id: NodeId,
+        query: &SelectorQuery,
+        scope_root: Option<NodeId>,
+    ) -> bool {
         let Some(node) = self.nodes.get(node_id.index() as usize) else {
             return false;
         };
@@ -1937,7 +1988,7 @@ impl DomStore {
         }
 
         for pseudo_class in &query.pseudo_classes {
-            if !self.matches_selector_pseudo_class(node_id, pseudo_class) {
+            if !self.matches_selector_pseudo_class(node_id, pseudo_class, scope_root) {
                 return false;
             }
         }
@@ -1949,8 +2000,10 @@ impl DomStore {
         &self,
         node_id: NodeId,
         pseudo_class: &SelectorPseudoClass,
+        scope_root: Option<NodeId>,
     ) -> bool {
         match pseudo_class {
+            SelectorPseudoClass::Scope => scope_root == Some(node_id),
             SelectorPseudoClass::Root => self.is_root_pseudo_class(node_id),
             SelectorPseudoClass::Empty => self.is_empty_pseudo_class(node_id),
             SelectorPseudoClass::OnlyChild => self.is_only_child_pseudo_class(node_id),
@@ -1967,44 +2020,166 @@ impl DomStore {
             }
             SelectorPseudoClass::Is(chains) => chains
                 .iter()
-                .any(|chain| self.matches_selector_chain(node_id, chain)),
+                .any(|chain| self.matches_selector_chain(node_id, chain, scope_root)),
             SelectorPseudoClass::Where(chains) => chains
                 .iter()
-                .any(|chain| self.matches_selector_chain(node_id, chain)),
+                .any(|chain| self.matches_selector_chain(node_id, chain, scope_root)),
             SelectorPseudoClass::Not(chains) => !chains
                 .iter()
-                .any(|chain| self.matches_selector_chain(node_id, chain)),
+                .any(|chain| self.matches_selector_chain(node_id, chain, scope_root)),
+            SelectorPseudoClass::Has(chains) => chains.iter().any(|relative| {
+                self.matches_selector_relative_selector(node_id, relative, scope_root)
+            }),
             SelectorPseudoClass::Checked => self.is_checked_pseudo_class(node_id),
             SelectorPseudoClass::Disabled => self.is_disabled_pseudo_class(node_id),
             SelectorPseudoClass::Enabled => self.is_enabled_pseudo_class(node_id),
         }
     }
 
+    fn matches_selector_relative_selector(
+        &self,
+        node_id: NodeId,
+        relative_selector: &SelectorRelativeSelector,
+        _scope_root: Option<NodeId>,
+    ) -> bool {
+        match relative_selector.combinator {
+            Some(SelectorCombinator::Child) => self.has_child_matching_chain(
+                node_id,
+                &relative_selector.chain,
+                Some(node_id),
+            ),
+            Some(SelectorCombinator::AdjacentSibling) => self.has_adjacent_sibling_matching_chain(
+                node_id,
+                &relative_selector.chain,
+                Some(node_id),
+            ),
+            Some(SelectorCombinator::GeneralSibling) => self.has_general_sibling_matching_chain(
+                node_id,
+                &relative_selector.chain,
+                Some(node_id),
+            ),
+            Some(SelectorCombinator::Descendant) | None => {
+                if self.chain_starts_with_scope(&relative_selector.chain) {
+                    self.matches_selector_chain(node_id, &relative_selector.chain, Some(node_id))
+                } else {
+                    self.has_descendant_matching_chain(
+                        node_id,
+                        &relative_selector.chain,
+                        Some(node_id),
+                    )
+                }
+            }
+        }
+    }
+
+    fn chain_starts_with_scope(&self, chain: &SelectorChain) -> bool {
+        chain
+            .parts
+            .first()
+            .is_some_and(|query| query.pseudo_classes.iter().any(|pseudo| matches!(pseudo, SelectorPseudoClass::Scope)))
+    }
+
+    fn has_descendant_matching_chain(
+        &self,
+        node_id: NodeId,
+        chain: &SelectorChain,
+        scope_root: Option<NodeId>,
+    ) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+
+        node.children
+            .iter()
+            .copied()
+            .any(|child_id| {
+                self.matches_selector_chain(child_id, chain, scope_root)
+                    || self.has_descendant_matching_chain(child_id, chain, scope_root)
+            })
+    }
+
+    fn has_child_matching_chain(
+        &self,
+        node_id: NodeId,
+        chain: &SelectorChain,
+        scope_root: Option<NodeId>,
+    ) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+
+        node.children
+            .iter()
+            .copied()
+            .any(|child_id| self.matches_selector_chain(child_id, chain, scope_root))
+    }
+
+    fn has_adjacent_sibling_matching_chain(
+        &self,
+        node_id: NodeId,
+        chain: &SelectorChain,
+        scope_root: Option<NodeId>,
+    ) -> bool {
+        self.next_element_sibling_of(node_id)
+            .is_some_and(|sibling_id| self.matches_selector_chain(sibling_id, chain, scope_root))
+    }
+
+    fn has_general_sibling_matching_chain(
+        &self,
+        node_id: NodeId,
+        chain: &SelectorChain,
+        scope_root: Option<NodeId>,
+    ) -> bool {
+        let mut sibling = self.next_element_sibling_of(node_id);
+        while let Some(next_sibling) = sibling {
+            if self.matches_selector_chain(next_sibling, chain, scope_root) {
+                return true;
+            }
+            sibling = self.next_element_sibling_of(next_sibling);
+        }
+
+        false
+    }
+
     fn parse_selector_chain(selector: &str) -> Result<SelectorChain, String> {
+        let mut pos = 0;
+        let chain = Self::parse_selector_chain_from_pos(selector, &mut pos)?;
+        let bytes = selector.as_bytes();
+        skip_selector_whitespace(bytes, &mut pos);
+        if pos != bytes.len() {
+            return Err(selector_not_supported(selector));
+        }
+
+        Ok(chain)
+    }
+
+    fn parse_selector_chain_from_pos(
+        selector: &str,
+        pos: &mut usize,
+    ) -> Result<SelectorChain, String> {
         let mut parts = Vec::new();
         let mut relations = Vec::new();
         let bytes = selector.as_bytes();
-        let mut pos = 0;
 
-        parts.push(Self::parse_selector_compound(selector, &mut pos)?);
+        parts.push(Self::parse_selector_compound(selector, pos)?);
 
-        while pos < bytes.len() {
-            let had_whitespace = skip_selector_whitespace(bytes, &mut pos);
-            if pos >= bytes.len() {
+        while *pos < bytes.len() {
+            let had_whitespace = skip_selector_whitespace(bytes, pos);
+            if *pos >= bytes.len() {
                 break;
             }
 
-            let relation = match bytes[pos] {
+            let relation = match bytes[*pos] {
                 b'>' => {
-                    pos += 1;
+                    *pos += 1;
                     SelectorCombinator::Child
                 }
                 b'+' => {
-                    pos += 1;
+                    *pos += 1;
                     SelectorCombinator::AdjacentSibling
                 }
                 b'~' => {
-                    pos += 1;
+                    *pos += 1;
                     SelectorCombinator::GeneralSibling
                 }
                 byte if is_selector_combinator_byte(byte) => {
@@ -2014,12 +2189,12 @@ impl DomStore {
                 _ => return Err(selector_not_supported(selector)),
             };
 
-            skip_selector_whitespace(bytes, &mut pos);
-            if pos >= bytes.len() {
+            skip_selector_whitespace(bytes, pos);
+            if *pos >= bytes.len() {
                 return Err(selector_not_supported(selector));
             }
 
-            let part = Self::parse_selector_compound(selector, &mut pos)?;
+            let part = Self::parse_selector_compound(selector, pos)?;
             relations.push(relation);
             parts.push(part);
         }
@@ -2106,6 +2281,7 @@ impl DomStore {
                     let token = parse_selector_token(selector, pos)?;
                     let pseudo_class = match token.as_str() {
                         "root" => SelectorPseudoClass::Root,
+                        "scope" => SelectorPseudoClass::Scope,
                         "empty" => SelectorPseudoClass::Empty,
                         "only-child" => SelectorPseudoClass::OnlyChild,
                         "only-of-type" => SelectorPseudoClass::OnlyOfType,
@@ -2133,6 +2309,11 @@ impl DomStore {
                         )?),
                         "not" => {
                             SelectorPseudoClass::Not(parse_logical_pseudo_argument(selector, pos)?)
+                        }
+                        "has" => {
+                            SelectorPseudoClass::Has(parse_relative_selector_argument(
+                                selector, pos,
+                            )?)
                         }
                         "checked" => SelectorPseudoClass::Checked,
                         "disabled" => SelectorPseudoClass::Disabled,
@@ -2167,7 +2348,7 @@ impl DomStore {
             .and_then(|node| node.parent)
     }
 
-    fn root_element_id(&self) -> Option<NodeId> {
+    pub fn root_element_id(&self) -> Option<NodeId> {
         let document = self.nodes.get(self.document_id.index() as usize)?;
         document.children.iter().find_map(|child| {
             matches!(
@@ -2337,7 +2518,7 @@ impl DomStore {
     }
 
     fn is_nth_child(&self, node_id: NodeId, pattern: &SelectorNthChildPattern) -> bool {
-        let Some(position) = self.element_child_position(node_id) else {
+        let Some(position) = self.element_child_position_filtered(node_id, pattern.of_selectors.as_deref()) else {
             return false;
         };
 
@@ -2345,11 +2526,100 @@ impl DomStore {
     }
 
     fn is_nth_last_child(&self, node_id: NodeId, pattern: &SelectorNthChildPattern) -> bool {
-        let Some(position) = self.element_child_position_from_end(node_id) else {
+        let Some(position) = self.element_child_position_from_end_filtered(node_id, pattern.of_selectors.as_deref()) else {
             return false;
         };
 
         self.matches_nth_pattern(position as isize, pattern)
+    }
+
+    fn element_child_position_filtered(
+        &self,
+        node_id: NodeId,
+        of_selectors: Option<&[SelectorChain]>,
+    ) -> Option<usize> {
+        let parent_id = self.parent_of(node_id)?;
+        let parent = self.nodes.get(parent_id.index() as usize)?;
+        let mut position = 0;
+
+        for child in &parent.children {
+            if !matches!(
+                self.nodes
+                    .get(child.index() as usize)
+                    .map(|node| &node.kind),
+                Some(NodeKind::Element(_))
+            ) {
+                if *child == node_id {
+                    return None;
+                }
+                continue;
+            }
+
+            if !self.matches_nth_child_of_filters(*child, of_selectors) {
+                if *child == node_id {
+                    return None;
+                }
+                continue;
+            }
+
+            position += 1;
+            if *child == node_id {
+                return Some(position);
+            }
+        }
+
+        None
+    }
+
+    fn element_child_position_from_end_filtered(
+        &self,
+        node_id: NodeId,
+        of_selectors: Option<&[SelectorChain]>,
+    ) -> Option<usize> {
+        let parent_id = self.parent_of(node_id)?;
+        let parent = self.nodes.get(parent_id.index() as usize)?;
+        let mut position = 0;
+
+        for child in parent.children.iter().rev() {
+            if !matches!(
+                self.nodes
+                    .get(child.index() as usize)
+                    .map(|node| &node.kind),
+                Some(NodeKind::Element(_))
+            ) {
+                if *child == node_id {
+                    return None;
+                }
+                continue;
+            }
+
+            if !self.matches_nth_child_of_filters(*child, of_selectors) {
+                if *child == node_id {
+                    return None;
+                }
+                continue;
+            }
+
+            position += 1;
+            if *child == node_id {
+                return Some(position);
+            }
+        }
+
+        None
+    }
+
+    fn matches_nth_child_of_filters(
+        &self,
+        node_id: NodeId,
+        of_selectors: Option<&[SelectorChain]>,
+    ) -> bool {
+        match of_selectors {
+            None => true,
+            Some(selectors) => selectors
+                .iter()
+                .any(|chain| self.matches_selector_chain(node_id, chain, None)),
+        }
     }
 
     fn matches_nth_pattern(&self, position: isize, pattern: &SelectorNthChildPattern) -> bool {
@@ -2438,36 +2708,40 @@ impl DomStore {
         None
     }
 
-    fn element_child_position(&self, node_id: NodeId) -> Option<usize> {
+    fn next_element_sibling_of(&self, node_id: NodeId) -> Option<NodeId> {
         let parent_id = self.parent_of(node_id)?;
         let parent = self.nodes.get(parent_id.index() as usize)?;
-        let mut position = 0;
+        let mut seen_current = false;
 
         for child in &parent.children {
+            if *child == node_id {
+                seen_current = true;
+                continue;
+            }
+
+            if !seen_current {
+                continue;
+            }
+
             if matches!(
                 self.nodes
                     .get(child.index() as usize)
                     .map(|node| &node.kind),
                 Some(NodeKind::Element(_))
             ) {
-                position += 1;
-                if *child == node_id {
-                    return Some(position);
-                }
-            } else if *child == node_id {
-                return None;
+                return Some(*child);
             }
         }
 
         None
     }
 
-    fn element_child_position_from_end(&self, node_id: NodeId) -> Option<usize> {
+    fn element_child_position(&self, node_id: NodeId) -> Option<usize> {
         let parent_id = self.parent_of(node_id)?;
         let parent = self.nodes.get(parent_id.index() as usize)?;
         let mut position = 0;
 
-        for child in parent.children.iter().rev() {
+        for child in &parent.children {
             if matches!(
                 self.nodes
                     .get(child.index() as usize)
@@ -2552,7 +2826,7 @@ impl DomStore {
 
 fn selector_not_supported(selector: &str) -> String {
     format!(
-        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`; additional bounded structural pseudo-classes include `:root`, `:empty`, `:only-child`, `:only-of-type`, `:first-of-type`, `:last-of-type`, `:nth-of-type(2)`, and `:nth-last-of-type(2)`"
+        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`; additional bounded structural pseudo-classes include `:root`, `:empty`, `:only-child`, `:only-of-type`, `:first-of-type`, `:last-of-type`, `:nth-of-type(2)`, and `:nth-last-of-type(2)`; additional bounded selector grammar now also includes `:scope`, `:has(...)`, and `:nth-child(... of <selector-list>)` / `:nth-last-child(... of <selector-list>)`"
     )
 }
 
@@ -2560,7 +2834,10 @@ fn parse_nth_child_argument(
     selector: &str,
     pos: &mut usize,
 ) -> Result<SelectorNthChildPattern, String> {
-    let mut formula: String = parse_parenthesized_argument(selector, pos)?
+    let argument = parse_parenthesized_argument(selector, pos)?;
+    let (formula_text, of_selectors) = split_nth_child_argument(&argument)?;
+
+    let mut formula: String = formula_text
         .chars()
         .filter(|ch| !ch.is_ascii_whitespace())
         .collect();
@@ -2570,43 +2847,120 @@ fn parse_nth_child_argument(
     }
 
     formula.make_ascii_lowercase();
-    match formula.as_str() {
-        "odd" => {
-            return Ok(SelectorNthChildPattern { step: 2, offset: 1 });
+    let parsed_formula = match formula.as_str() {
+        "odd" => SelectorNthChildPattern {
+            step: 2,
+            offset: 1,
+            of_selectors: of_selectors
+                .as_deref()
+                .map(parse_nth_child_of_selectors)
+                .transpose()?,
+        },
+        "even" => SelectorNthChildPattern {
+            step: 2,
+            offset: 0,
+            of_selectors: of_selectors
+                .as_deref()
+                .map(parse_nth_child_of_selectors)
+                .transpose()?,
+        },
+        _ => {
+            if let Some(n_index) = formula.find('n') {
+                if formula[n_index + 1..].contains('n') {
+                    return Err(selector_not_supported(selector));
+                }
+
+                let step = match &formula[..n_index] {
+                    "" | "+" => 1,
+                    "-" => -1,
+                    value => value
+                        .parse::<isize>()
+                        .map_err(|_| selector_not_supported(selector))?,
+                };
+                let offset = if formula[n_index + 1..].is_empty() {
+                    0
+                } else {
+                    formula[n_index + 1..]
+                        .parse::<isize>()
+                        .map_err(|_| selector_not_supported(selector))?
+                };
+
+                SelectorNthChildPattern {
+                    step,
+                    offset,
+                    of_selectors: of_selectors
+                        .as_deref()
+                        .map(parse_nth_child_of_selectors)
+                        .transpose()?,
+                }
+            } else {
+                let offset = formula
+                    .parse::<isize>()
+                    .map_err(|_| selector_not_supported(selector))?;
+                SelectorNthChildPattern {
+                    step: 0,
+                    offset,
+                    of_selectors: of_selectors
+                        .as_deref()
+                        .map(parse_nth_child_of_selectors)
+                        .transpose()?,
+                }
+            }
         }
-        "even" => {
-            return Ok(SelectorNthChildPattern { step: 2, offset: 0 });
-        }
-        _ => {}
+    };
+
+    Ok(parsed_formula)
+}
+
+fn split_nth_child_argument(argument: &str) -> Result<(String, Option<String>), String> {
+    let argument = argument.trim();
+    if argument.is_empty() {
+        return Err(selector_not_supported(argument));
     }
 
-    if let Some(n_index) = formula.find('n') {
-        if formula[n_index + 1..].contains('n') {
-            return Err(selector_not_supported(selector));
+    let bytes = argument.as_bytes();
+    let mut pos = 0;
+    while pos < bytes.len() {
+        if bytes[pos].is_ascii_whitespace() {
+            let formula_end = pos;
+            skip_selector_whitespace(bytes, &mut pos);
+            if is_of_keyword(bytes, pos) {
+                let of_start = pos + 2;
+                if of_start >= bytes.len() {
+                    return Err(selector_not_supported(argument));
+                }
+                return Ok((
+                    argument[..formula_end].trim_end().to_string(),
+                    Some(argument[of_start..].trim_start().to_string()),
+                ));
+            }
         }
-
-        let step = match &formula[..n_index] {
-            "" | "+" => 1,
-            "-" => -1,
-            value => value
-                .parse::<isize>()
-                .map_err(|_| selector_not_supported(selector))?,
-        };
-        let offset = if formula[n_index + 1..].is_empty() {
-            0
-        } else {
-            formula[n_index + 1..]
-                .parse::<isize>()
-                .map_err(|_| selector_not_supported(selector))?
-        };
-
-        return Ok(SelectorNthChildPattern { step, offset });
+        pos += 1;
     }
 
-    let offset = formula
-        .parse::<isize>()
-        .map_err(|_| selector_not_supported(selector))?;
-    Ok(SelectorNthChildPattern { step: 0, offset })
+    Ok((argument.to_string(), None))
+}
+
+fn is_of_keyword(bytes: &[u8], pos: usize) -> bool {
+    match (bytes.get(pos), bytes.get(pos + 1), bytes.get(pos + 2)) {
+        (Some(b'o'), Some(b'f'), Some(next)) => next.is_ascii_whitespace(),
+        (Some(b'O'), Some(b'F'), Some(next)) => next.is_ascii_whitespace(),
+        _ => false,
+    }
+}
+
+fn parse_nth_child_of_selectors(argument: &str) -> Result<Vec<SelectorChain>, String> {
+    let mut chains = Vec::new();
+
+    for item in split_selector_list_items(argument)? {
+        chains.push(DomStore::parse_selector_chain(item)?);
+    }
+
+    if chains.is_empty() {
+        return Err(selector_not_supported(argument));
+    }
+
+    Ok(chains)
 }
 
 fn parse_logical_pseudo_argument(
@@ -2628,6 +2982,68 @@ fn parse_logical_pseudo_argument(
     }
 
     Ok(chains)
+}
+
+fn parse_relative_selector_argument(
+    selector: &str,
+    pos: &mut usize,
+) -> Result<Vec<SelectorRelativeSelector>, String> {
+    let argument = parse_parenthesized_argument(selector, pos)?;
+    let mut relative_selectors = Vec::new();
+
+    for item in
+        split_selector_list_items(&argument).map_err(|_| selector_not_supported(selector))?
+    {
+        relative_selectors.push(
+            parse_relative_selector_item(item).map_err(|_| selector_not_supported(selector))?,
+        );
+    }
+
+    if relative_selectors.is_empty() {
+        return Err(selector_not_supported(selector));
+    }
+
+    Ok(relative_selectors)
+}
+
+fn parse_relative_selector_item(selector: &str) -> Result<SelectorRelativeSelector, String> {
+    let bytes = selector.as_bytes();
+    let mut pos = 0;
+    skip_selector_whitespace(bytes, &mut pos);
+
+    let combinator = match bytes.get(pos).copied() {
+        Some(b'>') => {
+            pos += 1;
+            Some(SelectorCombinator::Child)
+        }
+        Some(b'+') => {
+            pos += 1;
+            Some(SelectorCombinator::AdjacentSibling)
+        }
+        Some(b'~') => {
+            pos += 1;
+            Some(SelectorCombinator::GeneralSibling)
+        }
+        Some(byte) if is_selector_combinator_byte(byte) => {
+            return Err(selector_not_supported(selector));
+        }
+        _ => None,
+    };
+
+    if combinator.is_some() {
+        skip_selector_whitespace(bytes, &mut pos);
+        if pos >= bytes.len() {
+            return Err(selector_not_supported(selector));
+        }
+    }
+
+    let chain = DomStore::parse_selector_chain_from_pos(selector, &mut pos)?;
+    skip_selector_whitespace(bytes, &mut pos);
+    if pos != bytes.len() {
+        return Err(selector_not_supported(selector));
+    }
+
+    Ok(SelectorRelativeSelector { combinator, chain })
 }
 
 fn parse_selector_attribute_operator_and_value(
