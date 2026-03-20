@@ -450,6 +450,25 @@ fn session_resolves_document_scripts_through_inline_scripts() {
 }
 
 #[test]
+fn session_resolves_document_embeds_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><embed id='first-embed'><embed name='second-embed'></div><div id='out'></div><script>const embeds = document.embeds; const before = embeds.length; const first = embeds.namedItem('first-embed'); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(embeds.length) + ':' + String(first) + ':' + String(embeds.namedItem('missing'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute document.embeds scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "2:0:[object Element]:null"
+    );
+}
+
+#[test]
 fn session_resolves_document_all_through_inline_scripts() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -520,6 +539,24 @@ fn session_reports_document_anchors_on_non_elements_explicitly() {
     assert!(error.to_string().contains("Script error"));
     assert!(error.to_string().contains("unsupported member access"));
     assert!(error.to_string().contains("`anchors`"));
+    assert!(error.to_string().contains("element value"));
+}
+
+#[test]
+fn session_reports_document_embeds_on_non_elements_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><div id='not-doc'></div></div><script>document.getElementById('not-doc').embeds.length;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-document embeds access should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(error.to_string().contains("unsupported member access"));
+    assert!(error.to_string().contains("`embeds`"));
     assert!(error.to_string().contains("element value"));
 }
 

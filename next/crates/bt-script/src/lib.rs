@@ -74,6 +74,55 @@ pub enum NodeListTarget {
     ByName(String),
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct CollectionIteratorState {
+    items: Vec<ScriptValue>,
+    index: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollectionIteratorHandle(Rc<RefCell<CollectionIteratorState>>);
+
+impl CollectionIteratorHandle {
+    pub fn new(items: Vec<ScriptValue>) -> Self {
+        Self(Rc::new(RefCell::new(CollectionIteratorState {
+            items,
+            index: 0,
+        })))
+    }
+
+    pub fn next_result(&self) -> IteratorResult {
+        let mut state = self.0.borrow_mut();
+        if state.index >= state.items.len() {
+            return IteratorResult::new(None, true);
+        }
+
+        let value = state.items[state.index].clone();
+        state.index += 1;
+        IteratorResult::new(Some(value), false)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct IteratorResult {
+    value: Option<ScriptValue>,
+    done: bool,
+}
+
+impl IteratorResult {
+    pub fn new(value: Option<ScriptValue>, done: bool) -> Self {
+        Self { value, done }
+    }
+
+    pub fn value(&self) -> Option<ScriptValue> {
+        self.value.clone()
+    }
+
+    pub fn done(&self) -> bool {
+        self.done
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum EventPhase {
@@ -193,6 +242,8 @@ pub enum ScriptValue {
     Dataset(ElementHandle),
     HtmlCollection(HtmlCollectionTarget),
     NodeList(NodeListTarget),
+    CollectionIterator(CollectionIteratorHandle),
+    IteratorResult(IteratorResult),
     Document,
     Window,
     Event(ScriptEventHandle),
@@ -391,6 +442,20 @@ pub trait HostBindings {
         _name: &str,
     ) -> Result<Option<ElementHandle>> {
         Err(ScriptError::phase_not_ready("document.anchors"))
+    }
+
+    fn collection_iterator_values(
+        &mut self,
+        _target: &HtmlCollectionTarget,
+    ) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("collection.values"))
+    }
+
+    fn collection_iterator_keys(
+        &mut self,
+        _target: &HtmlCollectionTarget,
+    ) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("collection.keys"))
     }
 
     fn element_text_content(&mut self, _element: ElementHandle) -> Result<String> {

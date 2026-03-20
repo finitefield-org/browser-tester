@@ -1039,7 +1039,7 @@ README は次だけを書く。
 - この workspace では Phase 0 から Phase 8 まで完了済み
 - Phase 7 の script DOM query expansion は slice 1 の `querySelector`、slice 2 の `matches`、slice 3 の `closest`、slice 4 の selector hardening まで実装済み
 - 追加の selector backlog slices として sibling combinators (`A + B`, `A ~ B`) も実装済み
-- 追加の selector / collection backlog slice として `querySelectorAll` と minimal `NodeList`、selector lists、bounded pseudo-classes（`not(<compound selector>)`, `is(<compound selector>, ...)`, `where(<compound selector>, ...)`, `root`, `empty`, `only-child`, `only-of-type`, `first-of-type`, `last-of-type`, `nth-child(<positive integer>)`, `nth-child(odd)`, `nth-child(even)`, `nth-child(an+b)`, `nth-last-child(<positive integer>)`, `nth-last-child(odd)`, `nth-last-child(even)`, `nth-last-child(an+b)`, `nth-of-type(<positive integer>)`, `nth-of-type(odd)`, `nth-of-type(even)`, `nth-of-type(an+b)`, `nth-last-of-type(<positive integer>)`, `nth-last-of-type(odd)`, `nth-last-of-type(even)`, `nth-last-of-type(an+b)` を含む）、`Element.children` / minimal `HTMLCollection`（`namedItem()` 含む）、`getElementsByTagName` / live `HTMLCollection`、`getElementsByTagNameNS` / live `HTMLCollection`、`getElementsByClassName` / live `HTMLCollection`、`getElementsByName` / live `NodeList`、`document.forms` / `form.elements` / live `HTMLCollection`、`select.options` / live `HTMLCollection`、`document.images` / `document.links` / `document.anchors` / `document.scripts` / `document.all` / live `HTMLCollection` も実装済み
+- 追加の selector / collection backlog slice として `querySelectorAll` と minimal `NodeList`、selector lists、bounded pseudo-classes（`not(<compound selector>)`, `is(<compound selector>, ...)`, `where(<compound selector>, ...)`, `root`, `empty`, `only-child`, `only-of-type`, `first-of-type`, `last-of-type`, `nth-child(<positive integer>)`, `nth-child(odd)`, `nth-child(even)`, `nth-child(an+b)`, `nth-last-child(<positive integer>)`, `nth-last-child(odd)`, `nth-last-child(even)`, `nth-last-child(an+b)`, `nth-of-type(<positive integer>)`, `nth-of-type(odd)`, `nth-of-type(even)`, `nth-of-type(an+b)`, `nth-last-of-type(<positive integer>)`, `nth-last-of-type(odd)`, `nth-last-of-type(even)`, `nth-last-of-type(an+b)` を含む）、`Element.children` / minimal `HTMLCollection`（`namedItem()` 含む）、`getElementsByTagName` / live `HTMLCollection`、`getElementsByTagNameNS` / live `HTMLCollection`、`getElementsByClassName` / live `HTMLCollection`、`getElementsByName` / live `NodeList`、`document.forms` / `form.elements` / live `HTMLCollection`、`select.options` / live `HTMLCollection`、`document.images` / `document.links` / `document.embeds` / `document.anchors` / `document.scripts` / `document.all` / live `HTMLCollection` も実装済み
 - Phase 8 は DOM mutation と reflection expansion を対象にしていたが、slice 1 から slice 5 まで完了済み
 
 ## Phase 6: Selector Expansion
@@ -1134,10 +1134,11 @@ README は次だけを書く。
 12. `select.options`（post-Phase-7 collection slice, 完了）
    - select-scoped live option HTMLCollection
    - `length` と `item(index)` と `namedItem(name)`
-13. `document.images` / `document.links` / `document.anchors`（post-Phase-7 collection slice, 完了）
-   - document-scoped live image HTMLCollection と document-scoped live link HTMLCollection
+13. `document.images` / `document.links` / `document.embeds` / `document.anchors`（post-Phase-7 collection slice, 完了）
+   - document-scoped live image HTMLCollection と document-scoped live link HTMLCollection と document-scoped live embed HTMLCollection
    - image collections は `length` と `item(index)` と `namedItem(name)`
    - link collections は `length` と `item(index)` と `namedItem(name)`、`a[href]` と `area[href]` に限定
+   - embed collections は `length` と `item(index)` と `namedItem(name)`、`embed` に限定
 14. `document.scripts`（post-Phase-7 collection slice, 完了）
    - document-scoped live script HTMLCollection
    - `length` と `item(index)` と `namedItem(name)`
@@ -1215,7 +1216,7 @@ README は次だけを書く。
 4. 実装は owning subsystem に閉じる
 5. 既存 API で足りない場合だけ `Harness` に公開する
 6. 公開面が変わる変更では README / capability matrix / mock guide も同じ変更で更新する
-- `querySelectorAll` と minimal `NodeList` は既に実装済みで、`NodeList.forEach` / `HTMLCollection.forEach` と `document.scripts` も実装済み、selector lists と bounded pseudo-classes も実装済み、`Element.children` / minimal `HTMLCollection`（`namedItem()` 含む）と `getElementsByTagName` / `getElementsByTagNameNS` / `getElementsByClassName` / live `HTMLCollection`、`getElementsByName` / live `NodeList`、`document.forms` / `form.elements` / live `HTMLCollection`、`select.options` / live `HTMLCollection`、`document.images` / `document.links` / `document.anchors` / `document.all` / live `HTMLCollection` も実装済み
+- `querySelectorAll` と minimal `NodeList` は既に実装済みで、`NodeList.forEach` / `HTMLCollection.forEach` と `document.scripts` も実装済み、selector lists と bounded pseudo-classes も実装済み、`Element.children` / minimal `HTMLCollection`（`namedItem()` 含む）と `getElementsByTagName` / `getElementsByTagNameNS` / `getElementsByClassName` / live `HTMLCollection`、`getElementsByName` / live `NodeList`、`document.forms` / `form.elements` / live `HTMLCollection`、`select.options` / live `HTMLCollection`、`document.images` / `document.links` / `document.embeds` / `document.anchors` / `document.all` / live `HTMLCollection` も実装済み
 - backlog slices は次の 3 つに整理する
   - collection API broadening: slices 1 (`NodeList.forEach` / `HTMLCollection.forEach`), 2 (`document.scripts`), and 3 (`document.anchors`) are delivered, and the remaining slices are iterator-style helpers -> specialized live collections beyond the bounded set
   - selector grammar broadening: `:scope` -> `:has(...)` -> structural selector expansion with richer nested selector handling

@@ -272,6 +272,25 @@ fn session_resolves_document_anchors_regression() {
 }
 
 #[test]
+fn session_resolves_document_embeds_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><embed id='first-embed'><embed name='second-embed'></div><div id='out'></div><script>const embeds = document.embeds; const before = embeds.length; const first = embeds.namedItem('first-embed'); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(embeds.length) + ':' + String(first) + ':' + String(embeds.namedItem('missing'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.embeds should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "2:0:[object Element]:null"
+    );
+}
+
+#[test]
 fn session_resolves_node_list_for_each_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),

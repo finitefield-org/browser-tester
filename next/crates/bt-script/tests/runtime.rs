@@ -1550,6 +1550,55 @@ fn runtime_resolves_document_scripts_access() {
 }
 
 #[test]
+fn runtime_resolves_document_embeds_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("first-embed", ElementHandle::new(1), "");
+    host.seed_element("second-embed", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    let embeds_collection = HtmlCollectionTarget::ByTagName {
+        scope: HtmlCollectionScope::Document,
+        tag_name: "embed".to_string(),
+    };
+    host.seed_html_collection_tag_name_items(
+        embeds_collection.clone(),
+        vec![ElementHandle::new(1), ElementHandle::new(2)],
+    );
+    host.seed_html_collection_tag_name_named_item(
+        embeds_collection.clone(),
+        "first-embed",
+        Some(ElementHandle::new(1)),
+    );
+    host.seed_html_collection_tag_name_named_item(embeds_collection.clone(), "missing", None);
+
+    runtime
+        .eval_program(
+            "const embeds = document.embeds; document.getElementById('out').textContent = String(embeds.length) + ':' + String(embeds.item(0)) + ':' + String(embeds.namedItem('first-embed')) + ':' + String(embeds.namedItem('missing'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.embeds should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("2:[object Element]:[object Element]:null")
+    );
+    assert_eq!(
+        host.html_collection_tag_name_items_calls,
+        vec![embeds_collection.clone(), embeds_collection.clone()]
+    );
+    assert_eq!(
+        host.html_collection_tag_name_named_item_calls,
+        vec![
+            (embeds_collection.clone(), "first-embed".to_string()),
+            (embeds_collection, "missing".to_string()),
+        ]
+    );
+}
+
+#[test]
 fn runtime_resolves_document_all_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();

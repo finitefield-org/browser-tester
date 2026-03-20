@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use crate::syntax::{AssignTarget, Expr, Program, Statement};
 use crate::{
-    HostBindings, HtmlCollectionScope, HtmlCollectionTarget, ListenerTarget, NodeListTarget,
-    Result, ScriptError, ScriptValue as Value,
+    CollectionIteratorHandle, HostBindings, HtmlCollectionScope, HtmlCollectionTarget,
+    IteratorResult, ListenerTarget, NodeListTarget, Result, ScriptError, ScriptValue as Value,
 };
 
 pub(crate) fn eval_program<H: HostBindings>(program: &Program, host: &mut H) -> Result<()> {
@@ -40,6 +40,8 @@ fn as_string(value: &Value) -> String {
         Value::Dataset(_) => "[object DOMStringMap]".to_string(),
         Value::HtmlCollection(_) => "[object HTMLCollection]".to_string(),
         Value::NodeList(_) => "[object NodeList]".to_string(),
+        Value::CollectionIterator(_) => "[object Iterator]".to_string(),
+        Value::IteratorResult(_) => "[object IteratorResult]".to_string(),
         Value::Document => "[object Document]".to_string(),
         Value::Window => "[object Window]".to_string(),
         Value::Event(_) => "[object Event]".to_string(),
@@ -120,6 +122,12 @@ fn eval_assignment<H: HostBindings>(
                 ))),
                 (Value::HtmlCollection(_), property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on html collection value"
+                ))),
+                (Value::CollectionIterator(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on iterator value"
+                ))),
+                (Value::IteratorResult(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on iterator result value"
                 ))),
                 (Value::Document, "title") => Err(ScriptError::phase_not_ready("document.title")),
                 (Value::Window, "title") => Err(ScriptError::phase_not_ready("window.title")),
@@ -231,6 +239,12 @@ fn eval_member<H: HostBindings>(
         Value::Document if property == "anchors" => {
             Ok(Value::HtmlCollection(HtmlCollectionTarget::DocumentAnchors))
         }
+        Value::Document if property == "embeds" => {
+            Ok(Value::HtmlCollection(HtmlCollectionTarget::ByTagName {
+                scope: HtmlCollectionScope::Document,
+                tag_name: "embed".to_string(),
+            }))
+        }
         Value::Window if property == "document" => Ok(Value::Document),
         Value::Document if property == "defaultView" => Ok(Value::Window),
         Value::Element(element) if property == "textContent" => {
@@ -283,6 +297,12 @@ fn eval_member<H: HostBindings>(
             let length = html_collection_items(&collection, host)?.len();
             Ok(Value::Number(length as f64))
         }
+        Value::IteratorResult(result) if property == "value" => {
+            Ok(result.value().unwrap_or(Value::Undefined))
+        }
+        Value::IteratorResult(result) if property == "done" => {
+            Ok(Value::Boolean(result.done()))
+        }
         Value::ClassList(element) if property == "length" => {
             let length = class_list_tokens(element, host)?.len();
             Ok(Value::Number(length as f64))
@@ -311,6 +331,8 @@ fn eval_member<H: HostBindings>(
         Value::Event(_) => Err(unsupported_member_access(property, "event")),
         Value::HtmlCollection(_) => Err(unsupported_member_access(property, "html collection")),
         Value::NodeList(_) => Err(unsupported_member_access(property, "node list")),
+        Value::CollectionIterator(_) => Err(unsupported_member_access(property, "iterator")),
+        Value::IteratorResult(_) => Err(unsupported_member_access(property, "iterator result")),
         Value::Function(_) => Err(unsupported_member_access(property, "function")),
     }
 }
@@ -462,6 +484,8 @@ fn eval_method_call<H: HostBindings>(
             "item" => html_collection_item(&collection, args, env, host),
             "namedItem" => html_collection_named_item(&collection, args, env, host),
             "forEach" => html_collection_for_each(&collection, args, env, host),
+            "keys" => html_collection_keys(&collection, host),
+            "values" => html_collection_values(&collection, host),
             other => Err(ScriptError::new(format!(
                 "unsupported HTMLCollection method: {other}"
             ))),
@@ -481,8 +505,16 @@ fn eval_method_call<H: HostBindings>(
         Value::NodeList(target) => match method {
             "item" => node_list_item(&target, args, env, host),
             "forEach" => node_list_for_each(&target, args, env, host),
+            "keys" => node_list_keys(&target, host),
+            "values" => node_list_values(&target, host),
             other => Err(ScriptError::new(format!(
                 "unsupported NodeList method: {other}"
+            ))),
+        },
+        Value::CollectionIterator(iterator) => match method {
+            "next" => collection_iterator_next(&iterator),
+            other => Err(ScriptError::new(format!(
+                "unsupported iterator method: {other}"
             ))),
         },
         Value::String(_) => Err(ScriptError::new(format!(
@@ -1046,6 +1078,28 @@ fn html_collection_for_each<H: HostBindings>(
     for_each_over_items(&callback, items, collection_value, env, host)
 }
 
+fn html_collection_keys<H: HostBindings>(
+    collection: &HtmlCollectionTarget,
+    host: &mut H,
+) -> Result<Value> {
+    let items = html_collection_items(collection, host)?;
+    Ok(collection_iterator(
+        (0..items.len())
+            .map(|index| Value::Number(index as f64))
+            .collect(),
+    ))
+}
+
+fn html_collection_values<H: HostBindings>(
+    collection: &HtmlCollectionTarget,
+    host: &mut H,
+) -> Result<Value> {
+    let items = html_collection_items(collection, host)?;
+    Ok(collection_iterator(
+        items.into_iter().map(Value::Element).collect(),
+    ))
+}
+
 fn html_collection_items<H: HostBindings>(
     collection: &HtmlCollectionTarget,
     host: &mut H,
@@ -1134,6 +1188,22 @@ fn node_list_for_each<H: HostBindings>(
     for_each_over_items(&callback, items, collection_value, env, host)
 }
 
+fn node_list_keys<H: HostBindings>(target: &NodeListTarget, host: &mut H) -> Result<Value> {
+    let items = node_list_items(target, host)?;
+    Ok(collection_iterator(
+        (0..items.len())
+            .map(|index| Value::Number(index as f64))
+            .collect(),
+    ))
+}
+
+fn node_list_values<H: HostBindings>(target: &NodeListTarget, host: &mut H) -> Result<Value> {
+    let items = node_list_items(target, host)?;
+    Ok(collection_iterator(
+        items.into_iter().map(Value::Element).collect(),
+    ))
+}
+
 fn node_list_items<H: HostBindings>(
     target: &NodeListTarget,
     host: &mut H,
@@ -1170,6 +1240,14 @@ fn for_each_over_items<H: HostBindings>(
     Ok(Value::Undefined)
 }
 
+fn collection_iterator_next(iterator: &CollectionIteratorHandle) -> Result<Value> {
+    Ok(Value::IteratorResult(iterator.next_result()))
+}
+
+fn collection_iterator(items: Vec<Value>) -> Value {
+    Value::CollectionIterator(CollectionIteratorHandle::new(items))
+}
+
 fn eval_add(left: Value, right: Value) -> Value {
     match (left, right) {
         (Value::Number(lhs), Value::Number(rhs)) => Value::Number(lhs + rhs),
@@ -1188,6 +1266,8 @@ fn is_truthy(value: &Value) -> bool {
         | Value::Dataset(_)
         | Value::HtmlCollection(_)
         | Value::NodeList(_)
+        | Value::CollectionIterator(_)
+        | Value::IteratorResult(_)
         | Value::Document
         | Value::Window
         | Value::Function(_)

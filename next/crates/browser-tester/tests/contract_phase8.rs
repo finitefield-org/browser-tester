@@ -84,6 +84,16 @@ fn document_scripts_are_live_end_to_end() -> browser_tester_next::Result<()> {
 }
 
 #[test]
+fn document_embeds_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><embed id='first-embed'><embed name='second-embed'></main><div id='out'></div><script>const embeds = document.embeds; const before = embeds.length; const first = embeds.namedItem('first-embed'); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(embeds.length) + ':' + String(first) + ':' + String(embeds.namedItem('missing'));</script>",
+    )?;
+
+    harness.assert_text("#out", "2:0:[object Element]:null")?;
+    Ok(())
+}
+
+#[test]
 fn document_anchors_are_live_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><a name='first'>First</a><a id='ignored'>Ignored</a></main><div id='out'></div><script>const anchors = document.anchors; const before = anchors.length; const first = anchors.namedItem('first'); const root = document.getElementById('root'); root.innerHTML = root.innerHTML + '<a name=\"second\">Second</a>'; document.getElementById('out').textContent = String(before) + ':' + String(anchors.length) + ':' + first.textContent + ':' + anchors.namedItem('second').textContent + ':' + String(anchors.namedItem('missing'));</script>",
@@ -92,6 +102,19 @@ fn document_anchors_are_live_end_to_end() -> browser_tester_next::Result<()> {
     harness.assert_text("#out", "1:2:First:Second:null")?;
     harness.assert_exists("a[name=first]")?;
     harness.assert_exists("a[name=second]")?;
+    Ok(())
+}
+
+#[test]
+fn document_embeds_are_not_available_on_elements_end_to_end() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html(
+        "<div id='wrapper'><div id='not-doc'></div></div><script>document.getElementById('not-doc').embeds.length;</script>",
+    )
+    .expect_err("non-document embeds access should fail");
+
+    assert!(error.to_string().contains("unsupported member access"));
+    assert!(error.to_string().contains("`embeds`"));
+    assert!(error.to_string().contains("element value"));
     Ok(())
 }
 
