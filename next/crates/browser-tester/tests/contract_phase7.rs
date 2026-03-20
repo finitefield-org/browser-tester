@@ -31,6 +31,38 @@ fn script_dom_selector_lists_work_end_to_end() -> browser_tester_next::Result<()
 }
 
 #[test]
+fn script_selector_escapes_and_selector_lists_handle_literal_punctuation_end_to_end()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root' class='app'><button id='foo,bar' class='alpha:beta'>First</button><button id='second' class='secondary'>Second</button><div id='out'></div></main><script>const escapedId = document.querySelector('#foo\\\\,bar'); const escapedClass = document.querySelector('.alpha\\\\:beta'); const list = document.querySelectorAll('#foo\\\\,bar, .secondary'); const isMatch = document.getElementById('root').matches('main:is(#foo\\\\)bar, .app)'); const whereMatch = document.getElementById('second').closest('button:where(#foo\\\\,bar, .secondary)'); document.getElementById('out').textContent = escapedId.textContent + ':' + escapedClass.textContent + ':' + String(list.length) + ':' + list.item(0).textContent + ':' + list.item(1).textContent + ':' + String(isMatch) + ':' + whereMatch.textContent;</script>",
+    )?;
+
+    harness.assert_text("#out", "First:First:2:First:Second:true:Second")?;
+    Ok(())
+}
+
+#[test]
+fn script_selector_hex_escapes_work_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root' class='app'><button id='foo,bar' class='alpha:beta' data-label='foo]bar'>First</button><button id='second' class='secondary'>Second</button><div id='out'></div></main><script>const escapedId = document.querySelector('#foo\\\\2c bar'); const escapedClass = document.querySelector('.alpha\\\\3a beta'); const escapedAttr = document.querySelector('[data-label=foo\\\\5d bar]'); const list = document.querySelectorAll('#foo\\\\2c bar, .secondary'); const whereMatch = document.getElementById('second').closest('button:where(#foo\\\\2c bar, .secondary)'); document.getElementById('out').textContent = escapedId.textContent + ':' + escapedClass.textContent + ':' + escapedAttr.textContent + ':' + String(list.length) + ':' + list.item(0).textContent + ':' + list.item(1).textContent + ':' + whereMatch.textContent;</script>",
+    )?;
+
+    harness.assert_text("#out", "First:First:First:2:First:Second:Second")?;
+    Ok(())
+}
+
+#[test]
+fn script_selector_lists_ignore_commas_inside_quoted_attribute_values_end_to_end()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root' class='app'><button id='first' data-label='A,B'>First</button><button id='second' class='secondary'>Second</button></main><div id='out'></div><script>const list = document.querySelectorAll(\"button[data-label='A,B'], .secondary\"); const isMatch = document.getElementById('root').matches(\"main:is([data-label='A,B'], .app)\"); const notMatch = document.getElementById('second').matches(\"button:not([data-label='A,B'], .blocked)\"); const whereMatch = document.getElementById('root').closest(\"main:where([data-label='A,B'], .app)\"); document.getElementById('out').textContent = String(list.length) + ':' + list.item(0).textContent + ':' + list.item(1).textContent + ':' + String(isMatch) + ':' + String(notMatch) + ':' + whereMatch.textContent;</script>",
+    )?;
+
+    harness.assert_text("#out", "2:First:Second:true:true:FirstSecond")?;
+    Ok(())
+}
+
+#[test]
 fn script_attribute_value_selectors_work_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root' data-kind='APP-shell' lang='EN-US'><button id='first' data-role='Primary Action' data-tags='Primary Ready' data-label='Primary Action'>First</button><button id='second' data-role='Secondary Action'>Second</button><input id='toggle' disabled></main><div id='out'></div><script>const prefix = document.querySelector(\"button[data-role^=prim i]\"); const strict = document.querySelector(\"button[data-role^='Primary' s]\"); const suffix = document.querySelector(\"[data-label$='action' i]\"); const contains = document.querySelector(\"button[data-role*='ond' i]\"); const token = document.querySelector(\"[data-tags~=ready i]\"); const all = document.querySelectorAll(\"main[data-kind|=app i], button[data-role$='Action' s]\"); const second = document.getElementById('second'); const root = second.closest(\"main:is([lang|=en i], .blocked)\"); const disabled = document.querySelector(\"input[disabled='']\"); document.getElementById('out').textContent = prefix.textContent + ':' + strict.textContent + ':' + suffix.textContent + ':' + contains.textContent + ':' + token.textContent + ':' + String(all.length) + ':' + String(second.matches(\"button[data-role~=secondary i]\")) + ':' + root.textContent + ':' + String(disabled);</script>",
@@ -166,6 +198,27 @@ fn script_simple_pseudo_classes_work_end_to_end() -> browser_tester_next::Result
         "#out",
         "First:Disabled:Enabled:Disabled:First:2:2:First:Disabled:2:Disabled:First:Disabled:2:true:B",
     )?;
+    Ok(())
+}
+
+#[test]
+fn script_root_and_empty_pseudo_classes_work_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><section id='empty-comment'><!-- gap --></section><section id='empty'></section><section id='non-empty'>content</section><div id='out'>seed</div></main><script>const root = document.querySelector(':root'); const empties = document.querySelectorAll('#root :empty'); const emptyComment = document.getElementById('empty-comment'); const nonEmpty = document.getElementById('non-empty'); document.getElementById('out').textContent = String(root.matches(':root')) + ':' + String(empties.length) + ':' + empties.item(0).matches(':empty') + ':' + empties.item(1).matches(':empty') + ':' + String(emptyComment.matches(':empty')) + ':' + String(nonEmpty.matches(':empty'));</script>",
+    )?;
+
+    harness.assert_text("#out", "true:2:true:true:true:false")?;
+    Ok(())
+}
+
+#[test]
+fn script_only_child_and_only_of_type_pseudo_classes_work_end_to_end()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'>lead<!-- gap --><div id='single-child-parent'>text<!-- marker --><section id='only-child'>child</section><!-- marker --></div><div id='type-parent'><span id='first-span'>one</span><em id='only-of-type'>type</em><span id='second-span'>two</span></div><div id='out'>seed</div><script>const onlyChild = document.querySelector('#only-child:only-child'); const onlyOfType = document.querySelector('#only-of-type:only-of-type'); const onlyChildMatches = document.querySelectorAll('#single-child-parent > :only-child'); const onlyOfTypeMatches = document.querySelectorAll('#type-parent > :only-of-type'); const firstSpan = document.getElementById('first-span'); const firstSpanNotOnlyChild = firstSpan.matches('#first-span:not(:only-child)'); const firstSpanNotOnlyOfType = firstSpan.matches('#first-span:not(:only-of-type)'); const parent = onlyChild.closest('#single-child-parent'); document.getElementById('out').textContent = onlyChild.textContent + ':' + onlyOfType.textContent + ':' + String(onlyChildMatches.length) + ':' + String(onlyOfTypeMatches.length) + ':' + String(firstSpanNotOnlyChild) + ':' + String(firstSpanNotOnlyOfType) + ':' + String(parent.matches('#single-child-parent'));</script></main>",
+    )?;
+
+    harness.assert_text("#out", "child:type:1:1:true:true:true")?;
     Ok(())
 }
 
@@ -351,4 +404,52 @@ fn unsupported_element_closest_selector_fails_explicitly() {
     let message = error.to_string();
     assert!(message.contains("Script error"));
     assert!(message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`"));
+}
+
+#[test]
+fn unsupported_script_hex_escape_selector_fails_explicitly() {
+    let error = Harness::from_html(
+        "<main id='foo,bar'></main><script>document.querySelector('#foo\\\\110000 bar');</script>",
+    )
+    .expect_err("out-of-range hex escape should fail explicitly");
+
+    let message = error.to_string();
+    assert!(message.contains("Script error"));
+    assert!(message.contains("unsupported selector `#foo\\110000 bar`"));
+}
+
+#[test]
+fn unsupported_script_control_character_hex_escape_selector_fails_explicitly() {
+    let error = Harness::from_html(
+        "<main id='foo'></main><script>document.querySelector('#foo\\\\0 bar');</script>",
+    )
+    .expect_err("control-character hex escape should fail explicitly");
+
+    let message = error.to_string();
+    assert!(message.contains("Script error"));
+    assert!(message.contains("unsupported selector `#foo\\0 bar`"));
+}
+
+#[test]
+fn unsupported_script_root_empty_selector_syntax_fails_explicitly() {
+    let error = Harness::from_html(
+        "<main id='root'><section id='empty'></section></main><script>document.querySelector('#empty:empty()');</script>",
+    )
+    .expect_err("malformed :empty selector should fail explicitly");
+
+    let message = error.to_string();
+    assert!(message.contains("Script error"));
+    assert!(message.contains("unsupported selector `#empty:empty()`"));
+}
+
+#[test]
+fn unsupported_script_only_child_selector_syntax_fails_explicitly() {
+    let error = Harness::from_html(
+        "<main id='root'><section id='child'>child</section></main><script>document.querySelector('#child:only-child()');</script>",
+    )
+    .expect_err("malformed :only-child selector should fail explicitly");
+
+    let message = error.to_string();
+    assert!(message.contains("Script error"));
+    assert!(message.contains("unsupported selector `#child:only-child()`"));
 }

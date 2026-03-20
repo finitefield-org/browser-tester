@@ -39,6 +39,33 @@ fn selector_lists_work_with_public_assert_exists() -> browser_tester_next::Resul
 }
 
 #[test]
+fn selector_escapes_and_selector_lists_handle_literal_punctuation()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root' class='app'><button id='foo,bar' class='alpha:beta'>First</button><button id='second' class='secondary'>Second</button></main>",
+    )?;
+
+    harness.assert_exists("#foo\\,bar")?;
+    harness.assert_exists(".alpha\\:beta")?;
+    harness.assert_exists("#foo\\,bar, .secondary")?;
+    harness.assert_exists("main:is(#foo\\)bar, .app)")?;
+    harness.assert_exists("button:where(#foo\\,bar, .secondary)")?;
+    Ok(())
+}
+
+#[test]
+fn selector_hex_escapes_work_with_public_assert_exists() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root' class='app'><button id='foo,bar' class='alpha:beta' data-label='foo]bar'>First</button><button id='second' class='secondary'>Second</button></main>",
+    )?;
+
+    harness.assert_exists("#foo\\2c bar")?;
+    harness.assert_exists(".alpha\\3a beta")?;
+    harness.assert_exists("[data-label=foo\\5d bar]")?;
+    Ok(())
+}
+
+#[test]
 fn simple_pseudo_classes_work_with_public_assert_exists() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main>lead<!-- gap --><button id='first' class='primary'>First</button><button id='disabled' class='primary' disabled>Disabled</button><button id='enabled' class='primary'>Enabled</button><input id='agree' type='checkbox' checked><select id='mode'><option value='a'>A</option><option id='selected' value='b' selected>B</option></select></main>",
@@ -61,6 +88,35 @@ fn simple_pseudo_classes_work_with_public_assert_exists() -> browser_tester_next
     harness.assert_exists("input:checked")?;
     harness.assert_exists("option:checked")?;
     harness.assert_exists("select:last-child")?;
+    Ok(())
+}
+
+#[test]
+fn root_and_empty_pseudo_classes_work_with_public_assert_exists() -> browser_tester_next::Result<()>
+{
+    let harness = Harness::from_html(
+        "<main id='root'><section id='empty-comment'><!-- gap --></section><section id='empty'></section><section id='non-empty'>content</section></main>",
+    )?;
+
+    harness.assert_exists(":root")?;
+    harness.assert_exists("main:root")?;
+    harness.assert_exists("#empty-comment:empty")?;
+    harness.assert_exists("#empty:empty")?;
+    harness.assert_exists("#non-empty:not(:empty)")?;
+    Ok(())
+}
+
+#[test]
+fn only_child_and_only_of_type_pseudo_classes_work_with_public_assert_exists()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><div id='single-child-parent'>lead<!-- gap --><section id='only-child'>child</section><!-- gap --></div><div id='type-parent'><span id='first-span'>one</span><em id='only-of-type'>type</em><span id='second-span'>two</span></div></main>",
+    )?;
+
+    harness.assert_exists("#only-child:only-child")?;
+    harness.assert_exists("#type-parent > #only-of-type:only-of-type")?;
+    harness.assert_exists("#first-span:not(:only-child)")?;
+    harness.assert_exists("#first-span:not(:only-of-type)")?;
     Ok(())
 }
 
@@ -161,5 +217,61 @@ fn unsupported_not_argument_syntax_is_reported_explicitly() -> browser_tester_ne
     assert!(
         message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`")
     );
+    Ok(())
+}
+
+#[test]
+fn unsupported_hex_escape_selector_syntax_is_reported_explicitly() -> browser_tester_next::Result<()>
+{
+    let harness = Harness::from_html("<main id='foo,bar' class='app'></main>")?;
+    let error = harness
+        .assert_exists("#foo\\110000 bar")
+        .expect_err("out-of-range hex escape should fail explicitly");
+
+    let message = error.to_string();
+    assert!(message.contains("Selector error"));
+    assert!(message.contains("unsupported selector `#foo\\110000 bar`"));
+    Ok(())
+}
+
+#[test]
+fn unsupported_control_character_hex_escape_selector_syntax_is_reported_explicitly()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html("<main id='foo'></main>")?;
+    let error = harness
+        .assert_exists("#foo\\0 bar")
+        .expect_err("control-character hex escape should fail explicitly");
+
+    let message = error.to_string();
+    assert!(message.contains("Selector error"));
+    assert!(message.contains("unsupported selector `#foo\\0 bar`"));
+    Ok(())
+}
+
+#[test]
+fn unsupported_root_empty_selector_syntax_is_reported_explicitly() -> browser_tester_next::Result<()>
+{
+    let harness = Harness::from_html("<main id='root'><section id='empty'></section></main>")?;
+    let error = harness
+        .assert_exists("#empty:empty()")
+        .expect_err("malformed :empty selector should fail explicitly");
+
+    let message = error.to_string();
+    assert!(message.contains("Selector error"));
+    assert!(message.contains("unsupported selector `#empty:empty()`"));
+    Ok(())
+}
+
+#[test]
+fn unsupported_only_child_selector_syntax_is_reported_explicitly() -> browser_tester_next::Result<()>
+{
+    let harness = Harness::from_html("<main id='root'><section id='child'>child</section></main>")?;
+    let error = harness
+        .assert_exists("#child:only-child()")
+        .expect_err("malformed :only-child selector should fail explicitly");
+
+    let message = error.to_string();
+    assert!(message.contains("Selector error"));
+    assert!(message.contains("unsupported selector `#child:only-child()`"));
     Ok(())
 }

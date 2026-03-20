@@ -509,6 +509,10 @@ pub enum NodeKind {
 - `:enabled`
 - `:first-child`
 - `:last-child`
+- `:root`
+- `:empty`
+- `:only-child`
+- `:only-of-type`
 - `:nth-child(<positive integer>)`
 - `:nth-child(odd)`
 - `:nth-child(even)`
@@ -1025,7 +1029,7 @@ README は次だけを書く。
 - この workspace では Phase 0 から Phase 6 まで完了済み
 - Phase 7 の script DOM query expansion は slice 1 の `querySelector`、slice 2 の `matches`、slice 3 の `closest`、slice 4 の selector hardening まで実装済み
 - 追加の selector backlog slices として sibling combinators (`A + B`, `A ~ B`) も実装済み
-- 追加の selector / collection backlog slice として `querySelectorAll` と minimal `NodeList`、selector lists、bounded pseudo-classes（`not(<compound selector>)`, `is(<compound selector>, ...)`, `where(<compound selector>, ...)`, `nth-child(<positive integer>)`, `nth-child(odd)`, `nth-child(even)`, `nth-child(an+b)`, `nth-last-child(<positive integer>)`, `nth-last-child(odd)`, `nth-last-child(even)`, `nth-last-child(an+b)` を含む）、`Element.children` / minimal `HTMLCollection`（`namedItem()` 含む）、`getElementsByTagName` / live `HTMLCollection`、`getElementsByTagNameNS` / live `HTMLCollection`、`getElementsByClassName` / live `HTMLCollection`、`getElementsByName` / live `NodeList`、`document.forms` / `form.elements` / live `HTMLCollection`、`select.options` / live `HTMLCollection`、`document.images` / `document.links` / live `HTMLCollection`、`document.all` / live `HTMLCollection` も実装済み
+- 追加の selector / collection backlog slice として `querySelectorAll` と minimal `NodeList`、selector lists、bounded pseudo-classes（`not(<compound selector>)`, `is(<compound selector>, ...)`, `where(<compound selector>, ...)`, `root`, `empty`, `nth-child(<positive integer>)`, `nth-child(odd)`, `nth-child(even)`, `nth-child(an+b)`, `nth-last-child(<positive integer>)`, `nth-last-child(odd)`, `nth-last-child(even)`, `nth-last-child(an+b)` を含む）、`Element.children` / minimal `HTMLCollection`（`namedItem()` 含む）、`getElementsByTagName` / live `HTMLCollection`、`getElementsByTagNameNS` / live `HTMLCollection`、`getElementsByClassName` / live `HTMLCollection`、`getElementsByName` / live `NodeList`、`document.forms` / `form.elements` / live `HTMLCollection`、`select.options` / live `HTMLCollection`、`document.images` / `document.links` / live `HTMLCollection`、`document.all` / live `HTMLCollection` も実装済み
 
 ## Phase 6: Selector Expansion
 
@@ -1095,7 +1099,7 @@ README は次だけを書く。
 6. selector lists (`A, B`)（post-Phase-7 selector slice, 完了）
    - document / element scoped lookup accepts comma-separated selector lists
    - results are document-order and deduplicated
-7. bounded pseudo-classes (`:not(...)`, `:is(...)`, `:where(...)`, `:first-child`, `:last-child`, `:nth-child(<positive integer>)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`, `:nth-last-child(<positive integer>)`, `:nth-last-child(odd)`, `:nth-last-child(even)`, `:nth-last-child(an+b)`, `:checked`, `:disabled`, `:enabled`)（post-Phase-7 selector slice, 完了）
+7. bounded pseudo-classes (`:not(...)`, `:is(...)`, `:where(...)`, `:first-child`, `:last-child`, `:root`, `:empty`, `:only-child`, `:only-of-type`, `:nth-child(<positive integer>)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`, `:nth-last-child(<positive integer>)`, `:nth-last-child(odd)`, `:nth-last-child(even)`, `:nth-last-child(an+b)`, `:checked`, `:disabled`, `:enabled`)（post-Phase-7 selector slice, 完了）
    - bounded logical, structural, and simple form-state pseudo-classes resolve through the same bounded selector engine
    - `:not(...)` / `:is(...)` / `:where(...)` の内側でも bounded selector list / combinator は使える
    - broader CSS parsing は引き続き未対応で、明示エラーにする

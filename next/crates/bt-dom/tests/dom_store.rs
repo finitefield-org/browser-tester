@@ -170,6 +170,57 @@ fn simple_pseudo_classes_match_state_and_structure() {
 }
 
 #[test]
+fn root_and_empty_pseudo_classes_match_expected_nodes() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><section id='empty'></section><div id='comment-only'><!-- marker --></div><p id='with-text'>text</p><article id='with-child'><span id='nested'>nested</span></article></main>",
+        )
+        .expect("HTML should parse");
+
+    let root_id = store.select("#root").unwrap()[0];
+    let empty_id = store.select("#empty").unwrap()[0];
+    let comment_only_id = store.select("#comment-only").unwrap()[0];
+
+    assert_eq!(store.select(":root").unwrap(), vec![root_id]);
+    assert_eq!(
+        store.select(":empty").unwrap(),
+        vec![empty_id, comment_only_id]
+    );
+
+    // Failure-path regressions for structural pseudo-classes.
+    assert!(store.select("#empty:root").unwrap().is_empty());
+    assert!(store.select("#with-text:empty").unwrap().is_empty());
+    assert!(store.select("#with-child:empty").unwrap().is_empty());
+}
+
+#[test]
+fn only_child_and_only_of_type_pseudo_classes_match_expected_nodes() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'>lead<!-- gap --><div id='single-child-parent'>text<!-- marker --><section id='only-child'>child</section><!-- marker --></div><div id='type-parent'><span id='first-span'>one</span><em id='only-of-type'>type</em><span id='second-span'>two</span></div></main>",
+        )
+        .expect("HTML should parse");
+
+    let root_id = store.select("#root").unwrap()[0];
+    let only_child_id = store.select("#only-child").unwrap()[0];
+    let only_of_type_id = store.select("#only-of-type").unwrap()[0];
+
+    assert_eq!(store.select(":root:only-child").unwrap(), vec![root_id]);
+    assert_eq!(
+        store.select("#only-child:only-child").unwrap(),
+        vec![only_child_id]
+    );
+    assert_eq!(
+        store.select("#only-of-type:only-of-type").unwrap(),
+        vec![only_of_type_id]
+    );
+    assert!(store.select("#first-span:only-child").unwrap().is_empty());
+    assert!(store.select("#first-span:only-of-type").unwrap().is_empty());
+}
+
+#[test]
 fn not_pseudo_class_negates_supported_compound_selectors() {
     let mut store = DomStore::new_empty();
     store
@@ -408,6 +459,78 @@ fn selector_lists_match_in_document_order_and_deduplicate() {
         store.select(".primary, main").unwrap(),
         vec![root_id, secondary_id]
     );
+}
+
+#[test]
+fn selector_escapes_and_selector_lists_handle_literal_punctuation() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root' class='app'><button id='foo,bar' class='alpha:beta'>First</button><button id='second' class='secondary'>Second</button></main>",
+        )
+        .expect("HTML should parse");
+
+    let root_id = store.select("#root").unwrap()[0];
+    let first_id = store.select("#foo\\,bar").unwrap()[0];
+    let second_id = store.select("#second").unwrap()[0];
+
+    assert_eq!(store.select(".alpha\\:beta").unwrap(), vec![first_id]);
+    assert_eq!(
+        store.select("#foo\\,bar, .secondary").unwrap(),
+        vec![first_id, second_id]
+    );
+    assert_eq!(
+        store.select("main:is(#foo\\)bar, .app)").unwrap(),
+        vec![root_id]
+    );
+    assert_eq!(
+        store
+            .select("button:where(#foo\\,bar, .secondary)")
+            .unwrap(),
+        vec![first_id, second_id]
+    );
+}
+
+#[test]
+fn selector_hex_escapes_match_ids_classes_and_attribute_values() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main><button id='foo,bar' class='alpha:beta' data-label='foo]bar'>First</button><button id='second' class='secondary'>Second</button></main>",
+        )
+        .expect("HTML should parse");
+
+    let first_id = store.select("#foo\\2c bar").unwrap()[0];
+
+    assert_eq!(store.select(".alpha\\3a beta").unwrap(), vec![first_id]);
+    assert_eq!(
+        store.select("[data-label=foo\\5d bar]").unwrap(),
+        vec![first_id]
+    );
+}
+
+#[test]
+fn selector_hex_escape_out_of_range_fails_explicitly() {
+    let mut store = DomStore::new_empty();
+    store.bootstrap_html("<main id='foo,bar'></main>").unwrap();
+
+    let error = store
+        .select("#foo\\110000 bar")
+        .expect_err("out-of-range hex escape should fail");
+
+    assert!(error.contains("supported forms are"));
+}
+
+#[test]
+fn selector_hex_escape_control_character_fails_explicitly() {
+    let mut store = DomStore::new_empty();
+    store.bootstrap_html("<main id='foo'></main>").unwrap();
+
+    let error = store
+        .select("#foo\\0 bar")
+        .expect_err("control-character hex escape should fail");
+
+    assert!(error.contains("supported forms are"));
 }
 
 #[test]

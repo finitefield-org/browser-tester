@@ -188,7 +188,7 @@ Post-Phase-7 slices:
   - comma-separated selector lists are available through the same bounded engine
   - document-order union and deduplication
 - bounded pseudo-classes
-  - `:not(...)`, `:is(...)`, `:first-child`, `:last-child`, `:nth-child(<positive integer>)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`, `:nth-last-child(<positive integer>)`, `:nth-last-child(odd)`, `:nth-last-child(even)`, `:nth-last-child(an+b)`, `:checked`, `:disabled`, and `:enabled` are available through the same bounded engine
+  - `:not(...)`, `:is(...)`, `:first-child`, `:last-child`, `:root`, `:empty`, `:only-child`, `:only-of-type`, `:nth-child(<positive integer>)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`, `:nth-last-child(<positive integer>)`, `:nth-last-child(odd)`, `:nth-last-child(even)`, `:nth-last-child(an+b)`, `:checked`, `:disabled`, and `:enabled` are available through the same bounded engine
   - bounded selector lists and combinators inside `:not(...)` and `:is(...)` are available; broader CSS parsing and malformed or unknown attribute selector flags stay deferred
 
 Exit criteria:

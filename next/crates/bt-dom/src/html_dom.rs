@@ -63,6 +63,10 @@ enum SelectorCombinator {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SelectorPseudoClass {
+    Root,
+    Empty,
+    OnlyChild,
+    OnlyOfType,
     FirstChild,
     LastChild,
     NthChild(SelectorNthChildPattern),
@@ -1025,6 +1029,10 @@ impl DomStore {
         pseudo_class: &SelectorPseudoClass,
     ) -> bool {
         match pseudo_class {
+            SelectorPseudoClass::Root => self.is_root_pseudo_class(node_id),
+            SelectorPseudoClass::Empty => self.is_empty_pseudo_class(node_id),
+            SelectorPseudoClass::OnlyChild => self.is_only_child_pseudo_class(node_id),
+            SelectorPseudoClass::OnlyOfType => self.is_only_of_type_pseudo_class(node_id),
             SelectorPseudoClass::FirstChild => self.is_first_child(node_id),
             SelectorPseudoClass::LastChild => self.is_last_child(node_id),
             SelectorPseudoClass::NthChild(pattern) => self.is_nth_child(node_id, pattern),
@@ -1169,6 +1177,10 @@ impl DomStore {
                     *pos += 1;
                     let token = parse_selector_token(selector, pos)?;
                     let pseudo_class = match token.as_str() {
+                        "root" => SelectorPseudoClass::Root,
+                        "empty" => SelectorPseudoClass::Empty,
+                        "only-child" => SelectorPseudoClass::OnlyChild,
+                        "only-of-type" => SelectorPseudoClass::OnlyOfType,
                         "first-child" => SelectorPseudoClass::FirstChild,
                         "last-child" => SelectorPseudoClass::LastChild,
                         "nth-child" => {
@@ -1217,6 +1229,82 @@ impl DomStore {
         self.nodes
             .get(node_id.index() as usize)
             .and_then(|node| node.parent)
+    }
+
+    fn root_element_id(&self) -> Option<NodeId> {
+        let document = self.nodes.get(self.document_id.index() as usize)?;
+        document.children.iter().find_map(|child| {
+            matches!(
+                self.nodes
+                    .get(child.index() as usize)
+                    .map(|node| &node.kind),
+                Some(NodeKind::Element(_))
+            )
+            .then_some(*child)
+        })
+    }
+
+    fn is_root_pseudo_class(&self, node_id: NodeId) -> bool {
+        self.root_element_id() == Some(node_id)
+    }
+
+    fn is_empty_pseudo_class(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+        let NodeKind::Element(_) = node.kind else {
+            return false;
+        };
+
+        !node.children.iter().any(|child| {
+            matches!(
+                self.nodes
+                    .get(child.index() as usize)
+                    .map(|child_node| &child_node.kind),
+                Some(NodeKind::Element(_)) | Some(NodeKind::Text(_))
+            )
+        })
+    }
+
+    fn is_only_child_pseudo_class(&self, node_id: NodeId) -> bool {
+        self.is_first_child(node_id) && self.is_last_child(node_id)
+    }
+
+    fn is_only_of_type_pseudo_class(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        let Some(parent_id) = node.parent else {
+            return false;
+        };
+        let Some(parent) = self.nodes.get(parent_id.index() as usize) else {
+            return false;
+        };
+
+        let mut matching_sibling_count = 0usize;
+        for child in &parent.children {
+            let Some(child_node) = self.nodes.get(child.index() as usize) else {
+                continue;
+            };
+            let NodeKind::Element(child_element) = &child_node.kind else {
+                continue;
+            };
+
+            if child_element.local_name == element.local_name
+                && child_element.namespace_uri == element.namespace_uri
+            {
+                matching_sibling_count += 1;
+                if matching_sibling_count > 1 {
+                    return false;
+                }
+            }
+        }
+
+        matching_sibling_count == 1
     }
 
     fn is_first_child(&self, node_id: NodeId) -> bool {
@@ -1458,7 +1546,7 @@ impl DomStore {
 
 fn selector_not_supported(selector: &str) -> String {
     format!(
-        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`"
+        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`; additional bounded structural pseudo-classes include `:root`, `:empty`, `:only-child`, and `:only-of-type`"
     )
 }
 
@@ -1607,30 +1695,55 @@ fn parse_selector_attribute_value(selector: &str, pos: &mut usize) -> Result<Str
     match bytes.get(*pos).copied() {
         Some(quote @ (b'"' | b'\'')) => {
             *pos += 1;
-            let start = *pos;
-            while *pos < bytes.len() && bytes[*pos] != quote {
-                *pos += 1;
+            let mut value = String::new();
+            while *pos < bytes.len() {
+                match bytes[*pos] {
+                    b'\\' => {
+                        *pos += 1;
+                        value.push(skip_selector_escape(selector, pos)?);
+                    }
+                    byte if byte == quote => {
+                        *pos += 1;
+                        return Ok(value);
+                    }
+                    _ => {
+                        let ch = selector[*pos..]
+                            .chars()
+                            .next()
+                            .ok_or_else(|| selector_not_supported(selector))?;
+                        value.push(ch);
+                        *pos += ch.len_utf8();
+                    }
+                }
             }
 
-            if *pos >= bytes.len() {
-                return Err(selector_not_supported(selector));
-            }
-
-            let value = selector[start..*pos].to_string();
-            *pos += 1;
-            Ok(value)
+            Err(selector_not_supported(selector))
         }
         Some(_) => {
-            let start = *pos;
-            while *pos < bytes.len() && !bytes[*pos].is_ascii_whitespace() && bytes[*pos] != b']' {
-                *pos += 1;
+            let mut value = String::new();
+            while *pos < bytes.len() {
+                match bytes[*pos] {
+                    b'\\' => {
+                        *pos += 1;
+                        value.push(skip_selector_escape(selector, pos)?);
+                    }
+                    byte if byte.is_ascii_whitespace() || byte == b']' => break,
+                    _ => {
+                        let ch = selector[*pos..]
+                            .chars()
+                            .next()
+                            .ok_or_else(|| selector_not_supported(selector))?;
+                        value.push(ch);
+                        *pos += ch.len_utf8();
+                    }
+                }
             }
 
-            if *pos == start {
+            if value.is_empty() {
                 return Err(selector_not_supported(selector));
             }
 
-            Ok(selector[start..*pos].to_string())
+            Ok(value)
         }
         None => Err(selector_not_supported(selector)),
     }
@@ -1689,21 +1802,75 @@ fn parse_parenthesized_argument(selector: &str, pos: &mut usize) -> Result<Strin
     *pos += 1;
 
     let start = *pos;
-    let mut depth = 1;
+    let mut depth = 1usize;
+    let mut in_quote: Option<u8> = None;
+    let mut bracket_depth = 0usize;
     while *pos < bytes.len() {
-        match bytes[*pos] {
-            b'(' => depth += 1,
-            b')' => {
-                depth -= 1;
-                if depth == 0 {
-                    let argument = selector[start..*pos].to_string();
+        let byte = bytes[*pos];
+        match in_quote {
+            Some(quote) => match byte {
+                b'\\' => {
                     *pos += 1;
-                    return Ok(argument);
+                    skip_selector_escape(selector, pos)?;
+                    continue;
                 }
-            }
-            _ => {}
+                byte if byte == quote => {
+                    in_quote = None;
+                    *pos += 1;
+                    continue;
+                }
+                _ => {
+                    let ch = selector[*pos..]
+                        .chars()
+                        .next()
+                        .ok_or_else(|| selector_not_supported(selector))?;
+                    *pos += ch.len_utf8();
+                    continue;
+                }
+            },
+            None => match byte {
+                b'\'' | b'"' => {
+                    in_quote = Some(byte);
+                    *pos += 1;
+                }
+                b'\\' => {
+                    *pos += 1;
+                    skip_selector_escape(selector, pos)?;
+                    continue;
+                }
+                b'[' => {
+                    bracket_depth += 1;
+                    *pos += 1;
+                }
+                b']' => {
+                    if bracket_depth == 0 {
+                        return Err(selector_not_supported(selector));
+                    }
+                    bracket_depth -= 1;
+                    *pos += 1;
+                }
+                b'(' if bracket_depth == 0 => {
+                    depth += 1;
+                    *pos += 1;
+                }
+                b')' if bracket_depth == 0 => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let argument = selector[start..*pos].to_string();
+                        *pos += 1;
+                        return Ok(argument);
+                    }
+                    *pos += 1;
+                }
+                _ => {
+                    let ch = selector[*pos..]
+                        .chars()
+                        .next()
+                        .ok_or_else(|| selector_not_supported(selector))?;
+                    *pos += ch.len_utf8();
+                }
+            },
         }
-        *pos += 1;
     }
 
     Err(selector_not_supported(selector))
@@ -1713,30 +1880,85 @@ fn split_selector_list_items(selector: &str) -> Result<Vec<&str>, String> {
     let bytes = selector.as_bytes();
     let mut items = Vec::new();
     let mut depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut in_quote: Option<u8> = None;
     let mut start = 0usize;
-
-    for (index, byte) in bytes.iter().enumerate() {
-        match byte {
-            b'(' => depth += 1,
-            b')' => {
-                if depth == 0 {
-                    return Err(selector_not_supported(selector));
+    let mut pos = 0usize;
+    while pos < bytes.len() {
+        let byte = bytes[pos];
+        match in_quote {
+            Some(quote) => match byte {
+                b'\\' => {
+                    pos += 1;
+                    skip_selector_escape(selector, &mut pos)?;
+                    continue;
                 }
-                depth -= 1;
-            }
-            b',' if depth == 0 => {
-                let item = selector[start..index].trim();
-                if item.is_empty() {
-                    return Err(selector_not_supported(selector));
+                byte if byte == quote => {
+                    in_quote = None;
+                    pos += 1;
+                    continue;
                 }
-                items.push(item);
-                start = index + 1;
-            }
-            _ => {}
+                _ => {
+                    let ch = selector[pos..]
+                        .chars()
+                        .next()
+                        .ok_or_else(|| selector_not_supported(selector))?;
+                    pos += ch.len_utf8();
+                    continue;
+                }
+            },
+            None => match byte {
+                b'\'' | b'"' => {
+                    in_quote = Some(byte);
+                    pos += 1;
+                }
+                b'\\' => {
+                    pos += 1;
+                    skip_selector_escape(selector, &mut pos)?;
+                }
+                b'(' => {
+                    depth += 1;
+                    pos += 1;
+                }
+                b')' => {
+                    if depth == 0 {
+                        return Err(selector_not_supported(selector));
+                    }
+                    depth -= 1;
+                    pos += 1;
+                }
+                b'[' => {
+                    bracket_depth += 1;
+                    pos += 1;
+                }
+                b']' => {
+                    if bracket_depth == 0 {
+                        return Err(selector_not_supported(selector));
+                    }
+                    bracket_depth -= 1;
+                    pos += 1;
+                }
+                b',' if depth == 0 && bracket_depth == 0 => {
+                    let item = selector[start..pos].trim();
+                    if item.is_empty() {
+                        return Err(selector_not_supported(selector));
+                    }
+                    items.push(item);
+                    pos += 1;
+                    start = pos;
+                }
+                _ => {
+                    let ch = selector[pos..]
+                        .chars()
+                        .next()
+                        .ok_or_else(|| selector_not_supported(selector))?;
+                    pos += ch.len_utf8();
+                }
+            },
         }
     }
 
-    if depth != 0 {
+    if depth != 0 || bracket_depth != 0 || in_quote.is_some() {
         return Err(selector_not_supported(selector));
     }
 
@@ -1750,17 +1972,68 @@ fn split_selector_list_items(selector: &str) -> Result<Vec<&str>, String> {
 }
 
 fn parse_selector_token(selector: &str, pos: &mut usize) -> Result<String, String> {
-    let start = *pos;
     let bytes = selector.as_bytes();
-    while *pos < bytes.len() && is_simple_name_byte(bytes[*pos]) {
-        *pos += 1;
+    let mut token = String::new();
+
+    while *pos < bytes.len() {
+        let byte = bytes[*pos];
+        if byte == b'\\' {
+            *pos += 1;
+            token.push(skip_selector_escape(selector, pos)?);
+            continue;
+        }
+
+        if is_simple_name_byte(byte) {
+            token.push(byte as char);
+            *pos += 1;
+            continue;
+        }
+
+        break;
     }
 
-    if *pos == start {
+    if token.is_empty() {
         return Err(selector_not_supported(selector));
     }
 
-    Ok(selector[start..*pos].to_string())
+    Ok(token)
+}
+
+fn skip_selector_escape(selector: &str, pos: &mut usize) -> Result<char, String> {
+    if *pos >= selector.len() {
+        return Err(selector_not_supported(selector));
+    }
+
+    let bytes = selector.as_bytes();
+    let mut end = *pos;
+    let mut digits = 0usize;
+    while end < bytes.len() && digits < 6 && bytes[end].is_ascii_hexdigit() {
+        end += 1;
+        digits += 1;
+    }
+
+    if digits > 0 {
+        let value = u32::from_str_radix(&selector[*pos..end], 16)
+            .map_err(|_| selector_not_supported(selector))?;
+        let ch = char::from_u32(value).ok_or_else(|| selector_not_supported(selector))?;
+        if ch.is_control() {
+            return Err(selector_not_supported(selector));
+        }
+        *pos = end;
+
+        if *pos < bytes.len() && bytes[*pos].is_ascii_whitespace() {
+            *pos += 1;
+        }
+
+        return Ok(ch);
+    }
+
+    let ch = selector[*pos..]
+        .chars()
+        .next()
+        .ok_or_else(|| selector_not_supported(selector))?;
+    *pos += ch.len_utf8();
+    Ok(ch)
 }
 
 fn skip_selector_whitespace(bytes: &[u8], pos: &mut usize) -> bool {
