@@ -49,6 +49,8 @@ struct RecordingHost {
         BTreeMap<(HtmlCollectionTarget, String), Option<ElementHandle>>,
     html_collection_form_elements_named_item_results:
         BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
+    html_collection_form_elements_named_items_results:
+        BTreeMap<(ElementHandle, String), Vec<ElementHandle>>,
     html_collection_select_options_named_item_results:
         BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
     html_collection_select_selected_options_named_item_results:
@@ -88,6 +90,7 @@ struct RecordingHost {
     html_collection_tag_name_ns_named_item_calls: Vec<(HtmlCollectionTarget, String)>,
     html_collection_class_name_named_item_calls: Vec<(HtmlCollectionTarget, String)>,
     html_collection_form_elements_named_item_calls: Vec<(ElementHandle, String)>,
+    html_collection_form_elements_named_items_calls: Vec<(ElementHandle, String)>,
     html_collection_select_options_named_item_calls: Vec<(ElementHandle, String)>,
     html_collection_select_selected_options_named_item_calls: Vec<(ElementHandle, String)>,
     html_collection_map_areas_named_item_calls: Vec<(ElementHandle, String)>,
@@ -284,6 +287,16 @@ impl RecordingHost {
         result: Option<ElementHandle>,
     ) {
         self.html_collection_form_elements_named_item_results
+            .insert((element, name.into()), result);
+    }
+
+    fn seed_html_collection_form_elements_named_items(
+        &mut self,
+        element: ElementHandle,
+        name: impl Into<String>,
+        result: Vec<ElementHandle>,
+    ) {
+        self.html_collection_form_elements_named_items_results
             .insert((element, name.into()), result);
     }
 
@@ -594,6 +607,31 @@ impl HostBindings for RecordingHost {
             .get(&(element, name.to_string()))
             .copied()
             .flatten())
+    }
+
+    fn html_collection_form_elements_named_items(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.html_collection_form_elements_named_item_calls
+            .push((element, name.to_string()));
+        self.html_collection_form_elements_named_items_calls
+            .push((element, name.to_string()));
+        if let Some(result) = self
+            .html_collection_form_elements_named_items_results
+            .get(&(element, name.to_string()))
+        {
+            return Ok(result.clone());
+        }
+
+        Ok(self
+            .html_collection_form_elements_named_item_results
+            .get(&(element, name.to_string()))
+            .copied()
+            .flatten()
+            .into_iter()
+            .collect())
     }
 
     fn html_collection_select_options_items(
@@ -1613,6 +1651,49 @@ fn runtime_resolves_form_elements_access() {
             (ElementHandle::new(1), "first".to_string()),
             (ElementHandle::new(1), "missing".to_string()),
         ]
+    );
+}
+
+#[test]
+fn runtime_resolves_form_elements_radio_node_list_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("signup", ElementHandle::new(1), "Signup");
+    host.seed_element("radio-a", ElementHandle::new(2), "");
+    host.seed_element("radio-b", ElementHandle::new(3), "");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_value(ElementHandle::new(2), "a");
+    host.seed_value(ElementHandle::new(3), "b");
+    host.seed_checked(ElementHandle::new(2), true);
+    host.seed_checked(ElementHandle::new(3), false);
+
+    host.seed_html_collection_form_elements_items(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2), ElementHandle::new(3)],
+    );
+    host.seed_html_collection_form_elements_named_items(
+        ElementHandle::new(1),
+        "mode",
+        vec![ElementHandle::new(2), ElementHandle::new(3)],
+    );
+
+    runtime
+        .eval_program(
+            "const elements = document.getElementById('signup').elements; const named = elements.namedItem('mode'); document.getElementById('out').textContent = String(elements.length) + ':' + String(named.length) + ':' + named.item(0).value + ':' + named.item(1).value + ':' + named.value + ':' + String(named);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("radio node list should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("2:2:a:b:a:[object RadioNodeList]")
+    );
+    assert_eq!(
+        host.html_collection_form_elements_named_items_calls,
+        vec![(ElementHandle::new(1), "mode".to_string())]
     );
 }
 

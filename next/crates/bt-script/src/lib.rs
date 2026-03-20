@@ -75,6 +75,20 @@ pub enum HtmlCollectionTarget {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RadioNodeListTarget {
+    FormElements {
+        element: ElementHandle,
+        name: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HtmlCollectionNamedItem {
+    Element(ElementHandle),
+    RadioNodeList(RadioNodeListTarget),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NodeListTarget {
     Snapshot(Vec<ElementHandle>),
     ByName(String),
@@ -249,6 +263,7 @@ pub enum ScriptValue {
     Dataset(ElementHandle),
     HtmlCollection(HtmlCollectionTarget),
     NodeList(NodeListTarget),
+    RadioNodeList(RadioNodeListTarget),
     CollectionIterator(CollectionIteratorHandle),
     IteratorResult(Box<IteratorResult>),
     Document,
@@ -415,6 +430,14 @@ pub trait HostBindings {
         _element: ElementHandle,
         _name: &str,
     ) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("form.elements"))
+    }
+
+    fn html_collection_form_elements_named_items(
+        &mut self,
+        _element: ElementHandle,
+        _name: &str,
+    ) -> Result<Vec<ElementHandle>> {
         Err(ScriptError::phase_not_ready("form.elements"))
     }
 

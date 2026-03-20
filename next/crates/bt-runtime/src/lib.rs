@@ -1566,6 +1566,15 @@ impl Session {
         form: ElementHandle,
         name: &str,
     ) -> Result<Option<ElementHandle>, ScriptError> {
+        let items = self.form_elements_named_items(form, name)?;
+        Ok(items.first().copied())
+    }
+
+    fn form_elements_named_items(
+        &self,
+        form: ElementHandle,
+        name: &str,
+    ) -> Result<Vec<ElementHandle>, ScriptError> {
         let node_id = self.node_id_for_handle(form)?;
         let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
             return Err(ScriptError::new("invalid element handle"));
@@ -1585,7 +1594,10 @@ impl Session {
             &mut collected,
             &|element: &ElementData| Self::is_form_control_element(element),
         );
-        Ok(self.first_named_item_in_nodes(&collected, name))
+        Ok(self.named_items_in_nodes(&collected, name)
+            .into_iter()
+            .map(Self::node_id_to_handle)
+            .collect())
     }
 
     fn select_options(&self, select: ElementHandle) -> Result<Vec<ElementHandle>, ScriptError> {
@@ -2025,6 +2037,32 @@ impl Session {
         None
     }
 
+    fn named_items_in_nodes(&self, collected: &[NodeId], name: &str) -> Vec<NodeId> {
+        let mut matches = Vec::new();
+        for node_id in collected {
+            let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+                continue;
+            };
+            let NodeKind::Element(element) = &node.kind else {
+                continue;
+            };
+
+            if element
+                .attributes
+                .get("id")
+                .is_some_and(|value| value == name)
+                || element
+                    .attributes
+                    .get("name")
+                    .is_some_and(|value| value == name)
+            {
+                matches.push(*node_id);
+            }
+        }
+
+        matches
+    }
+
     fn is_form_control_element(element: &ElementData) -> bool {
         matches!(
             element.tag_name.as_str(),
@@ -2352,44 +2390,22 @@ impl HostBindings for Session {
         element: ElementHandle,
         name: &str,
     ) -> bt_script::Result<Option<ElementHandle>> {
-        self.form_elements_named_item(element, name)
+        Session::form_elements_named_item(self, element, name)
     }
 
-    fn html_collection_map_areas_items(
-        &mut self,
-        element: ElementHandle,
-    ) -> bt_script::Result<Vec<ElementHandle>> {
-        self.map_areas(element)
-    }
-
-    fn html_collection_map_areas_named_item(
+    fn html_collection_form_elements_named_items(
         &mut self,
         element: ElementHandle,
         name: &str,
-    ) -> bt_script::Result<Option<ElementHandle>> {
-        self.map_areas_named_item(element, name)
-    }
-
-    fn html_collection_table_bodies_items(
-        &mut self,
-        element: ElementHandle,
     ) -> bt_script::Result<Vec<ElementHandle>> {
-        self.table_bodies(element)
-    }
-
-    fn html_collection_table_bodies_named_item(
-        &mut self,
-        element: ElementHandle,
-        name: &str,
-    ) -> bt_script::Result<Option<ElementHandle>> {
-        self.table_bodies_named_item(element, name)
+        Session::form_elements_named_items(self, element, name)
     }
 
     fn html_collection_select_options_items(
         &mut self,
         element: ElementHandle,
     ) -> bt_script::Result<Vec<ElementHandle>> {
-        self.select_options(element)
+        Session::select_options(self, element)
     }
 
     fn html_collection_select_options_named_item(
@@ -2397,14 +2413,14 @@ impl HostBindings for Session {
         element: ElementHandle,
         name: &str,
     ) -> bt_script::Result<Option<ElementHandle>> {
-        self.select_options_named_item(element, name)
+        Session::select_options_named_item(self, element, name)
     }
 
     fn html_collection_select_selected_options_items(
         &mut self,
         element: ElementHandle,
     ) -> bt_script::Result<Vec<ElementHandle>> {
-        self.selected_options(element)
+        Session::selected_options(self, element)
     }
 
     fn html_collection_select_selected_options_named_item(
@@ -2412,47 +2428,79 @@ impl HostBindings for Session {
         element: ElementHandle,
         name: &str,
     ) -> bt_script::Result<Option<ElementHandle>> {
-        self.selected_options_named_item(element, name)
+        Session::selected_options_named_item(self, element, name)
     }
 
     fn html_collection_document_links_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
-        self.document_links()
+        Session::document_links(self)
     }
 
     fn html_collection_document_links_named_item(
         &mut self,
         name: &str,
     ) -> bt_script::Result<Option<ElementHandle>> {
-        self.document_links_named_item(name)
+        Session::document_links_named_item(self, name)
     }
 
     fn html_collection_document_anchors_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
-        self.document_anchors()
+        Session::document_anchors(self)
     }
 
     fn html_collection_document_anchors_named_item(
         &mut self,
         name: &str,
     ) -> bt_script::Result<Option<ElementHandle>> {
-        self.document_anchors_named_item(name)
+        Session::document_anchors_named_item(self, name)
     }
 
-    fn html_collection_document_children_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
-        self.document_children()
+    fn html_collection_document_children_items(
+        &mut self,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        Session::document_children(self)
     }
 
     fn html_collection_document_children_named_item(
         &mut self,
         name: &str,
     ) -> bt_script::Result<Option<ElementHandle>> {
-        self.document_children_named_item(name)
+        Session::document_children_named_item(self, name)
+    }
+
+    fn html_collection_map_areas_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        Session::map_areas(self, element)
+    }
+
+    fn html_collection_map_areas_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        Session::map_areas_named_item(self, element, name)
+    }
+
+    fn html_collection_table_bodies_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        Session::table_bodies(self, element)
+    }
+
+    fn html_collection_table_bodies_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        Session::table_bodies_named_item(self, element, name)
     }
 
     fn html_collection_table_rows_items(
         &mut self,
         element: ElementHandle,
     ) -> bt_script::Result<Vec<ElementHandle>> {
-        self.table_rows(element)
+        Session::table_rows(self, element)
     }
 
     fn html_collection_table_rows_named_item(
@@ -2460,14 +2508,14 @@ impl HostBindings for Session {
         element: ElementHandle,
         name: &str,
     ) -> bt_script::Result<Option<ElementHandle>> {
-        self.table_rows_named_item(element, name)
+        Session::table_rows_named_item(self, element, name)
     }
 
     fn html_collection_row_cells_items(
         &mut self,
         element: ElementHandle,
     ) -> bt_script::Result<Vec<ElementHandle>> {
-        self.row_cells(element)
+        Session::row_cells(self, element)
     }
 
     fn html_collection_row_cells_named_item(
@@ -2475,9 +2523,11 @@ impl HostBindings for Session {
         element: ElementHandle,
         name: &str,
     ) -> bt_script::Result<Option<ElementHandle>> {
-        self.row_cells_named_item(element, name)
+        Session::row_cells_named_item(self, element, name)
     }
+}
 
+impl HostBindings for Session {
     fn element_text_content(&mut self, element: ElementHandle) -> bt_script::Result<String> {
         let node_id = self.node_id_for_handle(element)?;
         let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {

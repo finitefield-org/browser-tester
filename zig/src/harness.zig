@@ -389,9 +389,9 @@ test "regression: inline scripts execute against the copied html snapshot" {
     try std.testing.expectEqualStrings("<main id='out'>Before</main><script>document.getElementById('out').textContent = 'Hello';</script>", subject.html().?);
 }
 
-test "regression: phase 3 actions operate on the copied html snapshot" {
+test "regression: phase 3 actions resolve expanded selectors on the copied html snapshot" {
     const allocator = std.testing.allocator;
-    const original = "<input id='agree' type='checkbox'><div id='out'></div><script>document.getElementById('agree').addEventListener('change', () => { document.getElementById('out').textContent = String(document.getElementById('agree').checked); });</script>";
+    const original = "<main id='root'><input id='agree' type='checkbox'></main><div id='out'></div><script>document.getElementById('agree').addEventListener('change', () => { document.getElementById('out').textContent = String(document.getElementById('agree').checked); });</script>";
     var html_bytes = try allocator.dupe(u8, original);
     defer allocator.free(html_bytes);
 
@@ -400,8 +400,8 @@ test "regression: phase 3 actions operate on the copied html snapshot" {
 
     html_bytes[1] = 'Z';
 
-    try subject.click("#agree");
-    try subject.assertChecked("#agree", true);
+    try subject.click("main > #agree");
+    try subject.assertChecked("main > #agree", true);
     try subject.assertValue("#out", "true");
     try std.testing.expectEqualStrings(original, subject.html().?);
 }

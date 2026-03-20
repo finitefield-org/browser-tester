@@ -300,6 +300,17 @@ fn fieldset_elements_and_datalist_options_are_live_end_to_end() -> browser_teste
 }
 
 #[test]
+fn radio_node_list_is_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><form id='signup'><input type='radio' name='mode' id='mode-a' value='a' checked><input type='radio' name='mode' id='mode-b' value='b'></form><div id='out'></div><script>const elements = document.getElementById('signup').elements; const named = elements.namedItem('mode'); const before = named.length; document.getElementById('signup').innerHTML += '<input type=\"radio\" name=\"mode\" id=\"mode-c\" value=\"c\" checked>'; document.getElementById('out').textContent = String(before) + ':' + String(named.length) + ':' + named.item(0).value + ':' + named.item(1).value + ':' + named.value + ':' + String(named);</script></main>",
+    )?;
+
+    harness.assert_text("#out", "2:3:a:b:c:[object RadioNodeList]")?;
+    harness.assert_exists("#mode-c")?;
+    Ok(())
+}
+
+#[test]
 fn labels_reject_non_labelable_elements_end_to_end() -> browser_tester_next::Result<()> {
     let error = Harness::from_html(
         "<div id='wrapper'><div id='not-labelable'></div></div><script>document.getElementById('not-labelable').labels.length;</script>",

@@ -224,6 +224,23 @@ test "contract: Harness.assertExists and Harness.dumpDom expose read-only DOM in
     );
 }
 
+test "contract: Harness.assertExists resolves class selectors and combinators" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='app' class='shell'><section class='panel'><button id='save' class='primary'>Save</button></section><section class='panel'><button id='cancel' class='secondary'>Cancel</button></section></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertExists(".shell");
+    try subject.assertExists("main.shell");
+    try subject.assertExists("#app.shell");
+    try subject.assertExists("main section.panel");
+    try subject.assertExists("main > section.panel");
+    try subject.assertExists("main section.panel > button.primary");
+    try subject.assertExists("main > section.panel > button.secondary");
+}
+
 test "contract: Harness.fromHtml runs inline scripts during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -268,7 +285,7 @@ test "failure: Harness.assertExists rejects malformed selectors" {
     var subject = try Harness.fromHtml(allocator, "<main id='app'><span>Hello</span></main>");
     defer subject.deinit();
 
-    try std.testing.expectError(error.InvalidSelector, subject.assertExists("main > span"));
+    try std.testing.expectError(error.InvalidSelector, subject.assertExists("main + span"));
     try std.testing.expectError(error.InvalidSelector, subject.assertExists("[data-state"));
 }
 
@@ -284,11 +301,11 @@ test "contract: Harness.typeText updates value and dispatches input listeners" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
         allocator,
-        "<input id='name'><div id='out'></div><script>document.getElementById('name').addEventListener('input', () => { document.getElementById('out').textContent = document.getElementById('name').value; });</script>",
+        "<input id='name' class='field'><div id='out'></div><script>document.getElementById('name').addEventListener('input', () => { document.getElementById('out').textContent = document.getElementById('name').value; });</script>",
     );
     defer subject.deinit();
 
-    try subject.typeText("#name", "Alice");
+    try subject.typeText("input.field", "Alice");
     try subject.assertValue("#name", "Alice");
     try subject.assertValue("#out", "Alice");
 }
@@ -301,7 +318,7 @@ test "contract: Harness.click dispatches capture and bubble listeners in order" 
     );
     defer subject.deinit();
 
-    try subject.click("#child");
+    try subject.click("#parent > #child");
     try subject.assertValue(
         "#out",
         "window-capture:document-capture:parent-capture:target:parent-bubble:document-bubble:window-bubble",

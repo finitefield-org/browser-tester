@@ -65,6 +65,7 @@ zig/
 It owns the copied configuration state, the internal DOM store, the internal script runtime state, the event listener registry, the focused-node snapshot, the fake clock state, and the mock registry.
 
 `Harness` now exposes `assertExists()`, `assertValue()`, `assertChecked()`, and `dumpDom()` for read-only inspection, plus `nowMs()`, `advanceTime()`, `flush()`, `mocksMut()`, `fetch()`, `alert()`, `confirm()`, `prompt()`, `readClipboard()`, `writeClipboard()`, `captureDownload()`, `navigate()`, and `setFiles()` for deterministic runtime control, and `click()`, `typeText()`, `setChecked()`, `setSelectValue()`, `focus()`, `blur()`, `submit()`, and `dispatch()` for user-like actions.
+`assertExists()` and the action methods resolve through the shared DOM selector engine, which now covers class selectors, compound simple selectors, descendant combinators, and child combinators.
 
 ## High-Level Shape
 
@@ -147,6 +148,8 @@ The deterministic clock helpers and mock registry slice are implemented in this 
 - descendant and child combinators
 - selector hardening
 
+The selector expansion slice is implemented in this workspace now.
+
 ### Phase 7
 
 - script DOM query expansion
@@ -162,4 +165,4 @@ The deterministic clock helpers and mock registry slice are implemented in this 
 
 ## Current Status
 
-Phase 0, Phase 1, Phase 2, Phase 3, and Phase 4 are delivered in this workspace.
+Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, and Phase 6 are delivered in this workspace.

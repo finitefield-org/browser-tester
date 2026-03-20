@@ -40,6 +40,11 @@ const SelectorAttributeCaseSensitivity = enum {
     case_insensitive,
 };
 
+const SelectorCombinator = enum {
+    descendant,
+    child,
+};
+
 const SelectorAttributeOperator = enum {
     exists,
     equals,
@@ -60,10 +65,25 @@ const SelectorAttribute = struct {
 const SelectorQuery = struct {
     tag: ?[]const u8 = null,
     id: ?[]const u8 = null,
+    classes: std.ArrayListUnmanaged([]const u8) = .{},
     attributes: std.ArrayListUnmanaged(SelectorAttribute) = .{},
 
     fn deinit(self: *SelectorQuery, allocator: std.mem.Allocator) void {
+        self.classes.deinit(allocator);
         self.attributes.deinit(allocator);
+    }
+};
+
+const SelectorChain = struct {
+    parts: std.ArrayListUnmanaged(SelectorQuery) = .{},
+    relations: std.ArrayListUnmanaged(SelectorCombinator) = .{},
+
+    fn deinit(self: *SelectorChain, allocator: std.mem.Allocator) void {
+        for (self.parts.items) |*part| {
+            part.deinit(allocator);
+        }
+        self.parts.deinit(allocator);
+        self.relations.deinit(allocator);
     }
 };
 
@@ -149,29 +169,21 @@ pub const DomStore = struct {
         const trimmed = std.mem.trim(u8, selector, " \t\r\n");
         if (trimmed.len == 0) return error.HtmlParse;
 
-        var queries: std.ArrayList(SelectorQuery) = .empty;
-        errdefer {
-            for (queries.items) |*query| {
-                query.deinit(allocator);
+        var chains: std.ArrayList(SelectorChain) = .empty;
+        defer {
+            for (chains.items) |*chain| {
+                chain.deinit(allocator);
             }
-            queries.deinit(allocator);
+            chains.deinit(allocator);
         }
 
-        try appendSelectorQueries(allocator, trimmed, &queries);
-        if (queries.items.len == 0) return error.HtmlParse;
+        try appendSelectorChains(allocator, trimmed, &chains);
+        if (chains.items.len == 0) return error.HtmlParse;
 
         var results: std.ArrayList(NodeId) = .empty;
         errdefer results.deinit(allocator);
 
-        for (self.nodes.items) |node| {
-            if (!nodeMatchesAnyQuery(node, queries.items)) continue;
-            try results.append(allocator, node.id);
-        }
-
-        for (queries.items) |*query| {
-            query.deinit(allocator);
-        }
-        queries.deinit(allocator);
+        try collectSelectorMatches(self, self.documentId(), chains.items, &results, allocator);
 
         const owned = try allocator.dupe(NodeId, results.items);
         results.deinit(allocator);
@@ -952,6 +964,10 @@ fn isSelectorTokenByte(byte: u8) bool {
     return std.ascii.isAlphanumeric(byte) or byte == '-' or byte == '_';
 }
 
+fn isSelectorCombinatorByte(byte: u8) bool {
+    return byte == '>' or byte == '+' or byte == '~' or byte == ',';
+}
+
 fn isVoidElement(tag_name: []const u8) bool {
     return std.mem.eql(u8, tag_name, "area") or std.mem.eql(u8, tag_name, "base") or std.mem.eql(u8, tag_name, "br") or std.mem.eql(u8, tag_name, "col") or std.mem.eql(u8, tag_name, "embed") or std.mem.eql(u8, tag_name, "hr") or std.mem.eql(u8, tag_name, "img") or std.mem.eql(u8, tag_name, "input") or std.mem.eql(u8, tag_name, "link") or std.mem.eql(u8, tag_name, "meta") or std.mem.eql(u8, tag_name, "param") or std.mem.eql(u8, tag_name, "source") or std.mem.eql(u8, tag_name, "track") or std.mem.eql(u8, tag_name, "wbr");
 }
@@ -1022,10 +1038,10 @@ fn writeEscapedAttr(
     }
 }
 
-fn appendSelectorQueries(
+fn appendSelectorChains(
     allocator: std.mem.Allocator,
     selector: []const u8,
-    queries: *std.ArrayList(SelectorQuery),
+    chains: *std.ArrayList(SelectorChain),
 ) errors.Result(void) {
     var start: usize = 0;
     var bracket_depth: usize = 0;
@@ -1052,7 +1068,7 @@ fn appendSelectorQueries(
                 if (bracket_depth != 0) continue;
                 const item = std.mem.trim(u8, selector[start..index], " \t\r\n");
                 if (item.len == 0) return error.HtmlParse;
-                try appendSelectorQuery(allocator, queries, item);
+                try appendSelectorChain(allocator, chains, item);
                 start = index + 1;
             },
             else => {},
@@ -1063,48 +1079,91 @@ fn appendSelectorQueries(
 
     const item = std.mem.trim(u8, selector[start..], " \t\r\n");
     if (item.len == 0) return error.HtmlParse;
-    try appendSelectorQuery(allocator, queries, item);
+    try appendSelectorChain(allocator, chains, item);
 }
 
-fn appendSelectorQuery(
+fn appendSelectorChain(
     allocator: std.mem.Allocator,
-    queries: *std.ArrayList(SelectorQuery),
+    chains: *std.ArrayList(SelectorChain),
     selector: []const u8,
 ) errors.Result(void) {
-    var query = try parseSelectorQuery(allocator, selector);
-    errdefer query.deinit(allocator);
-    try queries.append(allocator, query);
+    var chain = try parseSelectorChain(allocator, selector);
+    errdefer chain.deinit(allocator);
+    try chains.append(allocator, chain);
 }
 
-fn parseSelectorQuery(
+fn parseSelectorChain(
     allocator: std.mem.Allocator,
     selector: []const u8,
+) errors.Result(SelectorChain) {
+    var chain: SelectorChain = .{};
+    errdefer chain.deinit(allocator);
+
+    var pos: usize = 0;
+    try chain.parts.append(allocator, try parseSelectorCompound(allocator, selector, &pos));
+
+    while (pos < selector.len) {
+        const had_whitespace = skipSelectorWhitespace(selector, &pos);
+        if (pos >= selector.len) break;
+
+        const relation = switch (selector[pos]) {
+            '>' => blk: {
+                pos += 1;
+                break :blk SelectorCombinator.child;
+            },
+            '+' => return error.HtmlParse,
+            '~' => return error.HtmlParse,
+            ',' => return error.HtmlParse,
+            else => blk: {
+                if (!had_whitespace) return error.HtmlParse;
+                break :blk SelectorCombinator.descendant;
+            },
+        };
+
+        _ = skipSelectorWhitespace(selector, &pos);
+        if (pos >= selector.len) return error.HtmlParse;
+
+        try chain.relations.append(allocator, relation);
+        try chain.parts.append(allocator, try parseSelectorCompound(allocator, selector, &pos));
+    }
+
+    return chain;
+}
+
+fn parseSelectorCompound(
+    allocator: std.mem.Allocator,
+    selector: []const u8,
+    pos: *usize,
 ) errors.Result(SelectorQuery) {
     var query: SelectorQuery = .{};
     errdefer query.deinit(allocator);
 
-    var pos: usize = 0;
     var saw_token = false;
-
-    while (pos < selector.len) {
-        const byte = selector[pos];
-        if (isHtmlWhitespace(byte)) return error.HtmlParse;
+    while (pos.* < selector.len) {
+        const byte = selector[pos.*];
+        if (isHtmlWhitespace(byte) or isSelectorCombinatorByte(byte)) break;
 
         switch (byte) {
             '#' => {
-                pos += 1;
-                const token = try parseSelectorToken(selector, &pos);
+                pos.* += 1;
+                const token = try parseSelectorToken(selector, pos);
                 if (query.id != null) return error.HtmlParse;
                 query.id = token;
                 saw_token = true;
             },
+            '.' => {
+                pos.* += 1;
+                const token = try parseSelectorToken(selector, pos);
+                try query.classes.append(allocator, token);
+                saw_token = true;
+            },
             '[' => {
-                try parseSelectorAttribute(allocator, selector, &pos, &query);
+                try parseSelectorAttribute(allocator, selector, pos, &query);
                 saw_token = true;
             },
             else => {
                 if (!isSelectorTokenByte(byte)) return error.HtmlParse;
-                const token = try parseSelectorToken(selector, &pos);
+                const token = try parseSelectorToken(selector, pos);
                 if (query.tag != null) return error.HtmlParse;
                 query.tag = token;
                 saw_token = true;
@@ -1135,10 +1194,10 @@ fn parseSelectorAttribute(
 ) errors.Result(void) {
     if (selector[pos.*] != '[') return error.HtmlParse;
     pos.* += 1;
-    skipSelectorWhitespace(selector, pos);
+    _ = skipSelectorWhitespace(selector, pos);
 
     const name = try parseSelectorToken(selector, pos);
-    skipSelectorWhitespace(selector, pos);
+    _ = skipSelectorWhitespace(selector, pos);
 
     var operator: SelectorAttributeOperator = .exists;
     var value: ?[]const u8 = null;
@@ -1146,9 +1205,9 @@ fn parseSelectorAttribute(
 
     if (pos.* < selector.len and selector[pos.*] != ']') {
         operator = try parseSelectorAttributeOperator(selector, pos);
-        skipSelectorWhitespace(selector, pos);
+        _ = skipSelectorWhitespace(selector, pos);
         value = try parseSelectorAttributeValue(selector, pos);
-        skipSelectorWhitespace(selector, pos);
+        _ = skipSelectorWhitespace(selector, pos);
 
         if (pos.* < selector.len and (selector[pos.*] == 'i' or selector[pos.*] == 's')) {
             case_sensitivity = if (selector[pos.*] == 'i')
@@ -1156,7 +1215,7 @@ fn parseSelectorAttribute(
             else
                 .case_sensitive;
             pos.* += 1;
-            skipSelectorWhitespace(selector, pos);
+            _ = skipSelectorWhitespace(selector, pos);
         }
     }
 
@@ -1241,20 +1300,85 @@ fn parseSelectorAttributeValue(
     return selector[start..pos.*];
 }
 
-fn skipSelectorWhitespace(selector: []const u8, pos: *usize) void {
+fn skipSelectorWhitespace(selector: []const u8, pos: *usize) bool {
+    const start = pos.*;
     while (pos.* < selector.len and isHtmlWhitespace(selector[pos.*])) {
         pos.* += 1;
     }
+
+    return pos.* != start;
 }
 
-fn nodeMatchesAnyQuery(node: NodeRecord, queries: []const SelectorQuery) bool {
-    for (queries) |query| {
-        if (nodeMatchesQuery(node, query)) return true;
+fn parentOf(self: *const DomStore, node_id: NodeId) ?NodeId {
+    const node = self.nodeAt(node_id) orelse return null;
+    return node.parent;
+}
+
+fn collectSelectorMatches(
+    self: *const DomStore,
+    node_id: NodeId,
+    chains: []const SelectorChain,
+    results: *std.ArrayList(NodeId),
+    allocator: std.mem.Allocator,
+) errors.Result(void) {
+    const node = self.nodeAt(node_id) orelse return error.HtmlParse;
+    switch (node.kind) {
+        .element => {
+            if (nodeMatchesAnyChain(self, node_id, chains)) {
+                try results.append(allocator, node_id);
+            }
+        },
+        else => {},
+    }
+
+    for (node.children.items) |child_id| {
+        try collectSelectorMatches(self, child_id, chains, results, allocator);
+    }
+}
+
+fn nodeMatchesAnyChain(self: *const DomStore, node_id: NodeId, chains: []const SelectorChain) bool {
+    for (chains) |chain| {
+        if (nodeMatchesSelectorChain(self, node_id, &chain)) return true;
     }
     return false;
 }
 
-fn nodeMatchesQuery(node: NodeRecord, query: SelectorQuery) bool {
+fn nodeMatchesSelectorChain(self: *const DomStore, node_id: NodeId, chain: *const SelectorChain) bool {
+    if (chain.parts.items.len == 0) return false;
+    const last_index = chain.parts.items.len - 1;
+    return nodeMatchesSelectorChainPart(self, node_id, chain.parts.items, chain.relations.items, last_index);
+}
+
+fn nodeMatchesSelectorChainPart(
+    self: *const DomStore,
+    node_id: NodeId,
+    parts: []const SelectorQuery,
+    relations: []const SelectorCombinator,
+    index: usize,
+) bool {
+    if (!nodeMatchesSelectorQuery(self, node_id, parts[index])) return false;
+    if (index == 0) return true;
+
+    return switch (relations[index - 1]) {
+        .child => blk: {
+            const parent_id = parentOf(self, node_id) orelse break :blk false;
+            break :blk nodeMatchesSelectorChainPart(self, parent_id, parts, relations, index - 1);
+        },
+        .descendant => blk: {
+            var ancestor = parentOf(self, node_id);
+            while (ancestor) |ancestor_id| {
+                if (nodeMatchesSelectorChainPart(self, ancestor_id, parts, relations, index - 1)) {
+                    break :blk true;
+                }
+                ancestor = parentOf(self, ancestor_id);
+            }
+            break :blk false;
+        },
+    };
+}
+
+fn nodeMatchesSelectorQuery(self: *const DomStore, node_id: NodeId, query: SelectorQuery) bool {
+    const node = self.nodeAt(node_id) orelse return false;
     const element = switch (node.kind) {
         .element => |element| element,
         else => return false,
@@ -1267,6 +1391,10 @@ fn nodeMatchesQuery(node: NodeRecord, query: SelectorQuery) bool {
     if (query.id) |id| {
         const actual_id = elementAttributeValue(element, "id") orelse return false;
         if (!std.mem.eql(u8, actual_id, id)) return false;
+    }
+
+    for (query.classes.items) |class_name| {
+        if (!elementHasClass(element, class_name)) return false;
     }
 
     for (query.attributes.items) |attribute| {
@@ -1308,6 +1436,15 @@ fn elementAttributeValue(element: ElementData, name: []const u8) ?[]const u8 {
         }
     }
     return null;
+}
+
+fn elementHasClass(element: ElementData, class_name: []const u8) bool {
+    const classes = elementAttributeValue(element, "class") orelse return false;
+    var iter = std.mem.tokenizeAny(u8, classes, " \t\r\n\x0c");
+    while (iter.next()) |candidate| {
+        if (std.mem.eql(u8, candidate, class_name)) return true;
+    }
+    return false;
 }
 
 fn textMatchesByOperator(
@@ -1478,6 +1615,44 @@ test "phase one: selector subset matches ids, tags, and attributes" {
     try std.testing.expectEqual(NodeId.new(4, 0), by_list[1]);
 }
 
+test "phase six: selector expansion matches classes and combinators" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml(
+        "<main id='app' class='shell'><section class='panel'><button id='save' class='primary action'>Save</button></section><section class='panel'><button id='cancel' class='secondary action'>Cancel</button></section></main>",
+    );
+
+    const by_class = try store.select(allocator, ".primary");
+    defer allocator.free(by_class);
+    try std.testing.expectEqual(@as(usize, 1), by_class.len);
+    try std.testing.expectEqual(NodeId.new(3, 0), by_class[0]);
+
+    const by_tag_class = try store.select(allocator, "button.action");
+    defer allocator.free(by_tag_class);
+    try std.testing.expectEqual(@as(usize, 2), by_tag_class.len);
+    try std.testing.expectEqual(NodeId.new(3, 0), by_tag_class[0]);
+    try std.testing.expectEqual(NodeId.new(6, 0), by_tag_class[1]);
+
+    const by_compound = try store.select(allocator, "#cancel.secondary.action");
+    defer allocator.free(by_compound);
+    try std.testing.expectEqual(@as(usize, 1), by_compound.len);
+    try std.testing.expectEqual(NodeId.new(6, 0), by_compound[0]);
+
+    const by_descendant = try store.select(allocator, "main .action");
+    defer allocator.free(by_descendant);
+    try std.testing.expectEqual(@as(usize, 2), by_descendant.len);
+    try std.testing.expectEqual(NodeId.new(3, 0), by_descendant[0]);
+    try std.testing.expectEqual(NodeId.new(6, 0), by_descendant[1]);
+
+    const by_child = try store.select(allocator, "main > section.panel > button.action");
+    defer allocator.free(by_child);
+    try std.testing.expectEqual(@as(usize, 2), by_child.len);
+    try std.testing.expectEqual(NodeId.new(3, 0), by_child[0]);
+    try std.testing.expectEqual(NodeId.new(6, 0), by_child[1]);
+}
+
 test "phase one: unsupported selector syntax is rejected explicitly" {
     const allocator = std.testing.allocator;
     var store = try DomStore.init(allocator);
@@ -1485,7 +1660,7 @@ test "phase one: unsupported selector syntax is rejected explicitly" {
 
     try store.bootstrapHtml("<main id='app'><span>Hello</span></main>");
 
-    try std.testing.expectError(error.HtmlParse, store.select(allocator, "main > span"));
+    try std.testing.expectError(error.HtmlParse, store.select(allocator, "main + span"));
     try std.testing.expectError(error.HtmlParse, store.select(allocator, "[data-state"));
     try std.testing.expectError(error.HtmlParse, store.select(allocator, ""));
 }

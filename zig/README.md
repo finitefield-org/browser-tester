@@ -5,15 +5,15 @@ The rewrite follows [`next.md`](../next.md) and keeps the public surface small w
 
 Current state:
 
-- phase 0 scaffold plus the internal phase 1 DOM bootstrap and selector slices, the phase 2 script runtime minimum slice, the phase 3 event/default-action and form-control slice, and the phase 4 deterministic mock and fake-clock slice
+- phase 0 scaffold plus the internal phase 1 DOM bootstrap slice, the phase 2 script runtime minimum slice, the phase 3 event/default-action and form-control slice, the phase 4 deterministic mock and fake-clock slice, and the phase 6 selector expansion slice
 - `Harness.assertExists(...)`, `Harness.assertValue(...)`, `Harness.assertChecked(...)`, and `Harness.dumpDom(...)` are available for inspection
 - `Harness.nowMs(...)`, `Harness.advanceTime(...)`, `Harness.flush(...)`, `Harness.mocksMut(...)`, `Harness.fetch(...)`, `Harness.alert(...)`, `Harness.confirm(...)`, `Harness.prompt(...)`, `Harness.readClipboard(...)`, `Harness.writeClipboard(...)`, `Harness.captureDownload(...)`, `Harness.navigate(...)`, and `Harness.setFiles(...)` are available for deterministic runtime and mock control
 - `Harness.click(...)`, `Harness.typeText(...)`, `Harness.setChecked(...)`, `Harness.setSelectValue(...)`, `Harness.focus(...)`, `Harness.blur(...)`, `Harness.submit(...)`, and `Harness.dispatch(...)` are available for user-like actions
 - inline `<script>` bootstrapping runs during `Harness.fromHtml(...)` construction for the `document.getElementById(...).textContent = ...` slice
 - `Harness` and `HarnessBuilder` are available
 - `Session` stays internal and owns the copied configuration state plus the DOM store, script runtime state, event listener registry, focus state, fake clock state, and mock registry
-- `DomStore` builds, selects, and dumps HTML trees for tests, but it is not part of the public API
-- deterministic selector expansion, event hardening, and later script expansion pieces are still planned
+- `DomStore` builds, selects, and dumps HTML trees for tests, including class selectors and descendant/child combinators, but it is not part of the public API
+- event hardening and later script expansion pieces are still planned
 
 ## Quick Start
 

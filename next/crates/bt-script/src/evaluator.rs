@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 
 use crate::syntax::{AssignTarget, Expr, Program, Statement};
 use crate::{
-    CollectionIteratorHandle, HostBindings, HtmlCollectionScope, HtmlCollectionTarget,
-    ListenerTarget, NodeListTarget, Result, ScriptError, ScriptValue as Value,
+    CollectionIteratorHandle, HostBindings, HtmlCollectionNamedItem, HtmlCollectionScope,
+    HtmlCollectionTarget, ListenerTarget, NodeListTarget, RadioNodeListTarget, Result, ScriptError,
+    ScriptValue as Value,
 };
 
 pub(crate) fn eval_program<H: HostBindings>(program: &Program, host: &mut H) -> Result<()> {
@@ -40,6 +41,7 @@ fn as_string(value: &Value) -> String {
         Value::Dataset(_) => "[object DOMStringMap]".to_string(),
         Value::HtmlCollection(_) => "[object HTMLCollection]".to_string(),
         Value::NodeList(_) => "[object NodeList]".to_string(),
+        Value::RadioNodeList(_) => "[object RadioNodeList]".to_string(),
         Value::CollectionIterator(_) => "[object Iterator]".to_string(),
         Value::IteratorResult(_) => "[object IteratorResult]".to_string(),
         Value::Document => "[object Document]".to_string(),
@@ -119,6 +121,9 @@ fn eval_assignment<H: HostBindings>(
                 ))),
                 (Value::NodeList(_), property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on node list value"
+                ))),
+                (Value::RadioNodeList(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on radio node list value"
                 ))),
                 (Value::HtmlCollection(_), property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on html collection value"
@@ -336,6 +341,13 @@ fn eval_member<H: HostBindings>(
             let length = node_list_items(&target, host)?.len();
             Ok(Value::Number(length as f64))
         }
+        Value::RadioNodeList(target) if property == "length" => {
+            let length = radio_node_list_items(&target, host)?.len();
+            Ok(Value::Number(length as f64))
+        }
+        Value::RadioNodeList(target) if property == "value" => {
+            Ok(Value::String(radio_node_list_value(&target, host)?))
+        }
         Value::Element(_) => Err(unsupported_member_access(property, "element")),
         Value::ClassList(_) => Err(unsupported_member_access(property, "class list")),
         Value::Dataset(element) => {
@@ -356,6 +368,7 @@ fn eval_member<H: HostBindings>(
         Value::Event(_) => Err(unsupported_member_access(property, "event")),
         Value::HtmlCollection(_) => Err(unsupported_member_access(property, "html collection")),
         Value::NodeList(_) => Err(unsupported_member_access(property, "node list")),
+        Value::RadioNodeList(_) => Err(unsupported_member_access(property, "radio node list")),
         Value::CollectionIterator(_) => Err(unsupported_member_access(property, "iterator")),
         Value::IteratorResult(_) => Err(unsupported_member_access(property, "iterator result")),
         Value::Function(_) => Err(unsupported_member_access(property, "function")),
@@ -534,6 +547,15 @@ fn eval_method_call<H: HostBindings>(
             "values" => node_list_values(&target, host),
             other => Err(ScriptError::new(format!(
                 "unsupported NodeList method: {other}"
+            ))),
+        },
+        Value::RadioNodeList(target) => match method {
+            "item" => radio_node_list_item(&target, args, env, host),
+            "forEach" => radio_node_list_for_each(&target, args, env, host),
+            "keys" => radio_node_list_keys(&target, host),
+            "values" => radio_node_list_values(&target, host),
+            other => Err(ScriptError::new(format!(
+                "unsupported RadioNodeList method: {other}"
             ))),
         },
         Value::CollectionIterator(iterator) => match method {
@@ -1068,9 +1090,11 @@ fn html_collection_named_item<H: HostBindings>(
     };
 
     let name = as_string(&eval_expr(name_expr, env, host)?);
-    let match_handle = html_collection_named_item_handle(collection, &name, host)?;
-
-    Ok(match_handle.map(Value::Element).unwrap_or(Value::Null))
+    Ok(match html_collection_named_item_handle(collection, &name, host)? {
+        Some(HtmlCollectionNamedItem::Element(handle)) => Value::Element(handle),
+        Some(HtmlCollectionNamedItem::RadioNodeList(target)) => Value::RadioNodeList(target),
+        None => Value::Null,
+    })
 }
 
 fn html_collection_for_each<H: HostBindings>(
@@ -1168,45 +1192,70 @@ fn html_collection_named_item_handle<H: HostBindings>(
     collection: &HtmlCollectionTarget,
     name: &str,
     host: &mut H,
-) -> Result<Option<crate::ElementHandle>> {
+) -> Result<Option<HtmlCollectionNamedItem>> {
     match collection {
-        HtmlCollectionTarget::Children(element) => host.html_collection_named_item(*element, name),
+        HtmlCollectionTarget::Children(element) => host
+            .html_collection_named_item(*element, name)
+            .map(|value| value.map(HtmlCollectionNamedItem::Element)),
         HtmlCollectionTarget::ByTagName { .. } => {
             host.html_collection_tag_name_named_item(collection.clone(), name)
+                .map(|value| value.map(HtmlCollectionNamedItem::Element))
         }
         HtmlCollectionTarget::ByTagNameNs { .. } => {
             host.html_collection_tag_name_ns_named_item(collection.clone(), name)
+                .map(|value| value.map(HtmlCollectionNamedItem::Element))
         }
         HtmlCollectionTarget::ByClassName { .. } => {
             host.html_collection_class_name_named_item(collection.clone(), name)
+                .map(|value| value.map(HtmlCollectionNamedItem::Element))
         }
         HtmlCollectionTarget::FormElements(element) => {
-            host.html_collection_form_elements_named_item(*element, name)
+            let items = host.html_collection_form_elements_named_items(*element, name)?;
+            Ok(match items.len() {
+                0 => None,
+                1 => Some(HtmlCollectionNamedItem::Element(items[0])),
+                _ => Some(HtmlCollectionNamedItem::RadioNodeList(
+                    RadioNodeListTarget::FormElements {
+                        element: *element,
+                        name: name.to_string(),
+                    },
+                )),
+            })
         }
         HtmlCollectionTarget::SelectOptions(element) => {
             host.html_collection_select_options_named_item(*element, name)
+                .map(|value| value.map(HtmlCollectionNamedItem::Element))
         }
         HtmlCollectionTarget::SelectSelectedOptions(element) => {
             host.html_collection_select_selected_options_named_item(*element, name)
+                .map(|value| value.map(HtmlCollectionNamedItem::Element))
         }
-        HtmlCollectionTarget::DocumentLinks => host.html_collection_document_links_named_item(name),
+        HtmlCollectionTarget::DocumentLinks => host
+            .html_collection_document_links_named_item(name)
+            .map(|value| value.map(HtmlCollectionNamedItem::Element)),
         HtmlCollectionTarget::DocumentAnchors => {
             host.html_collection_document_anchors_named_item(name)
+                .map(|value| value.map(HtmlCollectionNamedItem::Element))
         }
         HtmlCollectionTarget::DocumentChildren => {
             host.html_collection_document_children_named_item(name)
+                .map(|value| value.map(HtmlCollectionNamedItem::Element))
         }
         HtmlCollectionTarget::MapAreas(element) => {
             host.html_collection_map_areas_named_item(*element, name)
+                .map(|value| value.map(HtmlCollectionNamedItem::Element))
         }
         HtmlCollectionTarget::TableTBodies(element) => {
             host.html_collection_table_bodies_named_item(*element, name)
+                .map(|value| value.map(HtmlCollectionNamedItem::Element))
         }
         HtmlCollectionTarget::TableRows(element) => {
             host.html_collection_table_rows_named_item(*element, name)
+                .map(|value| value.map(HtmlCollectionNamedItem::Element))
         }
         HtmlCollectionTarget::RowCells(element) => {
             host.html_collection_row_cells_named_item(*element, name)
+                .map(|value| value.map(HtmlCollectionNamedItem::Element))
         }
     }
 }
@@ -1244,6 +1293,39 @@ fn node_list_for_each<H: HostBindings>(
     for_each_over_items(&callback, items, collection_value, env, host)
 }
 
+fn radio_node_list_for_each<H: HostBindings>(
+    target: &RadioNodeListTarget,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let (callback_expr, this_arg_expr) = match args {
+        [callback_expr] => (callback_expr, None),
+        [callback_expr, this_arg_expr] => (callback_expr, Some(this_arg_expr)),
+        _ => {
+            return Err(ScriptError::new(
+                "RadioNodeList.forEach() expects one or two arguments",
+            ));
+        }
+    };
+
+    let callback = match eval_expr(callback_expr, env, host)? {
+        Value::Function(function) => function,
+        _ => {
+            return Err(ScriptError::new(
+                "RadioNodeList.forEach() requires an arrow function callback",
+            ));
+        }
+    };
+    if let Some(this_arg_expr) = this_arg_expr {
+        let _ = eval_expr(this_arg_expr, env, host)?;
+    }
+
+    let items = radio_node_list_items(target, host)?;
+    let collection_value = Value::RadioNodeList(target.clone());
+    for_each_over_items(&callback, items, collection_value, env, host)
+}
+
 fn node_list_keys<H: HostBindings>(target: &NodeListTarget, host: &mut H) -> Result<Value> {
     let items = node_list_items(target, host)?;
     Ok(collection_iterator(
@@ -1260,6 +1342,28 @@ fn node_list_values<H: HostBindings>(target: &NodeListTarget, host: &mut H) -> R
     ))
 }
 
+fn radio_node_list_keys<H: HostBindings>(
+    target: &RadioNodeListTarget,
+    host: &mut H,
+) -> Result<Value> {
+    let items = radio_node_list_items(target, host)?;
+    Ok(collection_iterator(
+        (0..items.len())
+            .map(|index| Value::Number(index as f64))
+            .collect(),
+    ))
+}
+
+fn radio_node_list_values<H: HostBindings>(
+    target: &RadioNodeListTarget,
+    host: &mut H,
+) -> Result<Value> {
+    let items = radio_node_list_items(target, host)?;
+    Ok(collection_iterator(
+        items.into_iter().map(Value::Element).collect(),
+    ))
+}
+
 fn node_list_items<H: HostBindings>(
     target: &NodeListTarget,
     host: &mut H,
@@ -1269,6 +1373,32 @@ fn node_list_items<H: HostBindings>(
         NodeListTarget::ByName(name) => host.document_get_elements_by_name(name),
         NodeListTarget::Labels(element) => host.element_labels(*element),
     }
+}
+
+fn radio_node_list_items<H: HostBindings>(
+    target: &RadioNodeListTarget,
+    host: &mut H,
+) -> Result<Vec<crate::ElementHandle>> {
+    match target {
+        RadioNodeListTarget::FormElements { element, name } => {
+            host.html_collection_form_elements_named_items(*element, name)
+        }
+    }
+}
+
+fn radio_node_list_value<H: HostBindings>(
+    target: &RadioNodeListTarget,
+    host: &mut H,
+) -> Result<String> {
+    let items = radio_node_list_items(target, host)?;
+    for item in items {
+        if !host.element_checked(item)? {
+            continue;
+        }
+        return host.element_value(item);
+    }
+
+    Ok(String::new())
 }
 
 fn for_each_over_items<H: HostBindings>(
@@ -1323,6 +1453,7 @@ fn is_truthy(value: &Value) -> bool {
         | Value::Dataset(_)
         | Value::HtmlCollection(_)
         | Value::NodeList(_)
+        | Value::RadioNodeList(_)
         | Value::CollectionIterator(_)
         | Value::IteratorResult(_)
         | Value::Document

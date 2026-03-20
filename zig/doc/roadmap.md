@@ -77,6 +77,8 @@ Phase 4 is complete in this workspace.
 - child combinators
 - selector hardening
 
+Phase 6 is complete in this workspace.
+
 ## Phase 7: Script DOM Query Expansion
 
 - `document.querySelector`
