@@ -223,6 +223,17 @@ fn script_only_child_and_only_of_type_pseudo_classes_work_end_to_end()
 }
 
 #[test]
+fn script_first_last_and_nth_of_type_pseudo_classes_work_end_to_end()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><div id='type-parent'><span id='first-span'>one</span><em id='first-em'>first</em><span id='middle-span'>two</span><em id='last-em'>last</em><span id='last-span'>three</span></div><div id='out'>seed</div><script>const firstSpan = document.querySelector('#first-span:first-of-type'); const lastSpan = document.querySelector('#last-span:last-of-type'); const middleSpan = document.querySelector('#middle-span:nth-of-type(2)'); const middleFromEnd = document.querySelector('#middle-span:nth-last-of-type(2)'); const firstEm = document.querySelector('#first-em:first-of-type'); const lastEm = document.querySelector('#last-em:last-of-type'); document.getElementById('out').textContent = String(firstSpan.matches('#first-span:first-of-type')) + ':' + String(lastSpan.matches('#last-span:last-of-type')) + ':' + String(middleSpan.matches('#middle-span:nth-of-type(2)')) + ':' + String(middleFromEnd.matches('#middle-span:nth-last-of-type(2)')) + ':' + String(firstEm.matches('#first-em:first-of-type')) + ':' + String(lastEm.matches('#last-em:last-of-type'));</script></main>",
+    )?;
+
+    harness.assert_text("#out", "true:true:true:true:true:true")?;
+    Ok(())
+}
+
+#[test]
 fn script_not_pseudo_class_works_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root' class='app' data-kind='app'><button id='first' class='primary'>First</button><button id='disabled' class='primary' disabled>Disabled</button><button id='enabled' class='secondary'>Enabled</button><div id='out'></div><script>const enabled = document.querySelectorAll('button:not(:disabled)'); const second = document.getElementById('enabled'); const root = second.closest('main:not([data-kind*=blocked], .blocked)'); const bounded = document.querySelectorAll('button:not(main > .secondary, :disabled)'); document.getElementById('out').textContent = String(enabled.length) + ':' + enabled.item(0).textContent + ':' + enabled.item(1).textContent + ':' + String(second.matches('button:not(.primary)')) + ':' + String(root.matches('main:not([data-kind*=blocked], .blocked)')) + ':' + document.querySelector('button:not(:nth-child(even))').textContent + ':' + String(bounded.length) + ':' + bounded.item(0).textContent;</script></main>",
@@ -452,4 +463,16 @@ fn unsupported_script_only_child_selector_syntax_fails_explicitly() {
     let message = error.to_string();
     assert!(message.contains("Script error"));
     assert!(message.contains("unsupported selector `#child:only-child()`"));
+}
+
+#[test]
+fn unsupported_script_first_of_type_selector_syntax_fails_explicitly() {
+    let error = Harness::from_html(
+        "<main id='root'><section id='child'>child</section></main><script>document.querySelector('#child:first-of-type()');</script>",
+    )
+    .expect_err("malformed :first-of-type selector should fail explicitly");
+
+    let message = error.to_string();
+    assert!(message.contains("Script error"));
+    assert!(message.contains("unsupported selector `#child:first-of-type()`"));
 }

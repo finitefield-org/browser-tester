@@ -69,8 +69,12 @@ enum SelectorPseudoClass {
     OnlyOfType,
     FirstChild,
     LastChild,
+    FirstOfType,
+    LastOfType,
     NthChild(SelectorNthChildPattern),
     NthLastChild(SelectorNthChildPattern),
+    NthOfType(SelectorNthChildPattern),
+    NthLastOfType(SelectorNthChildPattern),
     Is(Vec<SelectorChain>),
     Where(Vec<SelectorChain>),
     Not(Vec<SelectorChain>),
@@ -1035,8 +1039,14 @@ impl DomStore {
             SelectorPseudoClass::OnlyOfType => self.is_only_of_type_pseudo_class(node_id),
             SelectorPseudoClass::FirstChild => self.is_first_child(node_id),
             SelectorPseudoClass::LastChild => self.is_last_child(node_id),
+            SelectorPseudoClass::FirstOfType => self.is_first_of_type(node_id),
+            SelectorPseudoClass::LastOfType => self.is_last_of_type(node_id),
             SelectorPseudoClass::NthChild(pattern) => self.is_nth_child(node_id, pattern),
             SelectorPseudoClass::NthLastChild(pattern) => self.is_nth_last_child(node_id, pattern),
+            SelectorPseudoClass::NthOfType(pattern) => self.is_nth_of_type(node_id, pattern),
+            SelectorPseudoClass::NthLastOfType(pattern) => {
+                self.is_nth_last_of_type(node_id, pattern)
+            }
             SelectorPseudoClass::Is(chains) => chains
                 .iter()
                 .any(|chain| self.matches_selector_chain(node_id, chain)),
@@ -1183,10 +1193,18 @@ impl DomStore {
                         "only-of-type" => SelectorPseudoClass::OnlyOfType,
                         "first-child" => SelectorPseudoClass::FirstChild,
                         "last-child" => SelectorPseudoClass::LastChild,
+                        "first-of-type" => SelectorPseudoClass::FirstOfType,
+                        "last-of-type" => SelectorPseudoClass::LastOfType,
                         "nth-child" => {
                             SelectorPseudoClass::NthChild(parse_nth_child_argument(selector, pos)?)
                         }
                         "nth-last-child" => SelectorPseudoClass::NthLastChild(
+                            parse_nth_child_argument(selector, pos)?,
+                        ),
+                        "nth-of-type" => {
+                            SelectorPseudoClass::NthOfType(parse_nth_child_argument(selector, pos)?)
+                        }
+                        "nth-last-of-type" => SelectorPseudoClass::NthLastOfType(
                             parse_nth_child_argument(selector, pos)?,
                         ),
                         "is" => {
@@ -1271,18 +1289,47 @@ impl DomStore {
     }
 
     fn is_only_of_type_pseudo_class(&self, node_id: NodeId) -> bool {
-        let Some(node) = self.nodes.get(node_id.index() as usize) else {
-            return false;
-        };
-        let NodeKind::Element(element) = &node.kind else {
+        self.element_sibling_position_of_type(node_id) == Some(1)
+            && self.element_sibling_position_from_end_of_type(node_id) == Some(1)
+    }
+
+    fn is_first_of_type(&self, node_id: NodeId) -> bool {
+        self.element_sibling_position_of_type(node_id) == Some(1)
+    }
+
+    fn is_last_of_type(&self, node_id: NodeId) -> bool {
+        self.element_sibling_position_from_end_of_type(node_id) == Some(1)
+    }
+
+    fn is_nth_of_type(&self, node_id: NodeId, pattern: &SelectorNthChildPattern) -> bool {
+        let Some(position) = self.element_sibling_position_of_type(node_id) else {
             return false;
         };
 
-        let Some(parent_id) = node.parent else {
+        self.matches_nth_pattern(position as isize, pattern)
+    }
+
+    fn is_nth_last_of_type(&self, node_id: NodeId, pattern: &SelectorNthChildPattern) -> bool {
+        let Some(position) = self.element_sibling_position_from_end_of_type(node_id) else {
             return false;
         };
+
+        self.matches_nth_pattern(position as isize, pattern)
+    }
+
+    fn element_sibling_position_of_type(&self, node_id: NodeId) -> Option<usize> {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return None;
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return None;
+        };
+
+        let Some(parent_id) = node.parent else {
+            return None;
+        };
         let Some(parent) = self.nodes.get(parent_id.index() as usize) else {
-            return false;
+            return None;
         };
 
         let mut matching_sibling_count = 0usize;
@@ -1298,13 +1345,54 @@ impl DomStore {
                 && child_element.namespace_uri == element.namespace_uri
             {
                 matching_sibling_count += 1;
-                if matching_sibling_count > 1 {
-                    return false;
+                if *child == node_id {
+                    return Some(matching_sibling_count);
                 }
+            } else if *child == node_id {
+                return None;
             }
         }
 
-        matching_sibling_count == 1
+        None
+    }
+
+    fn element_sibling_position_from_end_of_type(&self, node_id: NodeId) -> Option<usize> {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return None;
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return None;
+        };
+
+        let Some(parent_id) = node.parent else {
+            return None;
+        };
+        let Some(parent) = self.nodes.get(parent_id.index() as usize) else {
+            return None;
+        };
+
+        let mut matching_sibling_count = 0usize;
+        for child in parent.children.iter().rev() {
+            let Some(child_node) = self.nodes.get(child.index() as usize) else {
+                continue;
+            };
+            let NodeKind::Element(child_element) = &child_node.kind else {
+                continue;
+            };
+
+            if child_element.local_name == element.local_name
+                && child_element.namespace_uri == element.namespace_uri
+            {
+                matching_sibling_count += 1;
+                if *child == node_id {
+                    return Some(matching_sibling_count);
+                }
+            } else if *child == node_id {
+                return None;
+            }
+        }
+
+        None
     }
 
     fn is_first_child(&self, node_id: NodeId) -> bool {
@@ -1546,7 +1634,7 @@ impl DomStore {
 
 fn selector_not_supported(selector: &str) -> String {
     format!(
-        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`; additional bounded structural pseudo-classes include `:root`, `:empty`, `:only-child`, and `:only-of-type`"
+        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`; additional bounded structural pseudo-classes include `:root`, `:empty`, `:only-child`, `:only-of-type`, `:first-of-type`, `:last-of-type`, `:nth-of-type(2)`, and `:nth-last-of-type(2)`"
     )
 }
 

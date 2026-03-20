@@ -395,6 +395,25 @@ fn session_resolves_only_child_and_only_of_type_pseudo_classes_regression() {
 }
 
 #[test]
+fn session_resolves_first_last_and_nth_of_type_pseudo_classes_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='type-parent'><span id='first-span'>one</span><em id='first-em'>first</em><span id='middle-span'>two</span><em id='last-em'>last</em><span id='last-span'>three</span></div><div id='out'></div><script>const firstSpan = document.querySelector('#first-span:first-of-type'); const lastSpan = document.querySelector('#last-span:last-of-type'); const middleSpan = document.querySelector('#middle-span:nth-of-type(2)'); const middleFromEnd = document.querySelector('#middle-span:nth-last-of-type(2)'); const firstEm = document.querySelector('#first-em:first-of-type'); const lastEm = document.querySelector('#last-em:last-of-type'); document.getElementById('out').textContent = String(firstSpan.matches('#first-span:first-of-type')) + ':' + String(lastSpan.matches('#last-span:last-of-type')) + ':' + String(middleSpan.matches('#middle-span:nth-of-type(2)')) + ':' + String(middleFromEnd.matches('#middle-span:nth-last-of-type(2)')) + ':' + String(firstEm.matches('#first-em:first-of-type')) + ':' + String(lastEm.matches('#last-em:last-of-type'));</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect(":first-of-type and :nth-of-type pseudo-classes should remain available");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "true:true:true:true:true:true"
+    );
+}
+
+#[test]
 fn session_rejects_unsupported_empty_pseudo_arguments_explicitly() {
     let error = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -411,6 +430,26 @@ fn session_rejects_unsupported_empty_pseudo_arguments_explicitly() {
         error
             .to_string()
             .contains("unsupported selector `main:empty(1)`")
+    );
+}
+
+#[test]
+fn session_rejects_unsupported_first_of_type_selector_syntax_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><section id='child'>child</section></main><script>document.querySelector('#child:first-of-type()');</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("malformed :first-of-type selector should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported selector `#child:first-of-type()`")
     );
 }
 

@@ -221,6 +221,61 @@ fn only_child_and_only_of_type_pseudo_classes_match_expected_nodes() {
 }
 
 #[test]
+fn first_last_and_nth_of_type_pseudo_classes_match_expected_nodes() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><div id='type-parent'><span id='first-span'>one</span><em id='first-em'>first</em><span id='middle-span'>two</span><em id='last-em'>last</em><span id='last-span'>three</span></div></main>",
+        )
+        .expect("HTML should parse");
+
+    let first_span_id = store.select("#first-span").unwrap()[0];
+    let middle_span_id = store.select("#middle-span").unwrap()[0];
+    let last_span_id = store.select("#last-span").unwrap()[0];
+    let first_em_id = store.select("#first-em").unwrap()[0];
+    let last_em_id = store.select("#last-em").unwrap()[0];
+
+    assert_eq!(
+        store.select("#first-span:first-of-type").unwrap(),
+        vec![first_span_id]
+    );
+    assert_eq!(
+        store.select("#last-span:last-of-type").unwrap(),
+        vec![last_span_id]
+    );
+    assert_eq!(
+        store.select("#middle-span:nth-of-type(2)").unwrap(),
+        vec![middle_span_id]
+    );
+    assert_eq!(
+        store.select("#middle-span:nth-last-of-type(2)").unwrap(),
+        vec![middle_span_id]
+    );
+    assert_eq!(
+        store.select("#first-em:first-of-type").unwrap(),
+        vec![first_em_id]
+    );
+    assert_eq!(
+        store.select("#last-em:last-of-type").unwrap(),
+        vec![last_em_id]
+    );
+}
+
+#[test]
+fn unsupported_first_of_type_selector_syntax_fails_explicitly() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html("<main id='root'><section id='child'>child</section></main>")
+        .expect("HTML should parse");
+
+    let error = store
+        .select("#child:first-of-type()")
+        .expect_err("malformed :first-of-type selector should fail explicitly");
+
+    assert!(error.contains("unsupported selector `#child:first-of-type()`"));
+}
+
+#[test]
 fn not_pseudo_class_negates_supported_compound_selectors() {
     let mut store = DomStore::new_empty();
     store

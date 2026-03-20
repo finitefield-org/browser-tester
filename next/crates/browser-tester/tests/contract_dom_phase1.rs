@@ -121,6 +121,22 @@ fn only_child_and_only_of_type_pseudo_classes_work_with_public_assert_exists()
 }
 
 #[test]
+fn first_last_and_nth_of_type_pseudo_classes_work_with_public_assert_exists()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><div id='type-parent'><span id='first-span'>one</span><em id='first-em'>first</em><span id='middle-span'>two</span><em id='last-em'>last</em><span id='last-span'>three</span></div></main>",
+    )?;
+
+    harness.assert_exists("#first-span:first-of-type")?;
+    harness.assert_exists("#last-span:last-of-type")?;
+    harness.assert_exists("#middle-span:nth-of-type(2)")?;
+    harness.assert_exists("#middle-span:nth-last-of-type(2)")?;
+    harness.assert_exists("#first-em:first-of-type")?;
+    harness.assert_exists("#last-em:last-of-type")?;
+    Ok(())
+}
+
+#[test]
 fn not_pseudo_class_works_with_public_assert_exists() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root' class='app' data-kind='APP READY' lang='EN-US'><button id='first' class='primary'>First</button><button id='disabled' class='primary' disabled>Disabled</button><button id='enabled' class='secondary'>Enabled</button></main>",
@@ -273,5 +289,19 @@ fn unsupported_only_child_selector_syntax_is_reported_explicitly() -> browser_te
     let message = error.to_string();
     assert!(message.contains("Selector error"));
     assert!(message.contains("unsupported selector `#child:only-child()`"));
+    Ok(())
+}
+
+#[test]
+fn unsupported_first_of_type_selector_syntax_is_reported_explicitly()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html("<main id='root'><section id='child'>child</section></main>")?;
+    let error = harness
+        .assert_exists("#child:first-of-type()")
+        .expect_err("malformed :first-of-type selector should fail explicitly");
+
+    let message = error.to_string();
+    assert!(message.contains("Selector error"));
+    assert!(message.contains("unsupported selector `#child:first-of-type()`"));
     Ok(())
 }
