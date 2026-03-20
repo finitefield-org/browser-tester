@@ -1,6 +1,6 @@
 [package]
 name = "browser_tester"
-version = "1.4.14"
+version = "1.5.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Deterministic lightweight browser runtime for Rust tests"
