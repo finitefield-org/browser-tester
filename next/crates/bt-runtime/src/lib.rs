@@ -1587,6 +1587,31 @@ impl Session {
         Ok(self.first_named_item_in_nodes(&collected, name))
     }
 
+    fn document_anchors(&self) -> Result<Vec<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| Self::is_document_anchor_element(element),
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn document_anchors_named_item(
+        &self,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| Self::is_document_anchor_element(element),
+        );
+        Ok(self.first_named_item_in_nodes(&collected, name))
+    }
+
     fn first_named_item_in_nodes(&self, collected: &[NodeId], name: &str) -> Option<ElementHandle> {
         for node_id in collected {
             let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
@@ -1621,6 +1646,10 @@ impl Session {
 
     fn is_document_link_element(element: &ElementData) -> bool {
         matches!(element.tag_name.as_str(), "a" | "area") && element.attributes.contains_key("href")
+    }
+
+    fn is_document_anchor_element(element: &ElementData) -> bool {
+        element.tag_name == "a" && element.attributes.contains_key("name")
     }
 
     fn matches_namespace_uri(element: &ElementData, namespace_uri: &str) -> bool {
@@ -1743,6 +1772,7 @@ impl HostBindings for Session {
             HtmlCollectionTarget::FormElements(element) => self.form_elements(element),
             HtmlCollectionTarget::SelectOptions(element) => self.select_options(element),
             HtmlCollectionTarget::DocumentLinks => self.document_links(),
+            HtmlCollectionTarget::DocumentAnchors => self.document_anchors(),
         }
     }
 
@@ -1778,6 +1808,7 @@ impl HostBindings for Session {
                 self.select_options_named_item(element, name)
             }
             HtmlCollectionTarget::DocumentLinks => self.document_links_named_item(name),
+            HtmlCollectionTarget::DocumentAnchors => self.document_anchors_named_item(name),
         }
     }
 
@@ -1801,6 +1832,7 @@ impl HostBindings for Session {
             HtmlCollectionTarget::FormElements(element) => self.form_elements(element),
             HtmlCollectionTarget::SelectOptions(element) => self.select_options(element),
             HtmlCollectionTarget::DocumentLinks => self.document_links(),
+            HtmlCollectionTarget::DocumentAnchors => self.document_anchors(),
         }
     }
 
@@ -1836,6 +1868,7 @@ impl HostBindings for Session {
                 self.select_options_named_item(element, name)
             }
             HtmlCollectionTarget::DocumentLinks => self.document_links_named_item(name),
+            HtmlCollectionTarget::DocumentAnchors => self.document_anchors_named_item(name),
         }
     }
 
@@ -1856,6 +1889,7 @@ impl HostBindings for Session {
                 namespace_uri,
                 local_name,
             } => self.elements_by_tag_name_ns(&scope, &namespace_uri, &local_name),
+            HtmlCollectionTarget::DocumentAnchors => self.document_anchors(),
             other => self.html_collection_tag_name_items(other),
         }
     }
@@ -1876,6 +1910,7 @@ impl HostBindings for Session {
                 &local_name,
                 name,
             ),
+            HtmlCollectionTarget::DocumentAnchors => self.document_anchors_named_item(name),
             other => self.html_collection_tag_name_named_item(other, name),
         }
     }
@@ -1912,6 +1947,17 @@ impl HostBindings for Session {
         name: &str,
     ) -> bt_script::Result<Option<ElementHandle>> {
         self.document_links_named_item(name)
+    }
+
+    fn html_collection_document_anchors_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
+        self.document_anchors()
+    }
+
+    fn html_collection_document_anchors_named_item(
+        &mut self,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.document_anchors_named_item(name)
     }
 
     fn element_text_content(&mut self, element: ElementHandle) -> bt_script::Result<String> {

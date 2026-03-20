@@ -64,6 +64,38 @@ fn class_list_rejects_whitespace_tokens_end_to_end() -> browser_tester_next::Res
 }
 
 #[test]
+fn collection_for_each_updates_live_script_views_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><span class='item'>First</span><span class='item'>Second</span></main><div id='out'></div><script>const nodes = document.querySelectorAll('.item'); const children = document.getElementById('root').children; nodes.forEach((item, index, list) => { document.getElementById('out').textContent += 'N' + String(index) + ':' + item.textContent + ':' + String(list.length) + ';'; }, null); children.forEach((child, index, list) => { document.getElementById('out').textContent += 'H' + String(index) + ':' + child.textContent + ':' + String(list.length) + ';'; });</script>",
+    )?;
+
+    harness.assert_text("#out", "N0:First:2;N1:Second:2;H0:First:2;H1:Second:2;")?;
+    Ok(())
+}
+
+#[test]
+fn document_scripts_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><script id='first-script'></script></main><div id='out'></div><script>const out = document.getElementById('out'); const scripts = document.scripts; const before = scripts.length; const first = scripts.namedItem('first-script'); document.getElementById('root').textContent = 'gone'; out.textContent = String(before) + ':' + String(scripts.length) + ':' + String(first) + ':' + String(scripts.namedItem('missing'));</script>",
+    )?;
+
+    harness.assert_text("#out", "2:1:[object Element]:null")?;
+    Ok(())
+}
+
+#[test]
+fn document_anchors_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><a name='first'>First</a><a id='ignored'>Ignored</a></main><div id='out'></div><script>const anchors = document.anchors; const before = anchors.length; const first = anchors.namedItem('first'); const root = document.getElementById('root'); root.innerHTML = root.innerHTML + '<a name=\"second\">Second</a>'; document.getElementById('out').textContent = String(before) + ':' + String(anchors.length) + ':' + first.textContent + ':' + anchors.namedItem('second').textContent + ':' + String(anchors.namedItem('missing'));</script>",
+    )?;
+
+    harness.assert_text("#out", "1:2:First:Second:null")?;
+    harness.assert_exists("a[name=first]")?;
+    harness.assert_exists("a[name=second]")?;
+    Ok(())
+}
+
+#[test]
 fn tree_mutation_primitives_support_append_prepend_and_remove_end_to_end()
 -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(

@@ -219,8 +219,17 @@ fn eval_member<H: HostBindings>(
                 tag_name: "img".to_string(),
             }))
         }
+        Value::Document if property == "scripts" => {
+            Ok(Value::HtmlCollection(HtmlCollectionTarget::ByTagName {
+                scope: HtmlCollectionScope::Document,
+                tag_name: "script".to_string(),
+            }))
+        }
         Value::Document if property == "links" => {
             Ok(Value::HtmlCollection(HtmlCollectionTarget::DocumentLinks))
+        }
+        Value::Document if property == "anchors" => {
+            Ok(Value::HtmlCollection(HtmlCollectionTarget::DocumentAnchors))
         }
         Value::Window if property == "document" => Ok(Value::Document),
         Value::Document if property == "defaultView" => Ok(Value::Window),
@@ -452,6 +461,7 @@ fn eval_method_call<H: HostBindings>(
         Value::HtmlCollection(collection) => match method {
             "item" => html_collection_item(&collection, args, env, host),
             "namedItem" => html_collection_named_item(&collection, args, env, host),
+            "forEach" => html_collection_for_each(&collection, args, env, host),
             other => Err(ScriptError::new(format!(
                 "unsupported HTMLCollection method: {other}"
             ))),
@@ -470,6 +480,7 @@ fn eval_method_call<H: HostBindings>(
         ))),
         Value::NodeList(target) => match method {
             "item" => node_list_item(&target, args, env, host),
+            "forEach" => node_list_for_each(&target, args, env, host),
             other => Err(ScriptError::new(format!(
                 "unsupported NodeList method: {other}"
             ))),
@@ -1002,6 +1013,39 @@ fn html_collection_named_item<H: HostBindings>(
     Ok(match_handle.map(Value::Element).unwrap_or(Value::Null))
 }
 
+fn html_collection_for_each<H: HostBindings>(
+    collection: &HtmlCollectionTarget,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let (callback_expr, this_arg_expr) = match args {
+        [callback_expr] => (callback_expr, None),
+        [callback_expr, this_arg_expr] => (callback_expr, Some(this_arg_expr)),
+        _ => {
+            return Err(ScriptError::new(
+                "HTMLCollection.forEach() expects one or two arguments",
+            ));
+        }
+    };
+
+    let callback = match eval_expr(callback_expr, env, host)? {
+        Value::Function(function) => function,
+        _ => {
+            return Err(ScriptError::new(
+                "HTMLCollection.forEach() requires an arrow function callback",
+            ));
+        }
+    };
+    if let Some(this_arg_expr) = this_arg_expr {
+        let _ = eval_expr(this_arg_expr, env, host)?;
+    }
+
+    let items = html_collection_items(collection, host)?;
+    let collection_value = Value::HtmlCollection(collection.clone());
+    for_each_over_items(&callback, items, collection_value, env, host)
+}
+
 fn html_collection_items<H: HostBindings>(
     collection: &HtmlCollectionTarget,
     host: &mut H,
@@ -1024,6 +1068,7 @@ fn html_collection_items<H: HostBindings>(
             host.html_collection_select_options_items(*element)
         }
         HtmlCollectionTarget::DocumentLinks => host.html_collection_document_links_items(),
+        HtmlCollectionTarget::DocumentAnchors => host.html_collection_document_anchors_items(),
     }
 }
 
@@ -1050,7 +1095,43 @@ fn html_collection_named_item_handle<H: HostBindings>(
             host.html_collection_select_options_named_item(*element, name)
         }
         HtmlCollectionTarget::DocumentLinks => host.html_collection_document_links_named_item(name),
+        HtmlCollectionTarget::DocumentAnchors => {
+            host.html_collection_document_anchors_named_item(name)
+        }
     }
+}
+
+fn node_list_for_each<H: HostBindings>(
+    target: &NodeListTarget,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let (callback_expr, this_arg_expr) = match args {
+        [callback_expr] => (callback_expr, None),
+        [callback_expr, this_arg_expr] => (callback_expr, Some(this_arg_expr)),
+        _ => {
+            return Err(ScriptError::new(
+                "NodeList.forEach() expects one or two arguments",
+            ));
+        }
+    };
+
+    let callback = match eval_expr(callback_expr, env, host)? {
+        Value::Function(function) => function,
+        _ => {
+            return Err(ScriptError::new(
+                "NodeList.forEach() requires an arrow function callback",
+            ));
+        }
+    };
+    if let Some(this_arg_expr) = this_arg_expr {
+        let _ = eval_expr(this_arg_expr, env, host)?;
+    }
+
+    let items = node_list_items(target, host)?;
+    let collection_value = Value::NodeList(target.clone());
+    for_each_over_items(&callback, items, collection_value, env, host)
 }
 
 fn node_list_items<H: HostBindings>(
@@ -1061,6 +1142,32 @@ fn node_list_items<H: HostBindings>(
         NodeListTarget::Snapshot(nodes) => Ok(nodes.clone()),
         NodeListTarget::ByName(name) => host.document_get_elements_by_name(name),
     }
+}
+
+fn for_each_over_items<H: HostBindings>(
+    callback: &crate::ScriptFunction,
+    items: Vec<crate::ElementHandle>,
+    collection_value: Value,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let program = crate::parser::parse_program(&callback.body_source)?;
+
+    for (index, item) in items.into_iter().enumerate() {
+        let mut bindings = env.clone();
+        for (param_index, param) in callback.params.iter().enumerate() {
+            let value = match param_index {
+                0 => Value::Element(item),
+                1 => Value::Number(index as f64),
+                2 => collection_value.clone(),
+                _ => Value::Undefined,
+            };
+            bindings.insert(param.clone(), value);
+        }
+        eval_program_with_bindings(&program, host, bindings)?;
+    }
+
+    Ok(Value::Undefined)
 }
 
 fn eval_add(left: Value, right: Value) -> Value {

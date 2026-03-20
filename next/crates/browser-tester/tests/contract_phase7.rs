@@ -294,27 +294,23 @@ fn script_element_closest_works_end_to_end() -> browser_tester_next::Result<()> 
 }
 
 #[test]
-fn unsupported_node_list_methods_fail_explicitly() {
-    let error = Harness::from_html(
-        "<main id='out'></main><script>document.querySelectorAll('#out').forEach(() => {});</script>",
-    )
-    .expect_err("unsupported selector methods should fail");
+fn script_node_list_for_each_works_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><span class='item'>First</span><span class='item'>Second</span></main><div id='out'></div><script>const nodes = document.querySelectorAll('.item'); nodes.forEach((item, index, list) => { document.getElementById('out').textContent += String(index) + ':' + item.textContent + ':' + String(list.length) + ';'; }, null);</script>",
+    )?;
 
-    let message = error.to_string();
-    assert!(message.contains("Script error"));
-    assert!(message.contains("unsupported NodeList method: forEach"));
+    harness.assert_text("#out", "0:First:2;1:Second:2;")?;
+    Ok(())
 }
 
 #[test]
-fn unsupported_html_collection_methods_fail_explicitly() {
-    let error = Harness::from_html(
-        "<main id='root'><span>child</span></main><script>document.getElementById('root').children.forEach(() => {});</script>",
-    )
-    .expect_err("unsupported html collection methods should fail");
+fn script_html_collection_for_each_works_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><span>child</span><span>more</span></main><div id='out'></div><script>const children = document.getElementById('root').children; children.forEach((child, index, list) => { document.getElementById('out').textContent += String(index) + ':' + child.textContent + ':' + String(list.length) + ';'; }, null);</script>",
+    )?;
 
-    let message = error.to_string();
-    assert!(message.contains("Script error"));
-    assert!(message.contains("unsupported HTMLCollection method: forEach"));
+    harness.assert_text("#out", "0:child:2;1:more:2;")?;
+    Ok(())
 }
 
 #[test]

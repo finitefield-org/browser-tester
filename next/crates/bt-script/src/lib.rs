@@ -65,6 +65,7 @@ pub enum HtmlCollectionTarget {
     FormElements(ElementHandle),
     SelectOptions(ElementHandle),
     DocumentLinks,
+    DocumentAnchors,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -379,6 +380,17 @@ pub trait HostBindings {
         _name: &str,
     ) -> Result<Option<ElementHandle>> {
         Err(ScriptError::phase_not_ready("document.links"))
+    }
+
+    fn html_collection_document_anchors_items(&mut self) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("document.anchors"))
+    }
+
+    fn html_collection_document_anchors_named_item(
+        &mut self,
+        _name: &str,
+    ) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("document.anchors"))
     }
 
     fn element_text_content(&mut self, _element: ElementHandle) -> Result<String> {

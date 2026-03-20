@@ -412,6 +412,44 @@ fn session_resolves_document_images_and_links_through_inline_scripts() {
 }
 
 #[test]
+fn session_resolves_document_anchors_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><a name='first'>First</a><a id='ignored'>Ignored</a></div><div id='out'></div><script>const anchors = document.anchors; const before = anchors.length; const first = anchors.namedItem('first'); const root = document.getElementById('root'); root.innerHTML = root.innerHTML + '<a name=\"second\">Second</a>'; document.getElementById('out').textContent = String(before) + ':' + String(anchors.length) + ':' + first.textContent + ':' + anchors.namedItem('second').textContent + ':' + String(anchors.namedItem('missing'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute document.anchors scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "1:2:First:Second:null"
+    );
+}
+
+#[test]
+fn session_resolves_document_scripts_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><script id='first-script'></script></div><div id='out'></div><script>const out = document.getElementById('out'); const scripts = document.scripts; const before = scripts.length; const first = scripts.namedItem('first-script'); document.getElementById('root').textContent = 'gone'; out.textContent = String(before) + ':' + String(scripts.length) + ':' + String(first) + ':' + String(scripts.namedItem('missing'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute document.scripts scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "2:1:[object Element]:null"
+    );
+}
+
+#[test]
 fn session_resolves_document_all_through_inline_scripts() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -468,6 +506,24 @@ fn session_reports_document_images_on_non_elements_explicitly() {
 }
 
 #[test]
+fn session_reports_document_anchors_on_non_elements_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><div id='not-doc'></div></div><script>document.getElementById('not-doc').anchors.length;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-document anchors access should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(error.to_string().contains("unsupported member access"));
+    assert!(error.to_string().contains("`anchors`"));
+    assert!(error.to_string().contains("element value"));
+}
+
+#[test]
 fn session_reports_get_elements_by_tag_name_ns_arity_explicitly() {
     let error = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -520,22 +576,21 @@ fn session_reports_select_options_on_non_select_elements_explicitly() {
 }
 
 #[test]
-fn session_reports_html_collection_method_failures_explicitly() {
-    let error = Session::new(SessionConfig {
+fn session_supports_html_collection_for_each() {
+    let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
         html: Some(
-            "<main id='root'><span>child</span></main><script>document.getElementById('root').children.forEach(() => {});</script>"
+            "<main id='root'><span>child</span><span>more</span></main><div id='out'></div><script>const children = document.getElementById('root').children; children.forEach((child, index, list) => { document.getElementById('out').textContent += String(index) + ':' + child.textContent + ':' + String(list.length) + ';'; }, null);</script>"
                 .to_string(),
         ),
         local_storage: BTreeMap::new(),
     })
-    .expect_err("session should reject unsupported HTMLCollection methods");
+    .expect("session should execute HTMLCollection forEach");
 
-    assert!(error.to_string().contains("Script error"));
-    assert!(
-        error
-            .to_string()
-            .contains("unsupported HTMLCollection method: forEach")
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:child:2;1:more:2;"
     );
 }
 

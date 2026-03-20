@@ -234,6 +234,63 @@ fn session_resolves_html_collection_named_item_regression() {
 }
 
 #[test]
+fn session_resolves_document_scripts_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><script id='first-script'></script></div><div id='out'></div><script>const out = document.getElementById('out'); const scripts = document.scripts; const before = scripts.length; const first = scripts.namedItem('first-script'); document.getElementById('root').textContent = 'gone'; out.textContent = String(before) + ':' + String(scripts.length) + ':' + String(first) + ':' + String(scripts.namedItem('missing'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.scripts should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "2:1:[object Element]:null"
+    );
+}
+
+#[test]
+fn session_resolves_document_anchors_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><a name='first'>First</a><a id='ignored'>Ignored</a></div><div id='out'></div><script>const anchors = document.anchors; const before = anchors.length; const first = anchors.namedItem('first'); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(anchors.length) + ':' + String(first) + ':' + String(anchors.namedItem('missing'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.anchors should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "1:0:[object Element]:null"
+    );
+}
+
+#[test]
+fn session_resolves_node_list_for_each_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><span class='item'>First</span><span class='item'>Second</span></main><div id='out'></div><script>const nodes = document.querySelectorAll('.item'); nodes.forEach((item, index, list) => { document.getElementById('out').textContent += String(index) + ':' + item.textContent + ':' + String(list.length) + ';'; }, null);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("NodeList.forEach should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:First:2;1:Second:2;"
+    );
+}
+
+#[test]
 fn session_resolves_get_elements_by_tag_name_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),

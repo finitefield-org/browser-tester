@@ -31,6 +31,7 @@ struct RecordingHost {
     html_collection_form_elements_items_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
     html_collection_select_options_items_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
     document_links_items_results: Vec<ElementHandle>,
+    document_anchors_items_results: Vec<ElementHandle>,
     html_collection_named_item_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
     html_collection_tag_name_named_item_results:
         BTreeMap<(HtmlCollectionTarget, String), Option<ElementHandle>>,
@@ -43,6 +44,7 @@ struct RecordingHost {
     html_collection_select_options_named_item_results:
         BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
     document_links_named_item_results: BTreeMap<String, Option<ElementHandle>>,
+    document_anchors_named_item_results: BTreeMap<String, Option<ElementHandle>>,
     document_query_selector_results: BTreeMap<String, Option<ElementHandle>>,
     document_query_selector_all_results: BTreeMap<String, Vec<ElementHandle>>,
     document_get_elements_by_name_results: BTreeMap<String, Vec<ElementHandle>>,
@@ -56,6 +58,7 @@ struct RecordingHost {
     html_collection_form_elements_items_calls: Vec<ElementHandle>,
     html_collection_select_options_items_calls: Vec<ElementHandle>,
     document_links_items_calls: usize,
+    document_anchors_items_calls: usize,
     html_collection_named_item_calls: Vec<(ElementHandle, String)>,
     html_collection_tag_name_named_item_calls: Vec<(HtmlCollectionTarget, String)>,
     html_collection_tag_name_ns_named_item_calls: Vec<(HtmlCollectionTarget, String)>,
@@ -63,6 +66,7 @@ struct RecordingHost {
     html_collection_form_elements_named_item_calls: Vec<(ElementHandle, String)>,
     html_collection_select_options_named_item_calls: Vec<(ElementHandle, String)>,
     document_links_named_item_calls: Vec<String>,
+    document_anchors_named_item_calls: Vec<String>,
     document_query_selector_calls: Vec<String>,
     document_query_selector_all_calls: Vec<String>,
     document_get_elements_by_name_calls: Vec<String>,
@@ -156,6 +160,10 @@ impl RecordingHost {
         self.document_links_items_results = result;
     }
 
+    fn seed_document_anchors_items(&mut self, result: Vec<ElementHandle>) {
+        self.document_anchors_items_results = result;
+    }
+
     fn seed_html_collection_named_item(
         &mut self,
         element: ElementHandle,
@@ -222,6 +230,15 @@ impl RecordingHost {
         result: Option<ElementHandle>,
     ) {
         self.document_links_named_item_results
+            .insert(name.into(), result);
+    }
+
+    fn seed_document_anchors_named_item(
+        &mut self,
+        name: impl Into<String>,
+        result: Option<ElementHandle>,
+    ) {
+        self.document_anchors_named_item_results
             .insert(name.into(), result);
     }
 
@@ -474,6 +491,24 @@ impl HostBindings for RecordingHost {
         self.document_links_named_item_calls.push(name.to_string());
         Ok(self
             .document_links_named_item_results
+            .get(name)
+            .copied()
+            .flatten())
+    }
+
+    fn html_collection_document_anchors_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
+        self.document_anchors_items_calls += 1;
+        Ok(self.document_anchors_items_results.clone())
+    }
+
+    fn html_collection_document_anchors_named_item(
+        &mut self,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.document_anchors_named_item_calls
+            .push(name.to_string());
+        Ok(self
+            .document_anchors_named_item_results
             .get(name)
             .copied()
             .flatten())
@@ -1429,6 +1464,92 @@ fn runtime_resolves_document_images_and_links_access() {
 }
 
 #[test]
+fn runtime_resolves_document_anchors_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("anchor-one", ElementHandle::new(1), "First");
+    host.seed_element("anchor-two", ElementHandle::new(2), "Second");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_document_anchors_items(vec![ElementHandle::new(1), ElementHandle::new(2)]);
+    host.seed_document_anchors_named_item("first", Some(ElementHandle::new(1)));
+    host.seed_document_anchors_named_item("second", Some(ElementHandle::new(2)));
+    host.seed_document_anchors_named_item("missing", None);
+
+    runtime
+        .eval_program(
+            "const anchors = document.anchors; document.getElementById('out').textContent = String(anchors.length) + ':' + String(anchors.length) + ':' + anchors.item(0).textContent + ':' + anchors.namedItem('first').textContent + ':' + anchors.namedItem('second').textContent + ':' + String(anchors.namedItem('missing'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.anchors should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("2:2:First:First:Second:null")
+    );
+    assert_eq!(host.document_anchors_items_calls, 3);
+    assert_eq!(
+        host.document_anchors_named_item_calls,
+        vec![
+            "first".to_string(),
+            "second".to_string(),
+            "missing".to_string()
+        ]
+    );
+}
+
+#[test]
+fn runtime_resolves_document_scripts_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("first-script", ElementHandle::new(1), "First");
+    host.seed_element("second-script", ElementHandle::new(2), "Second");
+    host.seed_element("out", ElementHandle::new(3), "");
+    let scripts_collection = HtmlCollectionTarget::ByTagName {
+        scope: HtmlCollectionScope::Document,
+        tag_name: "script".to_string(),
+    };
+    host.seed_html_collection_tag_name_items(
+        scripts_collection.clone(),
+        vec![ElementHandle::new(1), ElementHandle::new(2)],
+    );
+    host.seed_html_collection_tag_name_named_item(
+        scripts_collection.clone(),
+        "first-script",
+        Some(ElementHandle::new(1)),
+    );
+    host.seed_html_collection_tag_name_named_item(scripts_collection.clone(), "missing", None);
+
+    runtime
+        .eval_program(
+            "const scripts = document.scripts; document.getElementById('out').textContent = String(scripts.length) + ':' + scripts.item(0).textContent + ':' + scripts.namedItem('first-script').textContent + ':' + String(scripts.namedItem('missing'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.scripts should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("2:First:First:null")
+    );
+    assert_eq!(
+        host.html_collection_tag_name_items_calls,
+        vec![scripts_collection.clone(), scripts_collection.clone()]
+    );
+    assert_eq!(
+        host.html_collection_tag_name_named_item_calls,
+        vec![
+            (scripts_collection.clone(), "first-script".to_string()),
+            (scripts_collection, "missing".to_string()),
+        ]
+    );
+}
+
+#[test]
 fn runtime_resolves_document_all_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -1749,45 +1870,70 @@ fn runtime_reports_missing_element_access() {
 }
 
 #[test]
-fn runtime_reports_unsupported_syntax_explicitly() {
+fn runtime_supports_node_list_for_each() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
-    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_element("first", ElementHandle::new(1), "One");
+    host.seed_element("second", ElementHandle::new(2), "Two");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_document_query_selector_all(
+        ".item",
+        vec![ElementHandle::new(1), ElementHandle::new(2)],
+    );
 
-    let error = runtime
+    runtime
         .eval_program(
-            "document.querySelectorAll('#out').forEach(() => {});",
+            "const nodes = document.querySelectorAll('.item'); nodes.forEach((item, index, list) => { document.getElementById('out').textContent += String(index) + ':' + item.textContent + ':' + String(list.length) + ';'; }, null);",
             "inline-script",
             &mut host,
         )
-        .expect_err("unsupported node list methods should fail");
+        .expect("NodeList.forEach should dispatch through the script runtime");
 
-    assert!(
-        error
-            .to_string()
-            .contains("unsupported NodeList method: forEach")
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("0:One:2;1:Two:2;")
+    );
+    assert_eq!(
+        host.document_query_selector_all_calls,
+        vec![".item".to_string()]
     );
 }
 
 #[test]
-fn runtime_reports_html_collection_methods_explicitly() {
+fn runtime_supports_html_collection_for_each() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
     host.seed_element("root", ElementHandle::new(1), "");
-    host.seed_element("out", ElementHandle::new(2), "");
-    host.seed_element_children(ElementHandle::new(1), vec![ElementHandle::new(3)]);
+    host.seed_element("first", ElementHandle::new(2), "One");
+    host.seed_element("second", ElementHandle::new(3), "Two");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_element_children(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2), ElementHandle::new(3)],
+    );
 
-    let error = runtime
+    runtime
         .eval_program(
-            "document.getElementById('root').children.forEach(() => {});",
+            "const children = document.getElementById('root').children; children.forEach((child, index, list) => { document.getElementById('out').textContent += String(index) + ':' + child.textContent + ':' + String(list.length) + ';'; });",
             "inline-script",
             &mut host,
         )
-        .expect_err("unsupported html collection methods should fail");
+        .expect("HTMLCollection.forEach should dispatch through the script runtime");
 
-    assert!(
-        error
-            .to_string()
-            .contains("unsupported HTMLCollection method: forEach")
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("0:One:2;1:Two:2;")
+    );
+    assert_eq!(
+        host.element_children_calls,
+        vec![
+            ElementHandle::new(1),
+            ElementHandle::new(1),
+            ElementHandle::new(1),
+        ]
     );
 }

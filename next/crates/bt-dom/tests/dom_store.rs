@@ -1082,7 +1082,10 @@ fn mutation_hardening_rebuilds_live_collections_after_tree_mutation() {
     assert_eq!(store.select("#form-replacement").unwrap().len(), 1);
     assert_eq!(store.select("select > option").unwrap().len(), 2);
     assert_eq!(store.select("option:checked").unwrap().len(), 1);
-    assert_eq!(store.select("option:checked").unwrap()[0], store.select("#second").unwrap()[0]);
+    assert_eq!(
+        store.select("option:checked").unwrap()[0],
+        store.select("#second").unwrap()[0]
+    );
 }
 
 #[test]

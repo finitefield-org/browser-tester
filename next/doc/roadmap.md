@@ -7,7 +7,7 @@ For day-to-day implementation sequencing inside each phase, also see [implementa
 Status note:
 
 - Phases 0 through 7 are complete in this workspace.
-- Phase 8 is now scoped as DOM mutation and reflection expansion. Phase 7 is complete in this workspace; slices 1 through 4 are delivered, sibling selectors (`A + B`, `A ~ B`), selector lists (`A, B`), and a small pseudo-class slice are also delivered as backlog slices, and post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support plus `Element.children`, `getElementsByTagName`, `getElementsByTagNameNS`, `getElementsByClassName`, `getElementsByName`, `document.forms` / `form.elements`, `select.options`, `document.images` / `document.links`, and `document.all` collection support. Future selector work should stay backlog-driven. Phase 8 slices 1 through 5 are delivered; the phase is complete in this workspace.
+- Phase 8 is now scoped as DOM mutation and reflection expansion. Phase 7 is complete in this workspace; slices 1 through 4 are delivered, sibling selectors (`A + B`, `A ~ B`), selector lists (`A, B`), and a small pseudo-class slice are also delivered as backlog slices, and post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support plus `Element.children`, `getElementsByTagName`, `getElementsByTagNameNS`, `getElementsByClassName`, `getElementsByName`, `document.forms` / `form.elements`, `select.options`, `document.images` / `document.links` / `document.anchors`, `document.scripts`, and `document.all` collection support. Future selector work should stay backlog-driven. Phase 8 slices 1 through 5 are delivered; the phase is complete in this workspace.
 
 ## Phase 0: Skeleton
 
@@ -177,6 +177,9 @@ Post-Phase-7 slices:
   - `document.images` with live `HTMLCollection` support
   - `document.links` with live `HTMLCollection` support
   - `length`, `item()`, and `namedItem()`
+- anchors collection
+  - `document.anchors` with live `HTMLCollection` support
+  - `length`, `item()`, and `namedItem()`
 - all-elements collection
   - `document.all` with live `HTMLCollection` support
   - `length`, `item()`, and `namedItem()`
@@ -248,15 +251,20 @@ Exit criteria:
 - no new `Harness` API is added unless the scenario cannot already be expressed
 - docs, contract tests, and regression tests agree
 
-## After Phase 7
+## After Phase 8
 
 Operating rule:
 
-- future selector work should stay backlog-driven and narrow
-- Phase 8 is complete in this workspace; future DOM mutation work should remain backlog-driven
-- `querySelectorAll` with minimal `NodeList` support is available, `Element.children`, `getElementsByTagName`, `getElementsByTagNameNS`, `getElementsByClassName`, `getElementsByName`, `document.forms` / `form.elements`, `select.options`, `document.images`, `document.links`, and `document.all` collection support are also available, and selector lists plus the bounded pseudo-class subset are also available through the bounded engine
+- future work should stay backlog-driven and narrow
+- the next slices are:
+  1. collection API broadening slice 1 (`NodeList.forEach` / `HTMLCollection.forEach`) is delivered
+  2. collection API broadening slice 2 (`document.scripts`) is delivered
+  3. collection API broadening slice 3 (`document.anchors`) is delivered; the remaining collection API broadening slices are iterator-style helpers, then further specialized live collections beyond the current bounded set
+  4. selector grammar broadening, starting with `:scope`, then `:has(...)`, then structural selector expansion that needs richer nested selector handling
+  5. HTML serialization broadening, starting with `insertAdjacentHTML`, then `DocumentFragment` / `template.content` serialization, then namespace-aware serialization compatibility
+- `querySelectorAll` with minimal `NodeList` support is available, `Element.children`, `getElementsByTagName`, `getElementsByTagNameNS`, `getElementsByClassName`, `getElementsByName`, `document.forms` / `form.elements`, `select.options`, `document.images`, `document.links`, `document.anchors`, `document.scripts`, and `document.all` collection support are also available; `NodeList.forEach` and `HTMLCollection.forEach` are now available too, and selector lists plus the bounded pseudo-class subset are also available through the bounded engine
 
-## After Phase 7: Rolling Capability Delivery
+## After Phase 8: Rolling Capability Delivery
 
 Operating rule:
 

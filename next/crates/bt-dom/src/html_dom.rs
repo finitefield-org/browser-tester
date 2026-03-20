@@ -647,10 +647,8 @@ impl DomStore {
             .child_index(parent_id, node_id)
             .ok_or_else(|| format!("node {:?} is not present in its parent", node_id))?;
 
-        let (fragment_store, fragment_root) = self.parse_html_fragment_for_context(
-            self.fragment_context_for_parent(parent_id)?,
-            html,
-        )?;
+        let (fragment_store, fragment_root) = self
+            .parse_html_fragment_for_context(self.fragment_context_for_parent(parent_id)?, html)?;
         let fragment_children = fragment_store.nodes()[fragment_root.index() as usize]
             .children
             .clone();
@@ -981,7 +979,10 @@ impl DomStore {
                 namespace_uri: element.namespace_uri.clone(),
                 attributes: BTreeMap::new(),
             }),
-            _ => Err(format!("node {:?} cannot act as an HTML fragment context", parent)),
+            _ => Err(format!(
+                "node {:?} cannot act as an HTML fragment context",
+                parent
+            )),
         }
     }
 
@@ -992,7 +993,8 @@ impl DomStore {
     ) -> Result<(DomStore, NodeId), String> {
         let mut fragment_store = DomStore::new_empty();
         let fragment_document_id = fragment_store.document_id;
-        let fragment_root = fragment_store.add_node(fragment_document_id, NodeKind::Element(context));
+        let fragment_root =
+            fragment_store.add_node(fragment_document_id, NodeKind::Element(context));
         let mut parser = HtmlParser::new(html);
         parser.parse_fragment_into(&mut fragment_store, fragment_root)?;
         Ok((fragment_store, fragment_root))
@@ -1018,11 +1020,9 @@ impl DomStore {
                     value: text.value.clone(),
                 }),
             ),
-            NodeKind::Comment(comment) => self.insert_node_at(
-                parent,
-                insertion_index,
-                NodeKind::Comment(comment.clone()),
-            ),
+            NodeKind::Comment(comment) => {
+                self.insert_node_at(parent, insertion_index, NodeKind::Comment(comment.clone()))
+            }
             NodeKind::Element(element) => {
                 let node_id = self.insert_node_at(
                     parent,
@@ -1101,11 +1101,7 @@ impl DomStore {
                 output.push('>');
                 let child_raw_text_context = is_raw_text_element(element.tag_name.as_str());
                 for child in &node.children {
-                    self.serialize_html_node_with_context(
-                        *child,
-                        output,
-                        child_raw_text_context,
-                    )?;
+                    self.serialize_html_node_with_context(*child, output, child_raw_text_context)?;
                 }
                 output.push_str("</");
                 output.push_str(&element.tag_name);
@@ -1129,7 +1125,10 @@ impl DomStore {
         }
     }
 
-    fn serialize_html_attributes(&self, attributes: &BTreeMap<String, String>) -> Result<String, String> {
+    fn serialize_html_attributes(
+        &self,
+        attributes: &BTreeMap<String, String>,
+    ) -> Result<String, String> {
         let mut parts = Vec::new();
         for (name, value) in attributes {
             if value.is_empty() {
