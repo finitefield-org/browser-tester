@@ -1321,7 +1321,9 @@ impl Session {
         self.collect_descendant_elements_matching(
             root,
             &mut collected,
-            &|element: &ElementData| tag_name == "*" || element.tag_name.eq_ignore_ascii_case(tag_name),
+            &|element: &ElementData| {
+                tag_name == "*" || element.tag_name.eq_ignore_ascii_case(tag_name)
+            },
         );
         Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
     }
@@ -1337,7 +1339,9 @@ impl Session {
         self.collect_descendant_elements_matching(
             root,
             &mut collected,
-            &|element: &ElementData| tag_name == "*" || element.tag_name.eq_ignore_ascii_case(tag_name),
+            &|element: &ElementData| {
+                tag_name == "*" || element.tag_name.eq_ignore_ascii_case(tag_name)
+            },
         );
         Ok(self.first_named_item_in_nodes(&collected, name))
     }
@@ -1354,17 +1358,21 @@ impl Session {
 
         let root = self.collection_root_for_scope(scope)?;
         let mut collected = Vec::new();
-        self.collect_descendant_elements_matching(root, &mut collected, &|element: &ElementData| {
-            let Some(value) = element.attributes.get("class") else {
-                return false;
-            };
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| {
+                let Some(value) = element.attributes.get("class") else {
+                    return false;
+                };
 
-            class_tokens.iter().all(|class_name| {
-                value
-                    .split_ascii_whitespace()
-                    .any(|candidate| candidate == class_name)
-            })
-        });
+                class_tokens.iter().all(|class_name| {
+                    value
+                        .split_ascii_whitespace()
+                        .any(|candidate| candidate == class_name)
+                })
+            },
+        );
         Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
     }
 
@@ -1381,30 +1389,160 @@ impl Session {
 
         let root = self.collection_root_for_scope(scope)?;
         let mut collected = Vec::new();
-        self.collect_descendant_elements_matching(root, &mut collected, &|element: &ElementData| {
-            let Some(value) = element.attributes.get("class") else {
-                return false;
-            };
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| {
+                let Some(value) = element.attributes.get("class") else {
+                    return false;
+                };
 
-            class_tokens.iter().all(|class_name| {
-                value
-                    .split_ascii_whitespace()
-                    .any(|candidate| candidate == class_name)
-            })
-        });
+                class_tokens.iter().all(|class_name| {
+                    value
+                        .split_ascii_whitespace()
+                        .any(|candidate| candidate == class_name)
+                })
+            },
+        );
         Ok(self.first_named_item_in_nodes(&collected, name))
     }
 
     fn elements_by_name(&self, name: &str) -> Result<Vec<ElementHandle>, ScriptError> {
         let root = self.dom.document_id();
         let mut collected = Vec::new();
-        self.collect_descendant_elements_matching(root, &mut collected, &|element: &ElementData| {
-            element
-                .attributes
-                .get("name")
-                .is_some_and(|value| value == name)
-        });
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| {
+                element
+                    .attributes
+                    .get("name")
+                    .is_some_and(|value| value == name)
+            },
+        );
         Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn form_elements(&self, form: ElementHandle) -> Result<Vec<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(form)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a form element"));
+        };
+
+        if element.tag_name != "form" {
+            return Err(ScriptError::new("node is not a form element"));
+        }
+
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            node_id,
+            &mut collected,
+            &|element: &ElementData| Self::is_form_control_element(element),
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn form_elements_named_item(
+        &self,
+        form: ElementHandle,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(form)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a form element"));
+        };
+
+        if element.tag_name != "form" {
+            return Err(ScriptError::new("node is not a form element"));
+        }
+
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            node_id,
+            &mut collected,
+            &|element: &ElementData| Self::is_form_control_element(element),
+        );
+        Ok(self.first_named_item_in_nodes(&collected, name))
+    }
+
+    fn select_options(&self, select: ElementHandle) -> Result<Vec<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(select)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a select element"));
+        };
+
+        if element.tag_name != "select" {
+            return Err(ScriptError::new("node is not a select element"));
+        }
+
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            node_id,
+            &mut collected,
+            &|element: &ElementData| element.tag_name == "option",
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn select_options_named_item(
+        &self,
+        select: ElementHandle,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(select)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a select element"));
+        };
+
+        if element.tag_name != "select" {
+            return Err(ScriptError::new("node is not a select element"));
+        }
+
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            node_id,
+            &mut collected,
+            &|element: &ElementData| element.tag_name == "option",
+        );
+        Ok(self.first_named_item_in_nodes(&collected, name))
+    }
+
+    fn document_links(&self) -> Result<Vec<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| Self::is_document_link_element(element),
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn document_links_named_item(&self, name: &str) -> Result<Option<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| Self::is_document_link_element(element),
+        );
+        Ok(self.first_named_item_in_nodes(&collected, name))
     }
 
     fn first_named_item_in_nodes(&self, collected: &[NodeId], name: &str) -> Option<ElementHandle> {
@@ -1430,6 +1568,17 @@ impl Session {
         }
 
         None
+    }
+
+    fn is_form_control_element(element: &ElementData) -> bool {
+        matches!(
+            element.tag_name.as_str(),
+            "input" | "select" | "textarea" | "button"
+        )
+    }
+
+    fn is_document_link_element(element: &ElementData) -> bool {
+        matches!(element.tag_name.as_str(), "a" | "area") && element.attributes.contains_key("href")
     }
 
     fn ordered_class_names(class_names: &str) -> Vec<String> {
@@ -1515,7 +1664,10 @@ impl HostBindings for Session {
         self.query_selector_handles(None, selector)
     }
 
-    fn document_get_elements_by_name(&mut self, name: &str) -> bt_script::Result<Vec<ElementHandle>> {
+    fn document_get_elements_by_name(
+        &mut self,
+        name: &str,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
         self.elements_by_name(name)
     }
 
@@ -1531,6 +1683,9 @@ impl HostBindings for Session {
             HtmlCollectionTarget::ByClassName { scope, class_names } => {
                 self.elements_by_class_name(&scope, &class_names)
             }
+            HtmlCollectionTarget::FormElements(element) => self.form_elements(element),
+            HtmlCollectionTarget::SelectOptions(element) => self.select_options(element),
+            HtmlCollectionTarget::DocumentLinks => self.document_links(),
         }
     }
 
@@ -1549,6 +1704,13 @@ impl HostBindings for Session {
             HtmlCollectionTarget::ByClassName { scope, class_names } => {
                 self.named_item_for_class_name_collection(&scope, &class_names, name)
             }
+            HtmlCollectionTarget::FormElements(element) => {
+                self.form_elements_named_item(element, name)
+            }
+            HtmlCollectionTarget::SelectOptions(element) => {
+                self.select_options_named_item(element, name)
+            }
+            HtmlCollectionTarget::DocumentLinks => self.document_links_named_item(name),
         }
     }
 
@@ -1564,6 +1726,9 @@ impl HostBindings for Session {
             HtmlCollectionTarget::ByClassName { scope, class_names } => {
                 self.elements_by_class_name(&scope, &class_names)
             }
+            HtmlCollectionTarget::FormElements(element) => self.form_elements(element),
+            HtmlCollectionTarget::SelectOptions(element) => self.select_options(element),
+            HtmlCollectionTarget::DocumentLinks => self.document_links(),
         }
     }
 
@@ -1582,7 +1747,55 @@ impl HostBindings for Session {
             HtmlCollectionTarget::ByClassName { scope, class_names } => {
                 self.named_item_for_class_name_collection(&scope, &class_names, name)
             }
+            HtmlCollectionTarget::FormElements(element) => {
+                self.form_elements_named_item(element, name)
+            }
+            HtmlCollectionTarget::SelectOptions(element) => {
+                self.select_options_named_item(element, name)
+            }
+            HtmlCollectionTarget::DocumentLinks => self.document_links_named_item(name),
         }
+    }
+
+    fn html_collection_form_elements_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.form_elements(element)
+    }
+
+    fn html_collection_form_elements_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.form_elements_named_item(element, name)
+    }
+
+    fn html_collection_select_options_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.select_options(element)
+    }
+
+    fn html_collection_select_options_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.select_options_named_item(element, name)
+    }
+
+    fn html_collection_document_links_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
+        self.document_links()
+    }
+
+    fn html_collection_document_links_named_item(
+        &mut self,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.document_links_named_item(name)
     }
 
     fn element_text_content(&mut self, element: ElementHandle) -> bt_script::Result<String> {

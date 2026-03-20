@@ -1,6 +1,6 @@
 # Implementation Guide
 
-This document explains how to actually build out the `next/` rewrite from its current Phase 6-complete baseline with Phase 7 slices 1 through 4 already delivered, plus sibling selector backlog slices (`A + B`, `A ~ B`), selector lists (`A, B`), simple pseudo-classes, and post-Phase-7 collection slices for `querySelectorAll` / minimal `NodeList`, `Element.children` / minimal `HTMLCollection`, `getElementsByTagName` / live `HTMLCollection`, `getElementsByClassName` / live `HTMLCollection`, and `getElementsByName` / live `NodeList`.
+This document explains how to actually build out the `next/` rewrite from its current Phase 6-complete baseline with Phase 7 slices 1 through 4 already delivered, plus sibling selector backlog slices (`A + B`, `A ~ B`), selector lists (`A, B`), simple pseudo-classes, and post-Phase-7 collection slices for `querySelectorAll` / minimal `NodeList`, `Element.children` / minimal `HTMLCollection`, `getElementsByTagName` / live `HTMLCollection`, `getElementsByClassName` / live `HTMLCollection`, `getElementsByName` / live `NodeList`, `document.forms` / `form.elements` live `HTMLCollection`, `select.options` live `HTMLCollection`, and `document.images` / `document.links` live `HTMLCollection`.
 
 Use it together with:
 
@@ -36,7 +36,7 @@ The safest way to turn the Phase 0 skeleton into a usable runtime is:
 
 This order keeps the public facade thin and avoids implementing user actions before the DOM and selector layers are trustworthy.
 
-Slices 1 through 13 are already implemented in this workspace, including public download capture. Phase 6 selector expansion slices 1 through 4, covering class selectors, compound simple selectors, descendant combinators, child combinators, and selector hardening, are also implemented in this workspace. A post-Phase-7 selector slice adds sibling combinators (`A + B`, `A ~ B`), selector lists (`A, B`), and simple pseudo-classes through the same bounded engine. Phase 7 script DOM query slices 1 through 4 (`document.querySelector`, `element.querySelector`, `Element.matches`, `Element.closest`, and selector hardening) are implemented as well. Post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support, `Element.children` with minimal `HTMLCollection` support, `getElementsByTagName` with live `HTMLCollection` support, `getElementsByClassName` with live `HTMLCollection` support, and `getElementsByName` with live `NodeList` support; keep broader collection APIs out of scope for this workspace.
+Slices 1 through 16 are already implemented in this workspace, including public download capture. Phase 6 selector expansion slices 1 through 4, covering class selectors, compound simple selectors, descendant combinators, child combinators, and selector hardening, are also implemented in this workspace. A post-Phase-7 selector slice adds sibling combinators (`A + B`, `A ~ B`), selector lists (`A, B`), and simple pseudo-classes through the same bounded engine. Phase 7 script DOM query slices 1 through 4 (`document.querySelector`, `element.querySelector`, `Element.matches`, `Element.closest`, and selector hardening) are implemented as well. Post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support, `Element.children` with minimal `HTMLCollection` support, `getElementsByTagName` with live `HTMLCollection` support, `getElementsByClassName` with live `HTMLCollection` support, `getElementsByName` with live `NodeList` support, `document.forms` / `form.elements` live `HTMLCollection` support, `select.options` live `HTMLCollection` support, and `document.images` / `document.links` live `HTMLCollection` support; keep broader collection APIs out of scope for this workspace.
 
 ## First Vertical Slices
 
@@ -422,6 +422,99 @@ Tests already in place:
 - `length`, `item()`, and `namedItem()` work for class-name collections
 - `length` and `item()` work for name-based node lists
 - unsupported `Element.getElementsByName` fails explicitly
+
+Do not add yet:
+
+- broader collection APIs
+
+### Slice 14: Form Collections
+
+Goal:
+
+- make `document.forms` and `form.elements` available in inline scripts through minimal live HTMLCollection surfaces
+
+Primary owners:
+
+- `bt-script`
+- `bt-runtime`
+
+Delivered in this workspace:
+
+- `document.forms`
+- `form.elements`
+- live forms collection semantics
+- live descendant form-control collection semantics
+- `HTMLCollection.length`
+- `HTMLCollection.item(index)`
+- `HTMLCollection.namedItem(name)`
+
+Tests already in place:
+
+- document-scoped forms collection works in inline scripts
+- form-scoped elements collection works in inline scripts
+- collections stay live after DOM mutations
+- `namedItem()` works for forms and form controls
+- non-form `elements` access fails explicitly
+
+Do not add yet:
+
+- broader collection APIs
+
+### Slice 15: Select Options
+
+Goal:
+
+- make `select.options` available in inline scripts through a minimal live HTMLCollection surface
+
+Primary owners:
+
+- `bt-script`
+- `bt-runtime`
+
+Delivered in this workspace:
+
+- `select.options`
+- live option collection semantics
+- `HTMLCollection.length`
+- `HTMLCollection.item(index)`
+- `HTMLCollection.namedItem(name)`
+
+Tests already in place:
+
+- select option collections reflect DOM mutations in inline scripts
+- `length`, `item()`, and `namedItem()` work for select options
+- non-select `options` access fails explicitly
+
+Do not add yet:
+
+- broader collection APIs
+
+### Slice 16: Document Images and Links
+
+Goal:
+
+- make `document.images` and `document.links` available in inline scripts through minimal live HTMLCollection surfaces
+
+Primary owners:
+
+- `bt-script`
+- `bt-runtime`
+
+Delivered in this workspace:
+
+- `document.images`
+- `document.links`
+- live image collection semantics
+- live link collection semantics filtered to `a[href]` and `area[href]`
+- `HTMLCollection.length`
+- `HTMLCollection.item(index)`
+- `HTMLCollection.namedItem(name)`
+
+Tests already in place:
+
+- image and link collections reflect DOM mutations in inline scripts
+- `length`, `item()`, and `namedItem()` work for document images and links
+- non-document `images` access fails explicitly
 
 Do not add yet:
 

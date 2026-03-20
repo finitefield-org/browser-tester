@@ -81,6 +81,49 @@ fn script_get_elements_by_name_are_live_end_to_end() -> browser_tester_next::Res
 }
 
 #[test]
+fn script_document_forms_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<div id='root'><form id='signup' name='signup'>Signup</form><form id='login' name='login'>Login</form></div><div id='out'></div><script>const forms = document.forms; const first = forms.item(0); const named = forms.namedItem('signup'); const before = forms.length; const firstText = first.textContent; const namedText = named.textContent; document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(forms.length) + ':' + firstText + ':' + namedText + ':' + String(forms.namedItem('missing'));</script>",
+    )?;
+
+    harness.assert_text("#out", "2:0:Signup:Signup:null")?;
+    Ok(())
+}
+
+#[test]
+fn script_form_elements_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<div id='root'><form id='signup'><input name='first' value='Ada'><textarea name='bio'>Bio</textarea></form></div><div id='out'></div><script>const elements = document.getElementById('signup').elements; const first = elements.item(0); const named = elements.namedItem('first'); const before = elements.length; const firstValue = first.value; const namedValue = named.value; document.getElementById('signup').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(elements.length) + ':' + firstValue + ':' + namedValue + ':' + String(elements.namedItem('missing'));</script>",
+    )?;
+
+    harness.assert_text("#out", "2:0:Ada:Ada:null")?;
+    Ok(())
+}
+
+#[test]
+fn script_select_options_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<div id='root'><select id='mode'><option name='alpha' value='a'>A</option><option id='second' value='b'>B</option></select></div><div id='out'></div><script>const options = document.getElementById('mode').options; const first = options.item(0); const named = options.namedItem('second'); const before = options.length; const firstText = first.textContent; const namedText = named.textContent; document.getElementById('mode').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(options.length) + ':' + firstText + ':' + namedText + ':' + String(options.namedItem('missing'));</script>",
+    )?;
+
+    harness.assert_text("#out", "2:0:A:B:null")?;
+    Ok(())
+}
+
+#[test]
+fn script_document_images_and_links_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<div id='root'><img id='hero' name='hero' alt='Hero'><img name='thumb' alt='Thumb'><a id='docs' href='/docs'>Docs</a><a id='plain'>Plain</a><area id='map' name='map' href='/map'></div><div id='out'></div><script>const images = document.images; const links = document.links; const beforeImages = images.length; const beforeLinks = links.length; const hero = images.namedItem('hero'); const thumb = images.namedItem('thumb'); const docs = links.namedItem('docs'); const map = links.namedItem('map'); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(beforeImages) + ':' + String(images.length) + ':' + String(beforeLinks) + ':' + String(links.length) + ':' + String(hero) + ':' + String(thumb) + ':' + String(docs) + ':' + String(map) + ':' + String(links.namedItem('plain'));</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "2:0:2:0:[object Element]:[object Element]:[object Element]:[object Element]:null",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn script_simple_pseudo_classes_work_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main><button id='first' class='primary'>First</button><button id='disabled' class='primary' disabled>Disabled</button><button id='enabled' class='primary'>Enabled</button><input id='agree' type='checkbox' checked><select id='mode'><option value='a'>A</option><option id='selected' value='b' selected>B</option></select><div id='out'></div><script>const first = document.querySelector('#first:first-child'); const disabled = document.querySelector('button:disabled'); const enabled = document.querySelectorAll('button:enabled'); const checked = document.querySelector('input:checked'); const selected = document.querySelector('option:checked'); document.getElementById('out').textContent = first.textContent + ':' + disabled.textContent + ':' + String(enabled.length) + ':' + checked.checked + ':' + selected.textContent;</script></main>",
@@ -154,6 +197,44 @@ fn unsupported_element_get_elements_by_name_fails_explicitly() {
     let message = error.to_string();
     assert!(message.contains("Script error"));
     assert!(message.contains("unsupported Element method: getElementsByName"));
+}
+
+#[test]
+fn unsupported_form_elements_on_non_form_elements_fails_explicitly() {
+    let error = Harness::from_html(
+        "<div id='wrapper'><div id='not-form'></div></div><script>document.getElementById('wrapper').elements.length;</script>",
+    )
+    .expect_err("non-form elements should fail");
+
+    let message = error.to_string();
+    assert!(message.contains("Script error"));
+    assert!(message.contains("node is not a form element"));
+}
+
+#[test]
+fn unsupported_select_options_on_non_select_elements_fails_explicitly() {
+    let error = Harness::from_html(
+        "<div id='wrapper'><div id='not-select'></div></div><script>document.getElementById('not-select').options.length;</script>",
+    )
+    .expect_err("non-select elements should fail");
+
+    let message = error.to_string();
+    assert!(message.contains("Script error"));
+    assert!(message.contains("node is not a select element"));
+}
+
+#[test]
+fn unsupported_document_images_on_elements_fails_explicitly() {
+    let error = Harness::from_html(
+        "<div id='wrapper'><div id='not-doc'></div></div><script>document.getElementById('not-doc').images.length;</script>",
+    )
+    .expect_err("non-document images access should fail");
+
+    let message = error.to_string();
+    assert!(message.contains("Script error"));
+    assert!(message.contains("unsupported member access"));
+    assert!(message.contains("`images`"));
+    assert!(message.contains("element value"));
 }
 
 #[test]

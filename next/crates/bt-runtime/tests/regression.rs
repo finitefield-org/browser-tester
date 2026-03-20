@@ -134,6 +134,24 @@ fn session_resolves_get_elements_by_class_name_regression() {
 }
 
 #[test]
+fn session_rejects_document_links_on_elements_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><div id='not-doc'></div></div><script>document.getElementById('not-doc').links.length;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-document links access should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(error.to_string().contains("unsupported member access"));
+    assert!(error.to_string().contains("`links`"));
+    assert!(error.to_string().contains("element value"));
+}
+
+#[test]
 fn session_rejects_get_elements_by_name_on_elements_explicitly() {
     let error = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -151,4 +169,36 @@ fn session_rejects_get_elements_by_name_on_elements_explicitly() {
             .to_string()
             .contains("unsupported Element method: getElementsByName")
     );
+}
+
+#[test]
+fn session_rejects_form_elements_on_non_form_elements_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><div id='not-form'></div></div><script>document.getElementById('wrapper').elements.length;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-form elements should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(error.to_string().contains("node is not a form element"));
+}
+
+#[test]
+fn session_rejects_select_options_on_non_select_elements_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><div id='not-select'></div></div><script>document.getElementById('not-select').options.length;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-select elements should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(error.to_string().contains("node is not a select element"));
 }

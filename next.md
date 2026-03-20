@@ -1010,7 +1010,7 @@ README は次だけを書く。
 - この workspace では Phase 0 から Phase 6 まで完了済み
 - Phase 7 の script DOM query expansion は slice 1 の `querySelector`、slice 2 の `matches`、slice 3 の `closest`、slice 4 の selector hardening まで実装済み
 - 追加の selector backlog slices として sibling combinators (`A + B`, `A ~ B`) も実装済み
-- 追加の selector / collection backlog slice として `querySelectorAll` と minimal `NodeList`、selector lists、simple pseudo-classes、`Element.children` / minimal `HTMLCollection`（`namedItem()` 含む）、`getElementsByTagName` / live `HTMLCollection`、`getElementsByClassName` / live `HTMLCollection`、`getElementsByName` / live `NodeList` も実装済み
+- 追加の selector / collection backlog slice として `querySelectorAll` と minimal `NodeList`、selector lists、simple pseudo-classes、`Element.children` / minimal `HTMLCollection`（`namedItem()` 含む）、`getElementsByTagName` / live `HTMLCollection`、`getElementsByClassName` / live `HTMLCollection`、`getElementsByName` / live `NodeList`、`document.forms` / `form.elements` / live `HTMLCollection`、`select.options` / live `HTMLCollection`、`document.images` / `document.links` / live `HTMLCollection` も実装済み
 
 ## Phase 6: Selector Expansion
 
@@ -1096,6 +1096,17 @@ README は次だけを書く。
    - document / element scoped live class-name HTMLCollection と document-scoped live name NodeList
    - class-name collections は `length` と `item(index)` と `namedItem(name)`
    - name collections は `length` と `item(index)`
+11. `document.forms` and `form.elements`（post-Phase-7 collection slice, 完了）
+   - document-scoped live forms HTMLCollection と form-scoped live elements HTMLCollection
+   - forms collections は `length` と `item(index)` と `namedItem(name)`
+   - elements collections は `length` と `item(index)` と `namedItem(name)`
+12. `select.options`（post-Phase-7 collection slice, 完了）
+   - select-scoped live option HTMLCollection
+   - `length` と `item(index)` と `namedItem(name)`
+13. `document.images` / `document.links`（post-Phase-7 collection slice, 完了）
+   - document-scoped live image HTMLCollection と document-scoped live link HTMLCollection
+   - image collections は `length` と `item(index)` と `namedItem(name)`
+   - link collections は `length` と `item(index)` と `namedItem(name)`、`a[href]` と `area[href]` に限定
 
 完了条件:
 
@@ -1120,7 +1131,7 @@ README は次だけを書く。
 4. 実装は owning subsystem に閉じる
 5. 既存 API で足りない場合だけ `Harness` に公開する
 6. 公開面が変わる変更では README / capability matrix / mock guide も同じ変更で更新する
-- `querySelectorAll` と minimal `NodeList` は既に実装済みで、selector lists と simple pseudo-classes も実装済み、`Element.children` / minimal `HTMLCollection`（`namedItem()` 含む）と `getElementsByTagName` / `getElementsByClassName` / live `HTMLCollection`、`getElementsByName` / live `NodeList` も実装済み、broader collection APIs は backlog のままにする
+- `querySelectorAll` と minimal `NodeList` は既に実装済みで、selector lists と simple pseudo-classes も実装済み、`Element.children` / minimal `HTMLCollection`（`namedItem()` 含む）と `getElementsByTagName` / `getElementsByClassName` / live `HTMLCollection`、`getElementsByName` / live `NodeList`、`document.forms` / `form.elements` / live `HTMLCollection`、`select.options` / live `HTMLCollection`、`document.images` / `document.links` / live `HTMLCollection` も実装済み、broader collection APIs は backlog のままにする
 
 新しい named phase を切る条件:
 

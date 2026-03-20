@@ -57,6 +57,9 @@ pub enum HtmlCollectionTarget {
         scope: HtmlCollectionScope,
         class_names: String,
     },
+    FormElements(ElementHandle),
+    SelectOptions(ElementHandle),
+    DocumentLinks,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -309,6 +312,47 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready(
             "HTMLCollection.getElementsByClassName",
         ))
+    }
+
+    fn html_collection_form_elements_items(
+        &mut self,
+        _element: ElementHandle,
+    ) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("form.elements"))
+    }
+
+    fn html_collection_form_elements_named_item(
+        &mut self,
+        _element: ElementHandle,
+        _name: &str,
+    ) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("form.elements"))
+    }
+
+    fn html_collection_select_options_items(
+        &mut self,
+        _element: ElementHandle,
+    ) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("select.options"))
+    }
+
+    fn html_collection_select_options_named_item(
+        &mut self,
+        _element: ElementHandle,
+        _name: &str,
+    ) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("select.options"))
+    }
+
+    fn html_collection_document_links_items(&mut self) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("document.links"))
+    }
+
+    fn html_collection_document_links_named_item(
+        &mut self,
+        _name: &str,
+    ) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("document.links"))
     }
 
     fn element_text_content(&mut self, _element: ElementHandle) -> Result<String> {

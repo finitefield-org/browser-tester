@@ -183,6 +183,21 @@ fn eval_member<H: HostBindings>(
 ) -> Result<Value> {
     let object = eval_expr(object, env, host)?;
     match object {
+        Value::Document if property == "forms" => {
+            Ok(Value::HtmlCollection(HtmlCollectionTarget::ByTagName {
+                scope: HtmlCollectionScope::Document,
+                tag_name: "form".to_string(),
+            }))
+        }
+        Value::Document if property == "images" => {
+            Ok(Value::HtmlCollection(HtmlCollectionTarget::ByTagName {
+                scope: HtmlCollectionScope::Document,
+                tag_name: "img".to_string(),
+            }))
+        }
+        Value::Document if property == "links" => {
+            Ok(Value::HtmlCollection(HtmlCollectionTarget::DocumentLinks))
+        }
         Value::Window if property == "document" => Ok(Value::Document),
         Value::Document if property == "defaultView" => Ok(Value::Window),
         Value::Element(element) if property == "textContent" => {
@@ -196,6 +211,12 @@ fn eval_member<H: HostBindings>(
         }
         Value::Element(element) if property == "children" => Ok(Value::HtmlCollection(
             HtmlCollectionTarget::Children(element),
+        )),
+        Value::Element(element) if property == "elements" => Ok(Value::HtmlCollection(
+            HtmlCollectionTarget::FormElements(element),
+        )),
+        Value::Element(element) if property == "options" => Ok(Value::HtmlCollection(
+            HtmlCollectionTarget::SelectOptions(element),
         )),
         Value::Event(event) if property == "type" => Ok(Value::String(event.event_type())),
         Value::Event(event) if property == "target" => {
@@ -631,6 +652,13 @@ fn html_collection_items<H: HostBindings>(
         HtmlCollectionTarget::ByClassName { .. } => {
             host.html_collection_class_name_items(collection.clone())
         }
+        HtmlCollectionTarget::FormElements(element) => {
+            host.html_collection_form_elements_items(*element)
+        }
+        HtmlCollectionTarget::SelectOptions(element) => {
+            host.html_collection_select_options_items(*element)
+        }
+        HtmlCollectionTarget::DocumentLinks => host.html_collection_document_links_items(),
     }
 }
 
@@ -647,6 +675,13 @@ fn html_collection_named_item_handle<H: HostBindings>(
         HtmlCollectionTarget::ByClassName { .. } => {
             host.html_collection_class_name_named_item(collection.clone(), name)
         }
+        HtmlCollectionTarget::FormElements(element) => {
+            host.html_collection_form_elements_named_item(*element, name)
+        }
+        HtmlCollectionTarget::SelectOptions(element) => {
+            host.html_collection_select_options_named_item(*element, name)
+        }
+        HtmlCollectionTarget::DocumentLinks => host.html_collection_document_links_named_item(name),
     }
 }
 

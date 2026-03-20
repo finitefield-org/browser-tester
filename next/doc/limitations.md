@@ -1,6 +1,6 @@
 # Limitations
 
-The `next/` workspace has reached Phase 4 for DOM, script, events, forms, fake time, and deterministic mock wiring, Phase 5 for hardening and publication checks, Phase 6 selector slices 1 through 4 plus sibling combinators, and Phase 7 script DOM query slices 1 through 4. Post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support, `Element.children` with minimal `HTMLCollection` support, including `namedItem()`, `getElementsByTagName` with live `HTMLCollection` support, `getElementsByClassName` with live `HTMLCollection` support, and `getElementsByName` with live `NodeList` support. Selector lists and a small pseudo-class slice are supported by the bounded selector engine; broader collection APIs remain deferred by design.
+The `next/` workspace has reached Phase 4 for DOM, script, events, forms, fake time, and deterministic mock wiring, Phase 5 for hardening and publication checks, Phase 6 selector slices 1 through 4 plus sibling combinators, and Phase 7 script DOM query slices 1 through 4. Post-Phase-7 collection slices add `querySelectorAll` with minimal `NodeList` support, `Element.children` with minimal `HTMLCollection` support, including `namedItem()`, `getElementsByTagName` with live `HTMLCollection` support, `getElementsByClassName` with live `HTMLCollection` support, `getElementsByName` with live `NodeList` support, `document.forms` / `form.elements` with live `HTMLCollection` support, `select.options` with live `HTMLCollection` support, and `document.images` / `document.links` with live `HTMLCollection` support. Selector lists and a small pseudo-class slice are supported by the bounded selector engine; broader collection APIs such as `document.all` and namespace-aware `getElementsByTagNameNS` remain deferred by design.
 
 What exists today:
 
@@ -23,13 +23,18 @@ What exists today:
 - script-side `getElementsByTagName` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
 - script-side `getElementsByClassName` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
 - script-side `getElementsByName` is available with live `NodeList` support (`length`, `item`)
+- script-side `document.forms` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
+- script-side `form.elements` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
+- script-side `select.options` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
+- script-side `document.images` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
+- script-side `document.links` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
 - script-side `Element.matches` is available
 - script-side `Element.closest` is available
 - selector hardening and regression coverage are available
 
 What does not exist yet:
 
-- broader collection APIs such as `getElementsBy*` families
+- broader collection APIs such as `document.all` and namespace-aware `getElementsByTagNameNS`
 - broad pseudo-classes such as `:nth-child`, `:not`, and `:is`
 
 ## Important Consequence

@@ -26,11 +26,19 @@ struct RecordingHost {
     element_children_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
     html_collection_tag_name_items_results: BTreeMap<HtmlCollectionTarget, Vec<ElementHandle>>,
     html_collection_class_name_items_results: BTreeMap<HtmlCollectionTarget, Vec<ElementHandle>>,
+    html_collection_form_elements_items_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
+    html_collection_select_options_items_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
+    document_links_items_results: Vec<ElementHandle>,
     html_collection_named_item_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
     html_collection_tag_name_named_item_results:
         BTreeMap<(HtmlCollectionTarget, String), Option<ElementHandle>>,
     html_collection_class_name_named_item_results:
         BTreeMap<(HtmlCollectionTarget, String), Option<ElementHandle>>,
+    html_collection_form_elements_named_item_results:
+        BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
+    html_collection_select_options_named_item_results:
+        BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
+    document_links_named_item_results: BTreeMap<String, Option<ElementHandle>>,
     document_query_selector_results: BTreeMap<String, Option<ElementHandle>>,
     document_query_selector_all_results: BTreeMap<String, Vec<ElementHandle>>,
     document_get_elements_by_name_results: BTreeMap<String, Vec<ElementHandle>>,
@@ -40,9 +48,15 @@ struct RecordingHost {
     element_children_calls: Vec<ElementHandle>,
     html_collection_tag_name_items_calls: Vec<HtmlCollectionTarget>,
     html_collection_class_name_items_calls: Vec<HtmlCollectionTarget>,
+    html_collection_form_elements_items_calls: Vec<ElementHandle>,
+    html_collection_select_options_items_calls: Vec<ElementHandle>,
+    document_links_items_calls: usize,
     html_collection_named_item_calls: Vec<(ElementHandle, String)>,
     html_collection_tag_name_named_item_calls: Vec<(HtmlCollectionTarget, String)>,
     html_collection_class_name_named_item_calls: Vec<(HtmlCollectionTarget, String)>,
+    html_collection_form_elements_named_item_calls: Vec<(ElementHandle, String)>,
+    html_collection_select_options_named_item_calls: Vec<(ElementHandle, String)>,
+    document_links_named_item_calls: Vec<String>,
     document_query_selector_calls: Vec<String>,
     document_query_selector_all_calls: Vec<String>,
     document_get_elements_by_name_calls: Vec<String>,
@@ -96,6 +110,28 @@ impl RecordingHost {
             .insert(collection, result);
     }
 
+    fn seed_html_collection_form_elements_items(
+        &mut self,
+        element: ElementHandle,
+        result: Vec<ElementHandle>,
+    ) {
+        self.html_collection_form_elements_items_results
+            .insert(element, result);
+    }
+
+    fn seed_html_collection_select_options_items(
+        &mut self,
+        element: ElementHandle,
+        result: Vec<ElementHandle>,
+    ) {
+        self.html_collection_select_options_items_results
+            .insert(element, result);
+    }
+
+    fn seed_document_links_items(&mut self, result: Vec<ElementHandle>) {
+        self.document_links_items_results = result;
+    }
+
     fn seed_html_collection_named_item(
         &mut self,
         element: ElementHandle,
@@ -124,6 +160,35 @@ impl RecordingHost {
     ) {
         self.html_collection_class_name_named_item_results
             .insert((collection, name.into()), result);
+    }
+
+    fn seed_html_collection_form_elements_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: impl Into<String>,
+        result: Option<ElementHandle>,
+    ) {
+        self.html_collection_form_elements_named_item_results
+            .insert((element, name.into()), result);
+    }
+
+    fn seed_html_collection_select_options_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: impl Into<String>,
+        result: Option<ElementHandle>,
+    ) {
+        self.html_collection_select_options_named_item_results
+            .insert((element, name.into()), result);
+    }
+
+    fn seed_document_links_named_item(
+        &mut self,
+        name: impl Into<String>,
+        result: Option<ElementHandle>,
+    ) {
+        self.document_links_named_item_results
+            .insert(name.into(), result);
     }
 
     fn seed_document_query_selector(
@@ -283,6 +348,76 @@ impl HostBindings for RecordingHost {
             .flatten())
     }
 
+    fn html_collection_form_elements_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.html_collection_form_elements_items_calls.push(element);
+        Ok(self
+            .html_collection_form_elements_items_results
+            .get(&element)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn html_collection_form_elements_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.html_collection_form_elements_named_item_calls
+            .push((element, name.to_string()));
+        Ok(self
+            .html_collection_form_elements_named_item_results
+            .get(&(element, name.to_string()))
+            .copied()
+            .flatten())
+    }
+
+    fn html_collection_select_options_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.html_collection_select_options_items_calls
+            .push(element);
+        Ok(self
+            .html_collection_select_options_items_results
+            .get(&element)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn html_collection_select_options_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.html_collection_select_options_named_item_calls
+            .push((element, name.to_string()));
+        Ok(self
+            .html_collection_select_options_named_item_results
+            .get(&(element, name.to_string()))
+            .copied()
+            .flatten())
+    }
+
+    fn html_collection_document_links_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
+        self.document_links_items_calls += 1;
+        Ok(self.document_links_items_results.clone())
+    }
+
+    fn html_collection_document_links_named_item(
+        &mut self,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.document_links_named_item_calls.push(name.to_string());
+        Ok(self
+            .document_links_named_item_results
+            .get(name)
+            .copied()
+            .flatten())
+    }
+
     fn element_set_text_content(
         &mut self,
         element: ElementHandle,
@@ -345,7 +480,10 @@ impl HostBindings for RecordingHost {
             .unwrap_or_default())
     }
 
-    fn document_get_elements_by_name(&mut self, name: &str) -> bt_script::Result<Vec<ElementHandle>> {
+    fn document_get_elements_by_name(
+        &mut self,
+        name: &str,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
         self.document_get_elements_by_name_calls
             .push(name.to_string());
         Ok(self
@@ -828,6 +966,261 @@ fn runtime_resolves_html_collection_class_name_access() {
 }
 
 #[test]
+fn runtime_resolves_document_forms_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("signup", ElementHandle::new(1), "Signup");
+    host.seed_element("login", ElementHandle::new(2), "Login");
+    host.seed_element("out", ElementHandle::new(3), "");
+
+    let forms_collection = HtmlCollectionTarget::ByTagName {
+        scope: HtmlCollectionScope::Document,
+        tag_name: "form".to_string(),
+    };
+    host.seed_html_collection_tag_name_items(
+        forms_collection.clone(),
+        vec![ElementHandle::new(1), ElementHandle::new(2)],
+    );
+    host.seed_html_collection_tag_name_named_item(
+        forms_collection.clone(),
+        "signup",
+        Some(ElementHandle::new(1)),
+    );
+    host.seed_html_collection_tag_name_named_item(forms_collection.clone(), "missing", None);
+
+    runtime
+        .eval_program(
+            "const forms = document.forms; const named = forms.namedItem('signup'); document.getElementById('out').textContent = String(forms.length) + ':' + forms.item(0).textContent + ':' + named.textContent + ':' + String(forms.namedItem('missing'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.forms should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("2:Signup:Signup:null")
+    );
+    assert_eq!(
+        host.html_collection_tag_name_items_calls,
+        vec![forms_collection.clone(), forms_collection.clone()]
+    );
+    assert_eq!(
+        host.html_collection_tag_name_named_item_calls,
+        vec![
+            (
+                HtmlCollectionTarget::ByTagName {
+                    scope: HtmlCollectionScope::Document,
+                    tag_name: "form".to_string(),
+                },
+                "signup".to_string()
+            ),
+            (
+                HtmlCollectionTarget::ByTagName {
+                    scope: HtmlCollectionScope::Document,
+                    tag_name: "form".to_string(),
+                },
+                "missing".to_string()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn runtime_resolves_form_elements_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("signup", ElementHandle::new(1), "Signup");
+    host.seed_element("first", ElementHandle::new(2), "Ada");
+    host.seed_element("second", ElementHandle::new(3), "Bio");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_value(ElementHandle::new(2), "Ada");
+    host.seed_value(ElementHandle::new(3), "Bio");
+
+    host.seed_html_collection_form_elements_items(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2), ElementHandle::new(3)],
+    );
+    host.seed_html_collection_form_elements_named_item(
+        ElementHandle::new(1),
+        "first",
+        Some(ElementHandle::new(2)),
+    );
+    host.seed_html_collection_form_elements_named_item(ElementHandle::new(1), "missing", None);
+
+    runtime
+        .eval_program(
+            "const elements = document.getElementById('signup').elements; const named = elements.namedItem('first'); document.getElementById('out').textContent = String(elements.length) + ':' + elements.item(0).value + ':' + elements.item(1).value + ':' + named.value + ':' + String(elements.namedItem('missing'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("form elements should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("2:Ada:Bio:Ada:null")
+    );
+    assert_eq!(
+        host.html_collection_form_elements_items_calls,
+        vec![
+            ElementHandle::new(1),
+            ElementHandle::new(1),
+            ElementHandle::new(1)
+        ]
+    );
+    assert_eq!(
+        host.html_collection_form_elements_named_item_calls,
+        vec![
+            (ElementHandle::new(1), "first".to_string()),
+            (ElementHandle::new(1), "missing".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn runtime_resolves_select_options_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("mode", ElementHandle::new(1), "mode");
+    host.seed_element("first", ElementHandle::new(2), "A");
+    host.seed_element("second", ElementHandle::new(3), "B");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_html_collection_select_options_items(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2), ElementHandle::new(3)],
+    );
+    host.seed_html_collection_select_options_named_item(
+        ElementHandle::new(1),
+        "second",
+        Some(ElementHandle::new(3)),
+    );
+    host.seed_html_collection_select_options_named_item(ElementHandle::new(1), "missing", None);
+
+    runtime
+        .eval_program(
+            "const options = document.getElementById('mode').options; const named = options.namedItem('second'); const before = options.length; document.getElementById('out').textContent = String(before) + ':' + options.item(0).textContent + ':' + options.item(1).textContent + ':' + named.textContent + ':' + String(options.namedItem('missing'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("select.options should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("2:A:B:B:null")
+    );
+    assert_eq!(
+        host.html_collection_select_options_items_calls,
+        vec![
+            ElementHandle::new(1),
+            ElementHandle::new(1),
+            ElementHandle::new(1),
+        ]
+    );
+    assert_eq!(
+        host.html_collection_select_options_named_item_calls,
+        vec![
+            (ElementHandle::new(1), "second".to_string()),
+            (ElementHandle::new(1), "missing".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn runtime_resolves_document_images_and_links_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("img-hero", ElementHandle::new(1), "");
+    host.seed_element("img-thumb", ElementHandle::new(2), "");
+    host.seed_element("docs", ElementHandle::new(3), "Docs");
+    host.seed_element("map", ElementHandle::new(4), "");
+    host.seed_element("out", ElementHandle::new(5), "");
+    host.seed_html_collection_tag_name_items(
+        HtmlCollectionTarget::ByTagName {
+            scope: HtmlCollectionScope::Document,
+            tag_name: "img".to_string(),
+        },
+        vec![ElementHandle::new(1), ElementHandle::new(2)],
+    );
+    host.seed_html_collection_tag_name_named_item(
+        HtmlCollectionTarget::ByTagName {
+            scope: HtmlCollectionScope::Document,
+            tag_name: "img".to_string(),
+        },
+        "img-hero",
+        Some(ElementHandle::new(1)),
+    );
+    host.seed_html_collection_tag_name_named_item(
+        HtmlCollectionTarget::ByTagName {
+            scope: HtmlCollectionScope::Document,
+            tag_name: "img".to_string(),
+        },
+        "img-thumb",
+        Some(ElementHandle::new(2)),
+    );
+    host.seed_document_links_items(vec![ElementHandle::new(3), ElementHandle::new(4)]);
+    host.seed_document_links_named_item("docs", Some(ElementHandle::new(3)));
+    host.seed_document_links_named_item("map", Some(ElementHandle::new(4)));
+    host.seed_document_links_named_item("plain", None);
+
+    runtime
+        .eval_program(
+            "const images = document.images; const links = document.links; const beforeImages = images.length; const beforeLinks = links.length; const hero = images.namedItem('img-hero'); const thumb = images.namedItem('img-thumb'); const docs = links.namedItem('docs'); const map = links.namedItem('map'); document.getElementById('out').textContent = String(beforeImages) + ':' + String(images.length) + ':' + String(beforeLinks) + ':' + String(links.length) + ':' + String(hero) + ':' + String(thumb) + ':' + String(docs) + ':' + String(map) + ':' + String(links.namedItem('plain'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.images and document.links should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(5))
+            .map(String::as_str),
+        Some("2:2:2:2:[object Element]:[object Element]:[object Element]:[object Element]:null")
+    );
+    assert_eq!(
+        host.html_collection_tag_name_items_calls,
+        vec![
+            HtmlCollectionTarget::ByTagName {
+                scope: HtmlCollectionScope::Document,
+                tag_name: "img".to_string(),
+            },
+            HtmlCollectionTarget::ByTagName {
+                scope: HtmlCollectionScope::Document,
+                tag_name: "img".to_string(),
+            },
+        ]
+    );
+    assert_eq!(
+        host.html_collection_tag_name_named_item_calls,
+        vec![
+            (
+                HtmlCollectionTarget::ByTagName {
+                    scope: HtmlCollectionScope::Document,
+                    tag_name: "img".to_string(),
+                },
+                "img-hero".to_string()
+            ),
+            (
+                HtmlCollectionTarget::ByTagName {
+                    scope: HtmlCollectionScope::Document,
+                    tag_name: "img".to_string(),
+                },
+                "img-thumb".to_string()
+            ),
+        ]
+    );
+    assert_eq!(host.document_links_items_calls, 2);
+    assert_eq!(
+        host.document_links_named_item_calls,
+        vec!["docs".to_string(), "map".to_string(), "plain".to_string()]
+    );
+}
+
+#[test]
 fn runtime_resolves_html_collection_named_item_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -916,7 +1309,11 @@ fn runtime_reports_get_elements_by_name_on_elements_explicitly() {
         )
         .expect_err("element.getElementsByName should fail explicitly");
 
-    assert!(error.to_string().contains("unsupported Element method: getElementsByName"));
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported Element method: getElementsByName")
+    );
 }
 
 #[test]
