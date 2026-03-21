@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use bt_script::{
     ElementHandle, HostBindings, HtmlCollectionScope, HtmlCollectionTarget, ListenerTarget,
-    MediaQueryListState, NodeHandle, RadioNodeListTarget, ScriptFunction, ScriptRuntime,
-    StorageTarget,
+    MediaQueryListState, NodeHandle, RadioNodeListTarget, ScreenOrientationState, ScriptFunction,
+    ScriptRuntime, StorageTarget,
 };
 
 #[derive(Default)]
@@ -39,6 +39,46 @@ fn origin_from_url(url: &str) -> String {
     format!("{scheme}://{authority}")
 }
 
+fn domain_from_url(url: &str) -> String {
+    let Some((_, rest)) = url.split_once(':') else {
+        return "null".to_string();
+    };
+
+    let Some(after_slashes) = rest.strip_prefix("//") else {
+        return "null".to_string();
+    };
+
+    let authority_end = after_slashes
+        .find(['/', '?', '#'])
+        .unwrap_or(after_slashes.len());
+    let mut authority = &after_slashes[..authority_end];
+    if authority.is_empty() {
+        return "null".to_string();
+    }
+
+    if let Some((_, host)) = authority.rsplit_once('@') {
+        authority = host;
+    }
+
+    let host = if authority.starts_with('[') {
+        let Some(end_bracket) = authority.find(']') else {
+            return "null".to_string();
+        };
+        &authority[1..end_bracket]
+    } else {
+        authority
+            .split_once(':')
+            .map(|(host, _)| host)
+            .unwrap_or(authority)
+    };
+
+    if host.is_empty() {
+        "null".to_string()
+    } else {
+        host.to_ascii_lowercase()
+    }
+}
+
 #[derive(Default)]
 struct RecordingHost {
     elements: BTreeMap<String, ElementHandle>,
@@ -64,6 +104,7 @@ struct RecordingHost {
     document_style_sheets_items_results: Vec<ElementHandle>,
     document_style_sheets_named_item_results: BTreeMap<String, Option<ElementHandle>>,
     document_children_items_results: Vec<ElementHandle>,
+    window_frames_items_results: Vec<ElementHandle>,
     node_child_nodes_items_results: BTreeMap<HtmlCollectionScope, Vec<NodeHandle>>,
     node_text_content_results: BTreeMap<NodeHandle, String>,
     node_type_results: BTreeMap<NodeHandle, u8>,
@@ -92,6 +133,7 @@ struct RecordingHost {
     document_links_named_item_results: BTreeMap<String, Option<ElementHandle>>,
     document_anchors_named_item_results: BTreeMap<String, Option<ElementHandle>>,
     document_children_named_item_results: BTreeMap<String, Option<ElementHandle>>,
+    window_frames_named_item_results: BTreeMap<String, Option<ElementHandle>>,
     table_rows_named_item_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
     row_cells_named_item_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
     document_query_selector_results: BTreeMap<String, Option<ElementHandle>>,
@@ -100,6 +142,7 @@ struct RecordingHost {
     document_document_element_result: Option<ElementHandle>,
     document_head_result: Option<ElementHandle>,
     document_body_result: Option<ElementHandle>,
+    document_scrolling_element_result: Option<ElementHandle>,
     document_active_element_result: Option<ElementHandle>,
     document_has_focus_result: bool,
     document_visibility_state_result: String,
@@ -112,17 +155,34 @@ struct RecordingHost {
     document_dir_result: String,
     document_base_uri_calls: usize,
     document_origin_calls: usize,
+    document_domain_calls: usize,
     document_referrer_result: String,
     document_referrer_calls: usize,
+    document_cookie_jar: BTreeMap<String, String>,
+    document_cookie_calls: usize,
+    document_set_cookie_calls: Vec<String>,
     window_name_result: String,
     window_name_calls: usize,
     set_window_name_calls: Vec<String>,
+    window_history_length_result: usize,
+    window_history_state_result: Option<String>,
+    window_history_scroll_restoration_result: String,
+    window_history_back_calls: usize,
+    window_history_forward_calls: usize,
+    window_history_go_calls: Vec<i64>,
+    window_history_push_state_calls: Vec<(Option<String>, Option<String>)>,
+    window_history_replace_state_calls: Vec<(Option<String>, Option<String>)>,
     window_open_calls: Vec<(Option<String>, Option<String>, Option<String>)>,
     window_open_error: Option<String>,
     window_close_calls: usize,
     window_close_error: Option<String>,
     window_print_calls: usize,
     window_print_error: Option<String>,
+    dialog_alert_messages: Vec<String>,
+    dialog_confirm_messages: Vec<String>,
+    dialog_prompt_messages: Vec<String>,
+    dialog_confirm_queue: Vec<bool>,
+    dialog_prompt_queue: Vec<Option<String>>,
     navigator_user_agent: String,
     navigator_platform: String,
     navigator_language: String,
@@ -165,6 +225,7 @@ struct RecordingHost {
     document_style_sheets_items_calls: usize,
     document_style_sheets_named_item_calls: Vec<String>,
     document_children_items_calls: usize,
+    window_frames_items_calls: usize,
     node_child_nodes_items_calls: Vec<HtmlCollectionScope>,
     node_text_content_calls: Vec<NodeHandle>,
     node_type_calls: Vec<NodeHandle>,
@@ -184,6 +245,7 @@ struct RecordingHost {
     document_links_named_item_calls: Vec<String>,
     document_anchors_named_item_calls: Vec<String>,
     document_children_named_item_calls: Vec<String>,
+    window_frames_named_item_calls: Vec<String>,
     table_rows_named_item_calls: Vec<(ElementHandle, String)>,
     row_cells_named_item_calls: Vec<(ElementHandle, String)>,
     document_query_selector_calls: Vec<String>,
@@ -192,6 +254,7 @@ struct RecordingHost {
     document_document_element_calls: usize,
     document_head_calls: usize,
     document_body_calls: usize,
+    document_scrolling_element_calls: usize,
     document_active_element_calls: usize,
     document_has_focus_calls: usize,
     document_visibility_state_calls: usize,
@@ -201,6 +264,10 @@ struct RecordingHost {
     document_location_calls: usize,
     document_set_location_calls: Vec<String>,
     document_set_dir_calls: Vec<String>,
+    window_history_length_calls: usize,
+    window_history_state_calls: usize,
+    window_history_scroll_restoration_calls: usize,
+    window_history_scroll_restoration_set_calls: Vec<String>,
     element_query_selector_calls: Vec<(ElementHandle, String)>,
     element_query_selector_all_calls: Vec<(ElementHandle, String)>,
     element_closest_calls: Vec<(ElementHandle, String)>,
@@ -360,6 +427,10 @@ impl RecordingHost {
         self.document_children_items_results = result;
     }
 
+    fn seed_window_frames_items(&mut self, result: Vec<ElementHandle>) {
+        self.window_frames_items_results = result;
+    }
+
     fn seed_node_child_nodes_items(&mut self, scope: HtmlCollectionScope, result: Vec<NodeHandle>) {
         self.node_child_nodes_items_results.insert(scope, result);
     }
@@ -511,6 +582,15 @@ impl RecordingHost {
             .insert(name.into(), result);
     }
 
+    fn seed_window_frames_named_item(
+        &mut self,
+        name: impl Into<String>,
+        result: Option<ElementHandle>,
+    ) {
+        self.window_frames_named_item_results
+            .insert(name.into(), result);
+    }
+
     fn seed_table_rows_named_item(
         &mut self,
         element: ElementHandle,
@@ -550,6 +630,10 @@ impl RecordingHost {
 
     fn seed_document_body(&mut self, result: Option<ElementHandle>) {
         self.document_body_result = result;
+    }
+
+    fn seed_document_scrolling_element(&mut self, result: Option<ElementHandle>) {
+        self.document_scrolling_element_result = result;
     }
 
     fn seed_document_active_element(&mut self, result: Option<ElementHandle>) {
@@ -718,6 +802,11 @@ impl HostBindings for RecordingHost {
         Ok(self.document_body_result)
     }
 
+    fn document_scrolling_element(&mut self) -> bt_script::Result<Option<ElementHandle>> {
+        self.document_scrolling_element_calls += 1;
+        Ok(self.document_scrolling_element_result)
+    }
+
     fn document_active_element(&mut self) -> bt_script::Result<Option<ElementHandle>> {
         self.document_active_element_calls += 1;
         Ok(self.document_active_element_result)
@@ -774,9 +863,55 @@ impl HostBindings for RecordingHost {
         Ok(origin_from_url(&self.document_location_result))
     }
 
+    fn document_domain(&mut self) -> bt_script::Result<String> {
+        self.document_domain_calls += 1;
+        Ok(domain_from_url(&self.document_location_result))
+    }
+
     fn document_referrer(&mut self) -> bt_script::Result<String> {
         self.document_referrer_calls += 1;
         Ok(self.document_referrer_result.clone())
+    }
+
+    fn document_cookie(&mut self) -> bt_script::Result<String> {
+        self.document_cookie_calls += 1;
+        Ok(self
+            .document_cookie_jar
+            .iter()
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect::<Vec<_>>()
+            .join("; "))
+    }
+
+    fn document_set_cookie(&mut self, value: &str) -> bt_script::Result<()> {
+        self.document_set_cookie_calls.push(value.to_string());
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(bt_script::ScriptError::new(
+                "document.cookie requires a non-empty cookie string",
+            ));
+        }
+
+        let pair = trimmed
+            .split_once(';')
+            .map(|(pair, _)| pair)
+            .unwrap_or(trimmed);
+        let Some((name, cookie_value)) = pair.split_once('=') else {
+            return Err(bt_script::ScriptError::new(
+                "document.cookie requires `name=value`",
+            ));
+        };
+
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(bt_script::ScriptError::new(
+                "document.cookie requires a non-empty cookie name",
+            ));
+        }
+
+        self.document_cookie_jar
+            .insert(name.to_string(), cookie_value.trim_start().to_string());
+        Ok(())
     }
 
     fn window_name(&mut self) -> bt_script::Result<String> {
@@ -817,6 +952,54 @@ impl HostBindings for RecordingHost {
         Ok(())
     }
 
+    fn window_alert(&mut self, message: &str) -> bt_script::Result<()> {
+        self.dialog_alert_messages.push(message.to_string());
+        Ok(())
+    }
+
+    fn window_confirm(&mut self, message: &str) -> bt_script::Result<bool> {
+        self.dialog_confirm_messages.push(message.to_string());
+        if self.dialog_confirm_queue.is_empty() {
+            return Err(bt_script::ScriptError::new(
+                "confirm() requires a queued response",
+            ));
+        }
+
+        Ok(self.dialog_confirm_queue.remove(0))
+    }
+
+    fn window_prompt(
+        &mut self,
+        message: &str,
+        _default_text: Option<&str>,
+    ) -> bt_script::Result<Option<String>> {
+        self.dialog_prompt_messages.push(message.to_string());
+        if self.dialog_prompt_queue.is_empty() {
+            return Err(bt_script::ScriptError::new(
+                "prompt() requires a queued response",
+            ));
+        }
+
+        Ok(self.dialog_prompt_queue.remove(0))
+    }
+
+    fn html_collection_window_frames_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
+        self.window_frames_items_calls += 1;
+        Ok(self.window_frames_items_results.clone())
+    }
+
+    fn html_collection_window_frames_named_item(
+        &mut self,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.window_frames_named_item_calls.push(name.to_string());
+        Ok(self
+            .window_frames_named_item_results
+            .get(name)
+            .copied()
+            .unwrap_or(None))
+    }
+
     fn window_navigator_user_agent(&mut self) -> bt_script::Result<String> {
         Ok(self.navigator_user_agent.clone())
     }
@@ -834,6 +1017,10 @@ impl HostBindings for RecordingHost {
     }
 
     fn window_navigator_product(&mut self) -> bt_script::Result<String> {
+        Ok("browser-tester-next".to_string())
+    }
+
+    fn window_navigator_product_sub(&mut self) -> bt_script::Result<String> {
         Ok("browser-tester-next".to_string())
     }
 
@@ -861,12 +1048,101 @@ impl HostBindings for RecordingHost {
         Ok("browser-tester-next".to_string())
     }
 
+    fn window_navigator_vendor_sub(&mut self) -> bt_script::Result<String> {
+        Ok("browser-tester-next".to_string())
+    }
+
+    fn window_navigator_pdf_viewer_enabled(&mut self) -> bt_script::Result<bool> {
+        Ok(false)
+    }
+
+    fn window_navigator_do_not_track(&mut self) -> bt_script::Result<String> {
+        Ok("unspecified".to_string())
+    }
+
+    fn window_navigator_java_enabled(&mut self) -> bt_script::Result<bool> {
+        Ok(false)
+    }
+
     fn window_navigator_hardware_concurrency(&mut self) -> bt_script::Result<i64> {
         Ok(8)
     }
 
     fn window_navigator_max_touch_points(&mut self) -> bt_script::Result<i64> {
         Ok(0)
+    }
+
+    fn window_history_length(&mut self) -> bt_script::Result<usize> {
+        self.window_history_length_calls += 1;
+        Ok(self.window_history_length_result)
+    }
+
+    fn window_history_state(&mut self) -> bt_script::Result<Option<String>> {
+        self.window_history_state_calls += 1;
+        Ok(self.window_history_state_result.clone())
+    }
+
+    fn window_history_scroll_restoration(&mut self) -> bt_script::Result<String> {
+        self.window_history_scroll_restoration_calls += 1;
+        Ok(self.window_history_scroll_restoration_result.clone())
+    }
+
+    fn set_window_history_scroll_restoration(&mut self, value: &str) -> bt_script::Result<()> {
+        match value {
+            "auto" | "manual" => {
+                self.window_history_scroll_restoration_set_calls
+                    .push(value.to_string());
+                self.window_history_scroll_restoration_result = value.to_string();
+                Ok(())
+            }
+            other => Err(bt_script::ScriptError::new(format!(
+                "unsupported history scroll restoration value: {other}"
+            ))),
+        }
+    }
+
+    fn window_history_push_state(
+        &mut self,
+        state: Option<&str>,
+        url: Option<&str>,
+    ) -> bt_script::Result<()> {
+        self.window_history_push_state_calls
+            .push((state.map(str::to_string), url.map(str::to_string)));
+        self.window_history_length_result += 1;
+        self.window_history_state_result = state.map(str::to_string);
+        if let Some(url) = url {
+            self.document_location_result = url.to_string();
+        }
+        Ok(())
+    }
+
+    fn window_history_replace_state(
+        &mut self,
+        state: Option<&str>,
+        url: Option<&str>,
+    ) -> bt_script::Result<()> {
+        self.window_history_replace_state_calls
+            .push((state.map(str::to_string), url.map(str::to_string)));
+        self.window_history_state_result = state.map(str::to_string);
+        if let Some(url) = url {
+            self.document_location_result = url.to_string();
+        }
+        Ok(())
+    }
+
+    fn window_history_back(&mut self) -> bt_script::Result<()> {
+        self.window_history_back_calls += 1;
+        Ok(())
+    }
+
+    fn window_history_forward(&mut self) -> bt_script::Result<()> {
+        self.window_history_forward_calls += 1;
+        Ok(())
+    }
+
+    fn window_history_go(&mut self, delta: i64) -> bt_script::Result<()> {
+        self.window_history_go_calls.push(delta);
+        Ok(())
     }
 
     fn window_scroll_to(&mut self, x: i64, y: i64) -> bt_script::Result<()> {
@@ -973,6 +1249,10 @@ impl HostBindings for RecordingHost {
 
     fn window_screen_pixel_depth(&mut self) -> bt_script::Result<i64> {
         Ok(24)
+    }
+
+    fn window_screen_orientation(&mut self) -> bt_script::Result<ScreenOrientationState> {
+        Ok(ScreenOrientationState::new("landscape-primary", 0))
     }
 
     fn match_media(&mut self, query: &str) -> bt_script::Result<MediaQueryListState> {
@@ -2038,24 +2318,43 @@ fn runtime_resolves_document_root_head_and_body_access() {
     host.seed_document_document_element(Some(ElementHandle::new(1)));
     host.seed_document_head(Some(ElementHandle::new(2)));
     host.seed_document_body(Some(ElementHandle::new(3)));
+    host.seed_document_scrolling_element(Some(ElementHandle::new(1)));
 
     runtime
         .eval_program(
-            "const html = document.documentElement; const head = document.head; const body = document.body; document.getElementById('out').textContent = html.getAttribute('id') + ':' + head.getAttribute('id') + ':' + body.getAttribute('id');",
+            "const html = document.documentElement; const head = document.head; const body = document.body; const scrolling = document.scrollingElement; document.getElementById('out').textContent = html.getAttribute('id') + ':' + head.getAttribute('id') + ':' + body.getAttribute('id') + ':' + scrolling.getAttribute('id');",
             "inline-script",
             &mut host,
         )
-        .expect("document root/head/body should resolve through host bindings");
+        .expect("document root/head/body/scrollingElement should resolve through host bindings");
 
     assert_eq!(host.document_document_element_calls, 1);
     assert_eq!(host.document_head_calls, 1);
     assert_eq!(host.document_body_calls, 1);
+    assert_eq!(host.document_scrolling_element_calls, 1);
     assert_eq!(
         host.text_content
             .get(&ElementHandle::new(4))
             .map(String::as_str),
-        Some("html:head:body")
+        Some("html:head:body:html")
     );
+}
+
+#[test]
+fn runtime_rejects_document_scrolling_element_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "document.scrollingElement = null;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("document.scrollingElement should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("scrollingElement"));
 }
 
 #[test]
@@ -2329,6 +2628,28 @@ fn runtime_resolves_window_screen_object_access() {
 }
 
 #[test]
+fn runtime_resolves_window_screen_orientation_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = String(window.screen.orientation) + ':' + window.screen.orientation.type + ':' + String(window.screen.orientation.angle);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.screen.orientation should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("[object ScreenOrientation]:landscape-primary:0")
+    );
+}
+
+#[test]
 fn runtime_rejects_window_screen_width_assignment() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -2339,6 +2660,23 @@ fn runtime_rejects_window_screen_width_assignment() {
 
     assert!(error.message().contains("screen"));
     assert!(error.message().contains("width"));
+}
+
+#[test]
+fn runtime_rejects_window_screen_orientation_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.screen.orientation.type = 'portrait-primary';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.screen.orientation.type should be read-only");
+
+    assert!(error.message().contains("screen orientation"));
+    assert!(error.message().contains("type"));
 }
 
 #[test]
@@ -2462,20 +2800,349 @@ fn runtime_resolves_window_name_getter_and_setter_access() {
 
     runtime
         .eval_program(
-            "const before = window.name; window.name = 'updated'; const after = document.defaultView.name; document.getElementById('out').textContent = before + ':' + after;",
+            "const before = window.name; window.self.name = 'updated'; document.getElementById('out').textContent = before + ':' + window.window.name + ':' + window.parent.name + ':' + window.top.name;",
             "inline-script",
             &mut host,
         )
         .expect("window.name should resolve through host bindings");
 
-    assert_eq!(host.window_name_calls, 2);
+    assert_eq!(host.window_name_calls, 4);
     assert_eq!(host.set_window_name_calls, vec!["updated".to_string()]);
     assert_eq!(host.window_name_result, "updated");
     assert_eq!(
         host.text_content
             .get(&ElementHandle::new(1))
             .map(String::as_str),
-        Some("seeded:updated")
+        Some("seeded:updated:updated:updated")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_self_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.self = 'updated';", "inline-script", &mut host)
+        .expect_err("window.self should be read-only");
+
+    assert!(error.message().contains("unsupported assignment target"));
+    assert!(error.message().contains("self"));
+}
+
+#[test]
+fn runtime_resolves_window_closed_accessor() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = String(window.closed) + ':' + String(window.self.closed) + ':' + String(window.window.closed) + ':' + String(window.parent.closed) + ':' + String(window.top.closed);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.closed should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("false:false:false:false:false")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_closed_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.closed = true;", "inline-script", &mut host)
+        .expect_err("window.closed should be read-only");
+
+    assert!(error.message().contains("unsupported assignment target"));
+    assert!(error.message().contains("closed"));
+}
+
+#[test]
+fn runtime_resolves_window_history_accessor() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.window_history_length_result = 1;
+    host.window_history_scroll_restoration_result = "auto".to_string();
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = String(window.history) + ':' + String(window.history.length) + ':' + String(window.self.history.length) + ':' + String(window.history.state) + ':' + String(window.history.scrollRestoration);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.history should resolve through host bindings");
+
+    assert_eq!(host.window_history_length_calls, 2);
+    assert_eq!(host.window_history_scroll_restoration_calls, 1);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("[object History]:1:1:null:auto")
+    );
+}
+
+#[test]
+fn runtime_updates_window_history_state_via_push_and_replace_state() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.window_history_length_result = 1;
+    host.window_history_state_result = None;
+
+    runtime
+        .eval_program(
+            "window.history.pushState('step-1', '', 'https://example.test/step-1'); window.history.replaceState('step-2', '', 'https://example.test/step-2'); document.getElementById('out').textContent = document.location + ':' + String(window.history.length) + ':' + String(window.history.state);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.history.pushState and replaceState should resolve through host bindings");
+
+    assert_eq!(
+        host.window_history_push_state_calls,
+        vec![(
+            Some("step-1".to_string()),
+            Some("https://example.test/step-1".to_string())
+        )]
+    );
+    assert_eq!(
+        host.window_history_replace_state_calls,
+        vec![(
+            Some("step-2".to_string()),
+            Some("https://example.test/step-2".to_string())
+        )]
+    );
+    assert_eq!(host.window_history_length_result, 2);
+    assert_eq!(host.window_history_state_result.as_deref(), Some("step-2"));
+    assert_eq!(host.document_location_result, "https://example.test/step-2");
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("https://example.test/step-2:2:step-2")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_history_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.history.length = 2;", "inline-script", &mut host)
+        .expect_err("window.history should be read-only");
+
+    assert!(error.message().contains("history"));
+    assert!(error.message().contains("length"));
+}
+
+#[test]
+fn runtime_rejects_window_history_state_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.history.state = 'step';", "inline-script", &mut host)
+        .expect_err("window.history.state should be read-only");
+
+    assert!(error.message().contains("history"));
+    assert!(error.message().contains("state"));
+}
+
+#[test]
+fn runtime_rejects_window_history_push_state_with_too_few_arguments() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.history.pushState('step');",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.history.pushState should reject too few arguments");
+
+    assert!(
+        error
+            .message()
+            .contains("history.pushState() expects 2 or 3 arguments")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_history_replace_state_with_too_few_arguments() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.history.replaceState('step');",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.history.replaceState should reject too few arguments");
+
+    assert!(
+        error
+            .message()
+            .contains("history.replaceState() expects 2 or 3 arguments")
+    );
+}
+
+#[test]
+fn runtime_updates_window_history_scroll_restoration() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.window_history_scroll_restoration_result = "auto".to_string();
+
+    runtime
+        .eval_program(
+            "window.history.scrollRestoration = 'manual'; document.getElementById('out').textContent = String(window.history.scrollRestoration);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.history.scrollRestoration should be writable");
+
+    assert_eq!(
+        host.window_history_scroll_restoration_set_calls,
+        vec!["manual".to_string()]
+    );
+    assert_eq!(host.window_history_scroll_restoration_result, "manual");
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("manual")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_history_scroll_restoration_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.history.scrollRestoration = 'sideways';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.history.scrollRestoration should reject invalid values");
+
+    assert!(error.message().contains("scroll restoration"));
+}
+
+#[test]
+fn runtime_exposes_window_history_methods() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.window_history_length_result = 2;
+
+    runtime
+        .eval_program(
+            "window.history.back(); window.history.forward(); window.history.go(-1); document.getElementById('out').textContent = String(window.history.length);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.history methods should resolve through host bindings");
+
+    assert_eq!(host.window_history_back_calls, 1);
+    assert_eq!(host.window_history_forward_calls, 1);
+    assert_eq!(host.window_history_go_calls, vec![-1]);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("2")
+    );
+}
+
+#[test]
+fn runtime_routes_window_dialogs_through_host_bindings() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.dialog_confirm_queue.push(true);
+    host.dialog_prompt_queue.push(Some("Ada".to_string()));
+
+    runtime
+        .eval_program(
+            "window.alert('Notice'); document.getElementById('out').textContent = String(window.confirm('Continue?')) + ':' + String(window.prompt('Name?', 'Default'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window dialogs should resolve through host bindings");
+
+    assert_eq!(host.dialog_alert_messages, vec!["Notice".to_string()]);
+    assert_eq!(
+        host.dialog_confirm_messages,
+        vec!["Continue?".to_string()]
+    );
+    assert_eq!(host.dialog_prompt_messages, vec!["Name?".to_string()]);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("true:Ada")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_confirm_without_queued_response() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.confirm('Continue?');",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.confirm should require a queued response");
+
+    assert!(error
+        .to_string()
+        .contains("confirm() requires a queued response"));
+}
+
+#[test]
+fn runtime_rejects_window_prompt_without_queued_response() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.prompt('Name?');", "inline-script", &mut host)
+        .expect_err("window.prompt should require a queued response");
+
+    assert!(error
+        .to_string()
+        .contains("prompt() requires a queued response"));
+}
+
+#[test]
+fn runtime_rejects_window_history_back_with_arguments() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.history.back(1);", "inline-script", &mut host)
+        .expect_err("window.history.back should reject arguments");
+
+    assert!(
+        error
+            .message()
+            .contains("history.back() expects no arguments")
     );
 }
 
@@ -2726,6 +3393,26 @@ fn runtime_rejects_window_navigator_product_assignment() {
 }
 
 #[test]
+fn runtime_rejects_window_navigator_product_sub_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.productSub = 'x';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.navigator.productSub should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `productSub` on navigator value")
+    );
+}
+
+#[test]
 fn runtime_rejects_window_navigator_on_line_assignment() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -2782,6 +3469,144 @@ fn runtime_rejects_window_navigator_vendor_assignment() {
 }
 
 #[test]
+fn runtime_rejects_window_navigator_vendor_sub_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.vendorSub = 'x';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.navigator.vendorSub should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `vendorSub` on navigator value")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_navigator_pdf_viewer_enabled_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.pdfViewerEnabled = true;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.navigator.pdfViewerEnabled should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `pdfViewerEnabled` on navigator value")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_navigator_do_not_track_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.doNotTrack = '1';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.navigator.doNotTrack should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `doNotTrack` on navigator value")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_navigator_plugins_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.plugins = null;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.navigator.plugins should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `plugins` on navigator value")
+    );
+}
+
+#[test]
+fn runtime_resolves_window_navigator_java_enabled_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = String(window.navigator.javaEnabled());",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.navigator.javaEnabled should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("false")
+    );
+}
+
+#[test]
+fn runtime_resolves_window_navigator_plugins_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("first-embed", ElementHandle::new(1), "");
+    host.seed_element("second-embed", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    let plugins_collection = HtmlCollectionTarget::ByTagName {
+        scope: HtmlCollectionScope::Document,
+        tag_name: "embed".to_string(),
+    };
+    host.seed_html_collection_tag_name_items(
+        plugins_collection.clone(),
+        vec![ElementHandle::new(1), ElementHandle::new(2)],
+    );
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = String(window.navigator.plugins.length);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.navigator.plugins should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("2")
+    );
+    assert_eq!(
+        host.html_collection_tag_name_items_calls,
+        vec![plugins_collection]
+    );
+}
+
+#[test]
 fn runtime_resolves_window_navigator_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -2789,8 +3614,8 @@ fn runtime_resolves_window_navigator_access() {
     host.seed_navigator("browser-tester-next", "unknown", "en-US", true, true);
 
     runtime
-        .eval_program(
-            "document.getElementById('out').textContent = window.navigator.userAgent + ':' + window.navigator.appCodeName + ':' + window.navigator.appName + ':' + window.navigator.appVersion + ':' + window.navigator.product + ':' + window.navigator.vendor + ':' + window.navigator.platform + ':' + window.navigator.language + ':' + String(window.navigator.cookieEnabled) + ':' + String(window.navigator.onLine) + ':' + String(window.navigator.webdriver) + ':' + String(window.navigator.hardwareConcurrency) + ':' + String(window.navigator.maxTouchPoints);",
+            .eval_program(
+            "document.getElementById('out').textContent = window.navigator.userAgent + ':' + window.navigator.appCodeName + ':' + window.navigator.appName + ':' + window.navigator.appVersion + ':' + window.navigator.product + ':' + window.navigator.productSub + ':' + window.navigator.vendor + ':' + window.navigator.vendorSub + ':' + String(window.navigator.pdfViewerEnabled) + ':' + window.navigator.doNotTrack + ':' + String(window.navigator.javaEnabled()) + ':' + String(window.navigator.plugins.length) + ':' + window.navigator.platform + ':' + window.navigator.language + ':' + String(window.navigator.cookieEnabled) + ':' + String(window.navigator.onLine) + ':' + String(window.navigator.webdriver) + ':' + String(window.navigator.hardwareConcurrency) + ':' + String(window.navigator.maxTouchPoints);",
             "inline-script",
             &mut host,
         )
@@ -2801,7 +3626,7 @@ fn runtime_resolves_window_navigator_access() {
             .get(&ElementHandle::new(1))
             .map(String::as_str),
         Some(
-            "browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:unknown:en-US:true:true:false:8:0"
+            "browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:false:unspecified:false:0:unknown:en-US:true:true:false:8:0"
         )
     );
 }
@@ -3018,6 +3843,53 @@ fn runtime_resolves_document_location_getter_setter_and_window_alias() {
 }
 
 #[test]
+fn runtime_resolves_document_cookie_getter_and_setter() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "document.cookie = 'theme=dark'; document.cookie = 'theme=light'; document.getElementById('out').textContent = document.cookie;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.cookie should resolve through host bindings");
+
+    assert_eq!(
+        host.document_set_cookie_calls,
+        vec!["theme=dark".to_string(), "theme=light".to_string()]
+    );
+    assert_eq!(host.document_cookie_calls, 1);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("theme=light")
+    );
+}
+
+#[test]
+fn runtime_rejects_malformed_document_cookie_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("document.cookie = 'badcookie';", "inline-script", &mut host)
+        .expect_err("document.cookie should reject malformed assignments");
+
+    assert!(
+        error
+            .to_string()
+            .contains("document.cookie requires `name=value`")
+    );
+    assert_eq!(
+        host.document_set_cookie_calls,
+        vec!["badcookie".to_string()]
+    );
+}
+
+#[test]
 fn runtime_resolves_document_url_and_document_uri_aliases() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -3079,12 +3951,13 @@ fn runtime_resolves_document_origin_and_element_origin_aliases() {
 
     runtime
         .eval_program(
-            "const root = document.getElementById('root'); const child = document.getElementById('child'); document.getElementById('root').textContent = document.origin + ':' + window.origin + ':' + root.origin + ':' + child.origin;",
+            "const root = document.getElementById('root'); const child = document.getElementById('child'); document.getElementById('root').textContent = document.domain + ':' + document.origin + ':' + window.origin + ':' + root.origin + ':' + child.origin;",
             "inline-script",
             &mut host,
         )
-        .expect("document.origin should resolve through host bindings");
+        .expect("document.domain and origin should resolve through host bindings");
 
+    assert_eq!(host.document_domain_calls, 1);
     assert_eq!(host.document_origin_calls, 2);
     assert_eq!(
         host.element_origin_calls,
@@ -3095,9 +3968,26 @@ fn runtime_resolves_document_origin_and_element_origin_aliases() {
             .get(&ElementHandle::new(1))
             .map(String::as_str),
         Some(
-            "https://example.test:8443:https://example.test:8443:https://example.test:8443:https://example.test:8443"
+            "example.test:https://example.test:8443:https://example.test:8443:https://example.test:8443:https://example.test:8443"
         )
     );
+}
+
+#[test]
+fn runtime_rejects_document_domain_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "document.domain = 'example.test';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("document.domain should be read-only");
+
+    assert!(error.message().contains("unsupported assignment target"));
+    assert!(error.message().contains("domain"));
 }
 
 #[test]
@@ -4117,6 +5007,211 @@ fn runtime_resolves_document_children_access() {
         host.document_children_named_item_calls,
         vec!["root".to_string(), "missing".to_string()]
     );
+}
+
+#[test]
+fn runtime_resolves_window_frames_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("first-frame", ElementHandle::new(1), "");
+    host.seed_element("second-frame", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_attribute(ElementHandle::new(1), "id", "first");
+    host.seed_attribute(ElementHandle::new(2), "id", "second");
+    host.seed_window_frames_items(vec![ElementHandle::new(1), ElementHandle::new(2)]);
+    host.seed_window_frames_named_item("first", Some(ElementHandle::new(1)));
+    host.seed_window_frames_named_item("missing", None);
+
+    runtime
+        .eval_program(
+            "const frames = window.frames; document.getElementById('out').textContent = String(frames.length) + ':' + frames.item(0).getAttribute('id') + ':' + frames.namedItem('first').getAttribute('id') + ':' + String(frames.namedItem('missing'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.frames should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("2:first:first:null")
+    );
+    assert_eq!(host.window_frames_items_calls, 2);
+    assert_eq!(
+        host.window_frames_named_item_calls,
+        vec!["first".to_string(), "missing".to_string()]
+    );
+}
+
+#[test]
+fn runtime_resolves_window_frame_element_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(3), "");
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = String(window.frameElement);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.frameElement should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("null")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_frame_element_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.frameElement = 2;", "inline-script", &mut host)
+        .expect_err("window.frameElement should be read-only");
+
+    assert!(error
+        .to_string()
+        .contains("unsupported assignment target"));
+}
+
+#[test]
+fn runtime_resolves_window_opener_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(3), "");
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = String(window.opener);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.opener should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("null")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_opener_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.opener = 2;", "inline-script", &mut host)
+        .expect_err("window.opener should be read-only");
+
+    assert!(error
+        .to_string()
+        .contains("unsupported assignment target"));
+}
+
+#[test]
+fn runtime_resolves_form_and_select_length_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("signup", ElementHandle::new(1), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "form");
+    host.seed_html_collection_form_elements_items(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(4), ElementHandle::new(5)],
+    );
+    host.seed_element("mode", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(2), "select");
+    host.seed_html_collection_select_options_items(
+        ElementHandle::new(2),
+        vec![ElementHandle::new(6), ElementHandle::new(7)],
+    );
+    host.seed_element("out", ElementHandle::new(3), "");
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = String(document.getElementById('signup').length) + ':' + String(document.getElementById('mode').length);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("form.length and select.length should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("2:2")
+    );
+}
+
+#[test]
+fn runtime_rejects_form_length_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("signup", ElementHandle::new(1), "");
+
+    let error = runtime
+        .eval_program("document.getElementById('signup').length = 2;", "inline-script", &mut host)
+        .expect_err("form.length should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("element"));
+    assert!(error.to_string().contains("length"));
+}
+
+#[test]
+fn runtime_resolves_window_length_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_window_frames_items(vec![ElementHandle::new(1), ElementHandle::new(2)]);
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = String(window.length);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.length should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("2")
+    );
+    assert_eq!(host.window_frames_items_calls, 1);
+}
+
+#[test]
+fn runtime_rejects_window_length_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.length = 2;", "inline-script", &mut host)
+        .expect_err("window.length should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+}
+
+#[test]
+fn runtime_rejects_window_frames_length_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.frames.length = 2;", "inline-script", &mut host)
+        .expect_err("window.frames.length should be read-only");
+
+    assert!(error
+        .to_string()
+        .contains("cannot assign to `length` on html collection value"));
 }
 
 #[test]

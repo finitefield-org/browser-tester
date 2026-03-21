@@ -38,13 +38,36 @@ fn focus_and_blur_are_publicly_supported() -> browser_tester_next::Result<()> {
 #[test]
 fn navigator_app_name_is_publicly_supported() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
-        "<div id='out'></div><script>document.getElementById('out').textContent = window.navigator.userAgent + ':' + window.navigator.appCodeName + ':' + window.navigator.appName + ':' + window.navigator.appVersion + ':' + window.navigator.product + ':' + window.navigator.vendor + ':' + window.navigator.platform + ':' + window.navigator.language + ':' + String(window.navigator.cookieEnabled) + ':' + String(window.navigator.onLine) + ':' + String(window.navigator.webdriver);</script>",
+        "<div id='out'></div><script>document.getElementById('out').textContent = window.navigator.userAgent + ':' + window.navigator.appCodeName + ':' + window.navigator.appName + ':' + window.navigator.appVersion + ':' + window.navigator.product + ':' + window.navigator.productSub + ':' + window.navigator.vendor + ':' + window.navigator.vendorSub + ':' + String(window.navigator.pdfViewerEnabled) + ':' + window.navigator.doNotTrack + ':' + String(window.navigator.javaEnabled()) + ':' + window.navigator.platform + ':' + window.navigator.language + ':' + String(window.navigator.cookieEnabled) + ':' + String(window.navigator.onLine) + ':' + String(window.navigator.webdriver);</script>",
     )?;
 
     harness.assert_text(
         "#out",
-        "browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:unknown:en-US:true:true:false",
+        "browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:false:unspecified:false:unknown:en-US:true:true:false",
     )?;
+    Ok(())
+}
+
+#[test]
+fn document_cookie_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<div id='out'></div><script>document.cookie = 'theme=dark'; document.cookie = 'theme=light'; document.getElementById('out').textContent = document.cookie;</script>",
+    )?;
+
+    harness.assert_text("#out", "theme=light")?;
+    Ok(())
+}
+
+#[test]
+fn document_cookie_assignment_rejects_malformed_input() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html("<script>document.cookie = 'badcookie';</script>")
+        .expect_err("malformed cookie assignments should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("document.cookie requires `name=value`")
+    );
     Ok(())
 }
 
@@ -197,12 +220,133 @@ fn document_has_focus_tracks_focus_state() -> browser_tester_next::Result<()> {
 }
 
 #[test]
+fn document_scrolling_element_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<html id='html'><head id='head'><title>Title</title></head><body id='body'><main id='out'></main><script>document.getElementById('out').textContent = document.scrollingElement.getAttribute('id');</script></body></html>",
+    )?;
+
+    harness.assert_text("#out", "html")?;
+    Ok(())
+}
+
+#[test]
+fn document_scrolling_element_assignment_is_rejected() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html(
+        "<main id='out'></main><script>document.scrollingElement = null;</script>",
+    )
+    .expect_err("document.scrollingElement should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("scrollingElement"));
+    Ok(())
+}
+
+#[test]
 fn window_children_are_publicly_supported() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<div id='root'><span id='first'>First</span><span id='second'>Second</span></div><div id='out'></div><script>const children = document.defaultView.children; document.getElementById('out').textContent = String(children.length) + ':' + children.item(0).textContent + ':' + children.item(1).textContent + ':' + String(children.namedItem('first')) + ':' + String(children.namedItem('missing'));</script>",
     )?;
 
     harness.assert_text("#out", "3:FirstSecond::null:null")?;
+    Ok(())
+}
+
+#[test]
+fn window_frames_are_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<iframe id='first' name='first'></iframe><iframe id='second'></iframe><div id='out'></div><script>const frames = window.frames; const before = frames.length; document.getElementById('second').remove(); document.getElementById('out').textContent = String(before) + ':' + String(frames.length) + ':' + frames.item(0).getAttribute('id') + ':' + frames.namedItem('first').getAttribute('id') + ':' + String(frames.namedItem('missing'));</script>",
+    )?;
+
+    harness.assert_text("#out", "2:1:first:first:null")?;
+    Ok(())
+}
+
+#[test]
+fn window_frames_length_assignment_is_rejected() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html(
+        "<iframe id='first'></iframe><script>window.frames.length = 2;</script>",
+    )
+    .expect_err("window.frames.length should be read-only");
+
+    assert!(error
+        .to_string()
+        .contains("cannot assign to `length` on html collection value"));
+    Ok(())
+}
+
+#[test]
+fn window_frame_element_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<div id='out'></div><script>document.getElementById('out').textContent = String(window.frameElement);</script>",
+    )?;
+
+    harness.assert_text("#out", "null")?;
+    Ok(())
+}
+
+#[test]
+fn window_frame_element_assignment_is_rejected() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html("<script>window.frameElement = 2;</script>")
+        .expect_err("window.frameElement should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    Ok(())
+}
+
+#[test]
+fn window_opener_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<div id='out'></div><script>document.getElementById('out').textContent = String(window.opener) + ':' + String(document.defaultView.opener);</script>",
+    )?;
+
+    harness.assert_text("#out", "null:null")?;
+    Ok(())
+}
+
+#[test]
+fn window_opener_assignment_is_rejected() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html("<script>window.opener = 2;</script>")
+        .expect_err("window.opener should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    Ok(())
+}
+
+#[test]
+fn form_and_select_lengths_are_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='out'></main><form id='signup'><input><input></form><select id='mode'><option>A</option><option>B</option></select><script>document.getElementById('out').textContent = String(document.getElementById('signup').length) + ':' + String(document.getElementById('mode').length);</script>",
+    )?;
+
+    harness.assert_text("#out", "2:2")?;
+    Ok(())
+}
+
+#[test]
+fn form_length_assignment_is_rejected() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html("<form id='signup'><input><input></form><script>document.getElementById('signup').length = 2;</script>")
+        .expect_err("form.length should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    Ok(())
+}
+
+#[test]
+fn window_length_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<iframe id='first' name='first'></iframe><iframe id='second'></iframe><div id='out'></div><script>const before = window.length; document.getElementById('second').remove(); document.getElementById('out').textContent = String(before) + ':' + String(window.length);</script>",
+    )?;
+
+    harness.assert_text("#out", "2:1")?;
+    Ok(())
+}
+
+#[test]
+fn window_length_assignment_is_rejected() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html("<iframe id='first'></iframe><script>window.length = 2;</script>")
+        .expect_err("window.length should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
     Ok(())
 }
 
@@ -308,6 +452,28 @@ fn window_screen_object_is_publicly_supported() -> browser_tester_next::Result<(
 }
 
 #[test]
+fn window_screen_orientation_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='out'></main><script>document.getElementById('out').textContent = String(window.screen.orientation) + ':' + window.screen.orientation.type + ':' + String(window.screen.orientation.angle);</script>",
+    )?;
+
+    harness.assert_text("#out", "[object ScreenOrientation]:landscape-primary:0")?;
+    Ok(())
+}
+
+#[test]
+fn window_screen_orientation_assignment_is_rejected() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html(
+        "<main id='out'></main><script>window.screen.orientation.type = 'portrait-primary';</script>",
+    )
+    .expect_err("window.screen.orientation.type should be rejected");
+
+    assert!(error.to_string().contains("screen orientation"));
+    assert!(error.to_string().contains("type"));
+    Ok(())
+}
+
+#[test]
 fn document_referrer_is_publicly_supported() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='out'></main><script>document.getElementById('out').textContent = '[' + document.referrer + ']';</script>",
@@ -320,10 +486,159 @@ fn document_referrer_is_publicly_supported() -> browser_tester_next::Result<()> 
 #[test]
 fn window_name_is_publicly_supported() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
-        "<main id='out'></main><script>const before = window.name; window.name = 'updated'; document.getElementById('out').textContent = before + ':' + document.defaultView.name;</script>",
+        "<main id='out'></main><script>const before = window.name; window.self.name = 'updated'; document.getElementById('out').textContent = before + ':' + window.window.name + ':' + window.parent.name + ':' + window.top.name;</script>",
     )?;
 
-    harness.assert_text("#out", ":updated")?;
+    harness.assert_text("#out", ":updated:updated:updated")?;
+    Ok(())
+}
+
+#[test]
+fn window_self_assignment_is_rejected() -> browser_tester_next::Result<()> {
+    let error =
+        Harness::from_html("<main id='out'></main><script>window.self = 'updated';</script>")
+            .expect_err("window.self should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("self"));
+    Ok(())
+}
+
+#[test]
+fn window_closed_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='out'></main><script>document.getElementById('out').textContent = String(window.closed) + ':' + String(window.self.closed) + ':' + String(window.window.closed) + ':' + String(window.parent.closed) + ':' + String(window.top.closed);</script>",
+    )?;
+
+    harness.assert_text("#out", "false:false:false:false:false")?;
+    Ok(())
+}
+
+#[test]
+fn window_closed_assignment_is_rejected() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html("<main id='out'></main><script>window.closed = true;</script>")
+        .expect_err("window.closed should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("closed"));
+    Ok(())
+}
+
+#[test]
+fn window_history_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='out'></main><script>document.getElementById('out').textContent = String(window.history) + ':' + String(window.history.length) + ':' + String(window.self.history.length) + ':' + String(window.history.state) + ':' + String(window.history.scrollRestoration);</script>",
+    )?;
+
+    harness.assert_text("#out", "[object History]:1:1:null:auto")?;
+    Ok(())
+}
+
+#[test]
+fn window_history_push_and_replace_state_are_publicly_supported() -> browser_tester_next::Result<()>
+{
+    let harness = Harness::from_html(
+        "<main id='out'></main><script>window.history.pushState('step-1', '', 'https://app.local/step-1'); window.history.replaceState('step-2', '', 'https://app.local/step-2'); document.getElementById('out').textContent = document.location + ':' + String(window.history.length) + ':' + String(window.history.state);</script>",
+    )?;
+
+    harness.assert_text("#out", "https://app.local/step-2:2:step-2")?;
+    Ok(())
+}
+
+#[test]
+fn window_history_assignment_is_rejected() -> browser_tester_next::Result<()> {
+    let error =
+        Harness::from_html("<main id='out'></main><script>window.history.length = 2;</script>")
+            .expect_err("window.history should be read-only");
+
+    assert!(error.to_string().contains("history"));
+    assert!(error.to_string().contains("length"));
+    Ok(())
+}
+
+#[test]
+fn window_history_state_assignment_is_rejected() -> browser_tester_next::Result<()> {
+    let error =
+        Harness::from_html("<main id='out'></main><script>window.history.state = 'step';</script>")
+            .expect_err("window.history.state should be read-only");
+
+    assert!(error.to_string().contains("history"));
+    assert!(error.to_string().contains("state"));
+    Ok(())
+}
+
+#[test]
+fn window_history_push_state_arity_is_rejected() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html(
+        "<main id='out'></main><script>window.history.pushState('step');</script>",
+    )
+    .expect_err("window.history.pushState should reject too few arguments");
+
+    assert!(
+        error
+            .to_string()
+            .contains("history.pushState() expects 2 or 3 arguments")
+    );
+    Ok(())
+}
+
+#[test]
+fn window_history_replace_state_arity_is_rejected() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html(
+        "<main id='out'></main><script>window.history.replaceState('step');</script>",
+    )
+    .expect_err("window.history.replaceState should reject too few arguments");
+
+    assert!(
+        error
+            .to_string()
+            .contains("history.replaceState() expects 2 or 3 arguments")
+    );
+    Ok(())
+}
+
+#[test]
+fn window_history_scroll_restoration_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='out'></main><script>window.history.scrollRestoration = 'manual'; document.getElementById('out').textContent = String(window.history.scrollRestoration);</script>",
+    )?;
+
+    harness.assert_text("#out", "manual")?;
+    Ok(())
+}
+
+#[test]
+fn window_history_scroll_restoration_assignment_is_rejected() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html(
+        "<main id='out'></main><script>window.history.scrollRestoration = 'sideways';</script>",
+    )
+    .expect_err("window.history.scrollRestoration should reject invalid values");
+
+    assert!(error.to_string().contains("scroll restoration"));
+    Ok(())
+}
+
+#[test]
+fn window_history_methods_are_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='out'></main><script>window.location = 'https://app.local/step-1'; window.location = 'https://app.local/step-2'; window.history.back(); window.history.forward(); window.history.go(-1); document.getElementById('out').textContent = document.location + ':' + String(window.history.length);</script>",
+    )?;
+
+    harness.assert_text("#out", "https://app.local/step-1:3")?;
+    Ok(())
+}
+
+#[test]
+fn window_history_back_arguments_are_rejected() -> browser_tester_next::Result<()> {
+    let error =
+        Harness::from_html("<main id='out'></main><script>window.history.back(1);</script>")
+            .expect_err("window.history.back should reject arguments");
+
+    assert!(
+        error
+            .to_string()
+            .contains("history.back() expects no arguments")
+    );
     Ok(())
 }
 
@@ -365,13 +680,24 @@ fn document_base_uri_aliases_are_publicly_supported() -> browser_tester_next::Re
 #[test]
 fn document_origin_aliases_are_publicly_supported() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
-        "<main id='root'><span id='child'></span></main><div id='out'></div><script>const root = document.getElementById('root'); const child = document.getElementById('child'); document.getElementById('out').textContent = document.origin + ':' + window.origin + ':' + root.origin + ':' + child.origin;</script>",
+        "<main id='root'><span id='child'></span></main><div id='out'></div><script>const root = document.getElementById('root'); const child = document.getElementById('child'); document.getElementById('out').textContent = document.domain + ':' + document.origin + ':' + window.origin + ':' + root.origin + ':' + child.origin;</script>",
     )?;
 
     harness.assert_text(
         "#out",
-        "https://app.local:https://app.local:https://app.local:https://app.local",
+        "app.local:https://app.local:https://app.local:https://app.local:https://app.local",
     )?;
+    Ok(())
+}
+
+#[test]
+fn document_domain_assignment_is_rejected() -> browser_tester_next::Result<()> {
+    let error =
+        Harness::from_html("<main id='out'></main><script>document.domain = 'app.local';</script>")
+            .expect_err("document.domain should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("domain"));
     Ok(())
 }
 
@@ -429,13 +755,23 @@ fn print_is_publicly_supported_and_captured() -> browser_tester_next::Result<()>
 #[test]
 fn navigator_metadata_is_publicly_supported() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
-        "<main id='out'></main><script>document.getElementById('out').textContent = window.navigator.userAgent + ':' + window.navigator.appCodeName + ':' + window.navigator.vendor + ':' + window.navigator.platform + ':' + window.navigator.language + ':' + String(window.navigator.cookieEnabled) + ':' + String(window.navigator.onLine) + ':' + String(window.navigator.webdriver);</script>",
+        "<main id='out'></main><script>document.getElementById('out').textContent = window.navigator.userAgent + ':' + window.navigator.appCodeName + ':' + window.navigator.productSub + ':' + window.navigator.vendor + ':' + window.navigator.vendorSub + ':' + String(window.navigator.pdfViewerEnabled) + ':' + window.navigator.doNotTrack + ':' + String(window.navigator.javaEnabled()) + ':' + window.navigator.platform + ':' + window.navigator.language + ':' + String(window.navigator.cookieEnabled) + ':' + String(window.navigator.onLine) + ':' + String(window.navigator.webdriver);</script>",
     )?;
 
     harness.assert_text(
         "#out",
-        "browser-tester-next:browser-tester-next:browser-tester-next:unknown:en-US:true:true:false",
+        "browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:false:unspecified:false:unknown:en-US:true:true:false",
     )?;
+    Ok(())
+}
+
+#[test]
+fn navigator_plugins_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<div id='root'><embed id='first-embed'><embed name='second-embed'></div><div id='out'></div><script>document.getElementById('out').textContent = String(window.navigator.plugins.length);</script>",
+    )?;
+
+    harness.assert_text("#out", "2")?;
     Ok(())
 }
 
@@ -562,6 +898,43 @@ fn open_failure_can_be_seeded_from_the_builder() -> browser_tester_next::Result<
         .expect_err("open failures should fail bootstrap when window.open runs");
 
     assert!(error.to_string().contains("popup blocked"));
+    Ok(())
+}
+
+#[test]
+fn window_alert_is_publicly_supported_from_scripts() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::from_html("<script>window.alert('Notice');</script>")?;
+
+    assert_eq!(
+        harness.mocks_mut().dialogs().alert_messages(),
+        &["Notice".to_string()]
+    );
+    Ok(())
+}
+
+#[test]
+fn window_confirm_requires_seeded_response_from_scripts() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html("<script>window.confirm('Continue?');</script>")
+        .expect_err("window.confirm should require a queued response");
+
+    assert!(
+        error
+            .to_string()
+            .contains("confirm() requires a queued response")
+    );
+    Ok(())
+}
+
+#[test]
+fn window_prompt_requires_seeded_response_from_scripts() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html("<script>window.prompt('Name?');</script>")
+        .expect_err("window.prompt should require a queued response");
+
+    assert!(
+        error
+            .to_string()
+            .contains("prompt() requires a queued response")
+    );
     Ok(())
 }
 

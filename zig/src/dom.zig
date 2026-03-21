@@ -28,6 +28,18 @@ pub const NodeKind = union(enum) {
     comment: []const u8,
 };
 
+pub const SelectionDirection = enum {
+    forward,
+    backward,
+    none,
+};
+
+pub const SelectionState = struct {
+    start: usize,
+    end: usize,
+    direction: SelectionDirection = .none,
+};
+
 const SerializationNamespace = enum {
     html,
     svg,
@@ -204,6 +216,7 @@ pub const DomStore = struct {
     document_title: []const u8 = "",
     focused_node: ?NodeId = null,
     target_fragment: ?[]const u8 = null,
+    selection: std.AutoHashMapUnmanaged(NodeId, SelectionState) = .{},
 
     pub fn init(allocator: std.mem.Allocator) errors.Result(DomStore) {
         var arena = std.heap.ArenaAllocator.init(allocator);
@@ -217,6 +230,7 @@ pub const DomStore = struct {
             .document_title = "",
             .focused_node = null,
             .target_fragment = null,
+            .selection = .{},
         };
         const arena_alloc = store.arena.allocator();
         try store.nodes.append(arena_alloc, .{
@@ -229,6 +243,7 @@ pub const DomStore = struct {
     }
 
     pub fn deinit(self: *DomStore) void {
+        self.selection.deinit(self.allocator);
         self.arena.deinit();
     }
 
@@ -539,6 +554,9 @@ pub const DomStore = struct {
 
         try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, node_id, 0);
         try self.syncDocumentTitleFromDom();
+        if (std.mem.eql(u8, element.tag_name, "textarea")) {
+            try self.resetSelectionToEnd(node_id);
+        }
         return;
     }
 
@@ -619,6 +637,9 @@ pub const DomStore = struct {
             const fragment_children = fragment_store.childIds(fragment_root);
             try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, node_id, 0);
             try self.syncDocumentTitleFromDom();
+            if (std.mem.eql(u8, element.tag_name, "textarea")) {
+                try self.resetSelectionToEnd(node_id);
+            }
             return;
         }
 
@@ -636,6 +657,9 @@ pub const DomStore = struct {
             const fragment_children = fragment_store.childIds(fragment_root);
             try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, node_id, insertion_index);
             try self.syncDocumentTitleFromDom();
+            if (std.mem.eql(u8, element.tag_name, "textarea")) {
+                try self.resetSelectionToEnd(node_id);
+            }
             return;
         }
 
@@ -686,6 +710,9 @@ pub const DomStore = struct {
                     _ = try self.addText(node_id, text);
                 }
                 try self.syncDocumentTitleFromDom();
+                if (self.isTextareaNode(node_id)) {
+                    try self.setSelectionRange(node_id, text.len, text.len, .none);
+                }
             },
             else => return error.HtmlParse,
         }
@@ -861,6 +888,9 @@ pub const DomStore = struct {
         if (std.mem.eql(u8, element.tag_name, "input") and isTextInputType(elementAttributeValue(element.*, "type"))) {
             const arena_alloc = self.arena.allocator();
             try upsertAttribute(arena_alloc, &element.attributes, "value", try duplicateString(self, value));
+            if (isSelectionInputType(elementAttributeValue(element.*, "type"))) {
+                try self.setSelectionRange(node_id, value.len, value.len, .none);
+            }
             return;
         }
 
@@ -970,6 +1000,47 @@ pub const DomStore = struct {
         return;
     }
 
+    pub fn isSelectionControlNode(self: *const DomStore, node_id: NodeId) bool {
+        const node = self.nodeAt(node_id) orelse return false;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return false,
+        };
+
+        if (std.mem.eql(u8, element.tag_name, "textarea")) {
+            return true;
+        }
+
+        if (!std.mem.eql(u8, element.tag_name, "input")) {
+            return false;
+        }
+
+        return isSelectionInputType(elementAttributeValue(element, "type"));
+    }
+
+    pub fn selectionStateForNode(self: *const DomStore, node_id: NodeId) errors.Result(?SelectionState) {
+        const length = try self.selectionControlValueLength(node_id) orelse return null;
+        const stored = self.selection.get(node_id) orelse return .{
+            .start = length,
+            .end = length,
+            .direction = .none,
+        };
+        return normalizeSelectionState(stored, length);
+    }
+
+    pub fn setSelectionRange(
+        self: *DomStore,
+        node_id: NodeId,
+        start: usize,
+        end: usize,
+        direction: SelectionDirection,
+    ) errors.Result(void) {
+        const length = try self.selectionControlValueLength(node_id) orelse return error.DomError;
+        const normalized = normalizeSelectionRange(start, end, length, direction);
+        try self.selection.put(self.allocator, node_id, normalized);
+        return;
+    }
+
     pub fn appendChild(self: *DomStore, parent: NodeId, child: NodeId) errors.Result(NodeId) {
         try self.insertChildrenAt(parent, try self.childCount(parent), &.{child});
         return child;
@@ -1025,6 +1096,9 @@ pub const DomStore = struct {
             if (!sliceContainsNodeId(children, old_child)) {
                 try self.removeNode(old_child);
             }
+        }
+        if (self.isTextareaNode(parent)) {
+            try self.resetSelectionToEnd(parent);
         }
         return;
     }
@@ -1090,6 +1164,8 @@ pub const DomStore = struct {
                 self.focused_node = null;
             }
         }
+
+        self.clearSelectionStateForSubtree(node_id);
 
         const record = self.nodeAtMut(node_id) orelse return error.DomError;
         record.parent = null;
@@ -1581,6 +1657,92 @@ pub const DomStore = struct {
         return;
     }
 
+    fn clearSelectionStateForSubtree(self: *DomStore, node_id: NodeId) void {
+        _ = self.selection.remove(node_id);
+        const node = self.nodeAt(node_id) orelse return;
+        for (node.children.items) |child_id| {
+            self.clearSelectionStateForSubtree(child_id);
+        }
+    }
+
+    fn isTextareaNode(self: *const DomStore, node_id: NodeId) bool {
+        const node = self.nodeAt(node_id) orelse return false;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return false,
+        };
+        return std.mem.eql(u8, element.tag_name, "textarea");
+    }
+
+    fn resetSelectionToEnd(self: *DomStore, node_id: NodeId) errors.Result(void) {
+        const length = try self.selectionControlValueLength(node_id) orelse return error.DomError;
+        try self.setSelectionRange(node_id, length, length, .none);
+        return;
+    }
+
+    fn selectionControlValueLength(self: *const DomStore, node_id: NodeId) errors.Result(?usize) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return null,
+        };
+
+        if (std.mem.eql(u8, element.tag_name, "textarea")) {
+            const text = try self.valueForNode(self.allocator, node_id);
+            defer self.allocator.free(text);
+            return text.len;
+        }
+
+        if (std.mem.eql(u8, element.tag_name, "input") and isSelectionInputType(elementAttributeValue(element, "type"))) {
+            const value = try self.valueForNode(self.allocator, node_id);
+            defer self.allocator.free(value);
+            return value.len;
+        }
+
+        return null;
+    }
+
+    fn normalizeSelectionState(state: SelectionState, length: usize) SelectionState {
+        const clamped_start = if (state.start > length) length else state.start;
+        const clamped_end = if (state.end > length) length else state.end;
+        if (clamped_start > clamped_end) {
+            return .{
+                .start = clamped_end,
+                .end = clamped_end,
+                .direction = state.direction,
+            };
+        }
+
+        return .{
+            .start = clamped_start,
+            .end = clamped_end,
+            .direction = state.direction,
+        };
+    }
+
+    fn normalizeSelectionRange(
+        start: usize,
+        end: usize,
+        length: usize,
+        direction: SelectionDirection,
+    ) SelectionState {
+        const clamped_start = if (start > length) length else start;
+        const clamped_end = if (end > length) length else end;
+        if (clamped_start > clamped_end) {
+            return .{
+                .start = clamped_end,
+                .end = clamped_end,
+                .direction = direction,
+            };
+        }
+
+        return .{
+            .start = clamped_start,
+            .end = clamped_end,
+            .direction = direction,
+        };
+    }
+
     fn targetNodeForFragment(self: *const DomStore, fragment: []const u8) ?NodeId {
         if (fragment.len == 0) return null;
         if (self.findElementById(fragment)) |node_id| {
@@ -1728,6 +1890,9 @@ pub const DomStore = struct {
         }
 
         try self.syncDocumentTitleFromDom();
+        if (self.isTextareaNode(parent)) {
+            try self.resetSelectionToEnd(parent);
+        }
         return;
     }
 
@@ -2145,6 +2310,11 @@ fn isTagNameByte(byte: u8) bool {
 fn isTextInputType(input_type: ?[]const u8) bool {
     const value = input_type orelse "text";
     return std.mem.eql(u8, value, "text") or std.mem.eql(u8, value, "search") or std.mem.eql(u8, value, "url") or std.mem.eql(u8, value, "tel") or std.mem.eql(u8, value, "email") or std.mem.eql(u8, value, "password") or std.mem.eql(u8, value, "number") or std.mem.eql(u8, value, "date") or std.mem.eql(u8, value, "datetime-local") or std.mem.eql(u8, value, "month") or std.mem.eql(u8, value, "week") or std.mem.eql(u8, value, "time") or std.mem.eql(u8, value, "color");
+}
+
+fn isSelectionInputType(input_type: ?[]const u8) bool {
+    const value = input_type orelse "text";
+    return std.mem.eql(u8, value, "text") or std.mem.eql(u8, value, "search") or std.mem.eql(u8, value, "url") or std.mem.eql(u8, value, "tel") or std.mem.eql(u8, value, "password");
 }
 
 fn isCheckableInputType(input_type: ?[]const u8) bool {

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use bt_script::ScriptRuntime;
 use bt_runtime::{MockRegistry, Session, SessionConfig};
 
 #[test]
@@ -79,6 +80,34 @@ fn reset_all_clears_every_mock_family() {
     assert!(registry.file_input().selections().is_empty());
     assert!(registry.storage().local().is_empty());
     assert!(registry.storage().session().is_empty());
+}
+
+#[test]
+fn session_rejects_unseeded_window_confirm_through_script_runtime() {
+    let mut session = Session::new(SessionConfig::default()).expect("session should build");
+    let mut runtime = ScriptRuntime::new();
+
+    let error = runtime
+        .eval_program("window.confirm('Continue?');", "inline-script", &mut session)
+        .expect_err("window.confirm should require a queued response");
+
+    assert!(error
+        .to_string()
+        .contains("confirm() requires a queued response"));
+}
+
+#[test]
+fn session_rejects_unseeded_window_prompt_through_script_runtime() {
+    let mut session = Session::new(SessionConfig::default()).expect("session should build");
+    let mut runtime = ScriptRuntime::new();
+
+    let error = runtime
+        .eval_program("window.prompt('Name?');", "inline-script", &mut session)
+        .expect_err("window.prompt should require a queued response");
+
+    assert!(error
+        .to_string()
+        .contains("prompt() requires a queued response"));
 }
 
 #[test]
@@ -249,6 +278,22 @@ fn session_resolves_document_location_without_special_handling_regression() {
 }
 
 #[test]
+fn session_resolves_document_cookie_without_special_handling_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/start".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.cookie = 'theme=dark'; document.cookie = 'theme=light'; document.getElementById('out').textContent = document.cookie;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.cookie should remain available through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "theme=light");
+}
+
+#[test]
 fn session_reports_current_script_during_inline_bootstrap_and_null_elsewhere() {
     let mut session = Session::new(SessionConfig {
         url: "https://example.test/start".to_string(),
@@ -288,6 +333,24 @@ fn session_reports_document_ready_state_loading_during_bootstrap_and_complete_af
     let out_id = session.dom().select("#out").unwrap()[0];
     assert_eq!(session.dom().text_content_for_node(out_id), "loading");
     assert_eq!(session.document_ready_state(), "complete");
+}
+
+#[test]
+fn document_cookie_assignment_is_rejected_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/start".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.cookie = 'badcookie';</script>".to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("document.cookie should reject malformed assignments");
+
+    assert!(
+        error
+            .to_string()
+            .contains("document.cookie requires `name=value`")
+    );
 }
 
 #[test]
@@ -336,6 +399,21 @@ fn document_origin_assignment_is_rejected_regression() {
 
     assert!(error.to_string().contains("unsupported assignment target"));
     assert!(error.to_string().contains("origin"));
+}
+
+#[test]
+fn document_domain_assignment_is_rejected_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/start".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.domain = 'example.test';</script>".to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("document.domain should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("domain"));
 }
 
 #[test]
@@ -965,6 +1043,76 @@ fn session_resolves_window_children_regression() {
 }
 
 #[test]
+fn session_rejects_window_frames_length_assignment_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<iframe id='first'></iframe><script>window.frames.length = 2;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("window.frames.length should be read-only");
+
+    let message = error.to_string();
+    assert!(message.contains("cannot assign to `length` on html collection value"));
+}
+
+#[test]
+fn session_rejects_window_frame_element_assignment_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<script>window.frameElement = 2;</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("window.frameElement should be read-only");
+
+    let message = error.to_string();
+    assert!(message.contains("unsupported assignment target"));
+}
+
+#[test]
+fn session_rejects_window_opener_assignment_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<script>window.opener = 2;</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("window.opener should be read-only");
+
+    let message = error.to_string();
+    assert!(message.contains("unsupported assignment target"));
+}
+
+#[test]
+fn session_rejects_form_length_assignment_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<form id='signup'><input><input></form><script>document.getElementById('signup').length = 2;</script>".to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("form.length should be read-only");
+
+    let message = error.to_string();
+    assert!(message.contains("unsupported assignment target"));
+}
+
+#[test]
+fn session_rejects_window_length_assignment_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<iframe id='first'></iframe><script>window.length = 2;</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("window.length should be read-only");
+
+    let message = error.to_string();
+    assert!(message.contains("unsupported assignment target"));
+}
+
+#[test]
 fn session_exposes_document_compat_mode_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -1129,6 +1277,25 @@ fn session_exposes_window_screen_object_regression() {
 }
 
 #[test]
+fn session_exposes_window_screen_orientation_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = String(window.screen.orientation) + ':' + window.screen.orientation.type + ':' + String(window.screen.orientation.angle);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("window.screen.orientation should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "[object ScreenOrientation]:landscape-primary:0"
+    );
+}
+
+#[test]
 fn session_exposes_document_referrer_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -1145,11 +1312,26 @@ fn session_exposes_document_referrer_regression() {
 }
 
 #[test]
+fn session_rejects_window_screen_orientation_assignment_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<script>window.screen.orientation.type = 'portrait-primary';</script>".to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("window.screen.orientation.type should be rejected explicitly");
+
+    assert!(error.to_string().contains("screen orientation"));
+    assert!(error.to_string().contains("type"));
+}
+
+#[test]
 fn session_exposes_window_name_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
         html: Some(
-            "<main id='out'></main><script>const before = window.name; window.name = 'updated'; document.getElementById('out').textContent = before + ':' + document.defaultView.name;</script>"
+            "<main id='out'></main><script>const before = window.name; window.self.name = 'updated'; document.getElementById('out').textContent = before + ':' + window.window.name + ':' + window.parent.name + ':' + window.top.name;</script>"
                 .to_string(),
         ),
         local_storage: BTreeMap::new(),
@@ -1157,7 +1339,185 @@ fn session_exposes_window_name_regression() {
     .expect("window.name should remain wired through Session");
 
     let out_id = session.dom().select("#out").unwrap()[0];
-    assert_eq!(session.dom().text_content_for_node(out_id), ":updated");
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        ":updated:updated:updated"
+    );
+}
+
+#[test]
+fn session_rejects_window_self_assignment_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<script>window.self = 'updated';</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("window.self should be rejected explicitly");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("self"));
+}
+
+#[test]
+fn session_exposes_window_closed_accessor_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = String(window.closed) + ':' + String(window.self.closed) + ':' + String(window.window.closed) + ':' + String(window.parent.closed) + ':' + String(window.top.closed);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("window.closed should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false:false:false:false:false"
+    );
+}
+
+#[test]
+fn session_rejects_window_closed_assignment_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<script>window.closed = true;</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("window.closed should be rejected explicitly");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("closed"));
+}
+
+#[test]
+fn session_resolves_window_history_accessor_regression() {
+    let mut session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = String(window.history) + ':' + String(window.history.length) + ':' + String(window.history.state) + ':' + String(window.history.scrollRestoration);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("window.history should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "[object History]:1:null:auto"
+    );
+    assert_eq!(session.window_history_length(), 1);
+
+    session.navigate("https://example.test/next").unwrap();
+    assert_eq!(session.window_history_length(), 2);
+}
+
+#[test]
+fn session_updates_window_history_state_via_push_and_replace_state_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>window.history.pushState('step-1', '', 'https://example.test/step-1'); window.history.replaceState('step-2', '', 'https://example.test/step-2'); document.getElementById('out').textContent = document.location + ':' + String(window.history.length) + ':' + String(window.history.state);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("window.history.pushState and replaceState should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "https://example.test/step-2:2:step-2"
+    );
+    assert_eq!(session.window_history_length(), 2);
+    assert_eq!(session.window_history_state(), Some("step-2"));
+}
+
+#[test]
+fn session_rejects_window_history_assignment_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<script>window.history.length = 2;</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("window.history should be rejected explicitly");
+
+    assert!(error.to_string().contains("history"));
+    assert!(error.to_string().contains("length"));
+}
+
+#[test]
+fn session_rejects_window_history_state_assignment_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<script>window.history.state = 'step';</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("window.history.state should be rejected explicitly");
+
+    assert!(error.to_string().contains("history"));
+    assert!(error.to_string().contains("state"));
+}
+
+#[test]
+fn session_rejects_window_history_push_state_with_too_few_arguments_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<script>window.history.pushState('step');</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("window.history.pushState should reject too few arguments");
+
+    assert!(
+        error
+            .to_string()
+            .contains("history.pushState() expects 2 or 3 arguments")
+    );
+}
+
+#[test]
+fn session_rejects_window_history_replace_state_with_too_few_arguments_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<script>window.history.replaceState('step');</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("window.history.replaceState should reject too few arguments");
+
+    assert!(
+        error
+            .to_string()
+            .contains("history.replaceState() expects 2 or 3 arguments")
+    );
+}
+
+#[test]
+fn session_updates_window_history_scroll_restoration_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>window.history.scrollRestoration = 'manual'; document.getElementById('out').textContent = String(window.history.scrollRestoration);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("window.history.scrollRestoration should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "manual");
+}
+
+#[test]
+fn session_rejects_window_history_scroll_restoration_assignment_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<script>window.history.scrollRestoration = 'sideways';</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("window.history.scrollRestoration should be rejected explicitly");
+
+    assert!(error.to_string().contains("scroll restoration"));
 }
 
 #[test]
@@ -1181,7 +1541,7 @@ fn session_exposes_document_root_head_and_body_with_null_fallbacks() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
         html: Some(
-            "<main id='root'><div id='out'></div><script>const root = document.documentElement; document.getElementById('out').textContent = root.getAttribute('id') + ':' + String(document.head) + ':' + String(document.body);</script></main>"
+            "<main id='root'><div id='out'></div><script>const root = document.documentElement; const scrolling = document.scrollingElement; document.getElementById('out').textContent = root.getAttribute('id') + ':' + String(document.head) + ':' + String(document.body) + ':' + scrolling.getAttribute('id');</script></main>"
                 .to_string(),
         ),
         local_storage: BTreeMap::new(),
@@ -1191,7 +1551,7 @@ fn session_exposes_document_root_head_and_body_with_null_fallbacks() {
     let out_id = session.dom().select("#out").unwrap()[0];
     assert_eq!(
         session.dom().text_content_for_node(out_id),
-        "root:null:null"
+        "root:null:null:root"
     );
 }
 
@@ -1758,7 +2118,7 @@ fn session_resolves_window_navigator_on_line_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
         html: Some(
-            "<div id='out'></div><script>document.getElementById('out').textContent = String(window.navigator.onLine) + ':' + String(window.navigator.webdriver) + ':' + String(window.navigator.appCodeName) + ':' + String(window.navigator.appName) + ':' + String(window.navigator.appVersion) + ':' + String(window.navigator.product) + ':' + String(window.navigator.vendor) + ':' + String(window.navigator.hardwareConcurrency) + ':' + String(window.navigator.maxTouchPoints);</script>"
+            "<div id='out'></div><script>document.getElementById('out').textContent = String(window.navigator.onLine) + ':' + String(window.navigator.webdriver) + ':' + String(window.navigator.appCodeName) + ':' + String(window.navigator.appName) + ':' + String(window.navigator.appVersion) + ':' + String(window.navigator.product) + ':' + String(window.navigator.productSub) + ':' + String(window.navigator.vendor) + ':' + String(window.navigator.vendorSub) + ':' + String(window.navigator.pdfViewerEnabled) + ':' + String(window.navigator.doNotTrack) + ':' + String(window.navigator.javaEnabled()) + ':' + String(window.navigator.hardwareConcurrency) + ':' + String(window.navigator.maxTouchPoints);</script>"
                 .to_string(),
         ),
         local_storage: BTreeMap::new(),
@@ -1768,8 +2128,24 @@ fn session_resolves_window_navigator_on_line_regression() {
     let out_id = session.dom().select("#out").unwrap()[0];
     assert_eq!(
         session.dom().text_content_for_node(out_id),
-        "true:false:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:8:0"
+        "true:false:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:false:unspecified:false:8:0"
     );
+}
+
+#[test]
+fn session_resolves_window_navigator_plugins_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><embed id='first-embed'><embed name='second-embed'></div><div id='out'></div><script>document.getElementById('out').textContent = String(window.navigator.plugins.length);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("navigator.plugins should be wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "2");
 }
 
 #[test]

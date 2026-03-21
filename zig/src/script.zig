@@ -283,6 +283,119 @@ const LocationState = struct {
     }
 };
 
+const CssRuleListState = union(enum) {
+    sheet: dom.NodeId,
+    items: []Value,
+};
+
+const CssStyleRuleState = struct {
+    selector_text: []const u8,
+    css_text: []const u8,
+};
+
+const CssMediaRuleState = struct {
+    condition_text: []const u8,
+    css_text: []const u8,
+    css_rules: []Value,
+};
+
+const CssSupportsRuleState = struct {
+    condition_text: []const u8,
+    css_text: []const u8,
+    css_rules: []Value,
+};
+
+const CssDocumentRuleState = struct {
+    condition_text: []const u8,
+    css_text: []const u8,
+    css_rules: []Value,
+};
+
+const CssContainerRuleState = struct {
+    condition_text: []const u8,
+    css_text: []const u8,
+    css_rules: []Value,
+};
+
+const CssStartingStyleRuleState = struct {
+    css_text: []const u8,
+    css_rules: []Value,
+};
+
+const CssKeyframesRuleState = struct {
+    name: []const u8,
+    css_text: []const u8,
+    css_rules: []Value,
+};
+
+const CssKeyframeRuleState = struct {
+    key_text: []const u8,
+    css_text: []const u8,
+};
+
+const CssFontFaceRuleState = struct {
+    css_text: []const u8,
+};
+
+const CssFontFeatureValuesRuleState = struct {
+    font_family: []const u8,
+    css_text: []const u8,
+};
+
+const CssPageRuleState = struct {
+    selector_text: []const u8,
+    css_text: []const u8,
+};
+
+const CssScopeRuleState = struct {
+    start_text: ?[]const u8,
+    end_text: ?[]const u8,
+    css_text: []const u8,
+    css_rules: []Value,
+};
+
+const CssLayerRuleState = struct {
+    name_text: []const u8,
+    css_text: []const u8,
+    css_rules: []Value,
+};
+
+const CssCounterStyleRuleState = struct {
+    name: []const u8,
+    css_text: []const u8,
+};
+
+const CssImportRuleState = struct {
+    href: []const u8,
+    media_text: []const u8,
+    css_text: []const u8,
+};
+
+const CssNamespaceRuleState = struct {
+    prefix: []const u8,
+    namespace_uri: []const u8,
+    css_text: []const u8,
+};
+
+const CssRuleState = union(enum) {
+    style: CssStyleRuleState,
+    media: CssMediaRuleState,
+    supports: CssSupportsRuleState,
+    document: CssDocumentRuleState,
+    container: CssContainerRuleState,
+    starting_style: CssStartingStyleRuleState,
+    keyframes: CssKeyframesRuleState,
+    keyframe: CssKeyframeRuleState,
+    font_face: CssFontFaceRuleState,
+    font_feature_values: CssFontFeatureValuesRuleState,
+    page: CssPageRuleState,
+    scope: CssScopeRuleState,
+    layer: CssLayerRuleState,
+    counter_style: CssCounterStyleRuleState,
+    import: CssImportRuleState,
+    namespace: CssNamespaceRuleState,
+};
+
 const PerformanceState = struct {
     host: *anyopaque,
     now_fn: *const fn (*anyopaque) i64,
@@ -417,6 +530,8 @@ const Value = union(enum) {
     document_scripts,
     document_anchors,
     document_style_sheets,
+    css_rule_list: CssRuleListState,
+    css_rule: CssRuleState,
     style_sheet: dom.NodeId,
     event: *ScriptEvent,
     function: ScriptFunction,
@@ -976,6 +1091,12 @@ fn evalAssignment(
                 return;
             }
 
+            if (std.mem.eql(u8, target.property, "cookie")) {
+                const text = try asString(allocator, value);
+                try host.setDocumentCookie(text);
+                return;
+            }
+
             if (std.mem.eql(u8, target.property, "location")) {
                 const text = try asString(allocator, value);
                 try host.assignLocation(text);
@@ -1002,6 +1123,10 @@ fn evalAssignment(
                 const text = try asString(allocator, value);
                 try host.setDocumentTitle(text);
                 return;
+            }
+
+            if (std.mem.eql(u8, target.property, "domain")) {
+                return error.ScriptRuntime;
             }
 
             if (std.mem.eql(u8, target.property, "location")) {
@@ -1086,6 +1211,49 @@ fn evalAssignment(
             if (std.mem.eql(u8, target.property, "value")) {
                 const text = try asString(allocator, value);
                 host.domStoreMut().setFormControlValue(element, text) catch return error.ScriptRuntime;
+                return;
+            }
+
+            if (std.mem.eql(u8, target.property, "selectionStart")) {
+                const current = host.domStore().selectionStateForNode(element) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ScriptRuntime,
+                };
+                const state = current orelse return error.ScriptRuntime;
+                const start = try selectionIndexFromValue(allocator, value);
+                host.domStoreMut().setSelectionRange(element, start, state.end, .none) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ScriptRuntime,
+                };
+                return;
+            }
+
+            if (std.mem.eql(u8, target.property, "selectionEnd")) {
+                const current = host.domStore().selectionStateForNode(element) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ScriptRuntime,
+                };
+                const state = current orelse return error.ScriptRuntime;
+                const end = try selectionIndexFromValue(allocator, value);
+                host.domStoreMut().setSelectionRange(element, state.start, end, .none) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ScriptRuntime,
+                };
+                return;
+            }
+
+            if (std.mem.eql(u8, target.property, "selectionDirection")) {
+                const direction_text = try asString(allocator, value);
+                const direction = selectionDirectionFromString(direction_text) orelse return error.ScriptRuntime;
+                const current = host.domStore().selectionStateForNode(element) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ScriptRuntime,
+                };
+                const state = current orelse return error.ScriptRuntime;
+                host.domStoreMut().setSelectionRange(element, state.start, state.end, direction) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ScriptRuntime,
+                };
                 return;
             }
 
@@ -1220,6 +1388,9 @@ fn evalMember(
             if (std.mem.eql(u8, member.property, "referrer")) {
                 break :blk Value{ .string = host.documentReferrer() };
             }
+            if (std.mem.eql(u8, member.property, "cookie")) {
+                break :blk Value{ .string = try host.documentCookie(allocator) };
+            }
             if (std.mem.eql(u8, member.property, "visibilityState")) {
                 break :blk Value{ .string = host.documentVisibilityState() };
             }
@@ -1258,6 +1429,9 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "origin")) {
                 break :blk Value{ .string = try originFromUrl(allocator, host.currentLocationUrl()) };
+            }
+            if (std.mem.eql(u8, member.property, "domain")) {
+                break :blk Value{ .string = try host.documentDomain(allocator) };
             }
             if (std.mem.eql(u8, member.property, "images")) {
                 break :blk Value{ .html_collection = .{ .root = host.domStore().documentId(), .kind = .document_images } };
@@ -1430,6 +1604,15 @@ fn evalMember(
             if (std.mem.eql(u8, member.property, "vendorSub")) {
                 break :blk Value{ .string = host.windowNavigatorVendorSub() };
             }
+            if (std.mem.eql(u8, member.property, "pdfViewerEnabled")) {
+                break :blk Value{ .boolean = host.windowNavigatorPdfViewerEnabled() };
+            }
+            if (std.mem.eql(u8, member.property, "doNotTrack")) {
+                break :blk Value{ .string = host.windowNavigatorDoNotTrack() };
+            }
+            if (std.mem.eql(u8, member.property, "plugins")) {
+                break :blk Value{ .html_collection = .{ .root = host.domStore().documentId(), .kind = .document_plugins } };
+            }
             if (std.mem.eql(u8, member.property, "platform")) {
                 break :blk Value{ .string = host.windowNavigatorPlatform() };
             }
@@ -1546,6 +1729,48 @@ fn evalMember(
             if (std.mem.eql(u8, member.property, "value")) {
                 const value = try host.domStore().valueForNode(allocator, element);
                 break :blk Value{ .string = value };
+            }
+            if (std.mem.eql(u8, member.property, "selectionStart")) {
+                const selection = host.domStore().selectionStateForNode(element) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ScriptRuntime,
+                };
+                if (selection) |state| {
+                    break :blk Value{ .number = @floatFromInt(state.start) };
+                }
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "input")) {
+                    break :blk Value{ .null_value = {} };
+                }
+                break :blk error.ScriptRuntime;
+            }
+            if (std.mem.eql(u8, member.property, "selectionEnd")) {
+                const selection = host.domStore().selectionStateForNode(element) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ScriptRuntime,
+                };
+                if (selection) |state| {
+                    break :blk Value{ .number = @floatFromInt(state.end) };
+                }
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "input")) {
+                    break :blk Value{ .null_value = {} };
+                }
+                break :blk error.ScriptRuntime;
+            }
+            if (std.mem.eql(u8, member.property, "selectionDirection")) {
+                const selection = host.domStore().selectionStateForNode(element) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ScriptRuntime,
+                };
+                if (selection) |state| {
+                    break :blk Value{ .string = selectionDirectionName(state.direction) };
+                }
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "input")) {
+                    break :blk Value{ .null_value = {} };
+                }
+                break :blk error.ScriptRuntime;
             }
             if (std.mem.eql(u8, member.property, "options")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
@@ -1728,7 +1953,195 @@ fn evalMember(
             }
             break :blk error.ScriptRuntime;
         },
-        .style_sheet => error.ScriptRuntime,
+        .css_rule_list => |list| blk: {
+            if (std.mem.eql(u8, member.property, "length")) {
+                const rules = try cssRuleListCurrentValues(allocator, host, list);
+                defer allocator.free(rules);
+                break :blk Value{ .number = @floatFromInt(rules.len) };
+            }
+            break :blk error.ScriptRuntime;
+        },
+        .style_sheet => |sheet_id| blk: {
+            if (std.mem.eql(u8, member.property, "cssRules")) {
+                break :blk Value{ .css_rule_list = .{ .sheet = sheet_id } };
+            }
+            break :blk error.ScriptRuntime;
+        },
+        .css_rule => |rule| blk: {
+            switch (rule) {
+                .style => |style| {
+                    if (std.mem.eql(u8, member.property, "cssText")) {
+                        break :blk Value{ .string = style.css_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "selectorText")) {
+                        break :blk Value{ .string = style.selector_text };
+                    }
+                    break :blk error.ScriptRuntime;
+                },
+                .media => |media| {
+                    if (std.mem.eql(u8, member.property, "cssText")) {
+                        break :blk Value{ .string = media.css_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "conditionText")) {
+                        break :blk Value{ .string = media.condition_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "cssRules")) {
+                        break :blk Value{ .css_rule_list = .{ .items = media.css_rules } };
+                    }
+                    break :blk error.ScriptRuntime;
+                },
+                .supports => |supports| {
+                    if (std.mem.eql(u8, member.property, "cssText")) {
+                        break :blk Value{ .string = supports.css_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "conditionText")) {
+                        break :blk Value{ .string = supports.condition_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "cssRules")) {
+                        break :blk Value{ .css_rule_list = .{ .items = supports.css_rules } };
+                    }
+                    break :blk error.ScriptRuntime;
+                },
+                .document => |document| {
+                    if (std.mem.eql(u8, member.property, "cssText")) {
+                        break :blk Value{ .string = document.css_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "conditionText")) {
+                        break :blk Value{ .string = document.condition_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "cssRules")) {
+                        break :blk Value{ .css_rule_list = .{ .items = document.css_rules } };
+                    }
+                    break :blk error.ScriptRuntime;
+                },
+                .container => |container| {
+                    if (std.mem.eql(u8, member.property, "cssText")) {
+                        break :blk Value{ .string = container.css_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "conditionText")) {
+                        break :blk Value{ .string = container.condition_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "cssRules")) {
+                        break :blk Value{ .css_rule_list = .{ .items = container.css_rules } };
+                    }
+                    break :blk error.ScriptRuntime;
+                },
+                .starting_style => |starting_style| {
+                    if (std.mem.eql(u8, member.property, "cssText")) {
+                        break :blk Value{ .string = starting_style.css_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "cssRules")) {
+                        break :blk Value{ .css_rule_list = .{ .items = starting_style.css_rules } };
+                    }
+                    break :blk error.ScriptRuntime;
+                },
+                .keyframes => |keyframes| {
+                    if (std.mem.eql(u8, member.property, "cssText")) {
+                        break :blk Value{ .string = keyframes.css_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "name")) {
+                        break :blk Value{ .string = keyframes.name };
+                    }
+                    if (std.mem.eql(u8, member.property, "cssRules")) {
+                        break :blk Value{ .css_rule_list = .{ .items = keyframes.css_rules } };
+                    }
+                    break :blk error.ScriptRuntime;
+                },
+                .keyframe => |keyframe| {
+                    if (std.mem.eql(u8, member.property, "cssText")) {
+                        break :blk Value{ .string = keyframe.css_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "keyText")) {
+                        break :blk Value{ .string = keyframe.key_text };
+                    }
+                    break :blk error.ScriptRuntime;
+                },
+                .font_face => |font_face| {
+                    if (std.mem.eql(u8, member.property, "cssText")) {
+                        break :blk Value{ .string = font_face.css_text };
+                    }
+                    break :blk error.ScriptRuntime;
+                },
+                .font_feature_values => |font_feature_values| {
+                    if (std.mem.eql(u8, member.property, "cssText")) {
+                        break :blk Value{ .string = font_feature_values.css_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "fontFamily")) {
+                        break :blk Value{ .string = font_feature_values.font_family };
+                    }
+                    break :blk error.ScriptRuntime;
+                },
+                .scope => |scope| {
+                    if (std.mem.eql(u8, member.property, "cssText")) {
+                        break :blk Value{ .string = scope.css_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "start")) {
+                        break :blk if (scope.start_text) |text| Value{ .string = text } else Value{ .null_value = {} };
+                    }
+                    if (std.mem.eql(u8, member.property, "end")) {
+                        break :blk if (scope.end_text) |text| Value{ .string = text } else Value{ .null_value = {} };
+                    }
+                    if (std.mem.eql(u8, member.property, "cssRules")) {
+                        break :blk Value{ .css_rule_list = .{ .items = scope.css_rules } };
+                    }
+                    break :blk error.ScriptRuntime;
+                },
+                .page => |page| {
+                    if (std.mem.eql(u8, member.property, "cssText")) {
+                        break :blk Value{ .string = page.css_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "selectorText")) {
+                        break :blk Value{ .string = page.selector_text };
+                    }
+                    break :blk error.ScriptRuntime;
+                },
+                .layer => |layer| {
+                    if (std.mem.eql(u8, member.property, "cssText")) {
+                        break :blk Value{ .string = layer.css_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "nameText")) {
+                        break :blk Value{ .string = layer.name_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "cssRules")) {
+                        break :blk Value{ .css_rule_list = .{ .items = layer.css_rules } };
+                    }
+                    break :blk error.ScriptRuntime;
+                },
+                .counter_style => |counter_style| {
+                    if (std.mem.eql(u8, member.property, "cssText")) {
+                        break :blk Value{ .string = counter_style.css_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "name")) {
+                        break :blk Value{ .string = counter_style.name };
+                    }
+                    break :blk error.ScriptRuntime;
+                },
+                .import => |import_rule| {
+                    if (std.mem.eql(u8, member.property, "cssText")) {
+                        break :blk Value{ .string = import_rule.css_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "href")) {
+                        break :blk Value{ .string = import_rule.href };
+                    }
+                    if (std.mem.eql(u8, member.property, "mediaText")) {
+                        break :blk Value{ .string = import_rule.media_text };
+                    }
+                    break :blk error.ScriptRuntime;
+                },
+                .namespace => |namespace_rule| {
+                    if (std.mem.eql(u8, member.property, "cssText")) {
+                        break :blk Value{ .string = namespace_rule.css_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "prefix")) {
+                        break :blk Value{ .string = namespace_rule.prefix };
+                    }
+                    if (std.mem.eql(u8, member.property, "namespaceURI")) {
+                        break :blk Value{ .string = namespace_rule.namespace_uri };
+                    }
+                    break :blk error.ScriptRuntime;
+                },
+            }
+        },
         .html_collection => |collection| blk: {
             if (std.mem.eql(u8, member.property, "length")) {
                 const items = try htmlCollectionCurrentIds(allocator, host, collection);
@@ -2383,6 +2796,32 @@ fn evalMethodCall(
             break :blk try elementAfter(allocator, host, bindings, element, args);
         } else if (std.mem.eql(u8, method, "remove")) blk: {
             break :blk try elementRemove(allocator, host, bindings, element, args);
+        } else if (std.mem.eql(u8, method, "setSelectionRange")) blk: {
+            if (args.len != 2 and args.len != 3) return error.ScriptRuntime;
+            const start_value = try evalExpr(allocator, host, bindings, args[0]);
+            const start = try selectionIndexFromValue(allocator, start_value);
+            const end_value = try evalExpr(allocator, host, bindings, args[1]);
+            const end = try selectionIndexFromValue(allocator, end_value);
+            const direction = if (args.len == 3) direction_blk: {
+                const direction_value = try evalExpr(allocator, host, bindings, args[2]);
+                const direction_text = try asString(allocator, direction_value);
+                break :direction_blk selectionDirectionFromString(direction_text) orelse return error.ScriptRuntime;
+            } else .none;
+            host.domStoreMut().setSelectionRange(element, start, end, direction) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "select")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            if (!host.domStore().isSelectionControlNode(element)) return error.ScriptRuntime;
+            const value = try host.domStore().valueForNode(allocator, element);
+            defer allocator.free(value);
+            host.domStoreMut().setSelectionRange(element, 0, value.len, .none) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            break :blk Value{ .undefined_value = {} };
         } else if (std.mem.eql(u8, method, "querySelector")) blk: {
             if (args.len != 1) return error.ScriptRuntime;
             const selector_value = try evalExpr(allocator, host, bindings, args[0]);
@@ -2505,6 +2944,8 @@ fn evalMethodCall(
         } else if (std.mem.eql(u8, method, "entries")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk try documentStyleSheetsEntries(allocator, host);
+        } else if (std.mem.eql(u8, method, "forEach")) blk: {
+            break :blk try documentStyleSheetsForEach(allocator, host, bindings, args);
         } else error.ScriptRuntime,
         .template_content => |_| error.ScriptRuntime,
         .class_list => |element| if (std.mem.eql(u8, method, "contains")) blk: {
@@ -2612,7 +3053,57 @@ fn evalMethodCall(
             break :blk error.ScriptRuntime;
         } else error.ScriptRuntime,
         .dataset => |_| error.ScriptRuntime,
-        .style_sheet => error.ScriptRuntime,
+        .style_sheet => |sheet_id| if (std.mem.eql(u8, method, "insertRule")) blk: {
+            break :blk try styleSheetInsertRule(allocator, host, bindings, sheet_id, args);
+        } else if (std.mem.eql(u8, method, "deleteRule")) blk: {
+            break :blk try styleSheetDeleteRule(allocator, host, bindings, sheet_id, args);
+        } else error.ScriptRuntime,
+        .css_rule_list => |list| if (std.mem.eql(u8, method, "item")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const index_value = try evalExpr(allocator, host, bindings, args[0]);
+            const index = try asNodeListIndex(index_value);
+            const rules = try cssRuleListCurrentValues(allocator, host, list);
+            defer allocator.free(rules);
+            if (index >= rules.len) {
+                break :blk Value{ .null_value = {} };
+            }
+            break :blk rules[index];
+        } else if (std.mem.eql(u8, method, "keys")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try cssRuleListKeys(allocator, host, list);
+        } else if (std.mem.eql(u8, method, "values")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try cssRuleListValues(allocator, host, list);
+        } else if (std.mem.eql(u8, method, "entries")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try cssRuleListEntries(allocator, host, list);
+        } else if (std.mem.eql(u8, method, "forEach")) blk: {
+            break :blk try cssRuleListForEach(allocator, host, bindings, list, args);
+        } else if (std.mem.eql(u8, method, "toString")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk Value{ .string = "[object CSSRuleList]" };
+        } else error.ScriptRuntime,
+        .css_rule => |rule| if (std.mem.eql(u8, method, "toString")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk Value{ .string = switch (rule) {
+                .style => "[object CSSStyleRule]",
+                .media => "[object CSSMediaRule]",
+                .supports => "[object CSSSupportsRule]",
+                .document => "[object CSSDocumentRule]",
+                .container => "[object CSSContainerRule]",
+                .starting_style => "[object CSSStartingStyleRule]",
+                .keyframes => "[object CSSKeyframesRule]",
+                .keyframe => "[object CSSKeyframeRule]",
+                .font_face => "[object CSSFontFaceRule]",
+                .font_feature_values => "[object CSSFontFeatureValuesRule]",
+                .scope => "[object CSSScopeRule]",
+                .page => "[object CSSPageRule]",
+                .layer => "[object CSSLayerBlockRule]",
+                .counter_style => "[object CSSCounterStyleRule]",
+                .import => "[object CSSImportRule]",
+                .namespace => "[object CSSNamespaceRule]",
+            } };
+        } else error.ScriptRuntime,
         .node_list => |list| if (std.mem.eql(u8, method, "item")) blk: {
             if (args.len != 1) return error.ScriptRuntime;
             const index_value = try evalExpr(allocator, host, bindings, args[0]);
@@ -2685,6 +3176,8 @@ fn evalMethodCall(
         } else if (std.mem.eql(u8, method, "entries")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk try radioNodeListEntries(allocator, host, list);
+        } else if (std.mem.eql(u8, method, "forEach")) blk: {
+            break :blk try radioNodeListForEach(allocator, host, bindings, list, args);
         } else error.ScriptRuntime,
         .media_query_list => if (std.mem.eql(u8, method, "toString")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
@@ -3672,6 +4165,1062 @@ fn documentStyleSheetsEntries(
     return try collectionEntriesFromStyleSheetIds(allocator, sheets);
 }
 
+fn documentStyleSheetsForEach(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    args: []*Expr,
+) errors.Result(Value) {
+    const callback_expr: *Expr = switch (args.len) {
+        1, 2 => args[0],
+        else => return error.ScriptRuntime,
+    };
+    const this_arg_expr: ?*Expr = if (args.len == 2) args[1] else null;
+
+    const callback_value = try evalExpr(allocator, host, bindings, callback_expr);
+    const callback = switch (callback_value) {
+        .function => |function| function,
+        else => return error.ScriptRuntime,
+    };
+
+    if (this_arg_expr) |expr| {
+        _ = try evalExpr(allocator, host, bindings, expr);
+    }
+
+    const sheets = try documentStyleSheetsItems(allocator, host);
+    defer allocator.free(sheets);
+
+    for (sheets, 0..) |sheet_id, index| {
+        const positional = [_]Value{
+            .{ .style_sheet = sheet_id },
+            .{ .number = @floatFromInt(index) },
+            .{ .document_style_sheets = {} },
+        };
+        var function_bindings = try functionBindings(allocator, callback, positional[0..]);
+        defer function_bindings.deinit(allocator);
+
+        const source_name = try std.fmt.allocPrint(allocator, "stylesheetlist:forEach:{d}", .{index});
+        defer allocator.free(source_name);
+
+        try executeScriptSource(
+            allocator,
+            host,
+            callback.body_source,
+            source_name,
+            function_bindings.items,
+        );
+    }
+
+    return Value{ .undefined_value = {} };
+}
+
+fn cssRuleListCurrentValues(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    list: CssRuleListState,
+) errors.Result([]Value) {
+    return switch (list) {
+        .sheet => |sheet_id| blk: {
+            const tag_name = host.domStore().tagNameForNode(sheet_id) orelse return error.ScriptRuntime;
+            if (std.mem.eql(u8, tag_name, "style")) {
+                const css_text = try host.domStore().textContent(allocator, sheet_id);
+                break :blk try parseStyleSheetRuleValues(allocator, css_text);
+            }
+            if (std.mem.eql(u8, tag_name, "link")) {
+                if (try isStyleSheetLinkElement(host, sheet_id)) {
+                    break :blk try allocator.alloc(Value, 0);
+                }
+            }
+            break :blk error.ScriptRuntime;
+        },
+        .items => |items| try allocator.dupe(Value, items),
+    };
+}
+
+fn cssRuleCssText(rule: Value) []const u8 {
+    return switch (rule) {
+        .css_rule => |state| switch (state) {
+            .style => |style| style.css_text,
+            .media => |media| media.css_text,
+            .supports => |supports| supports.css_text,
+            .document => |document| document.css_text,
+            .container => |container| container.css_text,
+            .starting_style => |starting_style| starting_style.css_text,
+            .keyframes => |keyframes| keyframes.css_text,
+            .keyframe => |keyframe| keyframe.css_text,
+            .font_face => |font_face| font_face.css_text,
+            .font_feature_values => |font_feature_values| font_feature_values.css_text,
+            .scope => |scope| scope.css_text,
+            .page => |page| page.css_text,
+            .layer => |layer| layer.css_text,
+            .counter_style => |counter_style| counter_style.css_text,
+            .import => |import_rule| import_rule.css_text,
+            .namespace => |namespace_rule| namespace_rule.css_text,
+        },
+        else => unreachable,
+    };
+}
+
+fn cssRuleListKeys(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    list: CssRuleListState,
+) errors.Result(Value) {
+    const rules = try cssRuleListCurrentValues(allocator, host, list);
+    defer allocator.free(rules);
+    var items = try allocator.alloc(Value, rules.len);
+    errdefer allocator.free(items);
+    for (rules, 0..) |_, index| {
+        items[index] = Value{ .number = @floatFromInt(index) };
+    }
+    return try collectionIteratorFromValues(allocator, items);
+}
+
+fn cssRuleListValues(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    list: CssRuleListState,
+) errors.Result(Value) {
+    const rules = try cssRuleListCurrentValues(allocator, host, list);
+    return try collectionIteratorFromValues(allocator, rules);
+}
+
+fn cssRuleListEntries(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    list: CssRuleListState,
+) errors.Result(Value) {
+    const rules = try cssRuleListCurrentValues(allocator, host, list);
+    defer allocator.free(rules);
+    return try collectionEntriesFromValues(allocator, rules);
+}
+
+fn cssRuleListForEach(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    list: CssRuleListState,
+    args: []*Expr,
+) errors.Result(Value) {
+    const callback_expr: *Expr = switch (args.len) {
+        1, 2 => args[0],
+        else => return error.ScriptRuntime,
+    };
+    const this_arg_expr: ?*Expr = if (args.len == 2) args[1] else null;
+
+    const callback_value = try evalExpr(allocator, host, bindings, callback_expr);
+    const callback = switch (callback_value) {
+        .function => |function| function,
+        else => return error.ScriptRuntime,
+    };
+
+    if (this_arg_expr) |expr| {
+        _ = try evalExpr(allocator, host, bindings, expr);
+    }
+
+    const rules = try cssRuleListCurrentValues(allocator, host, list);
+    defer allocator.free(rules);
+
+    for (rules, 0..) |rule, index| {
+        const positional = [_]Value{
+            rule,
+            .{ .number = @floatFromInt(index) },
+            .{ .css_rule_list = list },
+        };
+        var function_bindings = try functionBindings(allocator, callback, positional[0..]);
+        defer function_bindings.deinit(allocator);
+
+        const source_name = try std.fmt.allocPrint(allocator, "cssrulelist:forEach:{d}", .{index});
+        defer allocator.free(source_name);
+
+        try executeScriptSource(
+            allocator,
+            host,
+            callback.body_source,
+            source_name,
+            function_bindings.items,
+        );
+    }
+
+    return Value{ .undefined_value = {} };
+}
+
+fn styleSheetInsertRule(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    sheet_id: dom.NodeId,
+    args: []*Expr,
+) errors.Result(Value) {
+    if (args.len != 1 and args.len != 2) return error.ScriptRuntime;
+
+    const tag_name = host.domStore().tagNameForNode(sheet_id) orelse return error.ScriptRuntime;
+    if (!std.mem.eql(u8, tag_name, "style")) return error.ScriptRuntime;
+
+    const rule_text_value = try evalExpr(allocator, host, bindings, args[0]);
+    const rule_text = try asString(allocator, rule_text_value);
+
+    const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+    defer allocator.free(current_rules);
+
+    const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+    defer allocator.free(parsed_rules);
+    if (parsed_rules.len != 1) return error.ScriptRuntime;
+
+    const index = if (args.len == 2) index_value_blk: {
+        const index_value = try evalExpr(allocator, host, bindings, args[1]);
+        break :index_value_blk try asNodeListIndex(index_value);
+    } else 0;
+    if (index > current_rules.len) return error.ScriptRuntime;
+
+    var serialized: std.ArrayList(u8) = .empty;
+    defer serialized.deinit(allocator);
+
+    var wrote_any = false;
+    for (current_rules, 0..) |rule, current_index| {
+        if (current_index == index) {
+            if (wrote_any) try serialized.append(allocator, '\n');
+            try serialized.appendSlice(allocator, cssRuleCssText(parsed_rules[0]));
+            wrote_any = true;
+        }
+
+        if (wrote_any) try serialized.append(allocator, '\n');
+        try serialized.appendSlice(allocator, cssRuleCssText(rule));
+        wrote_any = true;
+    }
+
+    if (index == current_rules.len) {
+        if (wrote_any) try serialized.append(allocator, '\n');
+        try serialized.appendSlice(allocator, cssRuleCssText(parsed_rules[0]));
+    }
+
+    host.domStoreMut().setTextContent(sheet_id, serialized.items) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+    return Value{ .number = @floatFromInt(index) };
+}
+
+fn styleSheetDeleteRule(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    sheet_id: dom.NodeId,
+    args: []*Expr,
+) errors.Result(Value) {
+    if (args.len != 1) return error.ScriptRuntime;
+
+    const tag_name = host.domStore().tagNameForNode(sheet_id) orelse return error.ScriptRuntime;
+    if (!std.mem.eql(u8, tag_name, "style")) return error.ScriptRuntime;
+
+    const index_value = try evalExpr(allocator, host, bindings, args[0]);
+    const index = try asNodeListIndex(index_value);
+
+    const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+    defer allocator.free(current_rules);
+    if (index >= current_rules.len) return error.ScriptRuntime;
+
+    var serialized: std.ArrayList(u8) = .empty;
+    defer serialized.deinit(allocator);
+
+    var wrote_any = false;
+    for (current_rules, 0..) |rule, current_index| {
+        if (current_index == index) continue;
+        if (wrote_any) try serialized.append(allocator, '\n');
+        try serialized.appendSlice(allocator, cssRuleCssText(rule));
+        wrote_any = true;
+    }
+
+    host.domStoreMut().setTextContent(sheet_id, serialized.items) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+    return Value{ .undefined_value = {} };
+}
+
+fn parseStyleSheetRuleValues(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+) errors.Result([]Value) {
+    var rules: std.ArrayList(Value) = .empty;
+    errdefer rules.deinit(allocator);
+
+    var pos: usize = 0;
+    while (true) {
+        pos = try skipCssTrivia(source, pos);
+        if (pos >= source.len) break;
+        try rules.append(allocator, try parseStyleSheetRuleValue(allocator, source, &pos));
+    }
+
+    return try allocator.dupe(Value, rules.items);
+}
+
+fn parseStyleSheetRuleValue(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    pos: *usize,
+) errors.Result(Value) {
+    if (source[pos.*] == '@') {
+        return try parseStyleSheetAtRuleValue(allocator, source, pos);
+    }
+    return try parseStyleSheetQualifiedRuleValue(allocator, source, pos);
+}
+
+fn parseStyleSheetQualifiedRuleValue(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    pos: *usize,
+) errors.Result(Value) {
+    _ = allocator;
+    const selector_start = pos.*;
+    const block_start = try parseCssRuleBlockStart(source, pos.*);
+    const selector_text = std.mem.trim(u8, source[selector_start..block_start], " \t\r\n\x0c");
+    if (selector_text.len == 0) return error.ScriptRuntime;
+
+    const block_end = try parseCssRuleBlockEnd(source, block_start + 1);
+    const css_text = std.mem.trim(u8, source[selector_start..block_end], " \t\r\n\x0c");
+    pos.* = block_end;
+
+    return Value{ .css_rule = .{
+        .style = .{
+            .selector_text = selector_text,
+            .css_text = css_text,
+        },
+    } };
+}
+
+fn parseStyleSheetAtRuleValue(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    pos: *usize,
+) errors.Result(Value) {
+    const at_start = pos.*;
+    pos.* += 1;
+
+    const keyword_start = pos.*;
+    while (pos.* < source.len and (isIdentifierContinueByte(source[pos.*]) or source[pos.*] == '-')) {
+        pos.* += 1;
+    }
+    if (keyword_start == pos.*) return error.ScriptRuntime;
+
+    const keyword = source[keyword_start..pos.*];
+    if (std.ascii.eqlIgnoreCase(keyword, "import")) {
+        return try parseStyleSheetImportRuleValue(allocator, source, at_start, pos);
+    }
+    if (std.ascii.eqlIgnoreCase(keyword, "namespace")) {
+        return try parseStyleSheetNamespaceRuleValue(allocator, source, at_start, pos);
+    }
+    if (std.ascii.eqlIgnoreCase(keyword, "layer")) {
+        return try parseStyleSheetLayerRuleValue(allocator, source, at_start, pos);
+    }
+    if (std.ascii.eqlIgnoreCase(keyword, "scope")) {
+        return try parseStyleSheetScopeRuleValue(allocator, source, at_start, pos);
+    }
+
+    const rule_kind = if (std.ascii.eqlIgnoreCase(keyword, "media"))
+        CssBlockAtRuleKind.media
+    else if (std.ascii.eqlIgnoreCase(keyword, "supports"))
+        CssBlockAtRuleKind.supports
+    else if (std.ascii.eqlIgnoreCase(keyword, "document"))
+        CssBlockAtRuleKind.document
+    else if (std.ascii.eqlIgnoreCase(keyword, "container"))
+        CssBlockAtRuleKind.container
+    else if (std.ascii.eqlIgnoreCase(keyword, "starting-style"))
+        CssBlockAtRuleKind.starting_style
+    else if (std.ascii.eqlIgnoreCase(keyword, "keyframes"))
+        CssBlockAtRuleKind.keyframes
+    else if (std.ascii.eqlIgnoreCase(keyword, "font-face"))
+        CssBlockAtRuleKind.font_face
+    else if (std.ascii.eqlIgnoreCase(keyword, "font-feature-values"))
+        CssBlockAtRuleKind.font_feature_values
+    else if (std.ascii.eqlIgnoreCase(keyword, "page"))
+        CssBlockAtRuleKind.page
+    else if (std.ascii.eqlIgnoreCase(keyword, "counter-style"))
+        CssBlockAtRuleKind.counter_style
+    else
+        return error.ScriptRuntime;
+
+    const block_start = try parseCssRuleBlockStart(source, pos.*);
+    const header_text = std.mem.trim(u8, source[pos.*..block_start], " \t\r\n\x0c");
+    if (rule_kind != .font_face and rule_kind != .font_feature_values and rule_kind != .page and rule_kind != .counter_style and rule_kind != .starting_style and header_text.len == 0) return error.ScriptRuntime;
+
+    const block_end = try parseCssRuleBlockEnd(source, block_start + 1);
+    const css_text = std.mem.trim(u8, source[at_start..block_end], " \t\r\n\x0c");
+    pos.* = block_end;
+
+    return switch (rule_kind) {
+        .media => Value{ .css_rule = .{
+            .media = .{
+                .condition_text = header_text,
+                .css_text = css_text,
+                .css_rules = try parseStyleSheetRuleValues(allocator, source[block_start + 1 .. block_end - 1]),
+            },
+        } },
+        .supports => Value{ .css_rule = .{
+            .supports = .{
+                .condition_text = header_text,
+                .css_text = css_text,
+                .css_rules = try parseStyleSheetRuleValues(allocator, source[block_start + 1 .. block_end - 1]),
+            },
+        } },
+        .document => Value{ .css_rule = .{
+            .document = .{
+                .condition_text = header_text,
+                .css_text = css_text,
+                .css_rules = try parseStyleSheetRuleValues(allocator, source[block_start + 1 .. block_end - 1]),
+            },
+        } },
+        .container => Value{ .css_rule = .{
+            .container = .{
+                .condition_text = header_text,
+                .css_text = css_text,
+                .css_rules = try parseStyleSheetRuleValues(allocator, source[block_start + 1 .. block_end - 1]),
+            },
+        } },
+        .starting_style => Value{ .css_rule = .{
+            .starting_style = .{
+                .css_text = css_text,
+                .css_rules = try parseStyleSheetRuleValues(allocator, source[block_start + 1 .. block_end - 1]),
+            },
+        } },
+        .keyframes => Value{ .css_rule = .{
+            .keyframes = .{
+                .name = header_text,
+                .css_text = css_text,
+                .css_rules = try parseKeyframesRuleValues(allocator, source[block_start + 1 .. block_end - 1]),
+            },
+        } },
+        .font_face => Value{ .css_rule = .{
+            .font_face = .{
+                .css_text = css_text,
+            },
+        } },
+        .font_feature_values => Value{ .css_rule = .{
+            .font_feature_values = .{
+                .font_family = header_text,
+                .css_text = css_text,
+            },
+        } },
+        .page => Value{ .css_rule = .{
+            .page = .{
+                .selector_text = header_text,
+                .css_text = css_text,
+            },
+        } },
+        .counter_style => Value{ .css_rule = .{
+            .counter_style = .{
+                .name = header_text,
+                .css_text = css_text,
+            },
+        } },
+    };
+}
+
+const CssBlockAtRuleKind = enum {
+    media,
+    supports,
+    document,
+    container,
+    starting_style,
+    keyframes,
+    font_face,
+    font_feature_values,
+    page,
+    counter_style,
+};
+
+fn parseStyleSheetImportRuleValue(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    at_start: usize,
+    pos: *usize,
+) errors.Result(Value) {
+    _ = allocator;
+    const statement_end = try parseCssRuleStatementEnd(source, pos.*);
+    const prelude = std.mem.trim(u8, source[pos.*..statement_end], " \t\r\n\x0c");
+    if (prelude.len == 0) return error.ScriptRuntime;
+
+    const parsed = try parseCssImportPrelude(prelude);
+    const css_text = std.mem.trim(u8, source[at_start .. statement_end + 1], " \t\r\n\x0c");
+    pos.* = statement_end + 1;
+
+    return Value{ .css_rule = .{
+        .import = .{
+            .href = parsed.href,
+            .media_text = parsed.media_text,
+            .css_text = css_text,
+        },
+    } };
+}
+
+const CssImportPrelude = struct {
+    href: []const u8,
+    media_text: []const u8,
+};
+
+const CssNamespacePrelude = struct {
+    prefix: []const u8,
+    namespace_uri: []const u8,
+};
+
+const CssScopePrelude = struct {
+    start_text: ?[]const u8,
+    end_text: ?[]const u8,
+};
+
+fn parseStyleSheetLayerRuleValue(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    at_start: usize,
+    pos: *usize,
+) errors.Result(Value) {
+    const block_start = try parseCssRuleBlockStart(source, pos.*);
+    const name_text = std.mem.trim(u8, source[pos.*..block_start], " \t\r\n\x0c");
+    const block_end = try parseCssRuleBlockEnd(source, block_start + 1);
+    const css_text = std.mem.trim(u8, source[at_start..block_end], " \t\r\n\x0c");
+    pos.* = block_end;
+
+    return Value{ .css_rule = .{
+        .layer = .{
+            .name_text = name_text,
+            .css_text = css_text,
+            .css_rules = try parseStyleSheetRuleValues(allocator, source[block_start + 1 .. block_end - 1]),
+        },
+    } };
+}
+
+fn parseStyleSheetScopeRuleValue(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    at_start: usize,
+    pos: *usize,
+) errors.Result(Value) {
+    const block_start = try parseCssRuleBlockStart(source, pos.*);
+    const prelude = std.mem.trim(u8, source[pos.*..block_start], " \t\r\n\x0c");
+    if (prelude.len == 0) return error.ScriptRuntime;
+
+    const parsed = try parseCssScopePrelude(prelude);
+    const block_end = try parseCssRuleBlockEnd(source, block_start + 1);
+    const css_text = std.mem.trim(u8, source[at_start..block_end], " \t\r\n\x0c");
+    pos.* = block_end;
+
+    return Value{ .css_rule = .{
+        .scope = .{
+            .start_text = parsed.start_text,
+            .end_text = parsed.end_text,
+            .css_text = css_text,
+            .css_rules = try parseStyleSheetRuleValues(allocator, source[block_start + 1 .. block_end - 1]),
+        },
+    } };
+}
+
+fn parseCssScopePrelude(prelude: []const u8) errors.Result(CssScopePrelude) {
+    var pos: usize = 0;
+    pos = try skipCssTrivia(prelude, pos);
+    if (pos >= prelude.len) return error.ScriptRuntime;
+
+    if (isCssScopeToKeyword(prelude, pos)) {
+        pos += 2;
+        pos = try skipCssTrivia(prelude, pos);
+        const end_text = try parseCssScopePreludeGroup(prelude, &pos);
+        pos = try skipCssTrivia(prelude, pos);
+        if (pos != prelude.len) return error.ScriptRuntime;
+        return .{
+            .start_text = null,
+            .end_text = end_text,
+        };
+    }
+
+    const start_text = try parseCssScopePreludeGroup(prelude, &pos);
+    pos = try skipCssTrivia(prelude, pos);
+    if (pos >= prelude.len) {
+        return .{
+            .start_text = start_text,
+            .end_text = null,
+        };
+    }
+    if (!isCssScopeToKeyword(prelude, pos)) return error.ScriptRuntime;
+    pos += 2;
+    pos = try skipCssTrivia(prelude, pos);
+    const end_text = try parseCssScopePreludeGroup(prelude, &pos);
+    pos = try skipCssTrivia(prelude, pos);
+    if (pos != prelude.len) return error.ScriptRuntime;
+    return .{
+        .start_text = start_text,
+        .end_text = end_text,
+    };
+}
+
+fn parseCssScopePreludeGroup(prelude: []const u8, pos: *usize) errors.Result([]const u8) {
+    if (pos.* >= prelude.len or prelude[pos.*] != '(') return error.ScriptRuntime;
+
+    const text_start = pos.* + 1;
+    var scan = text_start;
+    var depth: usize = 1;
+    var in_string: ?u8 = null;
+    while (scan < prelude.len) {
+        const byte = prelude[scan];
+        if (in_string) |quote| {
+            if (byte == '\\') {
+                if (scan + 1 >= prelude.len) return error.ScriptRuntime;
+                scan += 2;
+                continue;
+            }
+            if (byte == quote) in_string = null;
+            scan += 1;
+            continue;
+        }
+        if (byte == '"' or byte == '\'') {
+            in_string = byte;
+            scan += 1;
+            continue;
+        }
+        if (byte == '/' and scan + 1 < prelude.len and prelude[scan + 1] == '*') {
+            scan = try skipCssComment(prelude, scan);
+            continue;
+        }
+        if (byte == '(') {
+            depth += 1;
+            scan += 1;
+            continue;
+        }
+        if (byte == ')') {
+            depth -= 1;
+            scan += 1;
+            if (depth == 0) {
+                const text = std.mem.trim(u8, prelude[text_start .. scan - 1], " \t\r\n\x0c");
+                if (text.len == 0) return error.ScriptRuntime;
+                pos.* = scan;
+                return text;
+            }
+            continue;
+        }
+        scan += 1;
+    }
+
+    return error.ScriptRuntime;
+}
+
+fn isCssScopeToKeyword(prelude: []const u8, pos: usize) bool {
+    if (pos + 2 > prelude.len) return false;
+    if (!std.ascii.eqlIgnoreCase(prelude[pos .. pos + 2], "to")) return false;
+    return pos + 2 == prelude.len or !isIdentifierContinueByte(prelude[pos + 2]);
+}
+
+fn parseCssImportPrelude(prelude: []const u8) errors.Result(CssImportPrelude) {
+    var pos: usize = 0;
+    pos = try skipCssTrivia(prelude, pos);
+    if (pos >= prelude.len) return error.ScriptRuntime;
+
+    const href: []const u8 = href_blk: {
+        if (prelude[pos] == '"' or prelude[pos] == '\'') {
+            const quote = prelude[pos];
+            pos += 1;
+            const start = pos;
+            while (pos < prelude.len) : (pos += 1) {
+                const byte = prelude[pos];
+                if (byte == '\\') {
+                    if (pos + 1 >= prelude.len) return error.ScriptRuntime;
+                    pos += 2;
+                    continue;
+                }
+                if (byte == quote) {
+                    break;
+                }
+            }
+            if (pos >= prelude.len or prelude[pos] != quote) return error.ScriptRuntime;
+            const value = prelude[start..pos];
+            pos += 1;
+            break :href_blk value;
+        }
+
+        if (pos + 4 <= prelude.len and std.ascii.eqlIgnoreCase(prelude[pos .. pos + 4], "url(")) {
+            pos += 4;
+            pos = try skipCssTrivia(prelude, pos);
+            if (pos >= prelude.len) return error.ScriptRuntime;
+
+            if (prelude[pos] == '"' or prelude[pos] == '\'') {
+                const quote = prelude[pos];
+                pos += 1;
+                const start = pos;
+                while (pos < prelude.len) : (pos += 1) {
+                    const byte = prelude[pos];
+                    if (byte == '\\') {
+                        if (pos + 1 >= prelude.len) return error.ScriptRuntime;
+                        pos += 2;
+                        continue;
+                    }
+                    if (byte == quote) {
+                        break;
+                    }
+                }
+                if (pos >= prelude.len or prelude[pos] != quote) return error.ScriptRuntime;
+                const value = prelude[start..pos];
+                pos += 1;
+                pos = try skipCssTrivia(prelude, pos);
+                if (pos >= prelude.len or prelude[pos] != ')') return error.ScriptRuntime;
+                pos += 1;
+                break :href_blk value;
+            }
+
+            const start = pos;
+            while (pos < prelude.len and prelude[pos] != ')') : (pos += 1) {
+                if (prelude[pos] == '\\') {
+                    if (pos + 1 >= prelude.len) return error.ScriptRuntime;
+                    pos += 2;
+                    continue;
+                }
+            }
+            if (pos >= prelude.len or prelude[pos] != ')') return error.ScriptRuntime;
+            const value = std.mem.trim(u8, prelude[start..pos], " \t\r\n\x0c");
+            if (value.len == 0) return error.ScriptRuntime;
+            pos += 1;
+            break :href_blk value;
+        }
+
+        return error.ScriptRuntime;
+    };
+
+    pos = try skipCssTrivia(prelude, pos);
+    const media_text = std.mem.trim(u8, prelude[pos..], " \t\r\n\x0c");
+    return .{
+        .href = href,
+        .media_text = media_text,
+    };
+}
+
+fn parseStyleSheetNamespaceRuleValue(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    at_start: usize,
+    pos: *usize,
+) errors.Result(Value) {
+    _ = allocator;
+    const statement_end = try parseCssRuleStatementEnd(source, pos.*);
+    const prelude = std.mem.trim(u8, source[pos.*..statement_end], " \t\r\n\x0c");
+    if (prelude.len == 0) return error.ScriptRuntime;
+
+    const parsed = try parseCssNamespacePrelude(prelude);
+    const css_text = std.mem.trim(u8, source[at_start .. statement_end + 1], " \t\r\n\x0c");
+    pos.* = statement_end + 1;
+
+    return Value{ .css_rule = .{
+        .namespace = .{
+            .prefix = parsed.prefix,
+            .namespace_uri = parsed.namespace_uri,
+            .css_text = css_text,
+        },
+    } };
+}
+
+fn parseCssNamespacePrelude(prelude: []const u8) errors.Result(CssNamespacePrelude) {
+    var pos: usize = 0;
+    pos = try skipCssTrivia(prelude, pos);
+    if (pos >= prelude.len) return error.ScriptRuntime;
+
+    var prefix: []const u8 = "";
+    const prefix_start = pos;
+    if (isIdentifierStartByte(prelude[pos])) {
+        pos += 1;
+        while (pos < prelude.len and isIdentifierContinueByte(prelude[pos])) {
+            pos += 1;
+        }
+        const after_prefix = try skipCssTrivia(prelude, pos);
+        if (after_prefix > pos) {
+            prefix = prelude[prefix_start..pos];
+            pos = after_prefix;
+        } else {
+            pos = prefix_start;
+        }
+    }
+
+    pos = try skipCssTrivia(prelude, pos);
+    if (pos >= prelude.len) return error.ScriptRuntime;
+
+    const namespace_uri: []const u8 = href_blk: {
+        if (prelude[pos] == '"' or prelude[pos] == '\'') {
+            const quote = prelude[pos];
+            pos += 1;
+            const start = pos;
+            while (pos < prelude.len) : (pos += 1) {
+                const byte = prelude[pos];
+                if (byte == '\\') {
+                    if (pos + 1 >= prelude.len) return error.ScriptRuntime;
+                    pos += 2;
+                    continue;
+                }
+                if (byte == quote) {
+                    break;
+                }
+            }
+            if (pos >= prelude.len or prelude[pos] != quote) return error.ScriptRuntime;
+            const value = prelude[start..pos];
+            pos += 1;
+            break :href_blk value;
+        }
+
+        if (pos + 4 <= prelude.len and std.ascii.eqlIgnoreCase(prelude[pos .. pos + 4], "url(")) {
+            pos += 4;
+            pos = try skipCssTrivia(prelude, pos);
+            if (pos >= prelude.len) return error.ScriptRuntime;
+
+            if (prelude[pos] == '"' or prelude[pos] == '\'') {
+                const quote = prelude[pos];
+                pos += 1;
+                const start = pos;
+                while (pos < prelude.len) : (pos += 1) {
+                    const byte = prelude[pos];
+                    if (byte == '\\') {
+                        if (pos + 1 >= prelude.len) return error.ScriptRuntime;
+                        pos += 2;
+                        continue;
+                    }
+                    if (byte == quote) {
+                        break;
+                    }
+                }
+                if (pos >= prelude.len or prelude[pos] != quote) return error.ScriptRuntime;
+                const value = prelude[start..pos];
+                pos += 1;
+                pos = try skipCssTrivia(prelude, pos);
+                if (pos >= prelude.len or prelude[pos] != ')') return error.ScriptRuntime;
+                pos += 1;
+                break :href_blk value;
+            }
+
+            const start = pos;
+            while (pos < prelude.len and prelude[pos] != ')') : (pos += 1) {
+                if (prelude[pos] == '\\') {
+                    if (pos + 1 >= prelude.len) return error.ScriptRuntime;
+                    pos += 2;
+                    continue;
+                }
+            }
+            if (pos >= prelude.len or prelude[pos] != ')') return error.ScriptRuntime;
+            const value = std.mem.trim(u8, prelude[start..pos], " \t\r\n\x0c");
+            if (value.len == 0) return error.ScriptRuntime;
+            pos += 1;
+            break :href_blk value;
+        }
+
+        return error.ScriptRuntime;
+    };
+
+    pos = try skipCssTrivia(prelude, pos);
+    if (pos != prelude.len) return error.ScriptRuntime;
+
+    return .{
+        .prefix = prefix,
+        .namespace_uri = namespace_uri,
+    };
+}
+
+fn parseCssRuleStatementEnd(
+    source: []const u8,
+    start: usize,
+) errors.Result(usize) {
+    var pos = start;
+    var paren_depth: usize = 0;
+    var in_string: ?u8 = null;
+    while (pos < source.len) {
+        const byte = source[pos];
+        if (in_string) |quote| {
+            if (byte == '\\') {
+                if (pos + 1 >= source.len) return error.ScriptRuntime;
+                pos += 2;
+                continue;
+            }
+            if (byte == quote) in_string = null;
+            pos += 1;
+            continue;
+        }
+        if (byte == '"' or byte == '\'') {
+            in_string = byte;
+            pos += 1;
+            continue;
+        }
+        if (byte == '/' and pos + 1 < source.len and source[pos + 1] == '*') {
+            pos = try skipCssComment(source, pos);
+            continue;
+        }
+        if (byte == '(') {
+            paren_depth += 1;
+            pos += 1;
+            continue;
+        }
+        if (byte == ')') {
+            if (paren_depth == 0) return error.ScriptRuntime;
+            paren_depth -= 1;
+            pos += 1;
+            continue;
+        }
+        if (byte == ';' and paren_depth == 0) return pos;
+        if (byte == '{' or byte == '}') return error.ScriptRuntime;
+        pos += 1;
+    }
+    return error.ScriptRuntime;
+}
+
+fn parseKeyframesRuleValues(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+) errors.Result([]Value) {
+    var rules: std.ArrayList(Value) = .empty;
+    errdefer rules.deinit(allocator);
+
+    var pos: usize = 0;
+    while (true) {
+        pos = try skipCssTrivia(source, pos);
+        if (pos >= source.len) break;
+        try rules.append(allocator, try parseKeyframesRuleValue(allocator, source, &pos));
+    }
+
+    return try allocator.dupe(Value, rules.items);
+}
+
+fn parseKeyframesRuleValue(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    pos: *usize,
+) errors.Result(Value) {
+    _ = allocator;
+    if (source[pos.*] == '@') return error.ScriptRuntime;
+
+    const key_start = pos.*;
+    const block_start = try parseCssRuleBlockStart(source, pos.*);
+    const key_text = std.mem.trim(u8, source[key_start..block_start], " \t\r\n\x0c");
+    if (key_text.len == 0) return error.ScriptRuntime;
+
+    const block_end = try parseCssRuleBlockEnd(source, block_start + 1);
+    const css_text = std.mem.trim(u8, source[key_start..block_end], " \t\r\n\x0c");
+    pos.* = block_end;
+
+    return Value{ .css_rule = .{
+        .keyframe = .{
+            .key_text = key_text,
+            .css_text = css_text,
+        },
+    } };
+}
+
+fn parseCssRuleBlockStart(
+    source: []const u8,
+    start: usize,
+) errors.Result(usize) {
+    var pos = start;
+    var in_string: ?u8 = null;
+    while (pos < source.len) {
+        const byte = source[pos];
+        if (in_string) |quote| {
+            if (byte == '\\') {
+                if (pos + 1 >= source.len) return error.ScriptRuntime;
+                pos += 2;
+                continue;
+            }
+            if (byte == quote) in_string = null;
+            pos += 1;
+            continue;
+        }
+        if (byte == '"' or byte == '\'') {
+            in_string = byte;
+            pos += 1;
+            continue;
+        }
+        if (byte == '/' and pos + 1 < source.len and source[pos + 1] == '*') {
+            pos = try skipCssComment(source, pos);
+            continue;
+        }
+        if (byte == '{') return pos;
+        if (byte == '}') return error.ScriptRuntime;
+        pos += 1;
+    }
+    return error.ScriptRuntime;
+}
+
+fn parseCssRuleBlockEnd(
+    source: []const u8,
+    start: usize,
+) errors.Result(usize) {
+    var pos = start;
+    var depth: usize = 1;
+    var in_string: ?u8 = null;
+    while (pos < source.len) {
+        const byte = source[pos];
+        if (in_string) |quote| {
+            if (byte == '\\') {
+                if (pos + 1 >= source.len) return error.ScriptRuntime;
+                pos += 2;
+                continue;
+            }
+            if (byte == quote) in_string = null;
+            pos += 1;
+            continue;
+        }
+        if (byte == '"' or byte == '\'') {
+            in_string = byte;
+            pos += 1;
+            continue;
+        }
+        if (byte == '/' and pos + 1 < source.len and source[pos + 1] == '*') {
+            pos = try skipCssComment(source, pos);
+            continue;
+        }
+        if (byte == '{') {
+            depth += 1;
+            pos += 1;
+            continue;
+        }
+        if (byte == '}') {
+            depth -= 1;
+            pos += 1;
+            if (depth == 0) return pos;
+            continue;
+        }
+        pos += 1;
+    }
+    return error.ScriptRuntime;
+}
+
+fn skipCssTrivia(
+    source: []const u8,
+    start: usize,
+) errors.Result(usize) {
+    var pos = start;
+    while (pos < source.len) {
+        if (isCssWhitespace(source[pos]) or source[pos] == ';') {
+            pos += 1;
+            continue;
+        }
+        if (source[pos] == '/' and pos + 1 < source.len and source[pos + 1] == '*') {
+            pos = try skipCssComment(source, pos);
+            continue;
+        }
+        break;
+    }
+    return pos;
+}
+
+fn skipCssComment(
+    source: []const u8,
+    start: usize,
+) errors.Result(usize) {
+    if (start + 1 >= source.len or source[start] != '/' or source[start + 1] != '*') return error.ScriptRuntime;
+    var pos = start + 2;
+    while (pos + 1 < source.len) : (pos += 1) {
+        if (source[pos] == '*' and source[pos + 1] == '/') {
+            return pos + 2;
+        }
+    }
+    return error.ScriptRuntime;
+}
+
+fn isCssWhitespace(byte: u8) bool {
+    return switch (byte) {
+        ' ', '\t', '\n', '\r', 0x0c => true,
+        else => false,
+    };
+}
+
 fn appendAllElementIds(
     allocator: std.mem.Allocator,
     host: anytype,
@@ -4050,6 +5599,56 @@ fn radioNodeListEntries(
     return try collectionEntriesFromNodeIds(allocator, items, .element);
 }
 
+fn radioNodeListForEach(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    list: RadioNodeList,
+    args: []*Expr,
+) errors.Result(Value) {
+    const callback_expr: *Expr = switch (args.len) {
+        1, 2 => args[0],
+        else => return error.ScriptRuntime,
+    };
+    const this_arg_expr: ?*Expr = if (args.len == 2) args[1] else null;
+
+    const callback_value = try evalExpr(allocator, host, bindings, callback_expr);
+    const callback = switch (callback_value) {
+        .function => |function| function,
+        else => return error.ScriptRuntime,
+    };
+
+    if (this_arg_expr) |expr| {
+        _ = try evalExpr(allocator, host, bindings, expr);
+    }
+
+    const items = try radioNodeListCurrentIds(allocator, host, list);
+    defer allocator.free(items);
+
+    for (items, 0..) |item, index| {
+        const positional = [_]Value{
+            .{ .element = item },
+            .{ .number = @floatFromInt(index) },
+            .{ .radio_node_list = list },
+        };
+        var function_bindings = try functionBindings(allocator, callback, positional[0..]);
+        defer function_bindings.deinit(allocator);
+
+        const source_name = try std.fmt.allocPrint(allocator, "radionodelist:forEach:{d}", .{index});
+        defer allocator.free(source_name);
+
+        try executeScriptSource(
+            allocator,
+            host,
+            callback.body_source,
+            source_name,
+            function_bindings.items,
+        );
+    }
+
+    return Value{ .undefined_value = {} };
+}
+
 pub fn functionBindings(
     allocator: std.mem.Allocator,
     function: ScriptFunction,
@@ -4378,6 +5977,25 @@ fn asString(allocator: std.mem.Allocator, value: Value) errors.Result([]const u8
         .document_scripts => "[object HTMLCollection]",
         .document_anchors => "[object HTMLCollection]",
         .document_style_sheets => "[object StyleSheetList]",
+        .css_rule_list => "[object CSSRuleList]",
+        .css_rule => |rule| switch (rule) {
+            .style => "[object CSSStyleRule]",
+            .media => "[object CSSMediaRule]",
+            .supports => "[object CSSSupportsRule]",
+            .document => "[object CSSDocumentRule]",
+            .container => "[object CSSContainerRule]",
+            .starting_style => "[object CSSStartingStyleRule]",
+            .keyframes => "[object CSSKeyframesRule]",
+            .keyframe => "[object CSSKeyframeRule]",
+            .font_face => "[object CSSFontFaceRule]",
+            .font_feature_values => "[object CSSFontFeatureValuesRule]",
+            .scope => "[object CSSScopeRule]",
+            .page => "[object CSSPageRule]",
+            .layer => "[object CSSLayerBlockRule]",
+            .counter_style => "[object CSSCounterStyleRule]",
+            .import => "[object CSSImportRule]",
+            .namespace => "[object CSSNamespaceRule]",
+        },
         .style_sheet => "[object CSSStyleSheet]",
         .style_declaration => |style| try styleDeclarationCssText(allocator, style),
         .radio_node_list => "[object RadioNodeList]",
@@ -4409,7 +6027,7 @@ fn isTruthy(value: Value) bool {
         .boolean => |flag| flag,
         .number => |number| number != 0,
         .string => |text| text.len != 0,
-        .element, .node, .template_content, .class_list, .dataset, .node_list, .collection_iterator, .iterator_result, .collection_entry, .html_collection, .document_scripts, .document_anchors, .document_style_sheets, .style_sheet, .style_declaration, .radio_node_list, .media_query_list, .navigator, .performance, .screen, .storage, .location, .history, .event, .document, .window, .function => true,
+        .element, .node, .template_content, .class_list, .dataset, .node_list, .collection_iterator, .iterator_result, .collection_entry, .html_collection, .document_scripts, .document_anchors, .document_style_sheets, .css_rule_list, .css_rule, .style_sheet, .style_declaration, .radio_node_list, .media_query_list, .navigator, .performance, .screen, .storage, .location, .history, .event, .document, .window, .function => true,
     };
 }
 
@@ -5004,6 +6622,42 @@ fn historyStateFromValue(allocator: std.mem.Allocator, value: Value) errors.Resu
     return switch (value) {
         .undefined_value, .null_value => null,
         else => try asString(allocator, value),
+    };
+}
+
+fn selectionIndexFromValue(allocator: std.mem.Allocator, value: Value) errors.Result(usize) {
+    return switch (value) {
+        .number => |number| blk: {
+            if (!std.math.isFinite(number)) return error.ScriptRuntime;
+            if (std.math.round(number) != number) return error.ScriptRuntime;
+            if (number < 0) return error.ScriptRuntime;
+            const max_index: f64 = @floatFromInt(std.math.maxInt(usize));
+            if (number > max_index) return error.ScriptRuntime;
+            break :blk @as(usize, @intFromFloat(number));
+        },
+        else => blk: {
+            const text = try asString(allocator, value);
+            const trimmed = std.mem.trim(u8, text, " \t\r\n");
+            if (trimmed.len == 0) return error.ScriptRuntime;
+            const parsed = std.fmt.parseInt(i64, trimmed, 10) catch return error.ScriptRuntime;
+            if (parsed < 0) return error.ScriptRuntime;
+            break :blk @as(usize, @intCast(parsed));
+        },
+    };
+}
+
+fn selectionDirectionFromString(text: []const u8) ?dom.SelectionDirection {
+    if (std.ascii.eqlIgnoreCase(text, "forward")) return .forward;
+    if (std.ascii.eqlIgnoreCase(text, "backward")) return .backward;
+    if (std.ascii.eqlIgnoreCase(text, "none")) return .none;
+    return null;
+}
+
+fn selectionDirectionName(direction: dom.SelectionDirection) []const u8 {
+    return switch (direction) {
+        .forward => "forward",
+        .backward => "backward",
+        .none => "none",
     };
 }
 

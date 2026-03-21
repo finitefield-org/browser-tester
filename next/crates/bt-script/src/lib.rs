@@ -82,6 +82,7 @@ pub enum HtmlCollectionTarget {
     DocumentLinks,
     DocumentAnchors,
     DocumentChildren,
+    WindowFrames,
     MapAreas(ElementHandle),
     TableTBodies(ElementHandle),
     TableRows(ElementHandle),
@@ -119,6 +120,29 @@ impl MediaQueryListState {
 
     pub fn matches(&self) -> bool {
         self.matches
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScreenOrientationState {
+    orientation_type: String,
+    angle: i64,
+}
+
+impl ScreenOrientationState {
+    pub fn new(orientation_type: impl Into<String>, angle: i64) -> Self {
+        Self {
+            orientation_type: orientation_type.into(),
+            angle,
+        }
+    }
+
+    pub fn orientation_type(&self) -> &str {
+        &self.orientation_type
+    }
+
+    pub fn angle(&self) -> i64 {
+        self.angle
     }
 }
 
@@ -344,7 +368,9 @@ pub enum ScriptValue {
     Storage(StorageTarget),
     MediaQueryList(MediaQueryListState),
     Navigator,
+    History,
     Screen,
+    ScreenOrientation(ScreenOrientationState),
     StyleSheet(StyleSheetTarget),
     Node(NodeHandle),
     NodeList(NodeListTarget),
@@ -431,6 +457,10 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("document.body"))
     }
 
+    fn document_scrolling_element(&mut self) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("document.scrollingElement"))
+    }
+
     fn document_active_element(&mut self) -> Result<Option<ElementHandle>> {
         Err(ScriptError::phase_not_ready("document.activeElement"))
     }
@@ -479,8 +509,20 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("document.origin"))
     }
 
+    fn document_domain(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("document.domain"))
+    }
+
     fn document_referrer(&mut self) -> Result<String> {
         Err(ScriptError::phase_not_ready("document.referrer"))
+    }
+
+    fn document_cookie(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("document.cookie"))
+    }
+
+    fn document_set_cookie(&mut self, _value: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready("document.cookie"))
     }
 
     fn match_media(&mut self, _query: &str) -> Result<MediaQueryListState> {
@@ -504,6 +546,33 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("window.print"))
     }
 
+    fn window_alert(&mut self, _message: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready("window.alert"))
+    }
+
+    fn window_confirm(&mut self, _message: &str) -> Result<bool> {
+        Err(ScriptError::phase_not_ready("window.confirm"))
+    }
+
+    fn window_prompt(
+        &mut self,
+        _message: &str,
+        _default_text: Option<&str>,
+    ) -> Result<Option<String>> {
+        Err(ScriptError::phase_not_ready("window.prompt"))
+    }
+
+    fn html_collection_window_frames_items(&mut self) -> Result<Vec<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("window.frames"))
+    }
+
+    fn html_collection_window_frames_named_item(
+        &mut self,
+        _name: &str,
+    ) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("window.frames"))
+    }
+
     fn window_navigator_user_agent(&mut self) -> Result<String> {
         Err(ScriptError::phase_not_ready("window.navigator.userAgent"))
     }
@@ -522,6 +591,10 @@ pub trait HostBindings {
 
     fn window_navigator_product(&mut self) -> Result<String> {
         Err(ScriptError::phase_not_ready("window.navigator.product"))
+    }
+
+    fn window_navigator_product_sub(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("window.navigator.productSub"))
     }
 
     fn window_navigator_platform(&mut self) -> Result<String> {
@@ -550,6 +623,26 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("window.navigator.vendor"))
     }
 
+    fn window_navigator_vendor_sub(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("window.navigator.vendorSub"))
+    }
+
+    fn window_navigator_pdf_viewer_enabled(&mut self) -> Result<bool> {
+        Err(ScriptError::phase_not_ready(
+            "window.navigator.pdfViewerEnabled",
+        ))
+    }
+
+    fn window_navigator_do_not_track(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("window.navigator.doNotTrack"))
+    }
+
+    fn window_navigator_java_enabled(&mut self) -> Result<bool> {
+        Err(ScriptError::phase_not_ready(
+            "window.navigator.javaEnabled()",
+        ))
+    }
+
     fn window_navigator_hardware_concurrency(&mut self) -> Result<i64> {
         Err(ScriptError::phase_not_ready(
             "window.navigator.hardwareConcurrency",
@@ -560,6 +653,56 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready(
             "window.navigator.maxTouchPoints",
         ))
+    }
+
+    fn window_history_length(&mut self) -> Result<usize> {
+        Err(ScriptError::phase_not_ready("window.history"))
+    }
+
+    fn window_history_scroll_restoration(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready(
+            "window.history.scrollRestoration",
+        ))
+    }
+
+    fn set_window_history_scroll_restoration(&mut self, _value: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready(
+            "window.history.scrollRestoration",
+        ))
+    }
+
+    fn window_history_state(&mut self) -> Result<Option<String>> {
+        Err(ScriptError::phase_not_ready("window.history.state"))
+    }
+
+    fn window_history_push_state(
+        &mut self,
+        _state: Option<&str>,
+        _url: Option<&str>,
+    ) -> Result<()> {
+        Err(ScriptError::phase_not_ready("window.history.pushState()"))
+    }
+
+    fn window_history_replace_state(
+        &mut self,
+        _state: Option<&str>,
+        _url: Option<&str>,
+    ) -> Result<()> {
+        Err(ScriptError::phase_not_ready(
+            "window.history.replaceState()",
+        ))
+    }
+
+    fn window_history_back(&mut self) -> Result<()> {
+        Err(ScriptError::phase_not_ready("window.history.back()"))
+    }
+
+    fn window_history_forward(&mut self) -> Result<()> {
+        Err(ScriptError::phase_not_ready("window.history.forward()"))
+    }
+
+    fn window_history_go(&mut self, _delta: i64) -> Result<()> {
+        Err(ScriptError::phase_not_ready("window.history.go()"))
     }
 
     fn window_scroll_x(&mut self) -> Result<i64> {
@@ -644,6 +787,10 @@ pub trait HostBindings {
 
     fn window_screen_pixel_depth(&mut self) -> Result<i64> {
         Err(ScriptError::phase_not_ready("window.screen.pixelDepth"))
+    }
+
+    fn window_screen_orientation(&mut self) -> Result<ScreenOrientationState> {
+        Err(ScriptError::phase_not_ready("window.screen.orientation"))
     }
 
     fn window_scroll_to(&mut self, _x: i64, _y: i64) -> Result<()> {
@@ -1345,6 +1492,10 @@ mod tests {
         fn on_microtask_checkpoint(&mut self) -> super::Result<()> {
             self.microtask_ticks += 1;
             Ok(())
+        }
+
+        fn document_scrolling_element(&mut self) -> super::Result<Option<super::ElementHandle>> {
+            Ok(None)
         }
     }
 

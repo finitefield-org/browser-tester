@@ -18,7 +18,7 @@ Even in Phase 0, the workspace already reserves explicit families so runtime beh
 - `matchMedia`
 - `storage`
 
-They are exposed from the public facade through `Harness::mocks_mut()`. `matchMedia` is configured through the builder seed API and the registry, then consumed from scripts via `window.matchMedia(...)`.
+They are exposed from the public facade through `Harness::mocks_mut()`. `matchMedia` is configured through the builder seed API and the registry, then consumed from scripts via `window.matchMedia(...)`. The dialogs family is consumed from scripts via `window.alert(...)`, `window.confirm(...)`, and `window.prompt(...)`, with alert/confirm/prompt message capture recorded in the registry.
 
 ## Public Mock Actions
 

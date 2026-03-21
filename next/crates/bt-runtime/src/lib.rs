@@ -8,8 +8,8 @@ use bt_dom::{
 };
 use bt_script::{
     ElementHandle, EventPhase, HostBindings, HtmlCollectionScope, HtmlCollectionTarget,
-    ListenerTarget, MediaQueryListState, NodeHandle, RadioNodeListTarget, ScriptError,
-    ScriptEventHandle, ScriptFunction, ScriptRuntime, ScriptValue, StorageTarget,
+    ListenerTarget, MediaQueryListState, NodeHandle, RadioNodeListTarget, ScreenOrientationState,
+    ScriptError, ScriptEventHandle, ScriptFunction, ScriptRuntime, ScriptValue, StorageTarget,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -888,6 +888,11 @@ pub struct Session {
     current_script: Option<NodeId>,
     document_ready_state: DocumentReadyState,
     window_name: String,
+    cookie_jar: BTreeMap<String, String>,
+    history_entries: Vec<String>,
+    history_states: Vec<Option<String>>,
+    history_index: usize,
+    history_scroll_restoration: String,
     scroll_x: i64,
     scroll_y: i64,
 }
@@ -923,6 +928,7 @@ impl Session {
                 mocks.storage_mut().seed_local(key.clone(), value.clone());
             }
         }
+        let initial_url = config.url.clone();
         mocks.location_mut().set_current(config.url.clone());
         dom.set_target_fragment(Self::fragment_identifier_from_url(&config.url));
 
@@ -942,6 +948,11 @@ impl Session {
             current_script: None,
             document_ready_state: DocumentReadyState::Loading,
             window_name: String::new(),
+            cookie_jar: BTreeMap::new(),
+            history_entries: vec![initial_url],
+            history_states: vec![None],
+            history_index: 0,
+            history_scroll_restoration: "auto".to_string(),
             scroll_x: 0,
             scroll_y: 0,
         };
@@ -1256,13 +1267,108 @@ impl Session {
             ));
         }
 
-        let location = self.mocks.location_mut();
-        location.set_current(url.to_string());
-        location.record_navigation(url.to_string());
-        self.dom
-            .set_target_fragment(Self::fragment_identifier_from_url(url));
-        self.scroll_x = 0;
-        self.scroll_y = 0;
+        if self.history_entries.is_empty() {
+            self.history_entries.push(url.to_string());
+            self.history_states.push(None);
+            self.history_index = 0;
+        } else {
+            let next_index = self.history_index.saturating_add(1);
+            self.history_entries.truncate(next_index);
+            self.history_states.truncate(next_index);
+            self.history_entries.push(url.to_string());
+            self.history_states.push(None);
+            self.history_index = self.history_entries.len().saturating_sub(1);
+        }
+
+        self.apply_history_navigation(url);
+        Ok(())
+    }
+
+    pub fn window_history_push_state(
+        &mut self,
+        state: Option<&str>,
+        url: Option<&str>,
+    ) -> Result<(), SessionError> {
+        let next_url = self.resolve_history_url(url);
+        let next_state = state.map(str::to_string);
+
+        if self.history_entries.is_empty() {
+            self.history_entries.push(next_url.clone());
+            self.history_states.push(next_state);
+            self.history_index = 0;
+        } else {
+            let next_index = self.history_index.saturating_add(1);
+            self.history_entries.truncate(next_index);
+            self.history_states.truncate(next_index);
+            self.history_entries.push(next_url.clone());
+            self.history_states.push(next_state);
+            self.history_index = self.history_entries.len().saturating_sub(1);
+        }
+
+        self.apply_history_url_update(&next_url);
+        Ok(())
+    }
+
+    pub fn window_history_replace_state(
+        &mut self,
+        state: Option<&str>,
+        url: Option<&str>,
+    ) -> Result<(), SessionError> {
+        let next_url = self.resolve_history_url(url);
+        let next_state = state.map(str::to_string);
+
+        if self.history_entries.is_empty() {
+            self.history_entries.push(next_url.clone());
+            self.history_states.push(next_state);
+            self.history_index = 0;
+        } else {
+            self.history_entries[self.history_index] = next_url.clone();
+            self.history_states[self.history_index] = next_state;
+        }
+
+        self.apply_history_url_update(&next_url);
+        Ok(())
+    }
+
+    pub fn window_history_back(&mut self) -> Result<(), SessionError> {
+        if self.history_index == 0 {
+            return Ok(());
+        }
+
+        let target_index = self.history_index - 1;
+        self.history_index = target_index;
+        let url = self.history_entries[target_index].clone();
+        self.apply_history_navigation(&url);
+        Ok(())
+    }
+
+    pub fn window_history_forward(&mut self) -> Result<(), SessionError> {
+        if self.history_index + 1 >= self.history_entries.len() {
+            return Ok(());
+        }
+
+        let target_index = self.history_index + 1;
+        self.history_index = target_index;
+        let url = self.history_entries[target_index].clone();
+        self.apply_history_navigation(&url);
+        Ok(())
+    }
+
+    pub fn window_history_go(&mut self, delta: i64) -> Result<(), SessionError> {
+        if delta == 0 || self.history_entries.is_empty() {
+            return Ok(());
+        }
+
+        let current = self.history_index as i64;
+        let max_index = (self.history_entries.len() - 1) as i64;
+        let target = current.saturating_add(delta).clamp(0, max_index) as usize;
+        if target == self.history_index {
+            return Ok(());
+        }
+
+        self.history_index = target;
+        let url = self.history_entries[target].clone();
+        self.apply_history_navigation(&url);
         Ok(())
     }
 
@@ -1296,6 +1402,31 @@ impl Session {
                 "node {:?} is not an element",
                 node_id
             ))),
+        }
+    }
+
+    fn apply_history_navigation(&mut self, url: &str) {
+        self.apply_history_url_update(url);
+        self.scroll_x = 0;
+        self.scroll_y = 0;
+    }
+
+    fn apply_history_url_update(&mut self, url: &str) {
+        let location = self.mocks.location_mut();
+        location.set_current(url.to_string());
+        location.record_navigation(url.to_string());
+        self.dom
+            .set_target_fragment(Self::fragment_identifier_from_url(url));
+    }
+
+    fn resolve_history_url(&self, url: Option<&str>) -> String {
+        match url.map(str::trim) {
+            Some(url) if !url.is_empty() => url.to_string(),
+            _ => self
+                .history_entries
+                .get(self.history_index)
+                .cloned()
+                .unwrap_or_else(|| self.config.url.clone()),
         }
     }
 
@@ -2224,6 +2355,10 @@ impl Session {
         Ok(self.dom.body_element_id().map(Self::node_id_to_handle))
     }
 
+    pub fn document_scrolling_element(&self) -> Result<Option<ElementHandle>, ScriptError> {
+        self.document_document_element()
+    }
+
     fn document_active_element(&self) -> Result<Option<ElementHandle>, ScriptError> {
         if let Some(node_id) = self.focused_node {
             return Ok(Some(Self::node_id_to_handle(node_id)));
@@ -2282,8 +2417,50 @@ impl Session {
         Self::origin_from_url(&self.document_location())
     }
 
+    pub fn document_domain(&self) -> String {
+        Self::domain_from_url(&self.document_location())
+    }
+
     pub fn document_referrer(&self) -> String {
         String::new()
+    }
+
+    fn document_cookie(&self) -> String {
+        self.cookie_jar
+            .iter()
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+
+    fn set_document_cookie(&mut self, value: &str) -> Result<(), SessionError> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(SessionError::Mock(
+                "document.cookie requires a non-empty cookie string".to_string(),
+            ));
+        }
+
+        let pair = trimmed
+            .split_once(';')
+            .map(|(pair, _)| pair)
+            .unwrap_or(trimmed);
+        let Some((name, cookie_value)) = pair.split_once('=') else {
+            return Err(SessionError::Mock(
+                "document.cookie requires `name=value`".to_string(),
+            ));
+        };
+
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(SessionError::Mock(
+                "document.cookie requires a non-empty cookie name".to_string(),
+            ));
+        }
+
+        self.cookie_jar
+            .insert(name.to_string(), cookie_value.trim_start().to_string());
+        Ok(())
     }
 
     pub fn window_name(&self) -> &str {
@@ -2314,6 +2491,10 @@ impl Session {
         "browser-tester-next"
     }
 
+    pub fn window_navigator_product_sub(&self) -> &'static str {
+        "browser-tester-next"
+    }
+
     pub fn window_navigator_platform(&self) -> &'static str {
         "unknown"
     }
@@ -2338,12 +2519,57 @@ impl Session {
         "browser-tester-next"
     }
 
+    pub fn window_navigator_vendor_sub(&self) -> &'static str {
+        "browser-tester-next"
+    }
+
+    pub fn window_navigator_pdf_viewer_enabled(&self) -> bool {
+        false
+    }
+
+    pub fn window_navigator_do_not_track(&self) -> &'static str {
+        "unspecified"
+    }
+
+    pub fn window_navigator_java_enabled(&self) -> bool {
+        false
+    }
+
     pub fn window_navigator_hardware_concurrency(&self) -> i64 {
         8
     }
 
     pub fn window_navigator_max_touch_points(&self) -> i64 {
         0
+    }
+
+    pub fn window_history_length(&self) -> usize {
+        self.history_entries.len()
+    }
+
+    pub fn window_history_state(&self) -> Option<&str> {
+        self.history_states
+            .get(self.history_index)
+            .and_then(|state| state.as_deref())
+    }
+
+    pub fn window_history_scroll_restoration(&self) -> &str {
+        &self.history_scroll_restoration
+    }
+
+    pub fn set_window_history_scroll_restoration(
+        &mut self,
+        value: &str,
+    ) -> Result<(), SessionError> {
+        match value {
+            "auto" | "manual" => {
+                self.history_scroll_restoration = value.to_string();
+                Ok(())
+            }
+            other => Err(SessionError::Mock(format!(
+                "unsupported history scroll restoration value: {other}"
+            ))),
+        }
     }
 
     pub fn window_scroll_x(&self) -> i64 {
@@ -2428,6 +2654,10 @@ impl Session {
 
     pub fn window_screen_pixel_depth(&self) -> i64 {
         24
+    }
+
+    pub fn window_screen_orientation(&self) -> ScreenOrientationState {
+        ScreenOrientationState::new("landscape-primary", 0)
     }
 
     fn storage_map(&self, target: StorageTarget) -> &BTreeMap<String, String> {
@@ -2539,6 +2769,46 @@ impl Session {
         format!("{scheme}://{authority}")
     }
 
+    fn domain_from_url(url: &str) -> String {
+        let Some((_, rest)) = url.split_once(':') else {
+            return "null".to_string();
+        };
+
+        let Some(after_slashes) = rest.strip_prefix("//") else {
+            return "null".to_string();
+        };
+
+        let authority_end = after_slashes
+            .find(['/', '?', '#'])
+            .unwrap_or(after_slashes.len());
+        let mut authority = &after_slashes[..authority_end];
+        if authority.is_empty() {
+            return "null".to_string();
+        }
+
+        if let Some((_, host)) = authority.rsplit_once('@') {
+            authority = host;
+        }
+
+        let host = if authority.starts_with('[') {
+            let Some(end_bracket) = authority.find(']') else {
+                return "null".to_string();
+            };
+            &authority[1..end_bracket]
+        } else {
+            authority
+                .split_once(':')
+                .map(|(host, _)| host)
+                .unwrap_or(authority)
+        };
+
+        if host.is_empty() {
+            "null".to_string()
+        } else {
+            host.to_ascii_lowercase()
+        }
+    }
+
     pub fn set_document_location(&mut self, value: &str) -> Result<(), SessionError> {
         self.navigate(value)
     }
@@ -2593,6 +2863,31 @@ impl Session {
             .collect();
 
         Ok(self.first_named_item_in_nodes(&children, name))
+    }
+
+    fn window_frames(&self) -> Result<Vec<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| matches!(element.tag_name.as_str(), "frame" | "iframe"),
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn window_frames_named_item(
+        &self,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| matches!(element.tag_name.as_str(), "frame" | "iframe"),
+        );
+        Ok(self.first_named_item_in_nodes(&collected, name))
     }
 
     fn node_child_nodes(&self, scope: HtmlCollectionScope) -> Result<Vec<NodeHandle>, ScriptError> {
@@ -3075,6 +3370,10 @@ impl HostBindings for Session {
         Session::document_body(self)
     }
 
+    fn document_scrolling_element(&mut self) -> bt_script::Result<Option<ElementHandle>> {
+        Session::document_scrolling_element(self)
+    }
+
     fn document_active_element(&mut self) -> bt_script::Result<Option<ElementHandle>> {
         Session::document_active_element(self)
     }
@@ -3125,8 +3424,21 @@ impl HostBindings for Session {
         Ok(Session::document_origin(self))
     }
 
+    fn document_domain(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_domain(self))
+    }
+
     fn document_referrer(&mut self) -> bt_script::Result<String> {
         Ok(Session::document_referrer(self))
+    }
+
+    fn document_cookie(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_cookie(self))
+    }
+
+    fn document_set_cookie(&mut self, value: &str) -> bt_script::Result<()> {
+        Session::set_document_cookie(self, value)
+            .map_err(|err| bt_script::ScriptError::new(err.to_string()))
     }
 
     fn match_media(&mut self, query: &str) -> bt_script::Result<MediaQueryListState> {
@@ -3154,6 +3466,23 @@ impl HostBindings for Session {
         Session::print(self).map_err(|error| ScriptError::new(error.to_string()))
     }
 
+    fn window_alert(&mut self, message: &str) -> bt_script::Result<()> {
+        Session::alert(self, message);
+        Ok(())
+    }
+
+    fn window_confirm(&mut self, message: &str) -> bt_script::Result<bool> {
+        Session::confirm(self, message).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_prompt(
+        &mut self,
+        message: &str,
+        _default_text: Option<&str>,
+    ) -> bt_script::Result<Option<String>> {
+        Session::prompt(self, message).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
     fn window_navigator_user_agent(&mut self) -> bt_script::Result<String> {
         Ok(Session::window_navigator_user_agent(self).to_string())
     }
@@ -3172,6 +3501,10 @@ impl HostBindings for Session {
 
     fn window_navigator_product(&mut self) -> bt_script::Result<String> {
         Ok(Session::window_navigator_product(self).to_string())
+    }
+
+    fn window_navigator_product_sub(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_product_sub(self).to_string())
     }
 
     fn window_navigator_platform(&mut self) -> bt_script::Result<String> {
@@ -3198,12 +3531,75 @@ impl HostBindings for Session {
         Ok(Session::window_navigator_vendor(self).to_string())
     }
 
+    fn window_navigator_vendor_sub(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_vendor_sub(self).to_string())
+    }
+
+    fn window_navigator_pdf_viewer_enabled(&mut self) -> bt_script::Result<bool> {
+        Ok(Session::window_navigator_pdf_viewer_enabled(self))
+    }
+
+    fn window_navigator_do_not_track(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_do_not_track(self).to_string())
+    }
+
+    fn window_navigator_java_enabled(&mut self) -> bt_script::Result<bool> {
+        Ok(Session::window_navigator_java_enabled(self))
+    }
+
     fn window_navigator_hardware_concurrency(&mut self) -> bt_script::Result<i64> {
         Ok(Session::window_navigator_hardware_concurrency(self))
     }
 
     fn window_navigator_max_touch_points(&mut self) -> bt_script::Result<i64> {
         Ok(Session::window_navigator_max_touch_points(self))
+    }
+
+    fn window_history_length(&mut self) -> bt_script::Result<usize> {
+        Ok(Session::window_history_length(self))
+    }
+
+    fn window_history_scroll_restoration(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_history_scroll_restoration(self).to_string())
+    }
+
+    fn set_window_history_scroll_restoration(&mut self, value: &str) -> bt_script::Result<()> {
+        Session::set_window_history_scroll_restoration(self, value)
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_history_state(&mut self) -> bt_script::Result<Option<String>> {
+        Ok(Session::window_history_state(self).map(str::to_string))
+    }
+
+    fn window_history_push_state(
+        &mut self,
+        state: Option<&str>,
+        url: Option<&str>,
+    ) -> bt_script::Result<()> {
+        Session::window_history_push_state(self, state, url)
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_history_replace_state(
+        &mut self,
+        state: Option<&str>,
+        url: Option<&str>,
+    ) -> bt_script::Result<()> {
+        Session::window_history_replace_state(self, state, url)
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_history_back(&mut self) -> bt_script::Result<()> {
+        Session::window_history_back(self).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_history_forward(&mut self) -> bt_script::Result<()> {
+        Session::window_history_forward(self).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_history_go(&mut self, delta: i64) -> bt_script::Result<()> {
+        Session::window_history_go(self, delta).map_err(|error| ScriptError::new(error.to_string()))
     }
 
     fn window_scroll_x(&mut self) -> bt_script::Result<i64> {
@@ -3288,6 +3684,10 @@ impl HostBindings for Session {
 
     fn window_screen_pixel_depth(&mut self) -> bt_script::Result<i64> {
         Ok(Session::window_screen_pixel_depth(self))
+    }
+
+    fn window_screen_orientation(&mut self) -> bt_script::Result<ScreenOrientationState> {
+        Ok(Session::window_screen_orientation(self))
     }
 
     fn window_scroll_to(&mut self, x: i64, y: i64) -> bt_script::Result<()> {
@@ -3472,6 +3872,7 @@ impl HostBindings for Session {
             HtmlCollectionTarget::DocumentLinks => self.document_links(),
             HtmlCollectionTarget::DocumentAnchors => self.document_anchors(),
             HtmlCollectionTarget::DocumentChildren => self.document_children(),
+            HtmlCollectionTarget::WindowFrames => self.window_frames(),
             HtmlCollectionTarget::MapAreas(element) => self.map_areas(element),
             HtmlCollectionTarget::TableTBodies(element) => self.table_bodies(element),
             HtmlCollectionTarget::TableRows(element) => self.table_rows(element),
@@ -3516,6 +3917,7 @@ impl HostBindings for Session {
             HtmlCollectionTarget::DocumentLinks => self.document_links_named_item(name),
             HtmlCollectionTarget::DocumentAnchors => self.document_anchors_named_item(name),
             HtmlCollectionTarget::DocumentChildren => self.document_children_named_item(name),
+            HtmlCollectionTarget::WindowFrames => self.window_frames_named_item(name),
             HtmlCollectionTarget::MapAreas(element) => self.map_areas_named_item(element, name),
             HtmlCollectionTarget::TableTBodies(element) => {
                 self.table_bodies_named_item(element, name)
@@ -3548,6 +3950,7 @@ impl HostBindings for Session {
             HtmlCollectionTarget::DocumentLinks => self.document_links(),
             HtmlCollectionTarget::DocumentAnchors => self.document_anchors(),
             HtmlCollectionTarget::DocumentChildren => self.document_children(),
+            HtmlCollectionTarget::WindowFrames => self.window_frames(),
             HtmlCollectionTarget::MapAreas(element) => self.map_areas(element),
             HtmlCollectionTarget::TableTBodies(element) => self.table_bodies(element),
             HtmlCollectionTarget::TableRows(element) => self.table_rows(element),
@@ -3592,6 +3995,7 @@ impl HostBindings for Session {
             HtmlCollectionTarget::DocumentLinks => self.document_links_named_item(name),
             HtmlCollectionTarget::DocumentAnchors => self.document_anchors_named_item(name),
             HtmlCollectionTarget::DocumentChildren => self.document_children_named_item(name),
+            HtmlCollectionTarget::WindowFrames => self.window_frames_named_item(name),
             HtmlCollectionTarget::MapAreas(element) => self.map_areas_named_item(element, name),
             HtmlCollectionTarget::TableTBodies(element) => {
                 self.table_bodies_named_item(element, name)
@@ -3768,6 +4172,17 @@ impl HostBindings for Session {
         name: &str,
     ) -> bt_script::Result<Option<ElementHandle>> {
         Session::document_children_named_item(self, name)
+    }
+
+    fn html_collection_window_frames_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
+        Session::window_frames(self)
+    }
+
+    fn html_collection_window_frames_named_item(
+        &mut self,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        Session::window_frames_named_item(self, name)
     }
 
     fn html_collection_map_areas_items(

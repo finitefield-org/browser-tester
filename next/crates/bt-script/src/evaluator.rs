@@ -50,7 +50,9 @@ fn as_string(value: &Value) -> String {
         Value::Storage(_) => "[object Storage]".to_string(),
         Value::MediaQueryList(_) => "[object MediaQueryList]".to_string(),
         Value::Navigator => "[object Navigator]".to_string(),
+        Value::History => "[object History]".to_string(),
         Value::Screen => "[object Screen]".to_string(),
+        Value::ScreenOrientation(_) => "[object ScreenOrientation]".to_string(),
         Value::CollectionIterator(_) => "[object Iterator]".to_string(),
         Value::IteratorResult(_) => "[object IteratorResult]".to_string(),
         Value::CollectionEntry(_) => "[object IteratorEntry]".to_string(),
@@ -166,6 +168,9 @@ fn eval_assignment<H: HostBindings>(
                 (Value::Screen, property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on screen value"
                 ))),
+                (Value::ScreenOrientation(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on screen orientation value"
+                ))),
                 (Value::CollectionIterator(_), property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on iterator value"
                 ))),
@@ -182,6 +187,10 @@ fn eval_assignment<H: HostBindings>(
                 }
                 (Value::Document, "location") => {
                     host.document_set_location(&as_string(&value))?;
+                    Ok(())
+                }
+                (Value::Document, "cookie") => {
+                    host.document_set_cookie(&as_string(&value))?;
                     Ok(())
                 }
                 (Value::Window, "title") => {
@@ -204,6 +213,13 @@ fn eval_assignment<H: HostBindings>(
                 ))),
                 (Value::Navigator, property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on navigator value"
+                ))),
+                (Value::History, "scrollRestoration") => {
+                    host.set_window_history_scroll_restoration(&as_string(&value))?;
+                    Ok(())
+                }
+                (Value::History, property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on history value"
                 ))),
                 (Value::Document, property) | (Value::Window, property) => Err(ScriptError::new(
                     format!("unsupported assignment target: {property}"),
@@ -332,6 +348,7 @@ fn eval_member<H: HostBindings>(
         Value::Document if property == "baseURI" => Ok(Value::String(host.document_base_uri()?)),
         Value::Document if property == "origin" => Ok(Value::String(host.document_origin()?)),
         Value::Document if property == "referrer" => Ok(Value::String(host.document_referrer()?)),
+        Value::Document if property == "cookie" => Ok(Value::String(host.document_cookie()?)),
         Value::Document if property == "currentScript" => {
             Ok(match host.document_current_script()? {
                 Some(element) => Value::Element(element),
@@ -359,6 +376,12 @@ fn eval_member<H: HostBindings>(
             Some(element) => Value::Element(element),
             None => Value::Null,
         }),
+        Value::Document if property == "scrollingElement" => {
+            Ok(match host.document_scrolling_element()? {
+                Some(element) => Value::Element(element),
+                None => Value::Null,
+            })
+        }
         Value::Document if property == "activeElement" => {
             Ok(match host.document_active_element()? {
                 Some(element) => Value::Element(element),
@@ -396,6 +419,19 @@ fn eval_member<H: HostBindings>(
             }))
         }
         Value::Window if property == "document" => Ok(Value::Document),
+        Value::Window if property == "self" => Ok(Value::Window),
+        Value::Window if property == "window" => Ok(Value::Window),
+        Value::Window if property == "parent" => Ok(Value::Window),
+        Value::Window if property == "top" => Ok(Value::Window),
+        Value::Window if property == "closed" => Ok(Value::Boolean(false)),
+        Value::Window if property == "frameElement" => Ok(Value::Null),
+        Value::Window if property == "opener" => Ok(Value::Null),
+        Value::Window if property == "frames" => Ok(Value::HtmlCollection(
+            HtmlCollectionTarget::WindowFrames,
+        )),
+        Value::Window if property == "length" => Ok(Value::Number(
+            host.html_collection_window_frames_items()?.len() as f64,
+        )),
         Value::Document if property == "defaultView" => Ok(Value::Window),
         Value::Document if property == "visibilityState" => {
             Ok(Value::String(host.document_visibility_state()?))
@@ -408,9 +444,11 @@ fn eval_member<H: HostBindings>(
         Value::Window if property == "title" => Ok(Value::String(host.document_title()?)),
         Value::Window if property == "location" => Ok(Value::String(host.document_location()?)),
         Value::Window if property == "origin" => Ok(Value::String(host.document_origin()?)),
+        Value::Document if property == "domain" => Ok(Value::String(host.document_domain()?)),
         Value::Window if property == "localStorage" => Ok(Value::Storage(StorageTarget::Local)),
         Value::Window if property == "sessionStorage" => Ok(Value::Storage(StorageTarget::Session)),
         Value::Window if property == "navigator" => Ok(Value::Navigator),
+        Value::Window if property == "history" => Ok(Value::History),
         Value::Window if property == "scrollX" => Ok(Value::Number(host.window_scroll_x()? as f64)),
         Value::Window if property == "scrollY" => Ok(Value::Number(host.window_scroll_y()? as f64)),
         Value::Window if property == "pageXOffset" => {
@@ -467,6 +505,15 @@ fn eval_member<H: HostBindings>(
         Value::Screen if property == "pixelDepth" => {
             Ok(Value::Number(host.window_screen_pixel_depth()? as f64))
         }
+        Value::Screen if property == "orientation" => Ok(Value::ScreenOrientation(
+            host.window_screen_orientation()?,
+        )),
+        Value::ScreenOrientation(orientation) if property == "type" => {
+            Ok(Value::String(orientation.orientation_type().to_string()))
+        }
+        Value::ScreenOrientation(orientation) if property == "angle" => {
+            Ok(Value::Number(orientation.angle() as f64))
+        }
         Value::MediaQueryList(list) if property == "matches" => Ok(Value::Boolean(list.matches())),
         Value::MediaQueryList(list) if property == "media" => {
             Ok(Value::String(list.media().to_string()))
@@ -486,6 +533,9 @@ fn eval_member<H: HostBindings>(
         Value::Navigator if property == "product" => {
             Ok(Value::String(host.window_navigator_product()?))
         }
+        Value::Navigator if property == "productSub" => {
+            Ok(Value::String(host.window_navigator_product_sub()?))
+        }
         Value::Navigator if property == "platform" => {
             Ok(Value::String(host.window_navigator_platform()?))
         }
@@ -504,12 +554,40 @@ fn eval_member<H: HostBindings>(
         Value::Navigator if property == "vendor" => {
             Ok(Value::String(host.window_navigator_vendor()?))
         }
+        Value::Navigator if property == "vendorSub" => {
+            Ok(Value::String(host.window_navigator_vendor_sub()?))
+        }
+        Value::Navigator if property == "pdfViewerEnabled" => {
+            Ok(Value::Boolean(host.window_navigator_pdf_viewer_enabled()?))
+        }
+        Value::Navigator if property == "doNotTrack" => {
+            Ok(Value::String(host.window_navigator_do_not_track()?))
+        }
+        Value::Navigator if property == "javaEnabled" => {
+            Ok(Value::Boolean(host.window_navigator_java_enabled()?))
+        }
+        Value::Navigator if property == "plugins" => {
+            Ok(Value::HtmlCollection(HtmlCollectionTarget::ByTagName {
+                scope: HtmlCollectionScope::Document,
+                tag_name: "embed".to_string(),
+            }))
+        }
         Value::Navigator if property == "hardwareConcurrency" => Ok(Value::Number(
             host.window_navigator_hardware_concurrency()? as f64,
         )),
         Value::Navigator if property == "maxTouchPoints" => Ok(Value::Number(
             host.window_navigator_max_touch_points()? as f64,
         )),
+        Value::History if property == "length" => {
+            Ok(Value::Number(host.window_history_length()? as f64))
+        }
+        Value::History if property == "state" => match host.window_history_state()? {
+            Some(value) => Ok(Value::String(value)),
+            None => Ok(Value::Null),
+        },
+        Value::History if property == "scrollRestoration" => {
+            Ok(Value::String(host.window_history_scroll_restoration()?))
+        }
         Value::Element(element) if property == "textContent" => {
             Ok(Value::String(host.element_text_content(element)?))
         }
@@ -528,6 +606,15 @@ fn eval_member<H: HostBindings>(
         Value::Element(element) if property == "value" => {
             Ok(Value::String(host.element_value(element)?))
         }
+        Value::Element(element) if property == "length" => match host.element_tag_name(element)? {
+            tag if tag == "form" => Ok(Value::Number(
+                host.html_collection_form_elements_items(element)?.len() as f64,
+            )),
+            tag if tag == "select" => Ok(Value::Number(
+                host.html_collection_select_options_items(element)?.len() as f64,
+            )),
+            _ => Err(unsupported_member_access(property, "element")),
+        },
         Value::Element(element) if property == "checked" => {
             Ok(Value::Boolean(host.element_checked(element)?))
         }
@@ -634,6 +721,7 @@ fn eval_member<H: HostBindings>(
             Ok(Value::String(radio_node_list_value(&target, host)?))
         }
         Value::Navigator => Err(unsupported_member_access(property, "navigator")),
+        Value::History => Err(unsupported_member_access(property, "history")),
         Value::Screen => Err(unsupported_member_access(property, "screen")),
         Value::Element(_) => Err(unsupported_member_access(property, "element")),
         Value::ClassList(_) => Err(unsupported_member_access(property, "class list")),
@@ -669,6 +757,9 @@ fn eval_member<H: HostBindings>(
         Value::NodeList(_) => Err(unsupported_member_access(property, "node list")),
         Value::RadioNodeList(_) => Err(unsupported_member_access(property, "radio node list")),
         Value::MediaQueryList(_) => Err(unsupported_member_access(property, "media query list")),
+        Value::ScreenOrientation(_) => {
+            Err(unsupported_member_access(property, "screen orientation"))
+        }
         Value::Storage(target) if property == "length" => {
             Ok(Value::Number(host.storage_length(target)? as f64))
         }
@@ -771,6 +862,47 @@ fn eval_method_call<H: HostBindings>(
             ))),
         },
         Value::Window => match method {
+            "alert" => {
+                if args.len() > 1 {
+                    return Err(ScriptError::new("alert() expects at most one argument"));
+                }
+                let message = if let Some(expr) = args.first() {
+                    as_string(&eval_expr(expr, env, host)?)
+                } else {
+                    as_string(&Value::Undefined)
+                };
+                host.window_alert(&message)?;
+                Ok(Value::Undefined)
+            }
+            "confirm" => {
+                if args.len() > 1 {
+                    return Err(ScriptError::new("confirm() expects at most one argument"));
+                }
+                let message = if let Some(expr) = args.first() {
+                    as_string(&eval_expr(expr, env, host)?)
+                } else {
+                    as_string(&Value::Undefined)
+                };
+                Ok(Value::Boolean(host.window_confirm(&message)?))
+            }
+            "prompt" => {
+                if args.len() > 2 {
+                    return Err(ScriptError::new("prompt() expects at most two arguments"));
+                }
+                let message = if let Some(expr) = args.first() {
+                    as_string(&eval_expr(expr, env, host)?)
+                } else {
+                    as_string(&Value::Undefined)
+                };
+                let default_text = match args.get(1) {
+                    Some(expr) => Some(as_string(&eval_expr(expr, env, host)?)),
+                    None => None,
+                };
+                match host.window_prompt(&message, default_text.as_deref())? {
+                    Some(value) => Ok(Value::String(value)),
+                    None => Ok(Value::Null),
+                }
+            }
             "open" => {
                 if args.len() > 3 {
                     return Err(ScriptError::new("open() expects at most three arguments"));
@@ -881,6 +1013,9 @@ fn eval_method_call<H: HostBindings>(
                 "unsupported Event method: {other}"
             ))),
         },
+        Value::ScreenOrientation(_) => Err(ScriptError::new(format!(
+            "unsupported ScreenOrientation method: {method}"
+        ))),
         Value::HtmlCollection(collection) => match method {
             "item" => html_collection_item(&collection, args, env, host),
             "namedItem" => html_collection_named_item(&collection, args, env, host),
@@ -907,9 +1042,83 @@ fn eval_method_call<H: HostBindings>(
         Value::StyleSheet(_) => Err(ScriptError::new(format!(
             "cannot call `{method}` on a style sheet value"
         ))),
-        Value::Navigator => Err(ScriptError::new(format!(
-            "cannot call `{method}` on a navigator value"
-        ))),
+        Value::Navigator => match method {
+            "javaEnabled" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new(
+                        "window.navigator.javaEnabled() expects no arguments",
+                    ));
+                }
+                Ok(Value::Boolean(host.window_navigator_java_enabled()?))
+            }
+            other => Err(ScriptError::new(format!(
+                "cannot call `{other}` on a navigator value"
+            ))),
+        },
+        Value::History => match method {
+            "pushState" => {
+                if args.len() < 2 || args.len() > 3 {
+                    return Err(ScriptError::new(
+                        "history.pushState() expects 2 or 3 arguments",
+                    ));
+                }
+                let state = eval_expr(&args[0], env, host)?;
+                let _ = eval_expr(&args[1], env, host)?;
+                let url = match args.get(2) {
+                    Some(expr) => Some(as_string(&eval_expr(expr, env, host)?)),
+                    None => None,
+                };
+                let state = history_state_from_value(&state);
+                host.window_history_push_state(state.as_deref(), url.as_deref())?;
+                Ok(Value::Undefined)
+            }
+            "replaceState" => {
+                if args.len() < 2 || args.len() > 3 {
+                    return Err(ScriptError::new(
+                        "history.replaceState() expects 2 or 3 arguments",
+                    ));
+                }
+                let state = eval_expr(&args[0], env, host)?;
+                let _ = eval_expr(&args[1], env, host)?;
+                let url = match args.get(2) {
+                    Some(expr) => Some(as_string(&eval_expr(expr, env, host)?)),
+                    None => None,
+                };
+                let state = history_state_from_value(&state);
+                host.window_history_replace_state(state.as_deref(), url.as_deref())?;
+                Ok(Value::Undefined)
+            }
+            "back" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("history.back() expects no arguments"));
+                }
+                host.window_history_back()?;
+                Ok(Value::Undefined)
+            }
+            "forward" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("history.forward() expects no arguments"));
+                }
+                host.window_history_forward()?;
+                Ok(Value::Undefined)
+            }
+            "go" => {
+                if args.len() > 1 {
+                    return Err(ScriptError::new(
+                        "history.go() expects at most one argument",
+                    ));
+                }
+                let delta = match args.first() {
+                    Some(expr) => history_delta_from_value(&eval_expr(expr, env, host)?)?,
+                    None => 0,
+                };
+                host.window_history_go(delta)?;
+                Ok(Value::Undefined)
+            }
+            other => Err(ScriptError::new(format!(
+                "cannot call `{other}` on a history value"
+            ))),
+        },
         Value::Screen => Err(ScriptError::new(format!(
             "cannot call `{method}` on a screen value"
         ))),
@@ -1795,6 +2004,7 @@ fn html_collection_items<H: HostBindings>(
         HtmlCollectionTarget::DocumentLinks => host.html_collection_document_links_items(),
         HtmlCollectionTarget::DocumentAnchors => host.html_collection_document_anchors_items(),
         HtmlCollectionTarget::DocumentChildren => host.html_collection_document_children_items(),
+        HtmlCollectionTarget::WindowFrames => host.html_collection_window_frames_items(),
         HtmlCollectionTarget::MapAreas(element) => host.html_collection_map_areas_items(*element),
         HtmlCollectionTarget::TableTBodies(element) => {
             host.html_collection_table_bodies_items(*element)
@@ -1868,6 +2078,9 @@ fn html_collection_named_item_handle<H: HostBindings>(
             .map(|value| value.map(HtmlCollectionNamedItem::Element)),
         HtmlCollectionTarget::DocumentChildren => host
             .html_collection_document_children_named_item(name)
+            .map(|value| value.map(HtmlCollectionNamedItem::Element)),
+        HtmlCollectionTarget::WindowFrames => host
+            .html_collection_window_frames_named_item(name)
             .map(|value| value.map(HtmlCollectionNamedItem::Element)),
         HtmlCollectionTarget::MapAreas(element) => host
             .html_collection_map_areas_named_item(*element, name)
@@ -2254,6 +2467,7 @@ fn is_truthy(value: &Value) -> bool {
         | Value::ClassList(_)
         | Value::Dataset(_)
         | Value::Navigator
+        | Value::History
         | Value::HtmlCollection(_)
         | Value::StyleSheetList(_)
         | Value::StyleSheet(_)
@@ -2266,11 +2480,12 @@ fn is_truthy(value: &Value) -> bool {
         | Value::Screen
         | Value::CollectionIterator(_)
         | Value::IteratorResult(_)
-        | Value::CollectionEntry(_)
-        | Value::Document
-        | Value::Window
-        | Value::Function(_)
-        | Value::Event(_) => true,
+            | Value::CollectionEntry(_)
+            | Value::Document
+            | Value::Window
+            | Value::Function(_)
+            | Value::Event(_)
+            | Value::ScreenOrientation(_) => true,
     }
 }
 
@@ -2300,6 +2515,30 @@ fn scroll_coordinate(value: &Value, method: &str) -> Result<i64> {
         _ => Err(ScriptError::new(format!(
             "{method}() expects integer coordinates"
         ))),
+    }
+}
+
+fn history_delta_from_value(value: &Value) -> Result<i64> {
+    match value {
+        Value::Number(number)
+            if number.is_finite()
+                && number.fract() == 0.0
+                && *number >= i64::MIN as f64
+                && *number <= i64::MAX as f64 =>
+        {
+            Ok(*number as i64)
+        }
+        Value::String(value) => value
+            .parse::<i64>()
+            .map_err(|_| ScriptError::new("history.go() expects an integer delta")),
+        _ => Err(ScriptError::new("history.go() expects an integer delta")),
+    }
+}
+
+fn history_state_from_value(value: &Value) -> Option<String> {
+    match value {
+        Value::Undefined | Value::Null => None,
+        _ => Some(as_string(value)),
     }
 }
 

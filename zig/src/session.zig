@@ -146,6 +146,7 @@ pub const Session = struct {
     scroll_x: i64 = 0,
     scroll_y: i64 = 0,
     window_name: []const u8 = "",
+    cookie_jar: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
 
     pub fn init(allocator: std.mem.Allocator, config: SessionConfig) errors.Result(Session) {
         const arena = try allocator.create(std.heap.ArenaAllocator);
@@ -186,6 +187,8 @@ pub const Session = struct {
         errdefer queued_microtasks.deinit(arena.allocator());
         var timers: std.ArrayListUnmanaged(ScheduledTimer) = .{};
         errdefer timers.deinit(arena.allocator());
+        var cookie_jar: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+        errdefer cookie_jar.deinit(arena_alloc);
         var mock_registry = mocks.MockRegistry.init(arena_alloc);
         errdefer mock_registry.deinit();
         for (config.local_storage, 0..) |_, index| {
@@ -237,6 +240,7 @@ pub const Session = struct {
                 .history = &history,
                 .allocator = arena.allocator(),
                 .window_name = &window_name,
+                .cookie_jar = &cookie_jar,
                 .scroll_x = &scroll_x,
                 .scroll_y = &scroll_y,
                 .queued_microtasks = &queued_microtasks,
@@ -270,12 +274,14 @@ pub const Session = struct {
             .scroll_x = scroll_x,
             .scroll_y = scroll_y,
             .window_name = window_name,
+            .cookie_jar = cookie_jar,
         };
     }
 
     pub fn deinit(self: *Session) void {
         self.mock_registry.deinit();
         self.history.deinit();
+        self.cookie_jar.deinit(self.arena.allocator());
         self.script_event_listeners.deinit(self.arena.allocator());
         self.queued_microtasks.deinit(self.arena.allocator());
         self.timers.deinit(self.arena.allocator());
@@ -455,6 +461,19 @@ pub const Session = struct {
         return "";
     }
 
+    pub fn documentDomain(self: *const Session, allocator: std.mem.Allocator) errors.Result([]const u8) {
+        return try domainFromUrl(allocator, self.currentLocationUrl());
+    }
+
+    pub fn documentCookie(self: *const Session, allocator: std.mem.Allocator) errors.Result([]const u8) {
+        return try cookieJarText(allocator, &self.cookie_jar);
+    }
+
+    pub fn setDocumentCookie(self: *Session, value: []const u8) errors.Result(void) {
+        try cookieJarSet(self.arena.allocator(), &self.cookie_jar, value);
+        return;
+    }
+
     pub fn documentVisibilityState(self: *const Session) []const u8 {
         _ = self;
         return "visible";
@@ -533,6 +552,16 @@ pub const Session = struct {
     pub fn windowNavigatorVendorSub(self: *const Session) []const u8 {
         _ = self;
         return "";
+    }
+
+    pub fn windowNavigatorPdfViewerEnabled(self: *const Session) bool {
+        _ = self;
+        return false;
+    }
+
+    pub fn windowNavigatorDoNotTrack(self: *const Session) []const u8 {
+        _ = self;
+        return "unspecified";
     }
 
     pub fn windowNavigatorPlatform(self: *const Session) []const u8 {
@@ -1222,6 +1251,26 @@ pub const Session = struct {
             }
         }
 
+        if (std.mem.eql(u8, element.tag_name, "a") or std.mem.eql(u8, element.tag_name, "area")) {
+            const href = elementAttributeValue(element, "href") orelse return;
+            const trimmed_href = std.mem.trim(u8, href, " \t\r\n");
+            if (trimmed_href.len == 0) return;
+
+            if (std.mem.eql(u8, element.tag_name, "a")) {
+                if (elementAttributeValue(element, "download")) |download_attr| {
+                    const trimmed_download = std.mem.trim(u8, download_attr, " \t\r\n");
+                    const file_name = if (trimmed_download.len > 0)
+                        trimmed_download
+                    else
+                        try downloadFileNameFromHref(self.arena.allocator(), trimmed_href);
+                    try self.captureDownload(file_name, trimmed_href);
+                    return;
+                }
+            }
+
+            try self.assignLocation(trimmed_href);
+        }
+
         return;
     }
 };
@@ -1241,6 +1290,7 @@ const BootstrapHost = struct {
     history: *HistoryModel,
     allocator: std.mem.Allocator,
     window_name: *[]const u8,
+    cookie_jar: *std.StringArrayHashMapUnmanaged([]const u8),
     scroll_x: *i64,
     scroll_y: *i64,
     storage: *mocks.StorageSeeds,
@@ -1294,6 +1344,14 @@ const BootstrapHost = struct {
         return "";
     }
 
+    pub fn documentDomain(self: *const BootstrapHost, allocator: std.mem.Allocator) errors.Result([]const u8) {
+        return try domainFromUrl(allocator, self.currentLocationUrl());
+    }
+
+    pub fn documentCookie(self: *const BootstrapHost, allocator: std.mem.Allocator) errors.Result([]const u8) {
+        return try cookieJarText(allocator, self.cookie_jar);
+    }
+
     pub fn documentVisibilityState(self: *const BootstrapHost) []const u8 {
         _ = self;
         return "visible";
@@ -1315,6 +1373,11 @@ const BootstrapHost = struct {
 
     pub fn setWindowName(self: *BootstrapHost, value: []const u8) errors.Result(void) {
         self.window_name.* = try self.allocator.dupe(u8, value);
+        return;
+    }
+
+    pub fn setDocumentCookie(self: *BootstrapHost, value: []const u8) errors.Result(void) {
+        try cookieJarSet(self.allocator, self.cookie_jar, value);
         return;
     }
 
@@ -1372,6 +1435,16 @@ const BootstrapHost = struct {
     pub fn windowNavigatorVendorSub(self: *const BootstrapHost) []const u8 {
         _ = self;
         return "";
+    }
+
+    pub fn windowNavigatorPdfViewerEnabled(self: *const BootstrapHost) bool {
+        _ = self;
+        return false;
+    }
+
+    pub fn windowNavigatorDoNotTrack(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "unspecified";
     }
 
     pub fn windowNavigatorPlatform(self: *const BootstrapHost) []const u8 {
@@ -1990,6 +2063,17 @@ fn elementAttributeValue(element: dom.ElementData, name: []const u8) ?[]const u8
     return null;
 }
 
+fn downloadFileNameFromHref(allocator: std.mem.Allocator, href: []const u8) errors.Result([]const u8) {
+    const without_fragment = href[0..(std.mem.indexOfAny(u8, href, "?#") orelse href.len)];
+    const file_name = if (std.mem.lastIndexOfScalar(u8, without_fragment, '/')) |slash_index| blk: {
+        break :blk without_fragment[slash_index + 1 ..];
+    } else without_fragment;
+    if (file_name.len == 0) {
+        return allocator.dupe(u8, "download");
+    }
+    return allocator.dupe(u8, file_name);
+}
+
 fn isFormNode(node: *const dom.NodeRecord) bool {
     return switch (node.kind) {
         .element => |element| std.mem.eql(u8, element.tag_name, "form"),
@@ -2019,6 +2103,119 @@ fn fragmentIdentifierFromUrl(url: []const u8) ?[]const u8 {
     const fragment_index = std.mem.indexOfScalar(u8, url, '#') orelse return null;
     if (fragment_index + 1 >= url.len) return null;
     return url[fragment_index + 1 ..];
+}
+
+fn cookieJarText(
+    allocator: std.mem.Allocator,
+    cookie_jar: *const std.StringArrayHashMapUnmanaged([]const u8),
+) errors.Result([]const u8) {
+    const keys_slice = cookie_jar.keys();
+    var keys = try allocator.alloc([]const u8, keys_slice.len);
+    defer allocator.free(keys);
+    @memcpy(keys, keys_slice);
+
+    if (keys.len > 1) {
+        var index: usize = 0;
+        while (index + 1 < keys.len) : (index += 1) {
+            var smallest = index;
+            var scan = index + 1;
+            while (scan < keys.len) : (scan += 1) {
+                if (std.mem.order(u8, keys[scan], keys[smallest]) == .lt) {
+                    smallest = scan;
+                }
+            }
+            if (smallest != index) {
+                const temp = keys[index];
+                keys[index] = keys[smallest];
+                keys[smallest] = temp;
+            }
+        }
+    }
+
+    var joined: std.ArrayList(u8) = .empty;
+    errdefer joined.deinit(allocator);
+    for (keys, 0..) |key, key_index| {
+        if (key_index > 0) {
+            try joined.appendSlice(allocator, "; ");
+        }
+        try joined.appendSlice(allocator, key);
+        try joined.append(allocator, '=');
+        try joined.appendSlice(allocator, cookie_jar.get(key).?);
+    }
+
+    return try joined.toOwnedSlice(allocator);
+}
+
+fn cookieJarSet(
+    allocator: std.mem.Allocator,
+    cookie_jar: *std.StringArrayHashMapUnmanaged([]const u8),
+    value: []const u8,
+) errors.Result(void) {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n");
+    if (trimmed.len == 0) return error.ScriptRuntime;
+
+    const pair_end = std.mem.indexOfScalar(u8, trimmed, ';') orelse trimmed.len;
+    const pair = trimmed[0..pair_end];
+    const equals_index = std.mem.indexOfScalar(u8, pair, '=') orelse return error.ScriptRuntime;
+
+    const name = std.mem.trim(u8, pair[0..equals_index], " \t\r\n");
+    if (name.len == 0) return error.ScriptRuntime;
+    const cookie_value = std.mem.trimLeft(u8, pair[equals_index + 1 ..], " \t\r\n");
+
+    if (cookie_jar.getPtr(name)) |value_ptr| {
+        value_ptr.* = try allocator.dupe(u8, cookie_value);
+        return;
+    }
+
+    const key_copy = try allocator.dupe(u8, name);
+    errdefer allocator.free(key_copy);
+    const value_copy = try allocator.dupe(u8, cookie_value);
+    errdefer allocator.free(value_copy);
+    try cookie_jar.put(allocator, key_copy, value_copy);
+    return;
+}
+
+fn domainFromUrl(allocator: std.mem.Allocator, url: []const u8) errors.Result([]const u8) {
+    const colon_index = std.mem.indexOfScalar(u8, url, ':') orelse return allocator.dupe(u8, "null");
+    if (colon_index + 2 >= url.len) return allocator.dupe(u8, "null");
+
+    const after_colon = url[colon_index + 1 ..];
+    if (!std.mem.startsWith(u8, after_colon, "//")) {
+        return allocator.dupe(u8, "null");
+    }
+
+    const remainder = url[colon_index + 3 ..];
+    const authority_end = std.mem.indexOfAny(u8, remainder, "/?#") orelse remainder.len;
+    var authority = remainder[0..authority_end];
+    if (authority.len == 0) {
+        return allocator.dupe(u8, "null");
+    }
+
+    if (std.mem.lastIndexOfScalar(u8, authority, '@')) |at_index| {
+        authority = authority[at_index + 1 ..];
+    }
+
+    var host = authority;
+    if (host.len == 0) {
+        return allocator.dupe(u8, "null");
+    }
+
+    if (host[0] == '[') {
+        const end_bracket = std.mem.indexOfScalar(u8, host, ']') orelse return allocator.dupe(u8, "null");
+        host = host[1..end_bracket];
+    } else if (std.mem.indexOfScalar(u8, host, ':')) |port_index| {
+        host = host[0..port_index];
+    }
+
+    if (host.len == 0) {
+        return allocator.dupe(u8, "null");
+    }
+
+    const out = try allocator.dupe(u8, host);
+    for (out) |*byte| {
+        byte.* = std.ascii.toLower(byte.*);
+    }
+    return out;
 }
 
 test "session boots html into the dom store" {
