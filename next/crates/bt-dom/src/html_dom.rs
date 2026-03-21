@@ -73,6 +73,15 @@ enum SelectorPseudoClass {
     Scope,
     Root,
     Empty,
+    Target,
+    Lang(Vec<String>),
+    AnyLink,
+    Dir(SelectorDirValue),
+    PlaceholderShown,
+    Focus,
+    FocusWithin,
+    Required,
+    Optional,
     OnlyChild,
     OnlyOfType,
     FirstChild,
@@ -92,6 +101,12 @@ enum SelectorPseudoClass {
     Enabled,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectorDirValue {
+    Ltr,
+    Rtl,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SelectorNthChildPattern {
     step: isize,
@@ -107,6 +122,7 @@ impl DomStore {
         let mut parser = HtmlParser::new(&html);
         parser.parse_into(&mut parsed)?;
         parsed.rebuild_form_controls();
+        parsed.document.title = parsed.document_title();
         *self = parsed;
         Ok(())
     }
@@ -133,6 +149,21 @@ impl DomStore {
         let mut output = String::new();
         self.dump_node(self.document_id, 0, &mut output);
         output
+    }
+
+    pub fn document_title(&self) -> String {
+        self.html_title_element_id()
+            .map(|title_id| self.text_content_for_node(title_id))
+            .unwrap_or_else(|| self.document.title.clone())
+    }
+
+    pub fn set_document_title(&mut self, value: impl Into<String>) -> Result<(), String> {
+        let value = value.into();
+        if let Some(title_id) = self.html_title_element_id() {
+            self.set_text_content(title_id, &value)?;
+        }
+        self.document.title = value;
+        Ok(())
     }
 
     pub fn get_attribute(&self, node_id: NodeId, name: &str) -> Result<Option<String>, String> {
@@ -312,6 +343,7 @@ impl DomStore {
 
         self.rebuild_indexes();
         self.rebuild_form_controls();
+        self.document.title = self.document_title();
         Ok(())
     }
 
@@ -642,6 +674,7 @@ impl DomStore {
 
         self.rebuild_indexes();
         self.rebuild_form_controls();
+        self.document.title = self.document_title();
         Ok(())
     }
 
@@ -671,6 +704,7 @@ impl DomStore {
 
         self.rebuild_indexes();
         self.rebuild_form_controls();
+        self.document.title = self.document_title();
         Ok(())
     }
 
@@ -770,6 +804,7 @@ impl DomStore {
 
         self.rebuild_indexes();
         self.rebuild_form_controls();
+        self.document.title = self.document_title();
         Ok(())
     }
 
@@ -784,6 +819,7 @@ impl DomStore {
         let children = children.into_iter().collect::<Vec<_>>();
         let insertion_index = self.child_count(parent)?;
         self.insert_children_at(parent, insertion_index, &children)?;
+        self.document.title = self.document_title();
         Ok(())
     }
 
@@ -793,6 +829,7 @@ impl DomStore {
     {
         let children = children.into_iter().collect::<Vec<_>>();
         self.insert_children_at(parent, 0, &children)?;
+        self.document.title = self.document_title();
         Ok(())
     }
 
@@ -834,6 +871,7 @@ impl DomStore {
             )
         })?;
         self.insert_children_at(parent, reference_index, &children)?;
+        self.document.title = self.document_title();
         Ok(())
     }
 
@@ -866,6 +904,7 @@ impl DomStore {
             )
         })?;
         self.insert_children_at(parent, reference_index + 1, &children)?;
+        self.document.title = self.document_title();
         Ok(())
     }
 
@@ -916,6 +955,7 @@ impl DomStore {
         }
 
         self.insert_children_at(parent, 0, &children)?;
+        self.document.title = self.document_title();
         Ok(())
     }
 
@@ -945,6 +985,7 @@ impl DomStore {
         self.remove_subtree_side_tables(node_id);
         self.rebuild_indexes();
         self.rebuild_form_controls();
+        self.document.title = self.document_title();
         Ok(())
     }
 
@@ -1043,6 +1084,19 @@ impl DomStore {
 
     fn add_comment(&mut self, parent: NodeId, value: String) -> NodeId {
         self.add_node(parent, NodeKind::Comment(value))
+    }
+
+    fn html_title_element_id(&self) -> Option<NodeId> {
+        self.indexes.tag_index.get("title").and_then(|ids| {
+            ids.iter().copied().find(|node_id| {
+                matches!(
+                    self.nodes.get(node_id.index() as usize).map(|node| &node.kind),
+                    Some(NodeKind::Element(element))
+                        if element.tag_name == "title"
+                            && element.namespace_uri == HTML_NAMESPACE_URI
+                )
+            })
+        })
     }
 
     fn insert_node_at(
@@ -2006,6 +2060,17 @@ impl DomStore {
             SelectorPseudoClass::Scope => scope_root == Some(node_id),
             SelectorPseudoClass::Root => self.is_root_pseudo_class(node_id),
             SelectorPseudoClass::Empty => self.is_empty_pseudo_class(node_id),
+            SelectorPseudoClass::Target => self.is_target_pseudo_class(node_id),
+            SelectorPseudoClass::Lang(langs) => self.is_lang_pseudo_class(node_id, langs),
+            SelectorPseudoClass::AnyLink => self.is_any_link_pseudo_class(node_id),
+            SelectorPseudoClass::Dir(dir) => self.is_dir_pseudo_class(node_id, *dir),
+            SelectorPseudoClass::PlaceholderShown => {
+                self.is_placeholder_shown_pseudo_class(node_id)
+            }
+            SelectorPseudoClass::Focus => self.is_focus_pseudo_class(node_id),
+            SelectorPseudoClass::FocusWithin => self.is_focus_within_pseudo_class(node_id),
+            SelectorPseudoClass::Required => self.is_required_pseudo_class(node_id),
+            SelectorPseudoClass::Optional => self.is_optional_pseudo_class(node_id),
             SelectorPseudoClass::OnlyChild => self.is_only_child_pseudo_class(node_id),
             SelectorPseudoClass::OnlyOfType => self.is_only_of_type_pseudo_class(node_id),
             SelectorPseudoClass::FirstChild => self.is_first_child(node_id),
@@ -2043,11 +2108,9 @@ impl DomStore {
         _scope_root: Option<NodeId>,
     ) -> bool {
         match relative_selector.combinator {
-            Some(SelectorCombinator::Child) => self.has_child_matching_chain(
-                node_id,
-                &relative_selector.chain,
-                Some(node_id),
-            ),
+            Some(SelectorCombinator::Child) => {
+                self.has_child_matching_chain(node_id, &relative_selector.chain, Some(node_id))
+            }
             Some(SelectorCombinator::AdjacentSibling) => self.has_adjacent_sibling_matching_chain(
                 node_id,
                 &relative_selector.chain,
@@ -2073,10 +2136,12 @@ impl DomStore {
     }
 
     fn chain_starts_with_scope(&self, chain: &SelectorChain) -> bool {
-        chain
-            .parts
-            .first()
-            .is_some_and(|query| query.pseudo_classes.iter().any(|pseudo| matches!(pseudo, SelectorPseudoClass::Scope)))
+        chain.parts.first().is_some_and(|query| {
+            query
+                .pseudo_classes
+                .iter()
+                .any(|pseudo| matches!(pseudo, SelectorPseudoClass::Scope))
+        })
     }
 
     fn has_descendant_matching_chain(
@@ -2089,13 +2154,10 @@ impl DomStore {
             return false;
         };
 
-        node.children
-            .iter()
-            .copied()
-            .any(|child_id| {
-                self.matches_selector_chain(child_id, chain, scope_root)
-                    || self.has_descendant_matching_chain(child_id, chain, scope_root)
-            })
+        node.children.iter().copied().any(|child_id| {
+            self.matches_selector_chain(child_id, chain, scope_root)
+                || self.has_descendant_matching_chain(child_id, chain, scope_root)
+        })
     }
 
     fn has_child_matching_chain(
@@ -2283,6 +2345,15 @@ impl DomStore {
                         "root" => SelectorPseudoClass::Root,
                         "scope" => SelectorPseudoClass::Scope,
                         "empty" => SelectorPseudoClass::Empty,
+                        "target" => SelectorPseudoClass::Target,
+                        "link" | "any-link" => SelectorPseudoClass::AnyLink,
+                        "lang" => SelectorPseudoClass::Lang(parse_lang_argument(selector, pos)?),
+                        "dir" => SelectorPseudoClass::Dir(parse_dir_argument(selector, pos)?),
+                        "placeholder-shown" => SelectorPseudoClass::PlaceholderShown,
+                        "focus" => SelectorPseudoClass::Focus,
+                        "focus-within" => SelectorPseudoClass::FocusWithin,
+                        "required" => SelectorPseudoClass::Required,
+                        "optional" => SelectorPseudoClass::Optional,
                         "only-child" => SelectorPseudoClass::OnlyChild,
                         "only-of-type" => SelectorPseudoClass::OnlyOfType,
                         "first-child" => SelectorPseudoClass::FirstChild,
@@ -2310,11 +2381,9 @@ impl DomStore {
                         "not" => {
                             SelectorPseudoClass::Not(parse_logical_pseudo_argument(selector, pos)?)
                         }
-                        "has" => {
-                            SelectorPseudoClass::Has(parse_relative_selector_argument(
-                                selector, pos,
-                            )?)
-                        }
+                        "has" => SelectorPseudoClass::Has(parse_relative_selector_argument(
+                            selector, pos,
+                        )?),
                         "checked" => SelectorPseudoClass::Checked,
                         "disabled" => SelectorPseudoClass::Disabled,
                         "enabled" => SelectorPseudoClass::Enabled,
@@ -2361,6 +2430,34 @@ impl DomStore {
         })
     }
 
+    pub fn document_element_id(&self) -> Option<NodeId> {
+        self.root_element_id()
+    }
+
+    pub fn head_element_id(&self) -> Option<NodeId> {
+        let root = self.root_element_id()?;
+        if self.tag_name_for(root) == Some("head") {
+            return Some(root);
+        }
+        if self.tag_name_for(root) != Some("html") {
+            return None;
+        }
+
+        self.child_element_with_tag_name(root, "head")
+    }
+
+    pub fn body_element_id(&self) -> Option<NodeId> {
+        let root = self.root_element_id()?;
+        if self.tag_name_for(root) == Some("body") {
+            return Some(root);
+        }
+        if self.tag_name_for(root) != Some("html") {
+            return None;
+        }
+
+        self.child_element_with_tag_name(root, "body")
+    }
+
     fn is_root_pseudo_class(&self, node_id: NodeId) -> bool {
         self.root_element_id() == Some(node_id)
     }
@@ -2381,6 +2478,193 @@ impl DomStore {
                 Some(NodeKind::Element(_)) | Some(NodeKind::Text(_))
             )
         })
+    }
+
+    fn is_target_pseudo_class(&self, node_id: NodeId) -> bool {
+        self.target_fragment()
+            .and_then(|fragment| self.target_node_for_fragment(fragment))
+            == Some(node_id)
+    }
+
+    fn is_lang_pseudo_class(&self, node_id: NodeId, langs: &[String]) -> bool {
+        let mut current = Some(node_id);
+
+        while let Some(current_id) = current {
+            let Some(node) = self.nodes.get(current_id.index() as usize) else {
+                return false;
+            };
+            let NodeKind::Element(element) = &node.kind else {
+                return false;
+            };
+
+            if let Some(value) = element
+                .attributes
+                .get("lang")
+                .or_else(|| element.attributes.get("xml:lang"))
+            {
+                let value = value.trim();
+                if !value.is_empty() {
+                    let value = value.to_ascii_lowercase();
+                    return langs.iter().any(|lang| lang_matches_range(&value, lang));
+                }
+            }
+
+            current = node.parent;
+        }
+
+        false
+    }
+
+    fn is_any_link_pseudo_class(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        matches!(element.tag_name.as_str(), "a" | "area") && element.attributes.contains_key("href")
+    }
+
+    fn target_node_for_fragment(&self, fragment: &str) -> Option<NodeId> {
+        if fragment.is_empty() {
+            return None;
+        }
+
+        if let Some(node_id) = self.indexes.id_index.get(fragment) {
+            return Some(*node_id);
+        }
+
+        self.indexes
+            .name_index
+            .get(fragment)
+            .and_then(|nodes| nodes.first().copied())
+    }
+
+    fn is_dir_pseudo_class(&self, node_id: NodeId, dir: SelectorDirValue) -> bool {
+        self.inherited_directionality(node_id) == Some(dir)
+    }
+
+    fn is_placeholder_shown_pseudo_class(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        match element.tag_name.as_str() {
+            "textarea" => {
+                element.attributes.contains_key("placeholder")
+                    && self.value_for_node(node_id).is_empty()
+            }
+            "input" if is_text_input_type(element.attributes.get("type").map(String::as_str)) => {
+                element.attributes.contains_key("placeholder")
+                    && self.value_for_node(node_id).is_empty()
+            }
+            _ => false,
+        }
+    }
+
+    fn is_focus_pseudo_class(&self, node_id: NodeId) -> bool {
+        self.focused_node() == Some(node_id)
+    }
+
+    fn is_focus_within_pseudo_class(&self, node_id: NodeId) -> bool {
+        let mut current = self.focused_node();
+
+        while let Some(current_id) = current {
+            if current_id == node_id {
+                return true;
+            }
+            current = self.parent_of(current_id);
+        }
+
+        false
+    }
+
+    fn is_required_pseudo_class(&self, node_id: NodeId) -> bool {
+        self.is_required_form_control_element(node_id)
+    }
+
+    fn is_optional_pseudo_class(&self, node_id: NodeId) -> bool {
+        self.is_optional_form_control_element(node_id)
+    }
+
+    fn inherited_directionality(&self, node_id: NodeId) -> Option<SelectorDirValue> {
+        let mut current = Some(node_id);
+
+        while let Some(current_id) = current {
+            let Some(node) = self.nodes.get(current_id.index() as usize) else {
+                return None;
+            };
+            let NodeKind::Element(element) = &node.kind else {
+                return None;
+            };
+
+            if let Some(value) = element.attributes.get("dir") {
+                match value.trim().to_ascii_lowercase().as_str() {
+                    "ltr" => return Some(SelectorDirValue::Ltr),
+                    "rtl" => return Some(SelectorDirValue::Rtl),
+                    "auto" => {
+                        current = node.parent;
+                        continue;
+                    }
+                    _ => {
+                        current = node.parent;
+                        continue;
+                    }
+                }
+            }
+
+            current = node.parent;
+        }
+
+        Some(SelectorDirValue::Ltr)
+    }
+
+    fn is_required_form_control_element(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        match element.tag_name.as_str() {
+            "textarea" | "select" => element.attributes.contains_key("required"),
+            "input" => {
+                let input_type = element.attributes.get("type").map(String::as_str);
+                !matches!(input_type, Some("hidden"))
+                    && (is_text_input_type(input_type)
+                        || is_checkable_input_type(input_type)
+                        || is_file_input_type(input_type))
+                    && element.attributes.contains_key("required")
+            }
+            _ => false,
+        }
+    }
+
+    fn is_optional_form_control_element(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        match element.tag_name.as_str() {
+            "textarea" | "select" => !element.attributes.contains_key("required"),
+            "input" => {
+                let input_type = element.attributes.get("type").map(String::as_str);
+                !matches!(input_type, Some("hidden"))
+                    && (is_text_input_type(input_type)
+                        || is_checkable_input_type(input_type)
+                        || is_file_input_type(input_type))
+                    && !element.attributes.contains_key("required")
+            }
+            _ => false,
+        }
     }
 
     fn is_only_child_pseudo_class(&self, node_id: NodeId) -> bool {
@@ -2518,7 +2802,9 @@ impl DomStore {
     }
 
     fn is_nth_child(&self, node_id: NodeId, pattern: &SelectorNthChildPattern) -> bool {
-        let Some(position) = self.element_child_position_filtered(node_id, pattern.of_selectors.as_deref()) else {
+        let Some(position) =
+            self.element_child_position_filtered(node_id, pattern.of_selectors.as_deref())
+        else {
             return false;
         };
 
@@ -2526,7 +2812,9 @@ impl DomStore {
     }
 
     fn is_nth_last_child(&self, node_id: NodeId, pattern: &SelectorNthChildPattern) -> bool {
-        let Some(position) = self.element_child_position_from_end_filtered(node_id, pattern.of_selectors.as_deref()) else {
+        let Some(position) =
+            self.element_child_position_from_end_filtered(node_id, pattern.of_selectors.as_deref())
+        else {
             return false;
         };
 
@@ -2822,11 +3110,24 @@ impl DomStore {
             _ => None,
         }
     }
+
+    fn child_element_with_tag_name(&self, parent: NodeId, tag_name: &str) -> Option<NodeId> {
+        let parent = self.nodes.get(parent.index() as usize)?;
+        parent.children.iter().find_map(|child| {
+            matches!(
+                self.nodes
+                    .get(child.index() as usize)
+                    .map(|node| &node.kind),
+                Some(NodeKind::Element(element)) if element.tag_name == tag_name
+            )
+            .then_some(*child)
+        })
+    }
 }
 
 fn selector_not_supported(selector: &str) -> String {
     format!(
-        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`; additional bounded structural pseudo-classes include `:root`, `:empty`, `:only-child`, `:only-of-type`, `:first-of-type`, `:last-of-type`, `:nth-of-type(2)`, and `:nth-last-of-type(2)`; additional bounded selector grammar now also includes `:scope`, `:has(...)`, and `:nth-child(... of <selector-list>)` / `:nth-last-child(... of <selector-list>)`"
+        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`; additional bounded structural pseudo-classes include `:root`, `:empty`, `:only-child`, `:only-of-type`, `:first-of-type`, `:last-of-type`, `:nth-of-type(2)`, and `:nth-last-of-type(2)`; additional bounded selector grammar now also includes `:scope`, `:has(...)`, `:lang(...)`, `:nth-child(... of <selector-list>)` / `:nth-last-child(... of <selector-list>)`, `:focus`, `:focus-within`, and `:target`"
     )
 }
 
@@ -3004,6 +3305,68 @@ fn parse_relative_selector_argument(
     }
 
     Ok(relative_selectors)
+}
+
+fn parse_lang_argument(selector: &str, pos: &mut usize) -> Result<Vec<String>, String> {
+    let argument = parse_parenthesized_argument(selector, pos)?;
+    let argument = argument.trim();
+    if argument.is_empty() {
+        return Err(selector_not_supported(selector));
+    }
+
+    let mut langs = Vec::new();
+    for item in argument.split(',') {
+        let item = item.trim();
+        if item.is_empty() {
+            return Err(selector_not_supported(selector));
+        }
+
+        let bytes = item.as_bytes();
+        let mut parse_pos = 0usize;
+        let lang = parse_selector_token(item, &mut parse_pos)
+            .map_err(|_| selector_not_supported(selector))?;
+        skip_selector_whitespace(bytes, &mut parse_pos);
+        if parse_pos != bytes.len() {
+            return Err(selector_not_supported(selector));
+        }
+
+        if !lang
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+        {
+            return Err(selector_not_supported(selector));
+        }
+
+        langs.push(lang.to_ascii_lowercase());
+    }
+
+    if langs.is_empty() {
+        return Err(selector_not_supported(selector));
+    }
+
+    Ok(langs)
+}
+
+fn parse_dir_argument(selector: &str, pos: &mut usize) -> Result<SelectorDirValue, String> {
+    let argument = parse_parenthesized_argument(selector, pos)?;
+    let argument = argument.trim();
+    if argument.is_empty() {
+        return Err(selector_not_supported(selector));
+    }
+
+    let mut parse_pos = 0usize;
+    let dir = parse_selector_token(argument, &mut parse_pos)
+        .map_err(|_| selector_not_supported(selector))?;
+    skip_selector_whitespace(argument.as_bytes(), &mut parse_pos);
+    if parse_pos != argument.len() {
+        return Err(selector_not_supported(selector));
+    }
+
+    match dir.to_ascii_lowercase().as_str() {
+        "ltr" => Ok(SelectorDirValue::Ltr),
+        "rtl" => Ok(SelectorDirValue::Rtl),
+        _ => Err(selector_not_supported(selector)),
+    }
 }
 
 fn parse_relative_selector_item(selector: &str) -> Result<SelectorRelativeSelector, String> {
@@ -3214,6 +3577,13 @@ fn contains_ignore_ascii_case(value: &str, needle: &str) -> bool {
     value
         .to_ascii_lowercase()
         .contains(&needle.to_ascii_lowercase())
+}
+
+fn lang_matches_range(lang: &str, range: &str) -> bool {
+    lang == range
+        || (lang.len() > range.len()
+            && lang.starts_with(range)
+            && lang.as_bytes().get(range.len()) == Some(&b'-'))
 }
 
 fn parse_parenthesized_argument(selector: &str, pos: &mut usize) -> Result<String, String> {

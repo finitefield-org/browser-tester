@@ -157,6 +157,155 @@ fn session_resolves_selectors_with_hex_escapes_regression() {
 }
 
 #[test]
+fn session_resolves_document_title_without_title_element_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.title = 'Fallback'; document.getElementById('out').textContent = document.title + ':' + window.title;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.title should remain available without <title>");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "Fallback:Fallback"
+    );
+    assert_eq!(session.dom().document_title(), "Fallback");
+}
+
+#[test]
+fn session_resolves_document_location_without_special_handling_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/start".to_string(),
+        html: Some(
+            "<main id='out'></main><script>const before = document.location; document.location = 'https://example.test/next'; const after = window.location; document.getElementById('out').textContent = before + ':' + after;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.location should remain available through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "https://example.test/start:https://example.test/next"
+    );
+    assert_eq!(session.document_location(), "https://example.test/next");
+    assert_eq!(
+        session.mocks().location().navigations(),
+        &["https://example.test/next".to_string()]
+    );
+}
+
+#[test]
+fn document_url_assignment_is_rejected_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/start".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.URL = 'https://example.test/next';</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("document.URL should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("URL"));
+}
+
+#[test]
+fn document_base_uri_assignment_is_rejected_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/start".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.baseURI = 'https://example.test/next';</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("document.baseURI should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("baseURI"));
+}
+
+#[test]
+fn document_origin_assignment_is_rejected_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/start".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.origin = 'https://example.test/next';</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("document.origin should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("origin"));
+}
+
+#[test]
+fn session_resolves_any_link_pseudo_class_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><a id='docs' href='/docs'>Docs</a><a id='plain'>Plain</a><area id='map' href='/map'></main><div id='out'></div><script>const anyLink = document.querySelector(':any-link'); const links = document.querySelectorAll(':link'); const anchor = document.getElementById('docs'); const matched = anchor.matches(':link'); const closest = anchor.closest(':any-link'); document.getElementById('out').textContent = anyLink.getAttribute('id') + ':' + String(links.length) + ':' + links.item(0).getAttribute('id') + ':' + links.item(1).getAttribute('id') + ':' + String(matched) + ':' + closest.getAttribute('id');</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("any-link selector should resolve through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "docs:2:docs:map:true:docs"
+    );
+}
+
+#[test]
+fn session_resolves_dir_pseudo_class_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root' dir='rtl'><section id='section'><div id='child'>Child</div></section><p id='ltr' dir='ltr'>LTR</p><div id='auto' dir='auto'><span id='auto-child'>Auto</span></div></main><div id='out'></div><script>const dir = document.querySelector(':dir(rtl)'); const dirAll = document.querySelectorAll(':dir(rtl)'); const section = document.querySelector('#section:dir(rtl)'); const child = document.getElementById('child').closest(':dir(rtl)'); const autoChild = document.querySelector('#auto-child:dir(rtl)'); document.getElementById('out').textContent = dir.getAttribute('id') + ':' + String(dirAll.length) + ':' + section.getAttribute('id') + ':' + child.getAttribute('id') + ':' + autoChild.getAttribute('id');</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("dir selector should resolve through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "root:5:section:child:auto-child"
+    );
+}
+
+#[test]
+fn session_resolves_placeholder_shown_pseudo_class_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='name' placeholder='Name'><input id='filled' placeholder='Filled' value='Ada'><textarea id='bio' placeholder='Bio'></textarea></main><div id='out'></div><script>const before = document.querySelectorAll(':placeholder-shown'); document.getElementById('name').value = 'Alice'; document.getElementById('bio').value = 'Bio text'; const after = document.querySelectorAll(':placeholder-shown'); const name = document.getElementById('name'); document.getElementById('out').textContent = String(before.length) + ':' + before.item(0).getAttribute('id') + ':' + String(after.length) + ':' + String(name.matches(':placeholder-shown')) + ':' + String(document.getElementById('filled').matches(':placeholder-shown'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("placeholder-shown selector should resolve through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "2:name:0:false:false"
+    );
+}
+
+#[test]
 fn session_reflects_attributes_through_inline_script_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -510,6 +659,25 @@ fn session_rejects_document_children_on_window_explicitly() {
     assert!(message.contains("unsupported member access"));
     assert!(message.contains("`children`"));
     assert!(message.contains("window value"));
+}
+
+#[test]
+fn session_exposes_document_root_head_and_body_with_null_fallbacks() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='out'></div><script>const root = document.documentElement; document.getElementById('out').textContent = root.getAttribute('id') + ':' + String(document.head) + ':' + String(document.body);</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("fragment documents should expose a root element and null head/body fallbacks");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "root:null:null"
+    );
 }
 
 #[test]
@@ -906,6 +1074,121 @@ fn session_rejects_unsupported_not_argument_syntax_explicitly() {
 
     assert!(error.to_string().contains("Script error"));
     assert!(error.to_string().contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`"));
+}
+
+#[test]
+fn session_rejects_unsupported_lang_arguments_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root' lang='en'><script>document.querySelector(':lang()');</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("malformed :lang selector should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(error.to_string().contains("unsupported selector `:lang()`"));
+}
+
+#[test]
+fn session_resolves_lang_selector_with_language_ranges() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root' lang='en-US'><section id='section'><div id='child'>Child</div></section><p id='french' lang='fr'>French</p><div id='out'></div><script>const root = document.querySelector(':lang(en, fr)'); const closest = document.getElementById('child').closest(':lang(fr, en)'); document.getElementById('out').textContent = root.getAttribute('id') + ':' + closest.getAttribute('id');</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("language ranges should be supported inside :lang()");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "root:child");
+}
+
+#[test]
+fn session_resolves_focus_pseudo_classes() {
+    let mut session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><section id='section'><input id='field'></section><div id='outside'>outside</div></main><div id='out'></div><script>document.getElementById('field').addEventListener('focus', () => { const field = document.querySelector(':focus'); const section = document.getElementById('section'); const root = document.getElementById('root'); document.getElementById('out').textContent = field.getAttribute('id') + ':' + String(section.matches(':focus-within')) + ':' + String(root.matches(':focus-within')); });</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("focus pseudo-classes should resolve through Session");
+
+    let field_id = session.dom().select("#field").unwrap()[0];
+    let section_id = session.dom().select("#section").unwrap()[0];
+    let root_id = session.dom().select("#root").unwrap()[0];
+    session.focus_node(field_id).expect("focus should work");
+
+    assert_eq!(session.dom().select(":focus").unwrap(), vec![field_id]);
+    assert_eq!(
+        session.dom().select("#field:focus").unwrap(),
+        vec![field_id]
+    );
+    assert_eq!(
+        session.dom().select("#section:focus-within").unwrap(),
+        vec![section_id]
+    );
+    assert_eq!(
+        session.dom().select("#root:focus-within").unwrap(),
+        vec![root_id]
+    );
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "field:true:true"
+    );
+
+    session.blur_node(field_id).expect("blur should work");
+    assert!(session.dom().select(":focus").unwrap().is_empty());
+    assert!(
+        session
+            .dom()
+            .select("#section:focus-within")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn session_resolves_target_pseudo_classes() {
+    let mut session = Session::new(SessionConfig {
+        url: "https://example.test/app#target".to_string(),
+        html: Some(
+            "<main id='root'><section id='target'>Target</section><a id='fallback' name='fallback'>Fallback</a><span name='named'>Named</span></main><div id='out'></div><script>const target = document.querySelector(':target'); document.getElementById('out').textContent = target.textContent + ':' + String(target.matches(':target'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("target pseudo-classes should resolve through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "Target:true");
+    assert_eq!(
+        session.dom().select(":target").unwrap()[0],
+        session.dom().select("#target").unwrap()[0]
+    );
+
+    session
+        .navigate("https://example.test/app#fallback")
+        .expect("navigation should update target fragment");
+    assert_eq!(
+        session.dom().select(":target").unwrap()[0],
+        session.dom().select("#fallback").unwrap()[0]
+    );
+
+    session
+        .navigate("https://example.test/app#named")
+        .expect("navigation should update target fragment");
+    assert_eq!(
+        session.dom().select(":target").unwrap()[0],
+        session.dom().select("[name=named]").unwrap()[0]
+    );
 }
 
 #[test]

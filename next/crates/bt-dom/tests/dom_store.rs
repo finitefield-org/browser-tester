@@ -85,6 +85,58 @@ fn phase_one_html_tree_building_and_selectors_work() {
 }
 
 #[test]
+fn document_head_body_and_document_element_helpers_work() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<html id='html'><head id='head'><title>Title</title></head><body id='body'><main id='main'>Body</main></body></html>",
+        )
+        .expect("HTML should parse");
+
+    let html_id = store.select("#html").unwrap()[0];
+    let head_id = store.select("#head").unwrap()[0];
+    let body_id = store.select("#body").unwrap()[0];
+
+    assert_eq!(store.document_element_id(), Some(html_id));
+    assert_eq!(store.head_element_id(), Some(head_id));
+    assert_eq!(store.body_element_id(), Some(body_id));
+}
+
+#[test]
+fn document_title_helpers_work() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<html id='html'><head id='head'><title>Title</title></head><body id='body'><main id='main'>Body</main></body></html>",
+        )
+        .expect("HTML should parse");
+
+    let title_id = store.select("title").unwrap()[0];
+    assert_eq!(store.document_title(), "Title");
+    assert_eq!(store.document_state().title, "Title");
+
+    store
+        .set_document_title("Updated")
+        .expect("document.title should be writable");
+
+    assert_eq!(store.document_title(), "Updated");
+    assert_eq!(store.document_state().title, "Updated");
+    assert_eq!(store.text_content_for_node(title_id), "Updated");
+
+    let mut fallback_store = DomStore::new_empty();
+    fallback_store
+        .bootstrap_html("<main id='root'></main>")
+        .expect("HTML should parse");
+    assert_eq!(fallback_store.document_title(), "");
+
+    fallback_store
+        .set_document_title("Fallback")
+        .expect("document.title should be writable even without <title>");
+    assert_eq!(fallback_store.document_title(), "Fallback");
+    assert_eq!(fallback_store.document_state().title, "Fallback");
+}
+
+#[test]
 fn malformed_html_is_reported_explicitly() {
     let mut store = DomStore::new_empty();
     let error = store
@@ -192,6 +244,171 @@ fn root_and_empty_pseudo_classes_match_expected_nodes() {
     assert!(store.select("#empty:root").unwrap().is_empty());
     assert!(store.select("#with-text:empty").unwrap().is_empty());
     assert!(store.select("#with-child:empty").unwrap().is_empty());
+}
+
+#[test]
+fn lang_pseudo_class_matches_inherited_language() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root' lang='EN-US'><section id='section'><span id='child'>child</span></section><p id='french' lang='fr'>fr</p></main>",
+        )
+        .expect("HTML should parse");
+
+    let root_id = store.select("#root").unwrap()[0];
+    let section_id = store.select("#section").unwrap()[0];
+    let child_id = store.select("#child").unwrap()[0];
+    let french_id = store.select("#french").unwrap()[0];
+
+    assert_eq!(
+        store.select(":lang(en)").unwrap(),
+        vec![root_id, section_id, child_id]
+    );
+    assert_eq!(
+        store.select(":lang(en, fr)").unwrap(),
+        vec![root_id, section_id, child_id, french_id]
+    );
+    assert_eq!(store.select("#section:lang(en)").unwrap(), vec![section_id]);
+    assert_eq!(store.select("#child:lang(en)").unwrap(), vec![child_id]);
+    assert_eq!(store.select("#french:lang(fr)").unwrap(), vec![french_id]);
+    assert!(store.select(":lang()").is_err());
+    assert!(store.select(":lang(en,)").is_err());
+}
+
+#[test]
+fn dir_pseudo_class_matches_inherited_directionality() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root' dir='rtl'><section id='section'><span id='child'>child</span></section><p id='ltr' dir='ltr'>ltr</p><div id='auto' dir='auto'><span id='auto-child'>auto</span></div></main>",
+        )
+        .expect("HTML should parse");
+
+    let root_id = store.select("#root").unwrap()[0];
+    let section_id = store.select("#section").unwrap()[0];
+    let child_id = store.select("#child").unwrap()[0];
+    let ltr_id = store.select("#ltr").unwrap()[0];
+    let auto_id = store.select("#auto").unwrap()[0];
+    let auto_child_id = store.select("#auto-child").unwrap()[0];
+
+    assert_eq!(
+        store.select(":dir(rtl)").unwrap(),
+        vec![root_id, section_id, child_id, auto_id, auto_child_id]
+    );
+    assert_eq!(store.select("#ltr:dir(ltr)").unwrap(), vec![ltr_id]);
+    assert_eq!(store.select("#auto:dir(rtl)").unwrap(), vec![auto_id]);
+    assert_eq!(
+        store.select("#auto-child:dir(rtl)").unwrap(),
+        vec![auto_child_id]
+    );
+    assert!(store.select(":dir()").is_err());
+    assert!(store.select(":dir(auto)").is_err());
+}
+
+#[test]
+fn placeholder_shown_pseudo_class_matches_empty_text_controls() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><input id='name' placeholder='Name'><input id='filled' placeholder='Filled' value='Ada'><textarea id='bio' placeholder='Bio'></textarea><div id='other'></div></main>",
+        )
+        .expect("HTML should parse");
+
+    let name_id = store.select("#name").unwrap()[0];
+    let bio_id = store.select("#bio").unwrap()[0];
+
+    assert_eq!(
+        store.select(":placeholder-shown").unwrap(),
+        vec![name_id, bio_id]
+    );
+    assert_eq!(
+        store.select("#name:placeholder-shown").unwrap(),
+        vec![name_id]
+    );
+    assert_eq!(
+        store.select("#bio:placeholder-shown").unwrap(),
+        vec![bio_id]
+    );
+    assert!(
+        store
+            .select("#filled:placeholder-shown")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(store.select(":placeholder-shown()").is_err());
+}
+
+#[test]
+fn focus_pseudo_classes_match_focused_nodes() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><section id='section'><input id='field'><span id='other'>other</span></section><div id='outside'>outside</div></main>",
+        )
+        .expect("HTML should parse");
+
+    let root_id = store.select("#root").unwrap()[0];
+    let section_id = store.select("#section").unwrap()[0];
+    let field_id = store.select("#field").unwrap()[0];
+
+    store.set_focused_node(Some(field_id));
+
+    assert_eq!(store.select(":focus").unwrap(), vec![field_id]);
+    assert_eq!(store.select("#field:focus").unwrap(), vec![field_id]);
+    assert_eq!(
+        store.select("#section:focus-within").unwrap(),
+        vec![section_id]
+    );
+    assert_eq!(store.select("#root:focus-within").unwrap(), vec![root_id]);
+    assert!(store.select("#outside:focus-within").unwrap().is_empty());
+    assert!(store.select(":focus()").is_err());
+}
+
+#[test]
+fn target_pseudo_class_matches_fragment_targets() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><section id='target'>Target</section><a id='fallback' name='fallback'>Fallback</a><span name='named'>Named</span></main>",
+        )
+        .expect("HTML should parse");
+
+    let target_id = store.select("#target").unwrap()[0];
+    let fallback_id = store.select("#fallback").unwrap()[0];
+    let named_id = store.select("[name=named]").unwrap()[0];
+
+    store.set_target_fragment(Some("target".to_string()));
+    assert_eq!(store.select(":target").unwrap(), vec![target_id]);
+    assert_eq!(store.select("#target:target").unwrap(), vec![target_id]);
+
+    store.set_target_fragment(Some("fallback".to_string()));
+    assert_eq!(store.select(":target").unwrap(), vec![fallback_id]);
+
+    store.set_target_fragment(Some("named".to_string()));
+    assert_eq!(store.select(":target").unwrap(), vec![named_id]);
+
+    store.set_target_fragment(Some("missing".to_string()));
+    assert!(store.select(":target").unwrap().is_empty());
+    assert!(store.select(":target()").is_err());
+}
+
+#[test]
+fn any_link_pseudo_class_matches_document_links() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><a id='docs' href='/docs'>Docs</a><a id='plain'>Plain</a><area id='map' href='/map'></main>",
+        )
+        .expect("HTML should parse");
+
+    let docs_id = store.select("#docs").unwrap()[0];
+    let map_id = store.select("#map").unwrap()[0];
+
+    assert_eq!(store.select(":link").unwrap(), vec![docs_id, map_id]);
+    assert_eq!(store.select(":any-link").unwrap(), vec![docs_id, map_id]);
+    assert_eq!(store.select("#docs:link").unwrap(), vec![docs_id]);
+    assert_eq!(store.select("#map:any-link").unwrap(), vec![map_id]);
+    assert!(store.select(":link()").is_err());
 }
 
 #[test]

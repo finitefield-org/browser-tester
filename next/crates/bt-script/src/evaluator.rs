@@ -156,8 +156,22 @@ fn eval_assignment<H: HostBindings>(
                 (Value::IteratorResult(_), property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on iterator result value"
                 ))),
-                (Value::Document, "title") => Err(ScriptError::phase_not_ready("document.title")),
-                (Value::Window, "title") => Err(ScriptError::phase_not_ready("window.title")),
+                (Value::Document, "title") => {
+                    host.document_set_title(&as_string(&value))?;
+                    Ok(())
+                }
+                (Value::Document, "location") => {
+                    host.document_set_location(&as_string(&value))?;
+                    Ok(())
+                }
+                (Value::Window, "title") => {
+                    host.document_set_title(&as_string(&value))?;
+                    Ok(())
+                }
+                (Value::Window, "location") => {
+                    host.document_set_location(&as_string(&value))?;
+                    Ok(())
+                }
                 (Value::Document, property) | (Value::Window, property) => Err(ScriptError::new(
                     format!("unsupported assignment target: {property}"),
                 )),
@@ -263,6 +277,28 @@ fn eval_member<H: HostBindings>(
         Value::Document if property == "styleSheets" => {
             Ok(Value::StyleSheetList(StyleSheetListTarget::Document))
         }
+        Value::Document if property == "documentElement" => {
+            Ok(match host.document_document_element()? {
+                Some(element) => Value::Element(element),
+                None => Value::Null,
+            })
+        }
+        Value::Document if property == "title" => Ok(Value::String(host.document_title()?)),
+        Value::Document if property == "location" => Ok(Value::String(host.document_location()?)),
+        Value::Document if property == "URL" => Ok(Value::String(host.document_url()?)),
+        Value::Document if property == "documentURI" => {
+            Ok(Value::String(host.document_document_uri()?))
+        }
+        Value::Document if property == "baseURI" => Ok(Value::String(host.document_base_uri()?)),
+        Value::Document if property == "origin" => Ok(Value::String(host.document_origin()?)),
+        Value::Document if property == "head" => Ok(match host.document_head()? {
+            Some(element) => Value::Element(element),
+            None => Value::Null,
+        }),
+        Value::Document if property == "body" => Ok(match host.document_body()? {
+            Some(element) => Value::Element(element),
+            None => Value::Null,
+        }),
         Value::Document if property == "childNodes" => Ok(Value::NodeList(
             NodeListTarget::ChildNodes(HtmlCollectionScope::Document),
         )),
@@ -295,6 +331,9 @@ fn eval_member<H: HostBindings>(
         }
         Value::Window if property == "document" => Ok(Value::Document),
         Value::Document if property == "defaultView" => Ok(Value::Window),
+        Value::Window if property == "title" => Ok(Value::String(host.document_title()?)),
+        Value::Window if property == "location" => Ok(Value::String(host.document_location()?)),
+        Value::Window if property == "origin" => Ok(Value::String(host.document_origin()?)),
         Value::Element(element) if property == "textContent" => {
             Ok(Value::String(host.element_text_content(element)?))
         }
@@ -303,6 +342,12 @@ fn eval_member<H: HostBindings>(
         }
         Value::Element(element) if property == "outerHTML" => {
             Ok(Value::String(host.element_outer_html(element)?))
+        }
+        Value::Element(element) if property == "baseURI" => {
+            Ok(Value::String(host.element_base_uri(element)?))
+        }
+        Value::Element(element) if property == "origin" => {
+            Ok(Value::String(host.element_origin(element)?))
         }
         Value::Element(element) if property == "value" => {
             Ok(Value::String(host.element_value(element)?))

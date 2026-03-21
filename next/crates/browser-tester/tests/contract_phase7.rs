@@ -11,6 +11,26 @@ fn script_dom_query_selectors_work_end_to_end() -> browser_tester_next::Result<(
 }
 
 #[test]
+fn script_document_root_head_and_body_access_work_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<html id='html'><head id='head'><title>Title</title></head><body id='body'><main id='out'></main><script>const html = document.documentElement; const head = document.head; const body = document.body; document.getElementById('out').textContent = html.getAttribute('id') + ':' + head.getAttribute('id') + ':' + body.getAttribute('id');</script></body></html>",
+    )?;
+
+    harness.assert_text("#out", "html:head:body")?;
+    Ok(())
+}
+
+#[test]
+fn script_document_title_access_works_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<html><head><title>Initial</title></head><body><main id='out'></main><script>const before = document.title; document.title = 'Updated'; const after = window.title; document.getElementById('out').textContent = before + ':' + after + ':' + document.querySelector('title').textContent;</script></body></html>",
+    )?;
+
+    harness.assert_text("#out", "Initial:Updated:Updated")?;
+    Ok(())
+}
+
+#[test]
 fn script_dom_query_selector_all_works_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root' class='primary'>root<section><div class='primary'>inside</div></section></main><div id='out'></div><script>const all = document.querySelectorAll('.primary'); const scoped = document.getElementById('root').querySelectorAll('.primary'); document.getElementById('out').textContent = String(all.length) + ':' + all.item(0).textContent + ':' + all.item(1).textContent + ':' + String(all.item(2)) + ':' + String(scoped.length) + ':' + scoped.item(0).textContent;</script>",
@@ -320,6 +340,68 @@ fn script_scope_pseudo_class_works_end_to_end() -> browser_tester_next::Result<(
     )?;
 
     harness.assert_text("#out", "root:section:null:true:child")?;
+    Ok(())
+}
+
+#[test]
+fn script_lang_pseudo_class_works_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root' lang='EN-US'><section id='section'><div id='child'>Child</div></section><p id='french' lang='fr'>French</p></main><div id='out'></div><script>const root = document.querySelector(':lang(en, fr)'); const section = document.querySelector('#section:lang(en)'); const child = document.querySelector('#child:lang(en)'); const french = document.querySelector('#french:lang(fr)'); const closest = document.getElementById('child').closest(':lang(fr, en)'); document.getElementById('out').textContent = root.getAttribute('id') + ':' + section.getAttribute('id') + ':' + child.getAttribute('id') + ':' + french.getAttribute('id') + ':' + closest.getAttribute('id');</script>",
+    )?;
+
+    harness.assert_text("#out", "root:section:child:french:child")?;
+    Ok(())
+}
+
+#[test]
+fn script_any_link_pseudo_class_works_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><a id='docs' href='/docs'>Docs</a><a id='plain'>Plain</a><area id='map' href='/map'></main><div id='out'></div><script>const anyLink = document.querySelector(':any-link'); const links = document.querySelectorAll(':link'); const anchor = document.getElementById('docs'); const matched = anchor.matches(':any-link'); const closest = anchor.closest(':link'); document.getElementById('out').textContent = anyLink.getAttribute('id') + ':' + String(links.length) + ':' + links.item(0).getAttribute('id') + ':' + links.item(1).getAttribute('id') + ':' + String(matched) + ':' + closest.getAttribute('id');</script>",
+    )?;
+
+    harness.assert_text("#out", "docs:2:docs:map:true:docs")?;
+    Ok(())
+}
+
+#[test]
+fn script_dir_pseudo_class_works_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root' dir='rtl'><section id='section'><div id='child'>Child</div></section><p id='ltr' dir='ltr'>LTR</p><div id='auto' dir='auto'><span id='auto-child'>Auto</span></div></main><div id='out'></div><script>const dir = document.querySelector(':dir(rtl)'); const dirAll = document.querySelectorAll(':dir(rtl)'); const section = document.querySelector('#section:dir(rtl)'); const child = document.getElementById('child').closest(':dir(rtl)'); const autoChild = document.querySelector('#auto-child:dir(rtl)'); document.getElementById('out').textContent = dir.getAttribute('id') + ':' + String(dirAll.length) + ':' + section.getAttribute('id') + ':' + child.getAttribute('id') + ':' + autoChild.getAttribute('id');</script>",
+    )?;
+
+    harness.assert_text("#out", "root:5:section:child:auto-child")?;
+    Ok(())
+}
+
+#[test]
+fn script_placeholder_shown_pseudo_class_works_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><input id='name' placeholder='Name'><input id='filled' placeholder='Filled' value='Ada'><textarea id='bio' placeholder='Bio'></textarea></main><div id='out'></div><script>const before = document.querySelectorAll(':placeholder-shown'); document.getElementById('name').value = 'Alice'; document.getElementById('bio').value = 'Bio text'; const after = document.querySelectorAll(':placeholder-shown'); const name = document.getElementById('name'); document.getElementById('out').textContent = String(before.length) + ':' + before.item(0).getAttribute('id') + ':' + String(after.length) + ':' + String(name.matches(':placeholder-shown')) + ':' + String(document.getElementById('filled').matches(':placeholder-shown'));</script>",
+    )?;
+
+    harness.assert_text("#out", "2:name:0:false:false")?;
+    Ok(())
+}
+
+#[test]
+fn script_focus_pseudo_classes_work_end_to_end() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::from_html(
+        "<main id='root'><section id='section'><input id='field'></section><div id='out'></div><script>document.getElementById('field').addEventListener('focus', () => { const field = document.querySelector(':focus'); const section = document.getElementById('section'); const root = document.getElementById('root'); document.getElementById('out').textContent = field.getAttribute('id') + ':' + String(section.matches(':focus-within')) + ':' + String(root.matches(':focus-within')); });</script></main>",
+    )?;
+
+    harness.focus("#field")?;
+    harness.assert_text("#out", "field:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn script_target_pseudo_class_tracks_url_fragments_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html_with_url(
+        "https://example.test/app#named",
+        "<main id='root'><section id='target'>Target</section><a id='fallback' name='fallback'>Fallback</a><span name='named'>Named</span></main><div id='out'></div><script>const target = document.querySelector(':target'); document.getElementById('out').textContent = target.textContent + ':' + String(target.getAttribute('name')) + ':' + String(document.getElementById('root').matches(':target')) + ':' + String(document.getElementById('fallback').matches(':target'));</script>",
+    )?;
+
+    harness.assert_text("#out", "Named:named:false:false")?;
     Ok(())
 }
 

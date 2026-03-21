@@ -110,6 +110,8 @@ pub struct DomStore {
     document_id: NodeId,
     indexes: DomIndexes,
     side_tables: DomSideTables,
+    focused_node: Option<NodeId>,
+    target_fragment: Option<String>,
     source_html: Option<String>,
 }
 
@@ -134,6 +136,8 @@ impl DomStore {
             document_id,
             indexes: DomIndexes::default(),
             side_tables: DomSideTables::default(),
+            focused_node: None,
+            target_fragment: None,
             source_html: None,
         }
     }
@@ -160,6 +164,22 @@ impl DomStore {
 
     pub fn side_tables(&self) -> &DomSideTables {
         &self.side_tables
+    }
+
+    pub fn focused_node(&self) -> Option<NodeId> {
+        self.focused_node
+    }
+
+    pub fn set_focused_node(&mut self, focused_node: Option<NodeId>) {
+        self.focused_node = focused_node;
+    }
+
+    pub fn target_fragment(&self) -> Option<&str> {
+        self.target_fragment.as_deref()
+    }
+
+    pub fn set_target_fragment(&mut self, target_fragment: Option<String>) {
+        self.target_fragment = target_fragment;
     }
 
     pub fn document_state(&self) -> &DocumentState {

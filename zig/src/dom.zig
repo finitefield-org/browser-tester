@@ -49,6 +49,8 @@ const SelectorAttributeCaseSensitivity = enum {
 const SelectorCombinator = enum {
     descendant,
     child,
+    adjacent_sibling,
+    general_sibling,
 };
 
 const SelectorAttributeOperator = enum {
@@ -168,6 +170,36 @@ pub const DomStore = struct {
         return switch (node.kind) {
             .element => |element| element.tag_name,
             else => null,
+        };
+    }
+
+    pub fn namespaceUriForNode(self: *const DomStore, node_id: NodeId) ?[]const u8 {
+        if (self.nodeAt(node_id) == null) return null;
+
+        return switch (self.serializationNamespaceForNode(node_id)) {
+            .html => "http://www.w3.org/1999/xhtml",
+            .svg => "http://www.w3.org/2000/svg",
+            .mathml => "http://www.w3.org/1998/Math/MathML",
+        };
+    }
+
+    pub fn nodeNameForNode(self: *const DomStore, node_id: NodeId) ?[]const u8 {
+        const node = self.nodeAt(node_id) orelse return null;
+        return switch (node.kind) {
+            .document => "#document",
+            .element => |element| element.tag_name,
+            .text => "#text",
+            .comment => "#comment",
+        };
+    }
+
+    pub fn nodeTypeForNode(self: *const DomStore, node_id: NodeId) ?u8 {
+        const node = self.nodeAt(node_id) orelse return null;
+        return switch (node.kind) {
+            .document => 9,
+            .element => 1,
+            .text => 3,
+            .comment => 8,
         };
     }
 
@@ -2024,8 +2056,14 @@ fn parseSelectorChain(
                 pos += 1;
                 break :blk SelectorCombinator.child;
             },
-            '+' => return error.HtmlParse,
-            '~' => return error.HtmlParse,
+            '+' => blk: {
+                pos += 1;
+                break :blk SelectorCombinator.adjacent_sibling;
+            },
+            '~' => blk: {
+                pos += 1;
+                break :blk SelectorCombinator.general_sibling;
+            },
             ',' => return error.HtmlParse,
             else => blk: {
                 if (!had_whitespace) return error.HtmlParse;
@@ -2225,6 +2263,20 @@ fn skipSelectorWhitespace(selector: []const u8, pos: *usize) bool {
 fn parentOf(self: *const DomStore, node_id: NodeId) ?NodeId {
     const node = self.nodeAt(node_id) orelse return null;
     return node.parent;
+}
+
+fn previousElementSibling(self: *const DomStore, node_id: NodeId) ?NodeId {
+    const parent_id = parentOf(self, node_id) orelse return null;
+    const parent = self.nodeAt(parent_id) orelse return null;
+    var index = self.childIndex(parent_id, node_id) catch return null;
+    while (index > 0) {
+        index -= 1;
+        const sibling_id = parent.children.items[index];
+        if (self.tagNameForNode(sibling_id) != null) {
+            return sibling_id;
+        }
+    }
+    return null;
 }
 
 fn sameNodeId(left: NodeId, right: NodeId) bool {
@@ -2503,6 +2555,20 @@ fn nodeMatchesSelectorChainPart(
                     break :blk true;
                 }
                 ancestor = parentOf(self, ancestor_id);
+            }
+            break :blk false;
+        },
+        .adjacent_sibling => blk: {
+            const sibling_id = previousElementSibling(self, node_id) orelse break :blk false;
+            break :blk nodeMatchesSelectorChainPart(self, sibling_id, parts, relations, index - 1);
+        },
+        .general_sibling => blk: {
+            var sibling = previousElementSibling(self, node_id);
+            while (sibling) |sibling_id| {
+                if (nodeMatchesSelectorChainPart(self, sibling_id, parts, relations, index - 1)) {
+                    break :blk true;
+                }
+                sibling = previousElementSibling(self, sibling_id);
             }
             break :blk false;
         },
@@ -3001,6 +3067,29 @@ test "phase six: selector expansion matches classes and combinators" {
     try std.testing.expectEqual(NodeId.new(6, 0), by_child[1]);
 }
 
+test "phase six: selector expansion matches sibling combinators" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml("<main id='root'><button id='first'>First</button><span id='gap'>Gap</span><button id='second'>Second</button><button id='third'>Third</button></main>");
+
+    const adjacent = try store.select(allocator, "#first + span");
+    defer allocator.free(adjacent);
+    try std.testing.expectEqual(@as(usize, 1), adjacent.len);
+    try std.testing.expectEqual(NodeId.new(4, 0), adjacent[0]);
+
+    const adjacent_miss = try store.select(allocator, "#first + button");
+    defer allocator.free(adjacent_miss);
+    try std.testing.expectEqual(@as(usize, 0), adjacent_miss.len);
+
+    const general = try store.select(allocator, "#first ~ button");
+    defer allocator.free(general);
+    try std.testing.expectEqual(@as(usize, 2), general.len);
+    try std.testing.expectEqual(NodeId.new(6, 0), general[0]);
+    try std.testing.expectEqual(NodeId.new(8, 0), general[1]);
+}
+
 test "phase seven: selector single-node helpers match and climb ancestors" {
     const allocator = std.testing.allocator;
     var store = try DomStore.init(allocator);
@@ -3310,7 +3399,7 @@ test "phase one: unsupported selector syntax is rejected explicitly" {
 
     try store.bootstrapHtml("<main id='app'><span>Hello</span></main>");
 
-    try std.testing.expectError(error.HtmlParse, store.select(allocator, "main + span"));
+    try std.testing.expectError(error.HtmlParse, store.select(allocator, "main::before"));
     try std.testing.expectError(error.HtmlParse, store.select(allocator, "[data-state"));
     try std.testing.expectError(error.HtmlParse, store.select(allocator, ""));
 }

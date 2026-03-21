@@ -183,6 +183,137 @@ fn where_pseudo_class_works_with_public_assert_exists() -> browser_tester_next::
 }
 
 #[test]
+fn lang_pseudo_class_works_with_public_assert_exists() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root' lang='EN-US'><section id='section'><span id='child'>Child</span></section><p id='french' lang='fr'>French</p></main>",
+    )?;
+
+    harness.assert_exists(":lang(en)")?;
+    harness.assert_exists(":lang(en, fr)")?;
+    harness.assert_exists("#section:lang(en)")?;
+    harness.assert_exists("#child:lang(en)")?;
+    harness.assert_exists("#french:lang(fr)")?;
+
+    let error = harness
+        .assert_exists(":lang(en,)")
+        .expect_err("malformed :lang selector list should fail explicitly");
+    let message = error.to_string();
+    assert!(message.contains("Selector error"));
+    assert!(message.contains("unsupported selector `:lang(en,)`"));
+    Ok(())
+}
+
+#[test]
+fn dir_pseudo_class_works_with_public_assert_exists() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root' dir='rtl'><section id='section'><span id='child'>Child</span></section><p id='ltr' dir='ltr'>LTR</p><div id='auto' dir='auto'><span id='auto-child'>Auto</span></div></main>",
+    )?;
+
+    harness.assert_exists(":dir(rtl)")?;
+    harness.assert_exists("#section:dir(rtl)")?;
+    harness.assert_exists("#child:dir(rtl)")?;
+    harness.assert_exists("#auto:dir(rtl)")?;
+    harness.assert_exists("#auto-child:dir(rtl)")?;
+    harness.assert_exists("#ltr:dir(ltr)")?;
+
+    let error = harness
+        .assert_exists(":dir()")
+        .expect_err("malformed :dir selector should fail explicitly");
+    let message = error.to_string();
+    assert!(message.contains("Selector error"));
+    assert!(message.contains("unsupported selector `:dir()`"));
+    Ok(())
+}
+
+#[test]
+fn placeholder_shown_pseudo_class_works_with_public_assert_exists()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><input id='name' placeholder='Name'><input id='filled' placeholder='Filled' value='Ada'><textarea id='bio' placeholder='Bio'></textarea></main>",
+    )?;
+
+    harness.assert_exists(":placeholder-shown")?;
+    harness.assert_exists("#name:placeholder-shown")?;
+    harness.assert_exists("#bio:placeholder-shown")?;
+
+    let error = harness
+        .assert_exists(":placeholder-shown()")
+        .expect_err("malformed placeholder-shown selector should fail explicitly");
+    let message = error.to_string();
+    assert!(message.contains("Selector error"));
+    assert!(message.contains("unsupported selector `:placeholder-shown()`"));
+    Ok(())
+}
+
+#[test]
+fn any_link_pseudo_class_works_with_public_assert_exists() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><a id='docs' href='/docs'>Docs</a><a id='plain'>Plain</a><area id='map' href='/map'></main>",
+    )?;
+
+    harness.assert_exists(":link")?;
+    harness.assert_exists(":any-link")?;
+    harness.assert_exists("#docs:link")?;
+    harness.assert_exists("#map:any-link")?;
+
+    let error = harness
+        .assert_exists(":link()")
+        .expect_err("malformed :link selector should fail explicitly");
+    let message = error.to_string();
+    assert!(message.contains("Selector error"));
+    assert!(message.contains("unsupported selector `:link()`"));
+    Ok(())
+}
+
+#[test]
+fn focus_pseudo_classes_work_with_public_assert_exists() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::from_html(
+        "<main id='root'><section id='section'><input id='field'></section><div id='outside'>outside</div></main>",
+    )?;
+
+    harness.focus("#field")?;
+    harness.assert_exists(":focus")?;
+    harness.assert_exists("#field:focus")?;
+    harness.assert_exists("#section:focus-within")?;
+    harness.assert_exists("#root:focus-within")?;
+
+    let error = harness
+        .assert_exists(":focus()")
+        .expect_err("malformed focus selector should fail explicitly");
+    let message = error.to_string();
+    assert!(message.contains("Selector error"));
+    assert!(message.contains("unsupported selector `:focus()`"));
+    Ok(())
+}
+
+#[test]
+fn target_pseudo_class_tracks_url_fragments_with_public_assert_exists()
+-> browser_tester_next::Result<()> {
+    let mut harness = Harness::from_html_with_url(
+        "https://example.test/app#target",
+        "<main id='root'><section id='target'>Target</section><a id='fallback' name='fallback'>Fallback</a><span name='named'>Named</span></main>",
+    )?;
+
+    harness.assert_exists(":target")?;
+    harness.assert_text(":target", "Target")?;
+    harness.assert_exists("#target:target")?;
+
+    harness.navigate("https://example.test/app#fallback")?;
+    harness.assert_text(":target", "Fallback")?;
+
+    harness.navigate("https://example.test/app#named")?;
+    harness.assert_text(":target", "Named")?;
+
+    let error = harness
+        .assert_exists(":target()")
+        .expect_err("malformed target selector should fail explicitly");
+    let message = error.to_string();
+    assert!(message.contains("Selector error"));
+    assert!(message.contains("unsupported selector `:target()`"));
+    Ok(())
+}
+
+#[test]
 fn assert_exists_reports_missing_nodes_with_dom_dump() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html("<main id='app'></main>")?;
 

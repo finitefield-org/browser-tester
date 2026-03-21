@@ -361,6 +361,50 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("document.getElementById"))
     }
 
+    fn document_document_element(&mut self) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("document.documentElement"))
+    }
+
+    fn document_head(&mut self) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("document.head"))
+    }
+
+    fn document_body(&mut self) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("document.body"))
+    }
+
+    fn document_title(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("document.title"))
+    }
+
+    fn document_set_title(&mut self, _value: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready("document.title"))
+    }
+
+    fn document_location(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("document.location"))
+    }
+
+    fn document_set_location(&mut self, _value: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready("document.location"))
+    }
+
+    fn document_url(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("document.URL"))
+    }
+
+    fn document_document_uri(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("document.documentURI"))
+    }
+
+    fn document_base_uri(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("document.baseURI"))
+    }
+
+    fn document_origin(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("document.origin"))
+    }
+
     fn document_query_selector(&mut self, _selector: &str) -> Result<Option<ElementHandle>> {
         Err(ScriptError::phase_not_ready("document.querySelector"))
     }
@@ -399,6 +443,14 @@ pub trait HostBindings {
 
     fn element_tag_name(&mut self, _element: ElementHandle) -> Result<String> {
         Err(ScriptError::phase_not_ready("element.tagName"))
+    }
+
+    fn element_base_uri(&mut self, _element: ElementHandle) -> Result<String> {
+        Err(ScriptError::phase_not_ready("element.baseURI"))
+    }
+
+    fn element_origin(&mut self, _element: ElementHandle) -> Result<String> {
+        Err(ScriptError::phase_not_ready("element.origin"))
     }
 
     fn element_labels(&mut self, _element: ElementHandle) -> Result<Vec<ElementHandle>> {

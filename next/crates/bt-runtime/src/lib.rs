@@ -589,6 +589,7 @@ impl Session {
             mocks.storage_mut().seed_local(key.clone(), value.clone());
         }
         mocks.location_mut().set_current(config.url.clone());
+        dom.set_target_fragment(Self::fragment_identifier_from_url(&config.url));
 
         let mut session = Self {
             dom,
@@ -713,10 +714,12 @@ impl Session {
         }
 
         if let Some(previous) = self.focused_node.take() {
+            self.dom.set_focused_node(None);
             self.dispatch_dom_event(previous, "blur", false, false)?;
         }
 
         self.focused_node = Some(node_id);
+        self.dom.set_focused_node(Some(node_id));
         self.dispatch_dom_event(node_id, "focus", false, false)?;
         Ok(())
     }
@@ -728,6 +731,7 @@ impl Session {
         }
 
         self.focused_node = None;
+        self.dom.set_focused_node(None);
         self.dispatch_dom_event(node_id, "blur", false, false)?;
         Ok(())
     }
@@ -874,6 +878,8 @@ impl Session {
         let location = self.mocks.location_mut();
         location.set_current(url.to_string());
         location.record_navigation(url.to_string());
+        self.dom
+            .set_target_fragment(Self::fragment_identifier_from_url(url));
         Ok(())
     }
 
@@ -1208,6 +1214,15 @@ impl Session {
 
     fn node_id_to_node_handle(node_id: NodeId) -> NodeHandle {
         NodeHandle::new(((node_id.generation() as u64) << 32) | node_id.index() as u64)
+    }
+
+    fn fragment_identifier_from_url(url: &str) -> Option<String> {
+        let fragment = url.split_once('#')?.1;
+        if fragment.is_empty() {
+            None
+        } else {
+            Some(fragment.to_string())
+        }
     }
 
     fn query_selector_handle(
@@ -1739,6 +1754,77 @@ impl Session {
         Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
     }
 
+    fn document_document_element(&self) -> Result<Option<ElementHandle>, ScriptError> {
+        Ok(self.dom.document_element_id().map(Self::node_id_to_handle))
+    }
+
+    fn document_head(&self) -> Result<Option<ElementHandle>, ScriptError> {
+        Ok(self.dom.head_element_id().map(Self::node_id_to_handle))
+    }
+
+    fn document_body(&self) -> Result<Option<ElementHandle>, ScriptError> {
+        Ok(self.dom.body_element_id().map(Self::node_id_to_handle))
+    }
+
+    pub fn document_title(&self) -> String {
+        self.dom.document_title()
+    }
+
+    pub fn set_document_title(&mut self, value: &str) -> Result<(), SessionError> {
+        self.dom
+            .set_document_title(value.to_string())
+            .map_err(SessionError::Dom)
+    }
+
+    pub fn document_location(&self) -> String {
+        self.mocks
+            .location()
+            .current_url()
+            .unwrap_or(self.config.url.as_str())
+            .to_string()
+    }
+
+    pub fn document_url(&self) -> String {
+        self.document_location()
+    }
+
+    pub fn document_document_uri(&self) -> String {
+        self.document_location()
+    }
+
+    pub fn document_base_uri(&self) -> String {
+        self.document_location()
+    }
+
+    pub fn document_origin(&self) -> String {
+        Self::origin_from_url(&self.document_location())
+    }
+
+    fn origin_from_url(url: &str) -> String {
+        let Some((scheme, rest)) = url.split_once(':') else {
+            return "null".to_string();
+        };
+
+        let scheme = scheme.to_ascii_lowercase();
+        let Some(after_slashes) = rest.strip_prefix("//") else {
+            return "null".to_string();
+        };
+
+        let authority_end = after_slashes
+            .find(['/', '?', '#'])
+            .unwrap_or(after_slashes.len());
+        let authority = &after_slashes[..authority_end];
+        if authority.is_empty() {
+            return "null".to_string();
+        }
+
+        format!("{scheme}://{authority}")
+    }
+
+    pub fn set_document_location(&mut self, value: &str) -> Result<(), SessionError> {
+        self.navigate(value)
+    }
+
     fn document_children(&self) -> Result<Vec<ElementHandle>, ScriptError> {
         let root = self.dom.document_id();
         let Some(node) = self.dom.nodes().get(root.index() as usize) else {
@@ -2257,6 +2343,52 @@ impl HostBindings for Session {
         };
 
         Ok(Some(Self::node_id_to_handle(node_id)))
+    }
+
+    fn document_document_element(&mut self) -> bt_script::Result<Option<ElementHandle>> {
+        Session::document_document_element(self)
+    }
+
+    fn document_head(&mut self) -> bt_script::Result<Option<ElementHandle>> {
+        Session::document_head(self)
+    }
+
+    fn document_body(&mut self) -> bt_script::Result<Option<ElementHandle>> {
+        Session::document_body(self)
+    }
+
+    fn document_title(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_title(self))
+    }
+
+    fn document_set_title(&mut self, value: &str) -> bt_script::Result<()> {
+        Session::set_document_title(self, value)
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_location(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_location(self))
+    }
+
+    fn document_set_location(&mut self, value: &str) -> bt_script::Result<()> {
+        Session::set_document_location(self, value)
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_url(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_url(self))
+    }
+
+    fn document_document_uri(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_document_uri(self))
+    }
+
+    fn document_base_uri(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_base_uri(self))
+    }
+
+    fn document_origin(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_origin(self))
     }
 
     fn document_query_selector(
@@ -2785,6 +2917,14 @@ impl HostBindings for Session {
         };
 
         Ok(element.tag_name.clone())
+    }
+
+    fn element_base_uri(&mut self, _element: ElementHandle) -> bt_script::Result<String> {
+        Ok(Session::document_base_uri(self))
+    }
+
+    fn element_origin(&mut self, _element: ElementHandle) -> bt_script::Result<String> {
+        Ok(Session::document_origin(self))
     }
 
     fn element_labels(&mut self, element: ElementHandle) -> bt_script::Result<Vec<ElementHandle>> {

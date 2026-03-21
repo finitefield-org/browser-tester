@@ -72,6 +72,133 @@ fn session_executes_inline_scripts_during_bootstrap() {
 }
 
 #[test]
+fn session_resolves_document_root_head_and_body() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<html id='html'><head id='head'><title>Title</title></head><body id='body'><main id='out'></main><script>const html = document.documentElement; const head = document.head; const body = document.body; document.getElementById('out').textContent = html.getAttribute('id') + ':' + head.getAttribute('id') + ':' + body.getAttribute('id');</script></body></html>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should expose document root/head/body");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "html:head:body"
+    );
+}
+
+#[test]
+fn session_resolves_document_title_getter_setter_and_window_alias() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<html><head><title>Initial</title></head><body><main id='out'></main><script>const before = document.title; document.title = 'Updated'; const after = window.title; document.getElementById('out').textContent = before + ':' + after + ':' + document.querySelector('title').textContent;</script></body></html>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should expose document.title");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "Initial:Updated:Updated"
+    );
+    assert_eq!(session.dom().document_title(), "Updated");
+}
+
+#[test]
+fn session_resolves_document_location_getter_setter_and_window_alias() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/start".to_string(),
+        html: Some(
+            "<main id='out'></main><script>const before = document.location; document.location = 'https://example.test/next'; const after = window.location; document.getElementById('out').textContent = before + ':' + after;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should expose document.location");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "https://example.test/start:https://example.test/next"
+    );
+    assert_eq!(
+        session.mocks().location().current_url(),
+        Some("https://example.test/next")
+    );
+    assert_eq!(
+        session.mocks().location().navigations(),
+        &["https://example.test/next".to_string()]
+    );
+    assert_eq!(session.document_location(), "https://example.test/next");
+}
+
+#[test]
+fn session_resolves_document_url_and_document_uri_aliases() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/start".to_string(),
+        html: Some(
+            "<main id='out'></main><script>const beforeLocation = document.location; const beforeUrl = document.URL; const beforeDocumentUri = document.documentURI; const beforeWindowLocation = window.location; document.getElementById('out').textContent = beforeLocation + ':' + beforeUrl + ':' + beforeDocumentUri + ':' + beforeWindowLocation;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should expose document.URL aliases");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "https://example.test/start:https://example.test/start:https://example.test/start:https://example.test/start"
+    );
+    assert_eq!(session.document_location(), "https://example.test/start");
+}
+
+#[test]
+fn session_resolves_document_base_uri_and_element_base_uri_aliases() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/start".to_string(),
+        html: Some(
+            "<main id='root'><span id='child'></span></main><div id='out'></div><script>const root = document.getElementById('root'); const child = document.getElementById('child'); document.getElementById('out').textContent = document.baseURI + ':' + root.baseURI + ':' + child.baseURI;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should expose baseURI aliases");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "https://example.test/start:https://example.test/start:https://example.test/start"
+    );
+    assert_eq!(session.document_base_uri(), "https://example.test/start");
+}
+
+#[test]
+fn session_resolves_document_origin_and_element_origin_aliases() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test:8443/start?x#y".to_string(),
+        html: Some(
+            "<main id='root'><span id='child'></span></main><div id='out'></div><script>const root = document.getElementById('root'); const child = document.getElementById('child'); document.getElementById('out').textContent = document.origin + ':' + window.origin + ':' + root.origin + ':' + child.origin;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should expose origin aliases");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "https://example.test:8443:https://example.test:8443:https://example.test:8443:https://example.test:8443"
+    );
+    assert_eq!(session.document_origin(), "https://example.test:8443");
+}
+
+#[test]
 fn session_reports_script_errors_from_inline_bootstrap() {
     let error = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),

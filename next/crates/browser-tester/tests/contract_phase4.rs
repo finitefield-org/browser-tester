@@ -128,6 +128,69 @@ fn dialogs_clipboard_and_location_are_wired() -> browser_tester_next::Result<()>
 }
 
 #[test]
+fn document_location_is_wired_through_script_and_location_mock() -> browser_tester_next::Result<()>
+{
+    let mut harness = Harness::from_html(
+        "<main id='out'></main><script>const beforeLocation = document.location; const beforeUrl = document.URL; document.location = 'https://example.test/next'; const afterDocumentUri = document.documentURI; const afterWindowLocation = window.location; document.getElementById('out').textContent = beforeLocation + ':' + beforeUrl + ':' + afterDocumentUri + ':' + afterWindowLocation;</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "https://app.local/:https://app.local/:https://example.test/next:https://example.test/next",
+    )?;
+    assert_eq!(
+        harness.mocks_mut().location().current_url(),
+        Some("https://example.test/next")
+    );
+    assert_eq!(
+        harness.mocks_mut().location().navigations(),
+        &["https://example.test/next".to_string()]
+    );
+    assert_eq!(harness.debug().url(), "https://example.test/next");
+    Ok(())
+}
+
+#[test]
+fn document_url_assignment_is_rejected() -> browser_tester_next::Result<()> {
+    let error = Harness::from_html(
+        "<main id='out'></main><script>document.URL = 'https://example.test/next';</script>",
+    )
+    .expect_err("document.URL should be read-only");
+
+    assert!(error
+        .to_string()
+        .contains("unsupported assignment target"));
+    assert!(error.to_string().contains("URL"));
+    Ok(())
+}
+
+#[test]
+fn document_base_uri_aliases_are_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><span id='child'></span></main><div id='out'></div><script>const root = document.getElementById('root'); const child = document.getElementById('child'); document.getElementById('out').textContent = document.baseURI + ':' + root.baseURI + ':' + child.baseURI + ':' + document.documentURI;</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "https://app.local/:https://app.local/:https://app.local/:https://app.local/",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn document_origin_aliases_are_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><span id='child'></span></main><div id='out'></div><script>const root = document.getElementById('root'); const child = document.getElementById('child'); document.getElementById('out').textContent = document.origin + ':' + window.origin + ':' + root.origin + ':' + child.origin;</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "https://app.local:https://app.local:https://app.local:https://app.local",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn dialogs_and_clipboard_reads_require_seeded_values() -> browser_tester_next::Result<()> {
     let mut harness = Harness::builder().build()?;
 

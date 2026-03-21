@@ -17,6 +17,27 @@ impl HostBindings for NoopHost {
     }
 }
 
+fn origin_from_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once(':') else {
+        return "null".to_string();
+    };
+
+    let scheme = scheme.to_ascii_lowercase();
+    let Some(after_slashes) = rest.strip_prefix("//") else {
+        return "null".to_string();
+    };
+
+    let authority_end = after_slashes
+        .find(['/', '?', '#'])
+        .unwrap_or(after_slashes.len());
+    let authority = &after_slashes[..authority_end];
+    if authority.is_empty() {
+        return "null".to_string();
+    }
+
+    format!("{scheme}://{authority}")
+}
+
 #[derive(Default)]
 struct RecordingHost {
     elements: BTreeMap<String, ElementHandle>,
@@ -74,6 +95,15 @@ struct RecordingHost {
     document_query_selector_results: BTreeMap<String, Option<ElementHandle>>,
     document_query_selector_all_results: BTreeMap<String, Vec<ElementHandle>>,
     document_get_elements_by_name_results: BTreeMap<String, Vec<ElementHandle>>,
+    document_document_element_result: Option<ElementHandle>,
+    document_head_result: Option<ElementHandle>,
+    document_body_result: Option<ElementHandle>,
+    document_title_result: String,
+    document_location_result: String,
+    document_base_uri_calls: usize,
+    document_origin_calls: usize,
+    element_base_uri_calls: Vec<ElementHandle>,
+    element_origin_calls: Vec<ElementHandle>,
     element_query_selector_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
     element_query_selector_all_results: BTreeMap<(ElementHandle, String), Vec<ElementHandle>>,
     element_closest_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
@@ -119,6 +149,13 @@ struct RecordingHost {
     document_query_selector_calls: Vec<String>,
     document_query_selector_all_calls: Vec<String>,
     document_get_elements_by_name_calls: Vec<String>,
+    document_document_element_calls: usize,
+    document_head_calls: usize,
+    document_body_calls: usize,
+    document_title_calls: usize,
+    document_set_title_calls: Vec<String>,
+    document_location_calls: usize,
+    document_set_location_calls: Vec<String>,
     element_query_selector_calls: Vec<(ElementHandle, String)>,
     element_query_selector_all_calls: Vec<(ElementHandle, String)>,
     element_closest_calls: Vec<(ElementHandle, String)>,
@@ -441,6 +478,26 @@ impl RecordingHost {
             .insert(selector.into(), result);
     }
 
+    fn seed_document_document_element(&mut self, result: Option<ElementHandle>) {
+        self.document_document_element_result = result;
+    }
+
+    fn seed_document_head(&mut self, result: Option<ElementHandle>) {
+        self.document_head_result = result;
+    }
+
+    fn seed_document_body(&mut self, result: Option<ElementHandle>) {
+        self.document_body_result = result;
+    }
+
+    fn seed_document_title(&mut self, result: impl Into<String>) {
+        self.document_title_result = result.into();
+    }
+
+    fn seed_document_location(&mut self, result: impl Into<String>) {
+        self.document_location_result = result.into();
+    }
+
     fn seed_document_query_selector_all(
         &mut self,
         selector: impl Into<String>,
@@ -505,6 +562,63 @@ impl HostBindings for RecordingHost {
         Ok(self.elements.get(id).copied())
     }
 
+    fn document_document_element(&mut self) -> bt_script::Result<Option<ElementHandle>> {
+        self.document_document_element_calls += 1;
+        Ok(self.document_document_element_result)
+    }
+
+    fn document_head(&mut self) -> bt_script::Result<Option<ElementHandle>> {
+        self.document_head_calls += 1;
+        Ok(self.document_head_result)
+    }
+
+    fn document_body(&mut self) -> bt_script::Result<Option<ElementHandle>> {
+        self.document_body_calls += 1;
+        Ok(self.document_body_result)
+    }
+
+    fn document_title(&mut self) -> bt_script::Result<String> {
+        self.document_title_calls += 1;
+        Ok(self.document_title_result.clone())
+    }
+
+    fn document_set_title(&mut self, value: &str) -> bt_script::Result<()> {
+        self.document_set_title_calls.push(value.to_string());
+        self.document_title_result = value.to_string();
+        Ok(())
+    }
+
+    fn document_location(&mut self) -> bt_script::Result<String> {
+        self.document_location_calls += 1;
+        Ok(self.document_location_result.clone())
+    }
+
+    fn document_url(&mut self) -> bt_script::Result<String> {
+        self.document_location_calls += 1;
+        Ok(self.document_location_result.clone())
+    }
+
+    fn document_document_uri(&mut self) -> bt_script::Result<String> {
+        self.document_location_calls += 1;
+        Ok(self.document_location_result.clone())
+    }
+
+    fn document_base_uri(&mut self) -> bt_script::Result<String> {
+        self.document_base_uri_calls += 1;
+        Ok(self.document_location_result.clone())
+    }
+
+    fn document_origin(&mut self) -> bt_script::Result<String> {
+        self.document_origin_calls += 1;
+        Ok(origin_from_url(&self.document_location_result))
+    }
+
+    fn document_set_location(&mut self, value: &str) -> bt_script::Result<()> {
+        self.document_set_location_calls.push(value.to_string());
+        self.document_location_result = value.to_string();
+        Ok(())
+    }
+
     fn element_text_content(&mut self, element: ElementHandle) -> bt_script::Result<String> {
         Ok(self.text_content.get(&element).cloned().unwrap_or_default())
     }
@@ -528,6 +642,16 @@ impl HostBindings for RecordingHost {
             .get(&element)
             .cloned()
             .unwrap_or_default())
+    }
+
+    fn element_base_uri(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+        self.element_base_uri_calls.push(element);
+        Ok(self.document_location_result.clone())
+    }
+
+    fn element_origin(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+        self.element_origin_calls.push(element);
+        Ok(origin_from_url(&self.document_location_result))
     }
 
     fn element_labels(&mut self, element: ElementHandle) -> bt_script::Result<Vec<ElementHandle>> {
@@ -1377,6 +1501,173 @@ fn runtime_supports_classname_classlist_and_dataset_views() {
             .map(String::as_str),
         Some(
             "primary tertiary active:2:true:true:App:42:[object DOMTokenList]:[object DOMStringMap]"
+        )
+    );
+}
+
+#[test]
+fn runtime_resolves_document_root_head_and_body_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("html", ElementHandle::new(1), "");
+    host.seed_element("head", ElementHandle::new(2), "");
+    host.seed_element("body", ElementHandle::new(3), "");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_attribute(ElementHandle::new(1), "id", "html");
+    host.seed_attribute(ElementHandle::new(2), "id", "head");
+    host.seed_attribute(ElementHandle::new(3), "id", "body");
+    host.seed_document_document_element(Some(ElementHandle::new(1)));
+    host.seed_document_head(Some(ElementHandle::new(2)));
+    host.seed_document_body(Some(ElementHandle::new(3)));
+
+    runtime
+        .eval_program(
+            "const html = document.documentElement; const head = document.head; const body = document.body; document.getElementById('out').textContent = html.getAttribute('id') + ':' + head.getAttribute('id') + ':' + body.getAttribute('id');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document root/head/body should resolve through host bindings");
+
+    assert_eq!(host.document_document_element_calls, 1);
+    assert_eq!(host.document_head_calls, 1);
+    assert_eq!(host.document_body_calls, 1);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("html:head:body")
+    );
+}
+
+#[test]
+fn runtime_resolves_document_title_getter_setter_and_window_alias() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_document_title("Initial");
+
+    runtime
+        .eval_program(
+            "const before = document.title; document.title = 'Updated'; const after = window.title; document.getElementById('out').textContent = before + ':' + after;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.title should resolve through host bindings");
+
+    assert_eq!(host.document_title_calls, 2);
+    assert_eq!(host.document_set_title_calls, vec!["Updated".to_string()]);
+    assert_eq!(host.document_title_result, "Updated");
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("Initial:Updated")
+    );
+}
+
+#[test]
+fn runtime_resolves_document_location_getter_setter_and_window_alias() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_document_location("https://example.test/start");
+
+    runtime
+        .eval_program(
+            "const before = document.location; document.location = 'https://example.test/next'; const after = window.location; document.getElementById('out').textContent = before + ':' + after;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.location should resolve through host bindings");
+
+    assert_eq!(host.document_location_calls, 2);
+    assert_eq!(
+        host.document_set_location_calls,
+        vec!["https://example.test/next".to_string()]
+    );
+    assert_eq!(host.document_location_result, "https://example.test/next");
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("https://example.test/start:https://example.test/next")
+    );
+}
+
+#[test]
+fn runtime_resolves_document_url_and_document_uri_aliases() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_document_location("https://example.test/start");
+
+    runtime
+        .eval_program(
+            "const beforeLocation = document.location; const beforeUrl = document.URL; const beforeDocumentUri = document.documentURI; const beforeWindowLocation = window.location; document.getElementById('out').textContent = beforeLocation + ':' + beforeUrl + ':' + beforeDocumentUri + ':' + beforeWindowLocation;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document URL aliases should resolve through host bindings");
+
+    assert_eq!(host.document_location_calls, 4);
+    assert_eq!(host.document_location_result, "https://example.test/start");
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some(
+            "https://example.test/start:https://example.test/start:https://example.test/start:https://example.test/start"
+        )
+    );
+}
+
+#[test]
+fn runtime_resolves_document_base_uri_and_element_base_uri_aliases() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_document_location("https://example.test/start");
+
+    runtime
+        .eval_program(
+            "const out = document.getElementById('out'); const beforeDocumentBaseUri = document.baseURI; const beforeElementBaseUri = out.baseURI; out.textContent = beforeDocumentBaseUri + ':' + beforeElementBaseUri;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.baseURI should resolve through host bindings");
+
+    assert_eq!(host.document_base_uri_calls, 1);
+    assert_eq!(host.element_base_uri_calls, vec![ElementHandle::new(1)]);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("https://example.test/start:https://example.test/start")
+    );
+}
+
+#[test]
+fn runtime_resolves_document_origin_and_element_origin_aliases() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "root");
+    host.seed_element("child", ElementHandle::new(2), "child");
+    host.seed_document_location("https://example.test:8443/start?x#y");
+
+    runtime
+        .eval_program(
+            "const root = document.getElementById('root'); const child = document.getElementById('child'); document.getElementById('root').textContent = document.origin + ':' + window.origin + ':' + root.origin + ':' + child.origin;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.origin should resolve through host bindings");
+
+    assert_eq!(host.document_origin_calls, 2);
+    assert_eq!(host.element_origin_calls, vec![ElementHandle::new(1), ElementHandle::new(2)]);
+    assert_eq!(
+        host.text_content.get(&ElementHandle::new(1)).map(String::as_str),
+        Some(
+            "https://example.test:8443:https://example.test:8443:https://example.test:8443:https://example.test:8443"
         )
     );
 }
