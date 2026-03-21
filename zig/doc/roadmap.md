@@ -56,7 +56,7 @@ Phase 3 is complete in this workspace.
 
 Delivered in this workspace:
 
-- fake clock helpers (`nowMs`, `advanceTime`, `flush`)
+- fake clock helpers (`nowMs`, `advanceTime`, `flush`), one-shot and repeating timer queue semantics, and queued microtask drain
 - typed mock registry (`mocksMut`)
 - fetch, clipboard, dialog, open, close, print, scroll, location, matchMedia, and file-input mocks
 - download capture
@@ -117,13 +117,15 @@ The minimal inline style declaration slice, including comment stripping, `!impor
 
 ## Phase 9: Document and Window Surface Expansion
 
-- `document.documentElement`, `document.head`, `document.body`, `document.activeElement`, `document.referrer`, `document.dir`, `window.children`, `window.scrollX`, `window.scrollY`, `window.pageXOffset`, `window.pageYOffset`, and `window.name`
+- `document.documentElement`, `document.head`, `document.body`, `document.activeElement`, `document.referrer`, `document.dir`, `document.visibilityState`, `document.hidden`, `document.hasFocus()`, `window.children`, `window.navigator` (`userAgent`, `appCodeName`, `appName`, `appVersion`, `product`, `productSub`, `vendor`, `vendorSub`, `platform`, `language`, `cookieEnabled`, `onLine`, `webdriver`, `hardwareConcurrency`, `maxTouchPoints`, `javaEnabled()`), `window.performance` (`now()` / `timeOrigin`), `window.devicePixelRatio`, `window.innerWidth`, `window.innerHeight`, `window.outerWidth`, `window.outerHeight`, `window.scrollX`, `window.scrollY`, `window.pageXOffset`, `window.pageYOffset`, and `window.name`
 - `document.title` and `window.title`
 - `document.location` and `window.location` as a limited `Location` host object (`href`, `assign()`, `replace()`, `reload()`)
 - `document.URL`, `document.documentURI`, `document.baseURI`, `document.compatMode`, `document.characterSet`, `document.charset`, and `document.contentType`
 - `document.origin`, `window.origin`, `Element.baseURI`, and `Element.origin`
 
-The document and window alias slice is implemented in this workspace now, including the document metadata, `document.referrer`, `document.dir`, `window.children`, `window.scrollX`, `window.scrollY`, `window.pageXOffset`, `window.pageYOffset`, and `window.name` aliases used during inline script bootstrap.
+The document and window alias slice is implemented in this workspace now, including the document metadata, `document.defaultView`, `document.referrer`, `document.dir`, `document.visibilityState`, `document.hidden`, `document.hasFocus()`, `window.window`, `window.self`, `window.top`, `window.parent`, `window.opener`, `window.closed`, `window.children`, `window.navigator` (`userAgent`, `appCodeName`, `appName`, `appVersion`, `product`, `productSub`, `vendor`, `vendorSub`, `platform`, `language`, `cookieEnabled`, `onLine`, `webdriver`, `hardwareConcurrency`, `maxTouchPoints`, `javaEnabled()`), `window.performance` (`now()` / `timeOrigin`), `window.devicePixelRatio`, `window.innerWidth`, `window.innerHeight`, `window.outerWidth`, `window.outerHeight`, `window.scrollX`, `window.scrollY`, `window.pageXOffset`, `window.pageYOffset`, and `window.name` aliases used during inline script bootstrap.
+
+`window.screen` is also implemented as a deterministic read-only geometry object, and the screen-position quartet (`window.screenX`, `window.screenY`, `window.screenLeft`, and `window.screenTop`) is already implemented in Zig as deterministic constants.
 
 ## Phase 10: Limited Navigation Model
 

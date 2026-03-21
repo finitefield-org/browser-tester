@@ -36,6 +36,19 @@ fn focus_and_blur_are_publicly_supported() -> browser_tester_next::Result<()> {
 }
 
 #[test]
+fn navigator_app_name_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<div id='out'></div><script>document.getElementById('out').textContent = window.navigator.userAgent + ':' + window.navigator.appCodeName + ':' + window.navigator.appName + ':' + window.navigator.appVersion + ':' + window.navigator.product + ':' + window.navigator.vendor + ':' + window.navigator.platform + ':' + window.navigator.language + ':' + String(window.navigator.cookieEnabled) + ':' + String(window.navigator.onLine) + ':' + String(window.navigator.webdriver);</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:unknown:en-US:true:true:false",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn set_select_value_updates_selection_and_fires_change() -> browser_tester_next::Result<()> {
     let mut harness = Harness::from_html(
         "<select id='mode'><option value='a'>A</option><option value='b'>B</option></select><div id='out'></div><script>document.getElementById('mode').addEventListener('change', () => { document.getElementById('out').textContent = document.getElementById('mode').value; });</script>",
@@ -255,6 +268,46 @@ fn window_device_pixel_ratio_is_publicly_supported() -> browser_tester_next::Res
 }
 
 #[test]
+fn window_inner_width_and_inner_height_are_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='out'></main><script>document.getElementById('out').textContent = String(window.innerWidth) + ':' + String(window.innerHeight);</script>",
+    )?;
+
+    harness.assert_text("#out", "1024:768")?;
+    Ok(())
+}
+
+#[test]
+fn window_outer_width_and_outer_height_are_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='out'></main><script>document.getElementById('out').textContent = String(window.outerWidth) + ':' + String(window.outerHeight);</script>",
+    )?;
+
+    harness.assert_text("#out", "1024:768")?;
+    Ok(())
+}
+
+#[test]
+fn window_screen_position_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='out'></main><script>document.getElementById('out').textContent = String(window.screenX) + ':' + String(window.screenY) + ':' + String(window.screenLeft) + ':' + String(window.screenTop);</script>",
+    )?;
+
+    harness.assert_text("#out", "0:0:0:0")?;
+    Ok(())
+}
+
+#[test]
+fn window_screen_object_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='out'></main><script>document.getElementById('out').textContent = String(window.screen) + ':' + String(window.screen.width) + ':' + String(window.screen.height) + ':' + String(window.screen.availWidth) + ':' + String(window.screen.availHeight) + ':' + String(window.screen.availLeft) + ':' + String(window.screen.availTop) + ':' + String(window.screen.colorDepth) + ':' + String(window.screen.pixelDepth);</script>",
+    )?;
+
+    harness.assert_text("#out", "[object Screen]:1024:768:1024:768:0:0:24:24")?;
+    Ok(())
+}
+
+#[test]
 fn document_referrer_is_publicly_supported() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='out'></main><script>document.getElementById('out').textContent = '[' + document.referrer + ']';</script>",
@@ -376,10 +429,13 @@ fn print_is_publicly_supported_and_captured() -> browser_tester_next::Result<()>
 #[test]
 fn navigator_metadata_is_publicly_supported() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
-        "<main id='out'></main><script>document.getElementById('out').textContent = window.navigator.userAgent + ':' + window.navigator.platform + ':' + window.navigator.language + ':' + String(window.navigator.cookieEnabled) + ':' + String(window.navigator.onLine);</script>",
+        "<main id='out'></main><script>document.getElementById('out').textContent = window.navigator.userAgent + ':' + window.navigator.appCodeName + ':' + window.navigator.vendor + ':' + window.navigator.platform + ':' + window.navigator.language + ':' + String(window.navigator.cookieEnabled) + ':' + String(window.navigator.onLine) + ':' + String(window.navigator.webdriver);</script>",
     )?;
 
-    harness.assert_text("#out", "browser-tester-next:unknown:en-US:true:true")?;
+    harness.assert_text(
+        "#out",
+        "browser-tester-next:browser-tester-next:browser-tester-next:unknown:en-US:true:true:false",
+    )?;
     Ok(())
 }
 

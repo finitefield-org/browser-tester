@@ -50,6 +50,7 @@ fn as_string(value: &Value) -> String {
         Value::Storage(_) => "[object Storage]".to_string(),
         Value::MediaQueryList(_) => "[object MediaQueryList]".to_string(),
         Value::Navigator => "[object Navigator]".to_string(),
+        Value::Screen => "[object Screen]".to_string(),
         Value::CollectionIterator(_) => "[object Iterator]".to_string(),
         Value::IteratorResult(_) => "[object IteratorResult]".to_string(),
         Value::CollectionEntry(_) => "[object IteratorEntry]".to_string(),
@@ -161,6 +162,9 @@ fn eval_assignment<H: HostBindings>(
                 ))),
                 (Value::CollectionEntry(_), property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on iterator entry value"
+                ))),
+                (Value::Screen, property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on screen value"
                 ))),
                 (Value::CollectionIterator(_), property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on iterator value"
@@ -407,12 +411,8 @@ fn eval_member<H: HostBindings>(
         Value::Window if property == "localStorage" => Ok(Value::Storage(StorageTarget::Local)),
         Value::Window if property == "sessionStorage" => Ok(Value::Storage(StorageTarget::Session)),
         Value::Window if property == "navigator" => Ok(Value::Navigator),
-        Value::Window if property == "scrollX" => {
-            Ok(Value::Number(host.window_scroll_x()? as f64))
-        }
-        Value::Window if property == "scrollY" => {
-            Ok(Value::Number(host.window_scroll_y()? as f64))
-        }
+        Value::Window if property == "scrollX" => Ok(Value::Number(host.window_scroll_x()? as f64)),
+        Value::Window if property == "scrollY" => Ok(Value::Number(host.window_scroll_y()? as f64)),
         Value::Window if property == "pageXOffset" => {
             Ok(Value::Number(host.window_page_x_offset()? as f64))
         }
@@ -422,12 +422,69 @@ fn eval_member<H: HostBindings>(
         Value::Window if property == "devicePixelRatio" => {
             Ok(Value::Number(host.window_device_pixel_ratio()?))
         }
+        Value::Window if property == "innerWidth" => {
+            Ok(Value::Number(host.window_inner_width()? as f64))
+        }
+        Value::Window if property == "innerHeight" => {
+            Ok(Value::Number(host.window_inner_height()? as f64))
+        }
+        Value::Window if property == "outerWidth" => {
+            Ok(Value::Number(host.window_outer_width()? as f64))
+        }
+        Value::Window if property == "outerHeight" => {
+            Ok(Value::Number(host.window_outer_height()? as f64))
+        }
+        Value::Window if property == "screenX" => Ok(Value::Number(host.window_screen_x()? as f64)),
+        Value::Window if property == "screenY" => Ok(Value::Number(host.window_screen_y()? as f64)),
+        Value::Window if property == "screenLeft" => {
+            Ok(Value::Number(host.window_screen_left()? as f64))
+        }
+        Value::Window if property == "screenTop" => {
+            Ok(Value::Number(host.window_screen_top()? as f64))
+        }
+        Value::Window if property == "screen" => Ok(Value::Screen),
+        Value::Screen if property == "width" => {
+            Ok(Value::Number(host.window_screen_width()? as f64))
+        }
+        Value::Screen if property == "height" => {
+            Ok(Value::Number(host.window_screen_height()? as f64))
+        }
+        Value::Screen if property == "availWidth" => {
+            Ok(Value::Number(host.window_screen_avail_width()? as f64))
+        }
+        Value::Screen if property == "availHeight" => {
+            Ok(Value::Number(host.window_screen_avail_height()? as f64))
+        }
+        Value::Screen if property == "availLeft" => {
+            Ok(Value::Number(host.window_screen_avail_left()? as f64))
+        }
+        Value::Screen if property == "availTop" => {
+            Ok(Value::Number(host.window_screen_avail_top()? as f64))
+        }
+        Value::Screen if property == "colorDepth" => {
+            Ok(Value::Number(host.window_screen_color_depth()? as f64))
+        }
+        Value::Screen if property == "pixelDepth" => {
+            Ok(Value::Number(host.window_screen_pixel_depth()? as f64))
+        }
         Value::MediaQueryList(list) if property == "matches" => Ok(Value::Boolean(list.matches())),
         Value::MediaQueryList(list) if property == "media" => {
             Ok(Value::String(list.media().to_string()))
         }
         Value::Navigator if property == "userAgent" => {
             Ok(Value::String(host.window_navigator_user_agent()?))
+        }
+        Value::Navigator if property == "appCodeName" => {
+            Ok(Value::String(host.window_navigator_app_code_name()?))
+        }
+        Value::Navigator if property == "appName" => {
+            Ok(Value::String(host.window_navigator_app_name()?))
+        }
+        Value::Navigator if property == "appVersion" => {
+            Ok(Value::String(host.window_navigator_app_version()?))
+        }
+        Value::Navigator if property == "product" => {
+            Ok(Value::String(host.window_navigator_product()?))
         }
         Value::Navigator if property == "platform" => {
             Ok(Value::String(host.window_navigator_platform()?))
@@ -441,6 +498,18 @@ fn eval_member<H: HostBindings>(
         Value::Navigator if property == "onLine" => {
             Ok(Value::Boolean(host.window_navigator_on_line()?))
         }
+        Value::Navigator if property == "webdriver" => {
+            Ok(Value::Boolean(host.window_navigator_webdriver()?))
+        }
+        Value::Navigator if property == "vendor" => {
+            Ok(Value::String(host.window_navigator_vendor()?))
+        }
+        Value::Navigator if property == "hardwareConcurrency" => Ok(Value::Number(
+            host.window_navigator_hardware_concurrency()? as f64,
+        )),
+        Value::Navigator if property == "maxTouchPoints" => Ok(Value::Number(
+            host.window_navigator_max_touch_points()? as f64,
+        )),
         Value::Element(element) if property == "textContent" => {
             Ok(Value::String(host.element_text_content(element)?))
         }
@@ -565,6 +634,7 @@ fn eval_member<H: HostBindings>(
             Ok(Value::String(radio_node_list_value(&target, host)?))
         }
         Value::Navigator => Err(unsupported_member_access(property, "navigator")),
+        Value::Screen => Err(unsupported_member_access(property, "screen")),
         Value::Element(_) => Err(unsupported_member_access(property, "element")),
         Value::ClassList(_) => Err(unsupported_member_access(property, "class list")),
         Value::Dataset(element) => {
@@ -645,9 +715,7 @@ fn eval_call<H: HostBindings>(
         | Expr::Boolean(_)
         | Expr::Null
         | Expr::Undefined
-        | Expr::UnaryNeg(_) => {
-            Err(ScriptError::new("invalid call target"))
-        }
+        | Expr::UnaryNeg(_) => Err(ScriptError::new("invalid call target")),
         Expr::Call { .. } | Expr::BinaryAdd { .. } => {
             Err(ScriptError::new("invalid nested call target"))
         }
@@ -841,6 +909,9 @@ fn eval_method_call<H: HostBindings>(
         ))),
         Value::Navigator => Err(ScriptError::new(format!(
             "cannot call `{method}` on a navigator value"
+        ))),
+        Value::Screen => Err(ScriptError::new(format!(
+            "cannot call `{method}` on a screen value"
         ))),
         Value::Node(_) => Err(ScriptError::new(format!(
             "cannot call `{method}` on a node value"
@@ -2192,6 +2263,7 @@ fn is_truthy(value: &Value) -> bool {
         | Value::Storage(_)
         | Value::MediaQueryList(_)
         | Value::TemplateContent(_)
+        | Value::Screen
         | Value::CollectionIterator(_)
         | Value::IteratorResult(_)
         | Value::CollectionEntry(_)
@@ -2218,10 +2290,13 @@ fn scroll_coordinate(value: &Value, method: &str) -> Result<i64> {
             if number.is_finite()
                 && number.fract() == 0.0
                 && *number >= i64::MIN as f64
-                && *number <= i64::MAX as f64 => Ok(*number as i64),
-        Value::String(value) => value.parse::<i64>().map_err(|_| {
-            ScriptError::new(format!("{method}() expects integer coordinates"))
-        }),
+                && *number <= i64::MAX as f64 =>
+        {
+            Ok(*number as i64)
+        }
+        Value::String(value) => value
+            .parse::<i64>()
+            .map_err(|_| ScriptError::new(format!("{method}() expects integer coordinates"))),
         _ => Err(ScriptError::new(format!(
             "{method}() expects integer coordinates"
         ))),

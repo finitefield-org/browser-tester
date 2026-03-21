@@ -26,6 +26,15 @@ const HistoryEntry = struct {
     state: ?[]const u8 = null,
 };
 
+const scheduler_step_limit: usize = 10_000;
+
+const ScheduledTimer = struct {
+    id: u64,
+    at_ms: i64,
+    interval_ms: ?i64 = null,
+    handler: script.ScriptFunction,
+};
+
 const HistoryModel = struct {
     allocator: std.mem.Allocator,
     entries: std.ArrayListUnmanaged(HistoryEntry) = .{},
@@ -126,6 +135,11 @@ pub const Session = struct {
     dom_store: dom.DomStore,
     script_runtime: script.ScriptRuntime,
     script_event_listeners: std.ArrayListUnmanaged(script.ScriptListenerRecord) = .{},
+    queued_microtasks: std.ArrayListUnmanaged(script.ScriptFunction) = .{},
+    timers: std.ArrayListUnmanaged(ScheduledTimer) = .{},
+    next_timer_id: u64 = 1,
+    active_timer_id: ?u64 = null,
+    active_timer_cancelled: bool = false,
     mock_registry: mocks.MockRegistry,
     history: HistoryModel,
     clock_ms: i64 = 0,
@@ -168,6 +182,10 @@ pub const Session = struct {
         errdefer dom_store.deinit();
         var script_event_listeners: std.ArrayListUnmanaged(script.ScriptListenerRecord) = .{};
         errdefer script_event_listeners.deinit(arena.allocator());
+        var queued_microtasks: std.ArrayListUnmanaged(script.ScriptFunction) = .{};
+        errdefer queued_microtasks.deinit(arena.allocator());
+        var timers: std.ArrayListUnmanaged(ScheduledTimer) = .{};
+        errdefer timers.deinit(arena.allocator());
         var mock_registry = mocks.MockRegistry.init(arena_alloc);
         errdefer mock_registry.deinit();
         for (config.local_storage, 0..) |_, index| {
@@ -200,6 +218,7 @@ pub const Session = struct {
         var window_name: []const u8 = "";
         var scroll_x: i64 = 0;
         var scroll_y: i64 = 0;
+        var next_timer_id: u64 = 1;
         if (html_copy) |html_source| {
             try dom_store.bootstrapHtml(html_source);
         }
@@ -220,9 +239,14 @@ pub const Session = struct {
                 .window_name = &window_name,
                 .scroll_x = &scroll_x,
                 .scroll_y = &scroll_y,
+                .queued_microtasks = &queued_microtasks,
+                .timers = &timers,
+                .next_timer_id = &next_timer_id,
                 .storage = mock_registry.storage(),
             };
             try script_runtime.bootstrapInlineScripts(allocator, &bootstrap_host);
+            var bootstrap_steps: usize = 0;
+            try drainQueuedMicrotasks(allocator, &script_runtime, &bootstrap_host, &queued_microtasks, &bootstrap_steps);
         }
 
         return .{
@@ -237,6 +261,9 @@ pub const Session = struct {
             .dom_store = dom_store,
             .script_runtime = script_runtime,
             .script_event_listeners = script_event_listeners,
+            .queued_microtasks = queued_microtasks,
+            .timers = timers,
+            .next_timer_id = next_timer_id,
             .mock_registry = mock_registry,
             .history = history,
             .clock_ms = 0,
@@ -250,6 +277,8 @@ pub const Session = struct {
         self.mock_registry.deinit();
         self.history.deinit();
         self.script_event_listeners.deinit(self.arena.allocator());
+        self.queued_microtasks.deinit(self.arena.allocator());
+        self.timers.deinit(self.arena.allocator());
         self.script_runtime.deinit();
         self.dom_store.deinit();
         self.arena.deinit();
@@ -279,12 +308,26 @@ pub const Session = struct {
     pub fn advanceTime(self: *Session, delta_ms: i64) errors.Result(void) {
         if (delta_ms < 0) return error.TimerError;
         self.clock_ms = std.math.add(i64, self.clock_ms, delta_ms) catch return error.TimerError;
+        try self.runSchedulerCycle();
         return;
     }
 
     pub fn flush(self: *Session) errors.Result(void) {
-        _ = self;
+        try self.runSchedulerCycle();
         return;
+    }
+
+    fn runSchedulerCycle(self: *Session) errors.Result(void) {
+        const allocator = std.heap.page_allocator;
+        var step_count: usize = 0;
+        try drainQueuedMicrotasks(
+            allocator,
+            &self.script_runtime,
+            self,
+            &self.queued_microtasks,
+            &step_count,
+        );
+        try runDueTimers(self, allocator, &step_count);
     }
 
     pub fn mocksMut(self: *Session) *mocks.MockRegistry {
@@ -412,6 +455,21 @@ pub const Session = struct {
         return "";
     }
 
+    pub fn documentVisibilityState(self: *const Session) []const u8 {
+        _ = self;
+        return "visible";
+    }
+
+    pub fn documentHidden(self: *const Session) bool {
+        _ = self;
+        return false;
+    }
+
+    pub fn documentHasFocus(self: *const Session) bool {
+        _ = self;
+        return true;
+    }
+
     pub fn windowName(self: *const Session) []const u8 {
         return self.window_name;
     }
@@ -435,6 +493,171 @@ pub const Session = struct {
 
     pub fn windowPageYOffset(self: *const Session) i64 {
         return self.scroll_y;
+    }
+
+    pub fn windowNavigatorUserAgent(self: *const Session) []const u8 {
+        _ = self;
+        return "browser-tester-next";
+    }
+
+    pub fn windowNavigatorAppCodeName(self: *const Session) []const u8 {
+        _ = self;
+        return "browser-tester-next";
+    }
+
+    pub fn windowNavigatorAppName(self: *const Session) []const u8 {
+        _ = self;
+        return "browser-tester-next";
+    }
+
+    pub fn windowNavigatorAppVersion(self: *const Session) []const u8 {
+        _ = self;
+        return "browser-tester-next";
+    }
+
+    pub fn windowNavigatorProduct(self: *const Session) []const u8 {
+        _ = self;
+        return "browser-tester-next";
+    }
+
+    pub fn windowNavigatorProductSub(self: *const Session) []const u8 {
+        _ = self;
+        return "browser-tester-next";
+    }
+
+    pub fn windowNavigatorVendor(self: *const Session) []const u8 {
+        _ = self;
+        return "browser-tester-next";
+    }
+
+    pub fn windowNavigatorVendorSub(self: *const Session) []const u8 {
+        _ = self;
+        return "";
+    }
+
+    pub fn windowNavigatorPlatform(self: *const Session) []const u8 {
+        _ = self;
+        return "unknown";
+    }
+
+    pub fn windowNavigatorLanguage(self: *const Session) []const u8 {
+        _ = self;
+        return "en-US";
+    }
+
+    pub fn windowNavigatorJavaEnabled(self: *const Session) bool {
+        _ = self;
+        return false;
+    }
+
+    pub fn windowNavigatorCookieEnabled(self: *const Session) bool {
+        _ = self;
+        return true;
+    }
+
+    pub fn windowNavigatorOnLine(self: *const Session) bool {
+        _ = self;
+        return true;
+    }
+
+    pub fn windowNavigatorWebdriver(self: *const Session) bool {
+        _ = self;
+        return false;
+    }
+
+    pub fn windowNavigatorHardwareConcurrency(self: *const Session) i64 {
+        _ = self;
+        return 8;
+    }
+
+    pub fn windowNavigatorMaxTouchPoints(self: *const Session) i64 {
+        _ = self;
+        return 0;
+    }
+
+    pub fn windowDevicePixelRatio(self: *const Session) f64 {
+        _ = self;
+        return 1.0;
+    }
+
+    pub fn windowInnerWidth(self: *const Session) i64 {
+        _ = self;
+        return 1024;
+    }
+
+    pub fn windowInnerHeight(self: *const Session) i64 {
+        _ = self;
+        return 768;
+    }
+
+    pub fn windowOuterWidth(self: *const Session) i64 {
+        _ = self;
+        return 1280;
+    }
+
+    pub fn windowOuterHeight(self: *const Session) i64 {
+        _ = self;
+        return 800;
+    }
+
+    pub fn windowScreenWidth(self: *const Session) i64 {
+        _ = self;
+        return 1280;
+    }
+
+    pub fn windowScreenHeight(self: *const Session) i64 {
+        _ = self;
+        return 800;
+    }
+
+    pub fn windowScreenAvailWidth(self: *const Session) i64 {
+        _ = self;
+        return 1280;
+    }
+
+    pub fn windowScreenAvailHeight(self: *const Session) i64 {
+        _ = self;
+        return 800;
+    }
+
+    pub fn windowScreenAvailLeft(self: *const Session) i64 {
+        _ = self;
+        return 0;
+    }
+
+    pub fn windowScreenAvailTop(self: *const Session) i64 {
+        _ = self;
+        return 0;
+    }
+
+    pub fn windowScreenColorDepth(self: *const Session) i64 {
+        _ = self;
+        return 24;
+    }
+
+    pub fn windowScreenPixelDepth(self: *const Session) i64 {
+        _ = self;
+        return 24;
+    }
+
+    pub fn windowScreenX(self: *const Session) i64 {
+        _ = self;
+        return 0;
+    }
+
+    pub fn windowScreenY(self: *const Session) i64 {
+        _ = self;
+        return 0;
+    }
+
+    pub fn windowScreenLeft(self: *const Session) i64 {
+        _ = self;
+        return 0;
+    }
+
+    pub fn windowScreenTop(self: *const Session) i64 {
+        _ = self;
+        return 0;
     }
 
     fn resetScrollPosition(self: *Session) void {
@@ -641,6 +864,7 @@ pub const Session = struct {
         try self.mock_registry.fileInput().setFiles(selector, files);
         _ = try self.dispatchDomEvent(node_id, "input", true, false);
         _ = try self.dispatchDomEvent(node_id, "change", true, false);
+        try self.flush();
         return;
     }
 
@@ -662,10 +886,58 @@ pub const Session = struct {
         return;
     }
 
+    pub fn queueMicrotask(self: *Session, handler: script.ScriptFunction) errors.Result(void) {
+        try appendQueuedMicrotask(self.arena.allocator(), &self.queued_microtasks, handler);
+        return;
+    }
+
+    pub fn scheduleTimer(
+        self: *Session,
+        handler: script.ScriptFunction,
+        delay_ms: i64,
+    ) errors.Result(u64) {
+        const at_ms = std.math.add(i64, self.clock_ms, delay_ms) catch return error.TimerError;
+        return try appendScheduledTimer(
+            self.arena.allocator(),
+            &self.next_timer_id,
+            &self.timers,
+            at_ms,
+            null,
+            handler,
+        );
+    }
+
+    pub fn scheduleIntervalTimer(
+        self: *Session,
+        handler: script.ScriptFunction,
+        delay_ms: i64,
+    ) errors.Result(u64) {
+        const at_ms = std.math.add(i64, self.clock_ms, delay_ms) catch return error.TimerError;
+        return try appendScheduledTimer(
+            self.arena.allocator(),
+            &self.next_timer_id,
+            &self.timers,
+            at_ms,
+            delay_ms,
+            handler,
+        );
+    }
+
+    pub fn clearTimer(self: *Session, timer_id: u64) void {
+        if (self.active_timer_id) |active_timer_id| {
+            if (active_timer_id == timer_id) {
+                self.active_timer_cancelled = true;
+                return;
+            }
+        }
+        clearScheduledTimer(&self.timers, timer_id);
+    }
+
     pub fn dispatchNode(self: *Session, node_id: dom.NodeId, event_type: []const u8) errors.Result(void) {
         const trimmed = std.mem.trim(u8, event_type, " \t\r\n");
         if (trimmed.len == 0) return error.EventError;
         _ = try self.dispatchDomEvent(node_id, trimmed, true, true);
+        try self.flush();
         return;
     }
 
@@ -675,6 +947,7 @@ pub const Session = struct {
         if (!outcome.default_prevented) {
             try self.runClickDefaultActions(node_id);
         }
+        try self.flush();
         return;
     }
 
@@ -682,6 +955,7 @@ pub const Session = struct {
         try self.ensureElementNode(node_id);
         try self.dom_store.setFormControlValue(node_id, text);
         _ = try self.dispatchDomEvent(node_id, "input", true, false);
+        try self.flush();
         return;
     }
 
@@ -690,6 +964,7 @@ pub const Session = struct {
         try self.dom_store.setFormControlChecked(node_id, checked);
         _ = try self.dispatchDomEvent(node_id, "input", true, false);
         _ = try self.dispatchDomEvent(node_id, "change", true, false);
+        try self.flush();
         return;
     }
 
@@ -698,6 +973,7 @@ pub const Session = struct {
         try self.dom_store.setSelectValue(node_id, value);
         _ = try self.dispatchDomEvent(node_id, "input", true, false);
         _ = try self.dispatchDomEvent(node_id, "change", true, false);
+        try self.flush();
         return;
     }
 
@@ -716,6 +992,7 @@ pub const Session = struct {
 
         self.dom_store.setFocusedNode(node_id);
         _ = try self.dispatchDomEvent(node_id, "focus", false, false);
+        try self.flush();
         return;
     }
 
@@ -731,6 +1008,7 @@ pub const Session = struct {
 
         self.dom_store.setFocusedNode(null);
         _ = try self.dispatchDomEvent(node_id, "blur", false, false);
+        try self.flush();
         return;
     }
 
@@ -739,11 +1017,13 @@ pub const Session = struct {
         const node = self.dom_store.nodeAt(node_id) orelse return error.DomError;
         if (isFormNode(node)) {
             _ = try self.dispatchDomEvent(node_id, "submit", true, true);
+            try self.flush();
             return;
         }
 
         const form_id = self.findAssociatedForm(node_id) orelse return error.DomError;
         _ = try self.dispatchDomEvent(form_id, "submit", true, true);
+        try self.flush();
         return;
     }
 
@@ -949,6 +1229,9 @@ pub const Session = struct {
 const BootstrapHost = struct {
     dom_store: *dom.DomStore,
     listeners: *std.ArrayListUnmanaged(script.ScriptListenerRecord),
+    queued_microtasks: *std.ArrayListUnmanaged(script.ScriptFunction),
+    timers: *std.ArrayListUnmanaged(ScheduledTimer),
+    next_timer_id: *u64,
     location: *mocks.LocationMocks,
     match_media: *mocks.MatchMediaMocks,
     open_mocks: *mocks.OpenMocks,
@@ -1011,6 +1294,21 @@ const BootstrapHost = struct {
         return "";
     }
 
+    pub fn documentVisibilityState(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "visible";
+    }
+
+    pub fn documentHidden(self: *const BootstrapHost) bool {
+        _ = self;
+        return false;
+    }
+
+    pub fn documentHasFocus(self: *const BootstrapHost) bool {
+        _ = self;
+        return true;
+    }
+
     pub fn windowName(self: *const BootstrapHost) []const u8 {
         return self.window_name.*;
     }
@@ -1034,6 +1332,171 @@ const BootstrapHost = struct {
 
     pub fn windowPageYOffset(self: *const BootstrapHost) i64 {
         return self.scroll_y.*;
+    }
+
+    pub fn windowNavigatorUserAgent(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "browser-tester-next";
+    }
+
+    pub fn windowNavigatorAppCodeName(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "browser-tester-next";
+    }
+
+    pub fn windowNavigatorAppName(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "browser-tester-next";
+    }
+
+    pub fn windowNavigatorAppVersion(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "browser-tester-next";
+    }
+
+    pub fn windowNavigatorProduct(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "browser-tester-next";
+    }
+
+    pub fn windowNavigatorProductSub(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "browser-tester-next";
+    }
+
+    pub fn windowNavigatorVendor(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "browser-tester-next";
+    }
+
+    pub fn windowNavigatorVendorSub(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "";
+    }
+
+    pub fn windowNavigatorPlatform(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "unknown";
+    }
+
+    pub fn windowNavigatorLanguage(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "en-US";
+    }
+
+    pub fn windowNavigatorJavaEnabled(self: *const BootstrapHost) bool {
+        _ = self;
+        return false;
+    }
+
+    pub fn windowNavigatorCookieEnabled(self: *const BootstrapHost) bool {
+        _ = self;
+        return true;
+    }
+
+    pub fn windowNavigatorOnLine(self: *const BootstrapHost) bool {
+        _ = self;
+        return true;
+    }
+
+    pub fn windowNavigatorWebdriver(self: *const BootstrapHost) bool {
+        _ = self;
+        return false;
+    }
+
+    pub fn windowNavigatorHardwareConcurrency(self: *const BootstrapHost) i64 {
+        _ = self;
+        return 8;
+    }
+
+    pub fn windowNavigatorMaxTouchPoints(self: *const BootstrapHost) i64 {
+        _ = self;
+        return 0;
+    }
+
+    pub fn windowDevicePixelRatio(self: *const BootstrapHost) f64 {
+        _ = self;
+        return 1.0;
+    }
+
+    pub fn windowInnerWidth(self: *const BootstrapHost) i64 {
+        _ = self;
+        return 1024;
+    }
+
+    pub fn windowInnerHeight(self: *const BootstrapHost) i64 {
+        _ = self;
+        return 768;
+    }
+
+    pub fn windowOuterWidth(self: *const BootstrapHost) i64 {
+        _ = self;
+        return 1280;
+    }
+
+    pub fn windowOuterHeight(self: *const BootstrapHost) i64 {
+        _ = self;
+        return 800;
+    }
+
+    pub fn windowScreenWidth(self: *const BootstrapHost) i64 {
+        _ = self;
+        return 1280;
+    }
+
+    pub fn windowScreenHeight(self: *const BootstrapHost) i64 {
+        _ = self;
+        return 800;
+    }
+
+    pub fn windowScreenAvailWidth(self: *const BootstrapHost) i64 {
+        _ = self;
+        return 1280;
+    }
+
+    pub fn windowScreenAvailHeight(self: *const BootstrapHost) i64 {
+        _ = self;
+        return 800;
+    }
+
+    pub fn windowScreenAvailLeft(self: *const BootstrapHost) i64 {
+        _ = self;
+        return 0;
+    }
+
+    pub fn windowScreenAvailTop(self: *const BootstrapHost) i64 {
+        _ = self;
+        return 0;
+    }
+
+    pub fn windowScreenColorDepth(self: *const BootstrapHost) i64 {
+        _ = self;
+        return 24;
+    }
+
+    pub fn windowScreenPixelDepth(self: *const BootstrapHost) i64 {
+        _ = self;
+        return 24;
+    }
+
+    pub fn windowScreenX(self: *const BootstrapHost) i64 {
+        _ = self;
+        return 0;
+    }
+
+    pub fn windowScreenY(self: *const BootstrapHost) i64 {
+        _ = self;
+        return 0;
+    }
+
+    pub fn windowScreenLeft(self: *const BootstrapHost) i64 {
+        _ = self;
+        return 0;
+    }
+
+    pub fn windowScreenTop(self: *const BootstrapHost) i64 {
+        _ = self;
+        return 0;
     }
 
     fn resetScrollPosition(self: *BootstrapHost) void {
@@ -1112,6 +1575,11 @@ const BootstrapHost = struct {
     pub fn documentReadyState(self: *const BootstrapHost) []const u8 {
         _ = self;
         return "loading";
+    }
+
+    pub fn nowMs(self: *const BootstrapHost) i64 {
+        _ = self;
+        return 0;
     }
 
     pub fn currentScript(self: *const BootstrapHost) ?dom.NodeId {
@@ -1259,6 +1727,45 @@ const BootstrapHost = struct {
         );
         return;
     }
+
+    pub fn queueMicrotask(self: *BootstrapHost, handler: script.ScriptFunction) errors.Result(void) {
+        try appendQueuedMicrotask(self.allocator, self.queued_microtasks, handler);
+        return;
+    }
+
+    pub fn scheduleTimer(
+        self: *BootstrapHost,
+        handler: script.ScriptFunction,
+        delay_ms: i64,
+    ) errors.Result(u64) {
+        return try appendScheduledTimer(
+            self.allocator,
+            self.next_timer_id,
+            self.timers,
+            delay_ms,
+            null,
+            handler,
+        );
+    }
+
+    pub fn scheduleIntervalTimer(
+        self: *BootstrapHost,
+        handler: script.ScriptFunction,
+        delay_ms: i64,
+    ) errors.Result(u64) {
+        return try appendScheduledTimer(
+            self.allocator,
+            self.next_timer_id,
+            self.timers,
+            delay_ms,
+            delay_ms,
+            handler,
+        );
+    }
+
+    pub fn clearTimer(self: *BootstrapHost, timer_id: u64) void {
+        clearScheduledTimer(self.timers, timer_id);
+    }
 };
 
 const DispatchOutcome = struct {
@@ -1281,6 +1788,152 @@ fn appendScriptListener(
         .capture = capture,
         .handler = handler_copy,
     });
+    return;
+}
+
+fn appendQueuedMicrotask(
+    allocator: std.mem.Allocator,
+    queued_microtasks: *std.ArrayListUnmanaged(script.ScriptFunction),
+    handler: script.ScriptFunction,
+) errors.Result(void) {
+    const handler_copy = try duplicateScriptFunction(allocator, handler);
+    try queued_microtasks.append(allocator, handler_copy);
+    return;
+}
+
+fn appendScheduledTimer(
+    allocator: std.mem.Allocator,
+    next_timer_id: *u64,
+    timers: *std.ArrayListUnmanaged(ScheduledTimer),
+    at_ms: i64,
+    interval_ms: ?i64,
+    handler: script.ScriptFunction,
+) errors.Result(u64) {
+    const handler_copy = try duplicateScriptFunction(allocator, handler);
+    const timer_id = next_timer_id.*;
+    next_timer_id.* = std.math.add(u64, next_timer_id.*, 1) catch return error.TimerError;
+    try timers.append(allocator, .{
+        .id = timer_id,
+        .at_ms = at_ms,
+        .interval_ms = interval_ms,
+        .handler = handler_copy,
+    });
+    bubbleScheduledTimerUp(timers.items);
+    return timer_id;
+}
+
+fn reinsertScheduledTimer(
+    allocator: std.mem.Allocator,
+    timers: *std.ArrayListUnmanaged(ScheduledTimer),
+    timer: ScheduledTimer,
+) errors.Result(void) {
+    try timers.append(allocator, timer);
+    bubbleScheduledTimerUp(timers.items);
+    return;
+}
+
+fn clearScheduledTimer(
+    timers: *std.ArrayListUnmanaged(ScheduledTimer),
+    timer_id: u64,
+) void {
+    var index: usize = 0;
+    while (index < timers.items.len) : (index += 1) {
+        if (timers.items[index].id == timer_id) {
+            _ = timers.orderedRemove(index);
+            return;
+        }
+    }
+}
+
+fn bubbleScheduledTimerUp(timers: []ScheduledTimer) void {
+    if (timers.len == 0) return;
+    var index = timers.len - 1;
+    while (index > 0 and scheduledTimerPrecedes(timers[index], timers[index - 1])) : (index -= 1) {
+        std.mem.swap(ScheduledTimer, &timers[index], &timers[index - 1]);
+    }
+}
+
+fn scheduledTimerPrecedes(lhs: ScheduledTimer, rhs: ScheduledTimer) bool {
+    return lhs.at_ms < rhs.at_ms or (lhs.at_ms == rhs.at_ms and lhs.id < rhs.id);
+}
+
+fn drainQueuedMicrotasks(
+    allocator: std.mem.Allocator,
+    runtime: *script.ScriptRuntime,
+    host: anytype,
+    queued_microtasks: *std.ArrayListUnmanaged(script.ScriptFunction),
+    step_count: *usize,
+) errors.Result(void) {
+    while (queued_microtasks.items.len > 0) {
+        step_count.* += 1;
+        if (step_count.* > scheduler_step_limit) return error.TimerError;
+        const handler = queued_microtasks.orderedRemove(0);
+        var bindings = try script.functionBindings(allocator, handler, &.{});
+        defer bindings.deinit(allocator);
+
+        const source_name = try std.fmt.allocPrint(allocator, "microtask:{d}", .{queued_microtasks.items.len});
+        defer allocator.free(source_name);
+
+        try runtime.evalScriptSourceWithBindings(
+            allocator,
+            host,
+            handler.body_source,
+            source_name,
+            bindings.items,
+        );
+    }
+    return;
+}
+
+fn runDueTimers(
+    self: *Session,
+    allocator: std.mem.Allocator,
+    step_count: *usize,
+) errors.Result(void) {
+    while (self.timers.items.len > 0) {
+        var timer = self.timers.items[0];
+        if (timer.at_ms > self.clock_ms) break;
+
+        _ = self.timers.orderedRemove(0);
+        step_count.* += 1;
+        if (step_count.* > scheduler_step_limit) return error.TimerError;
+
+        self.active_timer_id = timer.id;
+        self.active_timer_cancelled = false;
+        defer {
+            self.active_timer_id = null;
+            self.active_timer_cancelled = false;
+        }
+
+        var bindings = try script.functionBindings(allocator, timer.handler, &.{});
+        defer bindings.deinit(allocator);
+
+        const source_name = try std.fmt.allocPrint(allocator, "timer:{d}", .{timer.id});
+        defer allocator.free(source_name);
+
+        try self.script_runtime.evalScriptSourceWithBindings(
+            allocator,
+            self,
+            timer.handler.body_source,
+            source_name,
+            bindings.items,
+        );
+
+        try drainQueuedMicrotasks(
+            allocator,
+            &self.script_runtime,
+            self,
+            &self.queued_microtasks,
+            step_count,
+        );
+
+        if (timer.interval_ms) |interval_ms| {
+            if (!self.active_timer_cancelled) {
+                timer.at_ms = std.math.add(i64, timer.at_ms, interval_ms) catch return error.TimerError;
+                try reinsertScheduledTimer(allocator, &self.timers, timer);
+            }
+        }
+    }
     return;
 }
 

@@ -5,11 +5,11 @@ use std::fmt;
 pub use bt_dom::{DomStore, NodeId};
 use bt_runtime::SessionError;
 pub use bt_runtime::{
-    ClipboardMocks, CloseCall, CloseMocks, DebugState, DialogMocks, DownloadCapture,
-    DownloadMocks, FetchCall, FetchErrorRule, FetchMocks, FetchResponse, FetchResponseRule,
-    FileInputMocks, FileInputSelection, LocationMocks, MatchMediaCall, MatchMediaMocks,
-    MockRegistry, OpenCall, OpenMocks, PrintCall, PrintMocks, ScrollCall, ScrollMethod,
-    ScrollMocks, ScheduledTimer, Scheduler, Session, SessionConfig, StorageSeeds,
+    ClipboardMocks, CloseCall, CloseMocks, DebugState, DialogMocks, DownloadCapture, DownloadMocks,
+    FetchCall, FetchErrorRule, FetchMocks, FetchResponse, FetchResponseRule, FileInputMocks,
+    FileInputSelection, LocationMocks, MatchMediaCall, MatchMediaMocks, MockRegistry, OpenCall,
+    OpenMocks, PrintCall, PrintMocks, ScheduledTimer, Scheduler, ScrollCall, ScrollMethod,
+    ScrollMocks, Session, SessionConfig, StorageSeeds,
 };
 pub use bt_script::{HostBindings, ScriptError, ScriptRuntime};
 
@@ -356,7 +356,9 @@ impl Harness {
     }
 
     pub fn open(&mut self, url: &str) -> Result<()> {
-        self.session.open(Some(url), None, None).map_err(map_session_error)
+        self.session
+            .open(Some(url), None, None)
+            .map_err(map_session_error)
     }
 
     pub fn confirm(&mut self, message: &str) -> Result<bool> {

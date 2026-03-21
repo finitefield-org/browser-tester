@@ -411,12 +411,7 @@ impl OpenMocks {
         Ok(())
     }
 
-    pub fn record_call(
-        &mut self,
-        url: Option<&str>,
-        target: Option<&str>,
-        features: Option<&str>,
-    ) {
+    pub fn record_call(&mut self, url: Option<&str>, target: Option<&str>, features: Option<&str>) {
         self.calls.push(OpenCall {
             url: url.map(str::to_string),
             target: target.map(str::to_string),
@@ -1173,10 +1168,7 @@ impl Session {
     }
 
     pub fn print(&mut self) -> Result<(), SessionError> {
-        self.mocks
-            .print_mut()
-            .invoke()
-            .map_err(SessionError::Mock)
+        self.mocks.print_mut().invoke().map_err(SessionError::Mock)
     }
 
     pub fn scroll_to(&mut self, x: i64, y: i64) -> Result<(), SessionError> {
@@ -1200,10 +1192,7 @@ impl Session {
     }
 
     pub fn close(&mut self) -> Result<(), SessionError> {
-        self.mocks
-            .close_mut()
-            .invoke()
-            .map_err(SessionError::Mock)
+        self.mocks.close_mut().invoke().map_err(SessionError::Mock)
     }
 
     pub fn open(
@@ -2309,6 +2298,22 @@ impl Session {
         "browser-tester-next"
     }
 
+    pub fn window_navigator_app_code_name(&self) -> &'static str {
+        "browser-tester-next"
+    }
+
+    pub fn window_navigator_app_name(&self) -> &'static str {
+        "browser-tester-next"
+    }
+
+    pub fn window_navigator_app_version(&self) -> &'static str {
+        "browser-tester-next"
+    }
+
+    pub fn window_navigator_product(&self) -> &'static str {
+        "browser-tester-next"
+    }
+
     pub fn window_navigator_platform(&self) -> &'static str {
         "unknown"
     }
@@ -2323,6 +2328,22 @@ impl Session {
 
     pub fn window_navigator_on_line(&self) -> bool {
         true
+    }
+
+    pub fn window_navigator_webdriver(&self) -> bool {
+        false
+    }
+
+    pub fn window_navigator_vendor(&self) -> &'static str {
+        "browser-tester-next"
+    }
+
+    pub fn window_navigator_hardware_concurrency(&self) -> i64 {
+        8
+    }
+
+    pub fn window_navigator_max_touch_points(&self) -> i64 {
+        0
     }
 
     pub fn window_scroll_x(&self) -> i64 {
@@ -2343,6 +2364,70 @@ impl Session {
 
     pub fn window_device_pixel_ratio(&self) -> f64 {
         1.0
+    }
+
+    pub fn window_inner_width(&self) -> i64 {
+        1024
+    }
+
+    pub fn window_inner_height(&self) -> i64 {
+        768
+    }
+
+    pub fn window_outer_width(&self) -> i64 {
+        1024
+    }
+
+    pub fn window_outer_height(&self) -> i64 {
+        768
+    }
+
+    pub fn window_screen_x(&self) -> i64 {
+        0
+    }
+
+    pub fn window_screen_y(&self) -> i64 {
+        0
+    }
+
+    pub fn window_screen_left(&self) -> i64 {
+        self.window_screen_x()
+    }
+
+    pub fn window_screen_top(&self) -> i64 {
+        self.window_screen_y()
+    }
+
+    pub fn window_screen_width(&self) -> i64 {
+        1024
+    }
+
+    pub fn window_screen_height(&self) -> i64 {
+        768
+    }
+
+    pub fn window_screen_avail_width(&self) -> i64 {
+        1024
+    }
+
+    pub fn window_screen_avail_height(&self) -> i64 {
+        768
+    }
+
+    pub fn window_screen_avail_left(&self) -> i64 {
+        0
+    }
+
+    pub fn window_screen_avail_top(&self) -> i64 {
+        0
+    }
+
+    pub fn window_screen_color_depth(&self) -> i64 {
+        24
+    }
+
+    pub fn window_screen_pixel_depth(&self) -> i64 {
+        24
     }
 
     fn storage_map(&self, target: StorageTarget) -> &BTreeMap<String, String> {
@@ -3073,6 +3158,22 @@ impl HostBindings for Session {
         Ok(Session::window_navigator_user_agent(self).to_string())
     }
 
+    fn window_navigator_app_code_name(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_app_code_name(self).to_string())
+    }
+
+    fn window_navigator_app_name(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_app_name(self).to_string())
+    }
+
+    fn window_navigator_app_version(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_app_version(self).to_string())
+    }
+
+    fn window_navigator_product(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_product(self).to_string())
+    }
+
     fn window_navigator_platform(&mut self) -> bt_script::Result<String> {
         Ok(Session::window_navigator_platform(self).to_string())
     }
@@ -3087,6 +3188,22 @@ impl HostBindings for Session {
 
     fn window_navigator_on_line(&mut self) -> bt_script::Result<bool> {
         Ok(Session::window_navigator_on_line(self))
+    }
+
+    fn window_navigator_webdriver(&mut self) -> bt_script::Result<bool> {
+        Ok(Session::window_navigator_webdriver(self))
+    }
+
+    fn window_navigator_vendor(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_vendor(self).to_string())
+    }
+
+    fn window_navigator_hardware_concurrency(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_navigator_hardware_concurrency(self))
+    }
+
+    fn window_navigator_max_touch_points(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_navigator_max_touch_points(self))
     }
 
     fn window_scroll_x(&mut self) -> bt_script::Result<i64> {
@@ -3107,6 +3224,70 @@ impl HostBindings for Session {
 
     fn window_device_pixel_ratio(&mut self) -> bt_script::Result<f64> {
         Ok(Session::window_device_pixel_ratio(self))
+    }
+
+    fn window_inner_width(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_inner_width(self))
+    }
+
+    fn window_inner_height(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_inner_height(self))
+    }
+
+    fn window_outer_width(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_outer_width(self))
+    }
+
+    fn window_outer_height(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_outer_height(self))
+    }
+
+    fn window_screen_x(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_x(self))
+    }
+
+    fn window_screen_y(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_y(self))
+    }
+
+    fn window_screen_left(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_left(self))
+    }
+
+    fn window_screen_top(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_top(self))
+    }
+
+    fn window_screen_width(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_width(self))
+    }
+
+    fn window_screen_height(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_height(self))
+    }
+
+    fn window_screen_avail_width(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_avail_width(self))
+    }
+
+    fn window_screen_avail_height(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_avail_height(self))
+    }
+
+    fn window_screen_avail_left(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_avail_left(self))
+    }
+
+    fn window_screen_avail_top(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_avail_top(self))
+    }
+
+    fn window_screen_color_depth(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_color_depth(self))
+    }
+
+    fn window_screen_pixel_depth(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_pixel_depth(self))
     }
 
     fn window_scroll_to(&mut self, x: i64, y: i64) -> bt_script::Result<()> {

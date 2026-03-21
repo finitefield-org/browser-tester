@@ -1319,6 +1319,36 @@ test "regression: phase 31 window scroll aliases resolve on the copied html snap
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: phase 32 window.navigator aliases resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>const navigator = window.navigator; document.getElementById('out').textContent = String(navigator) + ':' + navigator.userAgent + ':' + navigator.appCodeName + ':' + navigator.appName + ':' + navigator.appVersion + ':' + navigator.product + ':' + navigator.productSub + ':' + navigator.vendor + ':[' + navigator.vendorSub + ']:' + navigator.platform + ':' + navigator.language + ':' + String(navigator.cookieEnabled) + ':' + String(navigator.onLine) + ':' + String(navigator.webdriver) + ':' + String(navigator.hardwareConcurrency) + ':' + String(navigator.maxTouchPoints) + ':' + String(navigator.javaEnabled());</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtmlWithUrl(allocator, "https://example.test:8443/start?x#old", html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "[object Navigator]:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:[]:unknown:en-US:true:true:false:8:0:false");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 38 window identity aliases resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>const view = document.defaultView; document.getElementById('out').textContent = String(view) + ':' + String(window.window) + ':' + String(window.self) + ':' + String(window.top) + ':' + String(window.parent) + ':' + String(window.opener) + ':' + String(window.closed);</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtmlWithUrl(allocator, "https://example.test:8443/start?x#old", html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "[object Window]:[object Window]:[object Window]:[object Window]:[object Window]:null:false");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
 test "regression: phase 27 document.baseURI and element.baseURI aliases resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<main id='root'><span id='child'></span></main><div id='out'></div><script>const root = document.getElementById('root'); const child = document.getElementById('child'); document.getElementById('out').textContent = document.baseURI + ':' + root.baseURI + ':' + child.baseURI;</script>";
@@ -1424,6 +1454,53 @@ test "regression: phase 34 window.name resolves on the copied html snapshot" {
     html_bytes[1] = 'Z';
 
     try subject.assertValue("#out", ":updated");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 36 viewport and visibility aliases resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>document.getElementById('out').textContent = String(window.devicePixelRatio) + ':' + String(window.innerWidth) + ':' + String(window.innerHeight) + ':' + String(window.outerWidth) + ':' + String(window.outerHeight) + ':' + document.visibilityState + ':' + String(document.hidden) + ':' + String(document.hasFocus());</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "1:1024:768:1280:800:visible:false:true");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 37 screen aliases resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>document.getElementById('out').textContent = String(window.screenX) + ':' + String(window.screenY) + ':' + String(window.screenLeft) + ':' + String(window.screenTop);</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "0:0:0:0");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 38 performance.now resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>const performance = window.performance; document.getElementById('out').textContent = String(performance) + ':' + String(window.performance) + ':' + String(performance.timeOrigin) + ':' + String(performance.now()); window.setTimeout(() => { document.getElementById('out').textContent = document.getElementById('out').textContent + ':' + String(performance.now()) + ':' + String(window.performance.now()); }, 5);</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "[object Performance]:[object Performance]:0:0");
+    try subject.advanceTime(5);
+    try subject.assertValue("#out", "[object Performance]:[object Performance]:0:0:5:5");
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
@@ -1580,5 +1657,60 @@ test "regression: phase 32 nth-child of selector lists resolve on the copied htm
     html_bytes[1] = 'Z';
 
     try subject.assertValue("#out", "a:d");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 33 queueMicrotask drains after copied html bootstrap and actions" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><button id='button'>Go</button><div id='out'></div><script>document.getElementById('out').textContent = 'boot'; window.queueMicrotask(() => { document.getElementById('out').textContent = 'booted'; }); document.getElementById('button').addEventListener('click', () => { document.getElementById('out').textContent = 'sync'; window.queueMicrotask(() => { document.getElementById('out').textContent = 'async'; }); });</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "booted");
+    try subject.click("#button");
+    try subject.assertValue("#out", "async");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 34 timer queue drains on advanceTime for copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><div id='out'></div><script>document.getElementById('out').textContent = 'boot'; window.setTimeout(() => { document.getElementById('out').textContent = 'timer'; queueMicrotask(() => { document.getElementById('out').textContent = 'micro'; }); }, 5);</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "boot");
+    try subject.advanceTime(4);
+    try subject.assertValue("#out", "boot");
+    try subject.advanceTime(1);
+    try subject.assertValue("#out", "micro");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 35 interval timer queue repeats on advanceTime for copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><div id='out'></div><script>document.getElementById('out').textContent = 'boot'; const repeating = setInterval(() => { document.getElementById('out').textContent = document.getElementById('out').textContent + 'x'; }, 5); const cancelledByGlobal = setInterval(() => { document.getElementById('out').textContent = 'global'; }, 7); clearInterval(cancelledByGlobal); const cancelledByWindow = window.setInterval(() => { document.getElementById('out').textContent = 'window'; }, 9); window.clearInterval(cancelledByWindow);</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "boot");
+    try subject.advanceTime(5);
+    try subject.assertValue("#out", "bootx");
+    try subject.advanceTime(5);
+    try subject.assertValue("#out", "bootxx");
     try std.testing.expectEqualStrings(original, subject.html().?);
 }

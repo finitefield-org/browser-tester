@@ -344,6 +344,7 @@ pub enum ScriptValue {
     Storage(StorageTarget),
     MediaQueryList(MediaQueryListState),
     Navigator,
+    Screen,
     StyleSheet(StyleSheetTarget),
     Node(NodeHandle),
     NodeList(NodeListTarget),
@@ -507,6 +508,22 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("window.navigator.userAgent"))
     }
 
+    fn window_navigator_app_code_name(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("window.navigator.appCodeName"))
+    }
+
+    fn window_navigator_app_name(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("window.navigator.appName"))
+    }
+
+    fn window_navigator_app_version(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("window.navigator.appVersion"))
+    }
+
+    fn window_navigator_product(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("window.navigator.product"))
+    }
+
     fn window_navigator_platform(&mut self) -> Result<String> {
         Err(ScriptError::phase_not_ready("window.navigator.platform"))
     }
@@ -516,11 +533,33 @@ pub trait HostBindings {
     }
 
     fn window_navigator_cookie_enabled(&mut self) -> Result<bool> {
-        Err(ScriptError::phase_not_ready("window.navigator.cookieEnabled"))
+        Err(ScriptError::phase_not_ready(
+            "window.navigator.cookieEnabled",
+        ))
     }
 
     fn window_navigator_on_line(&mut self) -> Result<bool> {
         Err(ScriptError::phase_not_ready("window.navigator.onLine"))
+    }
+
+    fn window_navigator_webdriver(&mut self) -> Result<bool> {
+        Err(ScriptError::phase_not_ready("window.navigator.webdriver"))
+    }
+
+    fn window_navigator_vendor(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("window.navigator.vendor"))
+    }
+
+    fn window_navigator_hardware_concurrency(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready(
+            "window.navigator.hardwareConcurrency",
+        ))
+    }
+
+    fn window_navigator_max_touch_points(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready(
+            "window.navigator.maxTouchPoints",
+        ))
     }
 
     fn window_scroll_x(&mut self) -> Result<i64> {
@@ -541,6 +580,70 @@ pub trait HostBindings {
 
     fn window_device_pixel_ratio(&mut self) -> Result<f64> {
         Err(ScriptError::phase_not_ready("window.devicePixelRatio"))
+    }
+
+    fn window_inner_width(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready("window.innerWidth"))
+    }
+
+    fn window_inner_height(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready("window.innerHeight"))
+    }
+
+    fn window_outer_width(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready("window.outerWidth"))
+    }
+
+    fn window_outer_height(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready("window.outerHeight"))
+    }
+
+    fn window_screen_x(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready("window.screenX"))
+    }
+
+    fn window_screen_y(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready("window.screenY"))
+    }
+
+    fn window_screen_left(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready("window.screenLeft"))
+    }
+
+    fn window_screen_top(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready("window.screenTop"))
+    }
+
+    fn window_screen_width(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready("window.screen.width"))
+    }
+
+    fn window_screen_height(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready("window.screen.height"))
+    }
+
+    fn window_screen_avail_width(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready("window.screen.availWidth"))
+    }
+
+    fn window_screen_avail_height(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready("window.screen.availHeight"))
+    }
+
+    fn window_screen_avail_left(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready("window.screen.availLeft"))
+    }
+
+    fn window_screen_avail_top(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready("window.screen.availTop"))
+    }
+
+    fn window_screen_color_depth(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready("window.screen.colorDepth"))
+    }
+
+    fn window_screen_pixel_depth(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready("window.screen.pixelDepth"))
     }
 
     fn window_scroll_to(&mut self, _x: i64, _y: i64) -> Result<()> {

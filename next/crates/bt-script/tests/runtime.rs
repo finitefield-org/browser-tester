@@ -821,6 +821,22 @@ impl HostBindings for RecordingHost {
         Ok(self.navigator_user_agent.clone())
     }
 
+    fn window_navigator_app_code_name(&mut self) -> bt_script::Result<String> {
+        Ok("browser-tester-next".to_string())
+    }
+
+    fn window_navigator_app_name(&mut self) -> bt_script::Result<String> {
+        Ok("browser-tester-next".to_string())
+    }
+
+    fn window_navigator_app_version(&mut self) -> bt_script::Result<String> {
+        Ok("browser-tester-next".to_string())
+    }
+
+    fn window_navigator_product(&mut self) -> bt_script::Result<String> {
+        Ok("browser-tester-next".to_string())
+    }
+
     fn window_navigator_platform(&mut self) -> bt_script::Result<String> {
         Ok(self.navigator_platform.clone())
     }
@@ -837,8 +853,25 @@ impl HostBindings for RecordingHost {
         Ok(self.navigator_on_line)
     }
 
+    fn window_navigator_webdriver(&mut self) -> bt_script::Result<bool> {
+        Ok(false)
+    }
+
+    fn window_navigator_vendor(&mut self) -> bt_script::Result<String> {
+        Ok("browser-tester-next".to_string())
+    }
+
+    fn window_navigator_hardware_concurrency(&mut self) -> bt_script::Result<i64> {
+        Ok(8)
+    }
+
+    fn window_navigator_max_touch_points(&mut self) -> bt_script::Result<i64> {
+        Ok(0)
+    }
+
     fn window_scroll_to(&mut self, x: i64, y: i64) -> bt_script::Result<()> {
-        self.window_scroll_calls.push(("scrollTo".to_string(), x, y));
+        self.window_scroll_calls
+            .push(("scrollTo".to_string(), x, y));
         if let Some(message) = &self.window_scroll_error {
             return Err(bt_script::ScriptError::new(message.clone()));
         }
@@ -848,7 +881,8 @@ impl HostBindings for RecordingHost {
     }
 
     fn window_scroll_by(&mut self, x: i64, y: i64) -> bt_script::Result<()> {
-        self.window_scroll_calls.push(("scrollBy".to_string(), x, y));
+        self.window_scroll_calls
+            .push(("scrollBy".to_string(), x, y));
         if let Some(message) = &self.window_scroll_error {
             return Err(bt_script::ScriptError::new(message.clone()));
         }
@@ -875,6 +909,70 @@ impl HostBindings for RecordingHost {
 
     fn window_device_pixel_ratio(&mut self) -> bt_script::Result<f64> {
         Ok(self.window_device_pixel_ratio_result)
+    }
+
+    fn window_inner_width(&mut self) -> bt_script::Result<i64> {
+        Ok(1024)
+    }
+
+    fn window_inner_height(&mut self) -> bt_script::Result<i64> {
+        Ok(768)
+    }
+
+    fn window_outer_width(&mut self) -> bt_script::Result<i64> {
+        Ok(1024)
+    }
+
+    fn window_outer_height(&mut self) -> bt_script::Result<i64> {
+        Ok(768)
+    }
+
+    fn window_screen_x(&mut self) -> bt_script::Result<i64> {
+        Ok(0)
+    }
+
+    fn window_screen_y(&mut self) -> bt_script::Result<i64> {
+        Ok(0)
+    }
+
+    fn window_screen_left(&mut self) -> bt_script::Result<i64> {
+        Ok(0)
+    }
+
+    fn window_screen_top(&mut self) -> bt_script::Result<i64> {
+        Ok(0)
+    }
+
+    fn window_screen_width(&mut self) -> bt_script::Result<i64> {
+        Ok(1024)
+    }
+
+    fn window_screen_height(&mut self) -> bt_script::Result<i64> {
+        Ok(768)
+    }
+
+    fn window_screen_avail_width(&mut self) -> bt_script::Result<i64> {
+        Ok(1024)
+    }
+
+    fn window_screen_avail_height(&mut self) -> bt_script::Result<i64> {
+        Ok(768)
+    }
+
+    fn window_screen_avail_left(&mut self) -> bt_script::Result<i64> {
+        Ok(0)
+    }
+
+    fn window_screen_avail_top(&mut self) -> bt_script::Result<i64> {
+        Ok(0)
+    }
+
+    fn window_screen_color_depth(&mut self) -> bt_script::Result<i64> {
+        Ok(24)
+    }
+
+    fn window_screen_pixel_depth(&mut self) -> bt_script::Result<i64> {
+        Ok(24)
     }
 
     fn match_media(&mut self, query: &str) -> bt_script::Result<MediaQueryListState> {
@@ -2104,19 +2202,159 @@ fn runtime_rejects_window_device_pixel_ratio_assignment() {
 }
 
 #[test]
+fn runtime_resolves_window_inner_width_and_inner_height_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = String(window.innerWidth) + ':' + String(window.innerHeight);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.innerWidth and window.innerHeight should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("1024:768")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_inner_width_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.innerWidth = 2;", "inline-script", &mut host)
+        .expect_err("window.innerWidth should be read-only");
+
+    assert!(error.message().contains("unsupported assignment target"));
+    assert!(error.message().contains("innerWidth"));
+}
+
+#[test]
+fn runtime_resolves_window_outer_width_and_outer_height_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = String(window.outerWidth) + ':' + String(window.outerHeight);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.outerWidth and window.outerHeight should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("1024:768")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_outer_width_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.outerWidth = 2;", "inline-script", &mut host)
+        .expect_err("window.outerWidth should be read-only");
+
+    assert!(error.message().contains("unsupported assignment target"));
+    assert!(error.message().contains("outerWidth"));
+}
+
+#[test]
+fn runtime_resolves_window_screen_position_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = String(window.screenX) + ':' + String(window.screenY) + ':' + String(window.screenLeft) + ':' + String(window.screenTop);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.screenX / screenY / screenLeft / screenTop should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("0:0:0:0")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_screen_x_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.screenX = 2;", "inline-script", &mut host)
+        .expect_err("window.screenX should be read-only");
+
+    assert!(error.message().contains("unsupported assignment target"));
+    assert!(error.message().contains("screenX"));
+}
+
+#[test]
+fn runtime_resolves_window_screen_object_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = String(window.screen) + ':' + String(window.screen.width) + ':' + String(window.screen.height) + ':' + String(window.screen.availWidth) + ':' + String(window.screen.availHeight) + ':' + String(window.screen.availLeft) + ':' + String(window.screen.availTop) + ':' + String(window.screen.colorDepth) + ':' + String(window.screen.pixelDepth);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.screen should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("[object Screen]:1024:768:1024:768:0:0:24:24")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_screen_width_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.screen.width = 2;", "inline-script", &mut host)
+        .expect_err("window.screen.width should be read-only");
+
+    assert!(error.message().contains("screen"));
+    assert!(error.message().contains("width"));
+}
+
+#[test]
 fn runtime_rejects_document_has_focus_with_arguments() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
 
     let error = runtime
-        .eval_program(
-            "document.hasFocus(true);",
-            "inline-script",
-            &mut host,
-        )
+        .eval_program("document.hasFocus(true);", "inline-script", &mut host)
         .expect_err("document.hasFocus should reject arguments");
 
-    assert!(error.message().contains("document.hasFocus() expects no arguments"));
+    assert!(
+        error
+            .message()
+            .contains("document.hasFocus() expects no arguments")
+    );
 }
 
 #[test]
@@ -2400,7 +2638,91 @@ fn runtime_rejects_window_navigator_assignment() {
         )
         .expect_err("window.navigator should be read-only");
 
-    assert!(error.to_string().contains("cannot assign to `userAgent` on navigator value"));
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `userAgent` on navigator value")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_navigator_app_name_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.appName = 'x';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.navigator.appName should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `appName` on navigator value")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_navigator_app_code_name_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.appCodeName = 'x';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.navigator.appCodeName should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `appCodeName` on navigator value")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_navigator_app_version_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.appVersion = 'x';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.navigator.appVersion should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `appVersion` on navigator value")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_navigator_product_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.product = 'x';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.navigator.product should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `product` on navigator value")
+    );
 }
 
 #[test]
@@ -2416,7 +2738,47 @@ fn runtime_rejects_window_navigator_on_line_assignment() {
         )
         .expect_err("window.navigator.onLine should be read-only");
 
-    assert!(error.to_string().contains("cannot assign to `onLine` on navigator value"));
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `onLine` on navigator value")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_navigator_webdriver_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.webdriver = true;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.navigator.webdriver should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `webdriver` on navigator value")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_navigator_vendor_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.navigator.vendor = 'x';", "inline-script", &mut host)
+        .expect_err("window.navigator.vendor should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `vendor` on navigator value")
+    );
 }
 
 #[test]
@@ -2428,7 +2790,7 @@ fn runtime_resolves_window_navigator_access() {
 
     runtime
         .eval_program(
-            "document.getElementById('out').textContent = window.navigator.userAgent + ':' + window.navigator.platform + ':' + window.navigator.language + ':' + String(window.navigator.cookieEnabled) + ':' + String(window.navigator.onLine);",
+            "document.getElementById('out').textContent = window.navigator.userAgent + ':' + window.navigator.appCodeName + ':' + window.navigator.appName + ':' + window.navigator.appVersion + ':' + window.navigator.product + ':' + window.navigator.vendor + ':' + window.navigator.platform + ':' + window.navigator.language + ':' + String(window.navigator.cookieEnabled) + ':' + String(window.navigator.onLine) + ':' + String(window.navigator.webdriver) + ':' + String(window.navigator.hardwareConcurrency) + ':' + String(window.navigator.maxTouchPoints);",
             "inline-script",
             &mut host,
         )
@@ -2438,7 +2800,9 @@ fn runtime_resolves_window_navigator_access() {
         host.text_content
             .get(&ElementHandle::new(1))
             .map(String::as_str),
-        Some("browser-tester-next:unknown:en-US:true:true")
+        Some(
+            "browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:unknown:en-US:true:true:false:8:0"
+        )
     );
 }
 
@@ -2497,9 +2861,11 @@ fn runtime_rejects_window_scroll_wrong_arity() {
         .eval_program("window.scrollTo(1, 2, 3);", "inline-script", &mut host)
         .expect_err("window.scrollTo should reject too many arguments");
 
-    assert!(error
-        .to_string()
-        .contains("scrollTo() expects at most two arguments"));
+    assert!(
+        error
+            .to_string()
+            .contains("scrollTo() expects at most two arguments")
+    );
     assert!(host.window_scroll_calls.is_empty());
 }
 
@@ -2541,7 +2907,11 @@ fn runtime_propagates_window_open_host_failures() {
     host.seed_window_open_error("popup blocked");
 
     let error = runtime
-        .eval_program("window.open('https://example.test/popup');", "inline-script", &mut host)
+        .eval_program(
+            "window.open('https://example.test/popup');",
+            "inline-script",
+            &mut host,
+        )
         .expect_err("window.open should propagate host failures");
 
     assert!(error.to_string().contains("popup blocked"));
@@ -2557,7 +2927,11 @@ fn runtime_rejects_window_open_wrong_arity() {
         .eval_program("window.open(1, 2, 3, 4);", "inline-script", &mut host)
         .expect_err("window.open should reject too many arguments");
 
-    assert!(error.to_string().contains("open() expects at most three arguments"));
+    assert!(
+        error
+            .to_string()
+            .contains("open() expects at most three arguments")
+    );
     assert_eq!(host.window_open_calls.len(), 0);
 }
 

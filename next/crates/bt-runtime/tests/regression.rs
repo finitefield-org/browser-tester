@@ -36,9 +36,11 @@ fn reset_all_clears_every_mock_family() {
         .downloads_mut()
         .capture("report.csv", b"downloaded bytes".to_vec());
     registry.open_mut().fail("popup blocked");
-    registry
-        .open_mut()
-        .record_call(Some("https://example.test/popup"), Some("_blank"), Some("noopener"));
+    registry.open_mut().record_call(
+        Some("https://example.test/popup"),
+        Some("_blank"),
+        Some("noopener"),
+    );
     registry.close_mut().fail("window closed");
     registry.close_mut().record_call();
     registry.print_mut().fail("print blocked");
@@ -1044,6 +1046,89 @@ fn session_exposes_window_device_pixel_ratio_regression() {
 }
 
 #[test]
+fn session_exposes_window_inner_width_and_inner_height_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = String(window.innerWidth) + ':' + String(window.innerHeight);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("window.innerWidth and window.innerHeight should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "1024:768");
+    assert_eq!(session.window_inner_width(), 1024);
+    assert_eq!(session.window_inner_height(), 768);
+}
+
+#[test]
+fn session_exposes_window_outer_width_and_outer_height_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = String(window.outerWidth) + ':' + String(window.outerHeight);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("window.outerWidth and window.outerHeight should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "1024:768");
+    assert_eq!(session.window_outer_width(), 1024);
+    assert_eq!(session.window_outer_height(), 768);
+}
+
+#[test]
+fn session_exposes_window_screen_position_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = String(window.screenX) + ':' + String(window.screenY) + ':' + String(window.screenLeft) + ':' + String(window.screenTop);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("window.screenX / screenY / screenLeft / screenTop should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "0:0:0:0");
+    assert_eq!(session.window_screen_x(), 0);
+    assert_eq!(session.window_screen_y(), 0);
+    assert_eq!(session.window_screen_left(), 0);
+    assert_eq!(session.window_screen_top(), 0);
+}
+
+#[test]
+fn session_exposes_window_screen_object_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = String(window.screen) + ':' + String(window.screen.width) + ':' + String(window.screen.height) + ':' + String(window.screen.availWidth) + ':' + String(window.screen.availHeight) + ':' + String(window.screen.availLeft) + ':' + String(window.screen.availTop) + ':' + String(window.screen.colorDepth) + ':' + String(window.screen.pixelDepth);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("window.screen should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "[object Screen]:1024:768:1024:768:0:0:24:24"
+    );
+    assert_eq!(session.window_screen_width(), 1024);
+    assert_eq!(session.window_screen_height(), 768);
+    assert_eq!(session.window_screen_avail_width(), 1024);
+    assert_eq!(session.window_screen_avail_height(), 768);
+    assert_eq!(session.window_screen_avail_left(), 0);
+    assert_eq!(session.window_screen_avail_top(), 0);
+    assert_eq!(session.window_screen_color_depth(), 24);
+    assert_eq!(session.window_screen_pixel_depth(), 24);
+}
+
+#[test]
 fn session_exposes_document_referrer_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -1673,7 +1758,7 @@ fn session_resolves_window_navigator_on_line_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
         html: Some(
-            "<div id='out'></div><script>document.getElementById('out').textContent = String(window.navigator.onLine);</script>"
+            "<div id='out'></div><script>document.getElementById('out').textContent = String(window.navigator.onLine) + ':' + String(window.navigator.webdriver) + ':' + String(window.navigator.appCodeName) + ':' + String(window.navigator.appName) + ':' + String(window.navigator.appVersion) + ':' + String(window.navigator.product) + ':' + String(window.navigator.vendor) + ':' + String(window.navigator.hardwareConcurrency) + ':' + String(window.navigator.maxTouchPoints);</script>"
                 .to_string(),
         ),
         local_storage: BTreeMap::new(),
@@ -1681,7 +1766,10 @@ fn session_resolves_window_navigator_on_line_regression() {
     .expect("navigator.onLine should be wired through Session");
 
     let out_id = session.dom().select("#out").unwrap()[0];
-    assert_eq!(session.dom().text_content_for_node(out_id), "true");
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "true:false:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:8:0"
+    );
 }
 
 #[test]

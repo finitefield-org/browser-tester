@@ -283,6 +283,20 @@ const LocationState = struct {
     }
 };
 
+const PerformanceState = struct {
+    host: *anyopaque,
+    now_fn: *const fn (*anyopaque) i64,
+    time_origin: i64 = 0,
+
+    fn now(self: *const PerformanceState) f64 {
+        return @floatFromInt(self.now_fn(self.host));
+    }
+
+    fn timeOrigin(self: *const PerformanceState) f64 {
+        return @floatFromInt(self.time_origin);
+    }
+};
+
 const HistoryState = struct {
     host: *anyopaque,
     length_fn: *const fn (*anyopaque) usize,
@@ -390,6 +404,9 @@ const Value = union(enum) {
     html_collection: HtmlCollection,
     radio_node_list: RadioNodeList,
     media_query_list: MediaQueryList,
+    navigator,
+    screen,
+    performance: *PerformanceState,
     style_declaration: *StyleDeclarationState,
     storage: *StorageState,
     location: *LocationState,
@@ -973,6 +990,7 @@ fn evalAssignment(
 
             return error.ScriptRuntime;
         },
+        .screen => return error.ScriptRuntime,
         .window => {
             if (std.mem.eql(u8, target.property, "name")) {
                 const text = try asString(allocator, value);
@@ -994,6 +1012,7 @@ fn evalAssignment(
 
             return error.ScriptRuntime;
         },
+        .navigator => return error.ScriptRuntime,
         .location => |location| {
             if (std.mem.eql(u8, target.property, "href")) {
                 const text = try asString(allocator, value);
@@ -1118,7 +1137,7 @@ fn evalExpr(
     expr: *Expr,
 ) errors.Result(Value) {
     return switch (expr.*) {
-        .identifier => |name| evalIdentifier(bindings, name),
+        .identifier => |name| evalIdentifier(allocator, host, bindings, name),
         .string => |value| .{ .string = value },
         .number => |value| .{ .number = try parseNumberLiteral(value) },
         .boolean => |value| .{ .boolean = value },
@@ -1131,7 +1150,12 @@ fn evalExpr(
     };
 }
 
-fn evalIdentifier(bindings: []const Binding, name: []const u8) errors.Result(Value) {
+fn evalIdentifier(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    name: []const u8,
+) errors.Result(Value) {
     var index = bindings.len;
     while (index > 0) {
         index -= 1;
@@ -1143,6 +1167,7 @@ fn evalIdentifier(bindings: []const Binding, name: []const u8) errors.Result(Val
 
     if (std.mem.eql(u8, name, "document")) return .{ .document = {} };
     if (std.mem.eql(u8, name, "window")) return .{ .window = {} };
+    if (std.mem.eql(u8, name, "performance")) return try makePerformanceValue(allocator, host);
     if (std.mem.eql(u8, name, "undefined")) return .{ .undefined_value = {} };
     if (std.mem.eql(u8, name, "null")) return .{ .null_value = {} };
     if (std.mem.eql(u8, name, "true")) return .{ .boolean = true };
@@ -1194,6 +1219,12 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "referrer")) {
                 break :blk Value{ .string = host.documentReferrer() };
+            }
+            if (std.mem.eql(u8, member.property, "visibilityState")) {
+                break :blk Value{ .string = host.documentVisibilityState() };
+            }
+            if (std.mem.eql(u8, member.property, "hidden")) {
+                break :blk Value{ .boolean = host.documentHidden() };
             }
             if (std.mem.eql(u8, member.property, "dir")) {
                 break :blk Value{ .string = host.documentDir() };
@@ -1280,6 +1311,19 @@ fn evalMember(
             if (std.mem.eql(u8, member.property, "document")) {
                 break :blk Value{ .document = {} };
             }
+            if (std.mem.eql(u8, member.property, "window") or
+                std.mem.eql(u8, member.property, "self") or
+                std.mem.eql(u8, member.property, "top") or
+                std.mem.eql(u8, member.property, "parent"))
+            {
+                break :blk Value{ .window = {} };
+            }
+            if (std.mem.eql(u8, member.property, "opener")) {
+                break :blk Value{ .null_value = {} };
+            }
+            if (std.mem.eql(u8, member.property, "closed")) {
+                break :blk Value{ .boolean = false };
+            }
             if (std.mem.eql(u8, member.property, "name")) {
                 break :blk Value{ .string = host.windowName() };
             }
@@ -1291,6 +1335,37 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "children")) {
                 break :blk Value{ .html_collection = .{ .root = host.domStore().documentId() } };
+            }
+            if (std.mem.eql(u8, member.property, "navigator")) {
+                break :blk Value{ .navigator = {} };
+            }
+            if (std.mem.eql(u8, member.property, "screen")) {
+                break :blk Value{ .screen = {} };
+            }
+            if (std.mem.eql(u8, member.property, "devicePixelRatio")) {
+                break :blk Value{ .number = host.windowDevicePixelRatio() };
+            }
+            if (std.mem.eql(u8, member.property, "innerWidth")) {
+                break :blk Value{ .number = @floatFromInt(host.windowInnerWidth()) };
+            }
+            if (std.mem.eql(u8, member.property, "innerHeight")) {
+                break :blk Value{ .number = @floatFromInt(host.windowInnerHeight()) };
+            }
+            if (std.mem.eql(u8, member.property, "outerWidth")) {
+                break :blk Value{ .number = @floatFromInt(host.windowOuterWidth()) };
+            }
+            if (std.mem.eql(u8, member.property, "outerHeight")) {
+                break :blk Value{ .number = @floatFromInt(host.windowOuterHeight()) };
+            }
+            if (std.mem.eql(u8, member.property, "screenX") or
+                std.mem.eql(u8, member.property, "screenLeft"))
+            {
+                break :blk Value{ .number = @floatFromInt(host.windowScreenX()) };
+            }
+            if (std.mem.eql(u8, member.property, "screenY") or
+                std.mem.eql(u8, member.property, "screenTop"))
+            {
+                break :blk Value{ .number = @floatFromInt(host.windowScreenY()) };
             }
             if (std.mem.eql(u8, member.property, "scrollX")) {
                 break :blk Value{ .number = @floatFromInt(host.windowScrollX()) };
@@ -1313,6 +1388,9 @@ fn evalMember(
             if (std.mem.eql(u8, member.property, "history")) {
                 break :blk makeHistoryValue(host);
             }
+            if (std.mem.eql(u8, member.property, "performance")) {
+                break :blk try makePerformanceValue(allocator, host);
+            }
             if (std.mem.eql(u8, member.property, "origin")) {
                 break :blk Value{ .string = try originFromUrl(allocator, host.currentLocationUrl()) };
             }
@@ -1324,6 +1402,93 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "origin")) {
                 break :blk Value{ .string = try originFromUrl(allocator, location.current_url) };
+            }
+            break :blk error.ScriptRuntime;
+        },
+        .navigator => blk: {
+            if (std.mem.eql(u8, member.property, "userAgent")) {
+                break :blk Value{ .string = host.windowNavigatorUserAgent() };
+            }
+            if (std.mem.eql(u8, member.property, "appCodeName")) {
+                break :blk Value{ .string = host.windowNavigatorAppCodeName() };
+            }
+            if (std.mem.eql(u8, member.property, "appName")) {
+                break :blk Value{ .string = host.windowNavigatorAppName() };
+            }
+            if (std.mem.eql(u8, member.property, "appVersion")) {
+                break :blk Value{ .string = host.windowNavigatorAppVersion() };
+            }
+            if (std.mem.eql(u8, member.property, "product")) {
+                break :blk Value{ .string = host.windowNavigatorProduct() };
+            }
+            if (std.mem.eql(u8, member.property, "productSub")) {
+                break :blk Value{ .string = host.windowNavigatorProductSub() };
+            }
+            if (std.mem.eql(u8, member.property, "vendor")) {
+                break :blk Value{ .string = host.windowNavigatorVendor() };
+            }
+            if (std.mem.eql(u8, member.property, "vendorSub")) {
+                break :blk Value{ .string = host.windowNavigatorVendorSub() };
+            }
+            if (std.mem.eql(u8, member.property, "platform")) {
+                break :blk Value{ .string = host.windowNavigatorPlatform() };
+            }
+            if (std.mem.eql(u8, member.property, "language")) {
+                break :blk Value{ .string = host.windowNavigatorLanguage() };
+            }
+            if (std.mem.eql(u8, member.property, "cookieEnabled")) {
+                break :blk Value{ .boolean = host.windowNavigatorCookieEnabled() };
+            }
+            if (std.mem.eql(u8, member.property, "onLine")) {
+                break :blk Value{ .boolean = host.windowNavigatorOnLine() };
+            }
+            if (std.mem.eql(u8, member.property, "webdriver")) {
+                break :blk Value{ .boolean = host.windowNavigatorWebdriver() };
+            }
+            if (std.mem.eql(u8, member.property, "hardwareConcurrency")) {
+                break :blk Value{ .number = @floatFromInt(host.windowNavigatorHardwareConcurrency()) };
+            }
+            if (std.mem.eql(u8, member.property, "maxTouchPoints")) {
+                break :blk Value{ .number = @floatFromInt(host.windowNavigatorMaxTouchPoints()) };
+            }
+            break :blk error.ScriptRuntime;
+        },
+        .performance => blk: {
+            if (std.mem.eql(u8, member.property, "timeOrigin")) {
+                break :blk Value{ .number = object.performance.timeOrigin() };
+            }
+            break :blk error.ScriptRuntime;
+        },
+        .screen => blk: {
+            if (std.mem.eql(u8, member.property, "width")) {
+                break :blk Value{ .number = @floatFromInt(host.windowScreenWidth()) };
+            }
+            if (std.mem.eql(u8, member.property, "height")) {
+                break :blk Value{ .number = @floatFromInt(host.windowScreenHeight()) };
+            }
+            if (std.mem.eql(u8, member.property, "availWidth")) {
+                break :blk Value{ .number = @floatFromInt(host.windowScreenAvailWidth()) };
+            }
+            if (std.mem.eql(u8, member.property, "availHeight")) {
+                break :blk Value{ .number = @floatFromInt(host.windowScreenAvailHeight()) };
+            }
+            if (std.mem.eql(u8, member.property, "availLeft")) {
+                break :blk Value{ .number = @floatFromInt(host.windowScreenAvailLeft()) };
+            }
+            if (std.mem.eql(u8, member.property, "availTop")) {
+                break :blk Value{ .number = @floatFromInt(host.windowScreenAvailTop()) };
+            }
+            if (std.mem.eql(u8, member.property, "left")) {
+                break :blk Value{ .number = @floatFromInt(host.windowScreenLeft()) };
+            }
+            if (std.mem.eql(u8, member.property, "top")) {
+                break :blk Value{ .number = @floatFromInt(host.windowScreenTop()) };
+            }
+            if (std.mem.eql(u8, member.property, "colorDepth")) {
+                break :blk Value{ .number = @floatFromInt(host.windowScreenColorDepth()) };
+            }
+            if (std.mem.eql(u8, member.property, "pixelDepth")) {
+                break :blk Value{ .number = @floatFromInt(host.windowScreenPixelDepth()) };
             }
             break :blk error.ScriptRuntime;
         },
@@ -1676,6 +1841,68 @@ fn evalCall(
                 return Value{ .string = try asString(allocator, value) };
             }
 
+            if (std.mem.eql(u8, name, "setTimeout")) {
+                if (call.args.len == 0 or call.args.len > 2) return error.ScriptRuntime;
+                const callback_value = try evalExpr(allocator, host, bindings, call.args[0]);
+                const callback = switch (callback_value) {
+                    .function => |function| function,
+                    else => return error.ScriptRuntime,
+                };
+                const delay_ms = if (call.args.len >= 2)
+                    try timerDelayFromExpr(allocator, host, bindings, call.args[1])
+                else
+                    0;
+                const timer_id = try host.scheduleTimer(callback, delay_ms);
+                return Value{ .number = @floatFromInt(timer_id) };
+            }
+
+            if (std.mem.eql(u8, name, "setInterval")) {
+                if (call.args.len == 0 or call.args.len > 2) return error.ScriptRuntime;
+                const callback_value = try evalExpr(allocator, host, bindings, call.args[0]);
+                const callback = switch (callback_value) {
+                    .function => |function| function,
+                    else => return error.ScriptRuntime,
+                };
+                const delay_ms = if (call.args.len >= 2)
+                    try timerDelayFromExpr(allocator, host, bindings, call.args[1])
+                else
+                    0;
+                const timer_id = try host.scheduleIntervalTimer(callback, delay_ms);
+                return Value{ .number = @floatFromInt(timer_id) };
+            }
+
+            if (std.mem.eql(u8, name, "clearTimeout")) {
+                if (call.args.len > 1) return error.ScriptRuntime;
+                if (call.args.len == 1) {
+                    if (try timerIdFromExpr(allocator, host, bindings, call.args[0])) |timer_id| {
+                        host.clearTimer(timer_id);
+                    }
+                }
+                return Value{ .undefined_value = {} };
+            }
+
+            if (std.mem.eql(u8, name, "clearInterval")) {
+                if (call.args.len > 1) return error.ScriptRuntime;
+                if (call.args.len == 1) {
+                    if (try timerIdFromExpr(allocator, host, bindings, call.args[0])) |timer_id| {
+                        host.clearTimer(timer_id);
+                    }
+                }
+                return Value{ .undefined_value = {} };
+            }
+
+            if (std.mem.eql(u8, name, "queueMicrotask")) {
+                if (call.args.len != 1) return error.ScriptRuntime;
+                const callback_value = try evalExpr(allocator, host, bindings, call.args[0]);
+                const callback = switch (callback_value) {
+                    .function => |function| function,
+                    else => return error.ScriptRuntime,
+                };
+
+                try host.queueMicrotask(callback);
+                return Value{ .undefined_value = {} };
+            }
+
             return error.ScriptRuntime;
         },
         .member => |member| {
@@ -1704,6 +1931,9 @@ fn evalMethodCall(
                 break :blk Value{ .element = element_id };
             }
             break :blk Value{ .null_value = {} };
+        } else if (std.mem.eql(u8, method, "hasFocus")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk Value{ .boolean = host.documentHasFocus() };
         } else if (std.mem.eql(u8, method, "getElementsByTagName")) blk: {
             if (args.len != 1) return error.ScriptRuntime;
             const tag_value = try evalExpr(allocator, host, bindings, args[0]);
@@ -1773,6 +2003,57 @@ fn evalMethodCall(
         } else error.ScriptRuntime,
         .window => if (std.mem.eql(u8, method, "document")) Value{ .document = {} } else if (std.mem.eql(u8, method, "addEventListener")) blk: {
             break :blk try registerListener(allocator, host, bindings, .window, args);
+        } else if (std.mem.eql(u8, method, "queueMicrotask")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const callback_value = try evalExpr(allocator, host, bindings, args[0]);
+            const callback = switch (callback_value) {
+                .function => |function| function,
+                else => return error.ScriptRuntime,
+            };
+            try host.queueMicrotask(callback);
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "setTimeout")) blk: {
+            if (args.len == 0 or args.len > 2) return error.ScriptRuntime;
+            const callback_value = try evalExpr(allocator, host, bindings, args[0]);
+            const callback = switch (callback_value) {
+                .function => |function| function,
+                else => return error.ScriptRuntime,
+            };
+            const delay_ms = if (args.len >= 2)
+                try timerDelayFromExpr(allocator, host, bindings, args[1])
+            else
+                0;
+            const timer_id = try host.scheduleTimer(callback, delay_ms);
+            break :blk Value{ .number = @floatFromInt(timer_id) };
+        } else if (std.mem.eql(u8, method, "setInterval")) blk: {
+            if (args.len == 0 or args.len > 2) return error.ScriptRuntime;
+            const callback_value = try evalExpr(allocator, host, bindings, args[0]);
+            const callback = switch (callback_value) {
+                .function => |function| function,
+                else => return error.ScriptRuntime,
+            };
+            const delay_ms = if (args.len >= 2)
+                try timerDelayFromExpr(allocator, host, bindings, args[1])
+            else
+                0;
+            const timer_id = try host.scheduleIntervalTimer(callback, delay_ms);
+            break :blk Value{ .number = @floatFromInt(timer_id) };
+        } else if (std.mem.eql(u8, method, "clearTimeout")) blk: {
+            if (args.len > 1) return error.ScriptRuntime;
+            if (args.len == 1) {
+                if (try timerIdFromExpr(allocator, host, bindings, args[0])) |timer_id| {
+                    host.clearTimer(timer_id);
+                }
+            }
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "clearInterval")) blk: {
+            if (args.len > 1) return error.ScriptRuntime;
+            if (args.len == 1) {
+                if (try timerIdFromExpr(allocator, host, bindings, args[0])) |timer_id| {
+                    host.clearTimer(timer_id);
+                }
+            }
+            break :blk Value{ .undefined_value = {} };
         } else if (std.mem.eql(u8, method, "open")) blk: {
             if (args.len > 3) return error.ScriptRuntime;
             const url = if (args.len >= 1)
@@ -1830,6 +2111,24 @@ fn evalMethodCall(
                 .media = query,
                 .matches = matches,
             } };
+        } else error.ScriptRuntime,
+        .navigator => if (std.mem.eql(u8, method, "javaEnabled")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk Value{ .boolean = host.windowNavigatorJavaEnabled() };
+        } else if (std.mem.eql(u8, method, "toString")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk Value{ .string = "[object Navigator]" };
+        } else error.ScriptRuntime,
+        .performance => if (std.mem.eql(u8, method, "now")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk Value{ .number = object.performance.now() };
+        } else if (std.mem.eql(u8, method, "toString")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk Value{ .string = "[object Performance]" };
+        } else error.ScriptRuntime,
+        .screen => if (std.mem.eql(u8, method, "toString")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk Value{ .string = "[object Screen]" };
         } else error.ScriptRuntime,
         .location => if (std.mem.eql(u8, method, "assign")) blk: {
             if (args.len != 1) return error.ScriptRuntime;
@@ -3751,7 +4050,7 @@ fn radioNodeListEntries(
     return try collectionEntriesFromNodeIds(allocator, items, .element);
 }
 
-fn functionBindings(
+pub fn functionBindings(
     allocator: std.mem.Allocator,
     function: ScriptFunction,
     positional: []const Value,
@@ -4083,6 +4382,9 @@ fn asString(allocator: std.mem.Allocator, value: Value) errors.Result([]const u8
         .style_declaration => |style| try styleDeclarationCssText(allocator, style),
         .radio_node_list => "[object RadioNodeList]",
         .media_query_list => "[object MediaQueryList]",
+        .navigator => "[object Navigator]",
+        .performance => "[object Performance]",
+        .screen => "[object Screen]",
         .storage => "[object Storage]",
         .history => "[object History]",
         .collection_entry => "[object IteratorEntry]",
@@ -4107,7 +4409,7 @@ fn isTruthy(value: Value) bool {
         .boolean => |flag| flag,
         .number => |number| number != 0,
         .string => |text| text.len != 0,
-        .element, .node, .template_content, .class_list, .dataset, .node_list, .collection_iterator, .iterator_result, .collection_entry, .html_collection, .document_scripts, .document_anchors, .document_style_sheets, .style_sheet, .style_declaration, .radio_node_list, .media_query_list, .storage, .location, .history, .event, .document, .window, .function => true,
+        .element, .node, .template_content, .class_list, .dataset, .node_list, .collection_iterator, .iterator_result, .collection_entry, .html_collection, .document_scripts, .document_anchors, .document_style_sheets, .style_sheet, .style_declaration, .radio_node_list, .media_query_list, .navigator, .performance, .screen, .storage, .location, .history, .event, .document, .window, .function => true,
     };
 }
 
@@ -4143,6 +4445,22 @@ fn makeLocationValue(allocator: std.mem.Allocator, host: anytype) errors.Result(
         }.call,
     };
     return .{ .location = state };
+}
+
+fn makePerformanceValue(allocator: std.mem.Allocator, host: anytype) errors.Result(Value) {
+    const Host = @TypeOf(host);
+    const state = try allocator.create(PerformanceState);
+    state.* = .{
+        .host = @ptrCast(host),
+        .now_fn = struct {
+            fn call(ptr: *anyopaque) i64 {
+                const typed: Host = @ptrCast(@alignCast(ptr));
+                return typed.nowMs();
+            }
+        }.call,
+        .time_origin = 0,
+    };
+    return .{ .performance = state };
 }
 
 fn makeHistoryValue(host: anytype) Value {
@@ -4686,6 +5004,67 @@ fn historyStateFromValue(allocator: std.mem.Allocator, value: Value) errors.Resu
     return switch (value) {
         .undefined_value, .null_value => null,
         else => try asString(allocator, value),
+    };
+}
+
+fn timerDelayFromExpr(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    expr: *Expr,
+) errors.Result(i64) {
+    const value = try evalExpr(allocator, host, bindings, expr);
+    return try timerDelayFromValue(allocator, value);
+}
+
+fn timerDelayFromValue(allocator: std.mem.Allocator, value: Value) errors.Result(i64) {
+    return switch (value) {
+        .number => |number| blk: {
+            if (!std.math.isFinite(number)) return error.ScriptRuntime;
+            if (std.math.round(number) != number) return error.ScriptRuntime;
+            const min = @as(f64, @floatFromInt(std.math.minInt(i64)));
+            const max = @as(f64, @floatFromInt(std.math.maxInt(i64)));
+            if (number < min or number > max) return error.ScriptRuntime;
+            const delay = @as(i64, @intFromFloat(number));
+            break :blk if (delay < 0) 0 else delay;
+        },
+        else => blk: {
+            const text = try asString(allocator, value);
+            const trimmed = std.mem.trim(u8, text, " \t\r\n");
+            const parsed = std.fmt.parseInt(i64, trimmed, 10) catch return error.ScriptRuntime;
+            break :blk if (parsed < 0) 0 else parsed;
+        },
+    };
+}
+
+fn timerIdFromExpr(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    expr: *Expr,
+) errors.Result(?u64) {
+    const value = try evalExpr(allocator, host, bindings, expr);
+    return timerIdFromValue(allocator, value);
+}
+
+fn timerIdFromValue(allocator: std.mem.Allocator, value: Value) errors.Result(?u64) {
+    return switch (value) {
+        .number => |number| blk: {
+            if (!std.math.isFinite(number)) break :blk null;
+            if (std.math.round(number) != number) break :blk null;
+            const min = @as(f64, @floatFromInt(@as(i64, 0)));
+            const max = @as(f64, @floatFromInt(std.math.maxInt(u64)));
+            if (number < min or number > max) break :blk null;
+            const id = @as(u64, @intFromFloat(number));
+            break :blk id;
+        },
+        else => blk: {
+            const text = try asString(allocator, value);
+            const trimmed = std.mem.trim(u8, text, " \t\r\n");
+            const parsed = std.fmt.parseInt(i64, trimmed, 10) catch return null;
+            if (parsed < 0) break :blk null;
+            break :blk @as(u64, @intCast(parsed));
+        },
     };
 }
 

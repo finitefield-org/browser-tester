@@ -1655,10 +1655,21 @@ fn session_exposes_window_navigator_metadata() {
     let session = Session::new(SessionConfig::default()).expect("session should build");
 
     assert_eq!(session.window_navigator_user_agent(), "browser-tester-next");
+    assert_eq!(session.window_navigator_app_code_name(), "browser-tester-next");
+    assert_eq!(session.window_navigator_app_name(), "browser-tester-next");
+    assert_eq!(
+        session.window_navigator_app_version(),
+        "browser-tester-next"
+    );
+    assert_eq!(session.window_navigator_product(), "browser-tester-next");
+    assert_eq!(session.window_navigator_vendor(), "browser-tester-next");
     assert_eq!(session.window_navigator_platform(), "unknown");
     assert_eq!(session.window_navigator_language(), "en-US");
     assert!(session.window_navigator_cookie_enabled());
     assert!(session.window_navigator_on_line());
+    assert!(!session.window_navigator_webdriver());
+    assert_eq!(session.window_navigator_hardware_concurrency(), 8);
+    assert_eq!(session.window_navigator_max_touch_points(), 0);
 }
 
 #[test]
@@ -1676,6 +1687,89 @@ fn session_exposes_window_device_pixel_ratio() {
     let out_id = session.dom().select("#out").unwrap()[0];
     assert_eq!(session.dom().text_content_for_node(out_id), "1");
     assert_eq!(session.window_device_pixel_ratio(), 1.0);
+}
+
+#[test]
+fn session_exposes_window_inner_width_and_inner_height() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = String(window.innerWidth) + ':' + String(window.innerHeight);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should expose window.innerWidth and window.innerHeight");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "1024:768");
+    assert_eq!(session.window_inner_width(), 1024);
+    assert_eq!(session.window_inner_height(), 768);
+}
+
+#[test]
+fn session_exposes_window_outer_width_and_outer_height() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = String(window.outerWidth) + ':' + String(window.outerHeight);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should expose window.outerWidth and window.outerHeight");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "1024:768");
+    assert_eq!(session.window_outer_width(), 1024);
+    assert_eq!(session.window_outer_height(), 768);
+}
+
+#[test]
+fn session_exposes_window_screen_position() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = String(window.screenX) + ':' + String(window.screenY) + ':' + String(window.screenLeft) + ':' + String(window.screenTop);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should expose window.screenX / screenY / screenLeft / screenTop");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "0:0:0:0");
+    assert_eq!(session.window_screen_x(), 0);
+    assert_eq!(session.window_screen_y(), 0);
+    assert_eq!(session.window_screen_left(), 0);
+    assert_eq!(session.window_screen_top(), 0);
+}
+
+#[test]
+fn session_exposes_window_screen_object_metadata() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = String(window.screen) + ':' + String(window.screen.width) + ':' + String(window.screen.height) + ':' + String(window.screen.availWidth) + ':' + String(window.screen.availHeight) + ':' + String(window.screen.availLeft) + ':' + String(window.screen.availTop) + ':' + String(window.screen.colorDepth) + ':' + String(window.screen.pixelDepth);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should expose window.screen metadata");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "[object Screen]:1024:768:1024:768:0:0:24:24"
+    );
+    assert_eq!(session.window_screen_width(), 1024);
+    assert_eq!(session.window_screen_height(), 768);
+    assert_eq!(session.window_screen_avail_width(), 1024);
+    assert_eq!(session.window_screen_avail_height(), 768);
+    assert_eq!(session.window_screen_avail_left(), 0);
+    assert_eq!(session.window_screen_avail_top(), 0);
+    assert_eq!(session.window_screen_color_depth(), 24);
+    assert_eq!(session.window_screen_pixel_depth(), 24);
 }
 
 #[test]
@@ -1781,7 +1875,10 @@ fn session_rejects_open_failure_seed_during_bootstrap() {
 
     let error = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
-        html: Some("<main id='out'></main><script>window.open('https://example.test/popup');</script>".to_string()),
+        html: Some(
+            "<main id='out'></main><script>window.open('https://example.test/popup');</script>"
+                .to_string(),
+        ),
         local_storage,
     })
     .expect_err("open failure seed should fail bootstrap when window.open runs");

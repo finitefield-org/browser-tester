@@ -164,6 +164,47 @@ test "contract: Harness.nowMs and Harness.advanceTime expose fake clock" {
     try subject.flush();
 }
 
+test "contract: queueMicrotask drains during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='out'></main><script>document.getElementById('out').textContent = 'start'; queueMicrotask(() => { document.getElementById('out').textContent = 'done'; });</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "done");
+}
+
+test "contract: setTimeout and clearTimeout drive the timer queue" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='out'></main><script>document.getElementById('out').textContent = 'start'; const cancelled = setTimeout(() => { document.getElementById('out').textContent = 'cancelled'; }, 10); clearTimeout(cancelled); window.setTimeout(() => { document.getElementById('out').textContent = 'timeout'; queueMicrotask(() => { document.getElementById('out').textContent = 'drained'; }); }, 5);</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "start");
+    try subject.advanceTime(4);
+    try subject.assertValue("#out", "start");
+    try subject.advanceTime(1);
+    try subject.assertValue("#out", "drained");
+}
+
+test "contract: setInterval and clearInterval drive the repeating timer queue" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='out'></main><script>document.getElementById('out').textContent = 'start'; const repeating = setInterval(() => { document.getElementById('out').textContent = document.getElementById('out').textContent + 'x'; }, 5); const cancelledByGlobal = setInterval(() => { document.getElementById('out').textContent = 'global'; }, 7); clearInterval(cancelledByGlobal); const cancelledByWindow = window.setInterval(() => { document.getElementById('out').textContent = 'window'; }, 9); window.clearInterval(cancelledByWindow);</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "start");
+    try subject.advanceTime(5);
+    try subject.assertValue("#out", "startx");
+    try subject.advanceTime(5);
+    try subject.assertValue("#out", "startxx");
+}
+
 test "failure: Harness.advanceTime rejects negative deltas" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(allocator, "<main></main>");
@@ -178,6 +219,30 @@ test "failure: window.localStorage.setItem rejects missing arguments" {
     try std.testing.expectError(
         error.ScriptRuntime,
         Harness.fromHtml(allocator, "<script>window.localStorage.setItem('theme')</script>"),
+    );
+}
+
+test "failure: queueMicrotask rejects non-function callbacks" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<script>queueMicrotask(1)</script>"),
+    );
+}
+
+test "failure: window.setTimeout rejects non-function callbacks" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<script>window.setTimeout(1, 0)</script>"),
+    );
+}
+
+test "failure: window.setInterval rejects non-function callbacks" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<script>window.setInterval(1, 0)</script>"),
     );
 }
 
@@ -2051,6 +2116,118 @@ test "failure: window.scrollTo rejects non-integer coordinates" {
     );
 }
 
+test "failure: window.navigator.toString rejects arguments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<script>window.navigator.toString(1);</script>"),
+    );
+}
+
+test "failure: window.performance.now rejects arguments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<script>window.performance.now(1);</script>"),
+    );
+}
+
+test "failure: window.navigator appCodeName is read-only" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<script>window.navigator.appCodeName = 'x';</script>"),
+    );
+}
+
+test "failure: window.navigator appName is read-only" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<script>window.navigator.appName = 'x';</script>"),
+    );
+}
+
+test "failure: window.navigator appVersion is read-only" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<script>window.navigator.appVersion = 'x';</script>"),
+    );
+}
+
+test "failure: window.navigator product is read-only" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<script>window.navigator.product = 'x';</script>"),
+    );
+}
+
+test "failure: window.navigator productSub is read-only" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<script>window.navigator.productSub = 'x';</script>"),
+    );
+}
+
+test "failure: window.navigator hardwareConcurrency is read-only" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<script>window.navigator.hardwareConcurrency = 16;</script>"),
+    );
+}
+
+test "failure: window.navigator vendor is read-only" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<script>window.navigator.vendor = 'x';</script>"),
+    );
+}
+
+test "failure: window.navigator vendorSub is read-only" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<script>window.navigator.vendorSub = 'x';</script>"),
+    );
+}
+
+test "failure: window.navigator javaEnabled rejects arguments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<script>window.navigator.javaEnabled(1);</script>"),
+    );
+}
+
+test "failure: window.devicePixelRatio is read-only" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<script>window.devicePixelRatio = 2;</script>"),
+    );
+}
+
+test "failure: window.top is read-only" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<script>window.top = null;</script>"),
+    );
+}
+
+test "failure: window.screenX is read-only" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<script>window.screenX = 1;</script>"),
+    );
+}
+
 test "contract: Harness.setFiles updates selection and fires change" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -2161,6 +2338,89 @@ test "contract: Harness.fromHtmlWithUrl exposes window scroll aliases and resets
         "https://example.test:8443/next",
         subject.mocksMut().location().currentUrl().?,
     );
+}
+
+test "contract: Harness.fromHtmlWithUrl exposes window.navigator aliases" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtmlWithUrl(
+        allocator,
+        "https://example.test:8443/start?x#old",
+        "<main id='out'></main><script>const navigator = window.navigator; document.getElementById('out').textContent = String(navigator) + ':' + navigator.userAgent + ':' + navigator.appCodeName + ':' + navigator.appName + ':' + navigator.appVersion + ':' + navigator.product + ':' + navigator.productSub + ':' + navigator.vendor + ':[' + navigator.vendorSub + ']:' + navigator.platform + ':' + navigator.language + ':' + String(navigator.cookieEnabled) + ':' + String(navigator.onLine) + ':' + String(navigator.webdriver) + ':' + String(navigator.hardwareConcurrency) + ':' + String(navigator.maxTouchPoints) + ':' + String(navigator.javaEnabled());</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "[object Navigator]:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:[]:unknown:en-US:true:true:false:8:0:false",
+    );
+}
+
+test "contract: Harness.fromHtmlWithUrl exposes window.performance aliases" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtmlWithUrl(
+        allocator,
+        "https://example.test:8443/start?x#old",
+        "<main id='out'></main><script>const performance = window.performance; document.getElementById('out').textContent = String(performance) + ':' + String(window.performance) + ':' + String(performance.timeOrigin) + ':' + String(performance.now()); window.setTimeout(() => { document.getElementById('out').textContent = document.getElementById('out').textContent + ':' + String(performance.now()) + ':' + String(window.performance.now()); }, 5);</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "[object Performance]:[object Performance]:0:0");
+    try subject.advanceTime(5);
+    try subject.assertValue("#out", "[object Performance]:[object Performance]:0:0:5:5");
+}
+
+test "contract: Harness.fromHtmlWithUrl exposes window.navigator toString" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtmlWithUrl(
+        allocator,
+        "https://example.test:8443/start?x#old",
+        "<main id='out'></main><script>const navigator = window.navigator; document.getElementById('out').textContent = navigator.toString();</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "[object Navigator]");
+}
+
+test "contract: Harness.fromHtmlWithUrl exposes window identity aliases" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtmlWithUrl(
+        allocator,
+        "https://example.test:8443/start?x#old",
+        "<main id='out'></main><script>const view = document.defaultView; document.getElementById('out').textContent = String(view) + ':' + String(window.window) + ':' + String(window.self) + ':' + String(window.top) + ':' + String(window.parent) + ':' + String(window.opener) + ':' + String(window.closed);</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "[object Window]:[object Window]:[object Window]:[object Window]:[object Window]:null:false",
+    );
+}
+
+test "contract: Harness.fromHtmlWithUrl exposes viewport and visibility aliases" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtmlWithUrl(
+        allocator,
+        "https://example.test:8443/start?x#old",
+        "<main id='out'></main><script>document.getElementById('out').textContent = String(window.devicePixelRatio) + ':' + String(window.innerWidth) + ':' + String(window.innerHeight) + ':' + String(window.outerWidth) + ':' + String(window.outerHeight) + ':' + document.visibilityState + ':' + String(document.hidden) + ':' + String(document.hasFocus());</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "1:1024:768:1280:800:visible:false:true",
+    );
+}
+
+test "contract: Harness.fromHtmlWithUrl exposes screen aliases" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtmlWithUrl(
+        allocator,
+        "https://example.test:8443/start?x#old",
+        "<main id='out'></main><script>document.getElementById('out').textContent = String(window.screenX) + ':' + String(window.screenY) + ':' + String(window.screenLeft) + ':' + String(window.screenTop);</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "0:0:0:0");
 }
 
 test "contract: Harness.fromHtmlWithUrl exposes window.history navigation methods" {
