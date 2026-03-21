@@ -19,8 +19,13 @@ pub const DialogMocks = mocks.DialogMocks;
 pub const ClipboardMocks = mocks.ClipboardMocks;
 pub const OpenCall = mocks.OpenCall;
 pub const OpenMocks = mocks.OpenMocks;
+pub const CloseCall = mocks.CloseCall;
+pub const CloseMocks = mocks.CloseMocks;
 pub const PrintCall = mocks.PrintCall;
 pub const PrintMocks = mocks.PrintMocks;
+pub const ScrollMethod = mocks.ScrollMethod;
+pub const ScrollCall = mocks.ScrollCall;
+pub const ScrollMocks = mocks.ScrollMocks;
 pub const LocationMocks = mocks.LocationMocks;
 pub const MatchMediaMocks = mocks.MatchMediaMocks;
 pub const MatchMediaRule = mocks.MatchMediaRule;
@@ -176,7 +181,7 @@ test "failure: window.localStorage.setItem rejects missing arguments" {
     );
 }
 
-test "contract: Harness.mocksMut exposes fetch, dialogs, clipboard, open, print, location, downloads, and storage" {
+test "contract: Harness.mocksMut exposes fetch, dialogs, clipboard, open, close, print, scroll, location, downloads, and storage" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(allocator, "<main></main>");
     defer subject.deinit();
@@ -246,6 +251,7 @@ test "contract: Harness.mocksMut exposes fetch, dialogs, clipboard, open, print,
         subject.mocksMut().storage().session().get("session-token").?,
     );
     try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().open().calls().len);
+    try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().close().calls().len);
     try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().print().calls().len);
 }
 
@@ -263,7 +269,9 @@ test "contract: Harness.mocksMut.resetAll clears every family" {
         try mocks_view.clipboard().seedText("seeded");
         try mocks_view.clipboard().recordWrite("copied");
         try mocks_view.open().fail("popup blocked");
+        try mocks_view.close().fail("window closed");
         try mocks_view.print().fail("print blocked");
+        try mocks_view.scroll().fail("scroll blocked");
         try mocks_view.location().setCurrent("https://example.test/next");
         try mocks_view.location().recordNavigation("https://example.test/next");
         try mocks_view.downloads().capture("report.csv", "downloaded bytes");
@@ -276,7 +284,9 @@ test "contract: Harness.mocksMut.resetAll clears every family" {
         error.MockError,
         subject.open("https://example.test/popup"),
     );
+    try std.testing.expectError(error.MockError, subject.close());
     try std.testing.expectError(error.MockError, subject.print());
+    try std.testing.expectError(error.MockError, subject.scrollTo(10, 20));
 
     subject.mocksMut().resetAll();
 
@@ -290,7 +300,9 @@ test "contract: Harness.mocksMut.resetAll clears every family" {
     try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().dialogs().promptMessages().len);
     try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().clipboard().writes().len);
     try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().open().calls().len);
+    try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().close().calls().len);
     try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().print().calls().len);
+    try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().scroll().calls().len);
     try std.testing.expectEqual(@as(?[]const u8, null), subject.mocksMut().location().currentUrl());
     try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().location().navigations().len);
     try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().downloads().artifacts().len);
@@ -300,7 +312,7 @@ test "contract: Harness.mocksMut.resetAll clears every family" {
     try std.testing.expectError(error.MockError, subject.readClipboard());
 }
 
-test "contract: Harness.open and Harness.print record calls through the registry" {
+test "contract: Harness.open, Harness.close, and Harness.print record calls through the registry" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(allocator, "<main></main>");
     defer subject.deinit();
@@ -315,7 +327,26 @@ test "contract: Harness.open and Harness.print record calls through the registry
     );
     try std.testing.expectEqual(@as(?[]const u8, null), subject.mocksMut().open().calls()[0].target);
     try std.testing.expectEqual(@as(?[]const u8, null), subject.mocksMut().open().calls()[0].features);
+    try subject.close();
+    try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().close().calls().len);
     try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().print().calls().len);
+}
+
+test "contract: Harness.scrollTo and Harness.scrollBy record calls through the registry" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(allocator, "<main></main>");
+    defer subject.deinit();
+
+    try subject.scrollTo(10, 20);
+    try subject.scrollBy(-5, 3);
+
+    try std.testing.expectEqual(@as(usize, 2), subject.mocksMut().scroll().calls().len);
+    try std.testing.expectEqual(.To, subject.mocksMut().scroll().calls()[0].method);
+    try std.testing.expectEqual(@as(i64, 10), subject.mocksMut().scroll().calls()[0].x);
+    try std.testing.expectEqual(@as(i64, 20), subject.mocksMut().scroll().calls()[0].y);
+    try std.testing.expectEqual(.By, subject.mocksMut().scroll().calls()[1].method);
+    try std.testing.expectEqual(@as(i64, -5), subject.mocksMut().scroll().calls()[1].x);
+    try std.testing.expectEqual(@as(i64, 3), subject.mocksMut().scroll().calls()[1].y);
 }
 
 test "failure: malformed html is rejected" {
@@ -1979,6 +2010,17 @@ test "failure: HarnessBuilder.openFailure rejects bootstrap window.open" {
     try std.testing.expectError(error.MockError, builder.build());
 }
 
+test "failure: HarnessBuilder.closeFailure rejects bootstrap window.close" {
+    const allocator = std.testing.allocator;
+    var builder = Harness.builder(allocator);
+    defer builder.deinit();
+
+    _ = builder.html("<main id='out'></main><script>window.close();</script>");
+    _ = builder.closeFailure("window closed");
+
+    try std.testing.expectError(error.MockError, builder.build());
+}
+
 test "failure: HarnessBuilder.printFailure rejects bootstrap window.print" {
     const allocator = std.testing.allocator;
     var builder = Harness.builder(allocator);
@@ -1988,6 +2030,25 @@ test "failure: HarnessBuilder.printFailure rejects bootstrap window.print" {
     _ = builder.printFailure("print blocked");
 
     try std.testing.expectError(error.MockError, builder.build());
+}
+
+test "failure: HarnessBuilder.scrollFailure rejects bootstrap window.scrollTo" {
+    const allocator = std.testing.allocator;
+    var builder = Harness.builder(allocator);
+    defer builder.deinit();
+
+    _ = builder.html("<main id='out'></main><script>window.scrollTo(10, 20);</script>");
+    _ = builder.scrollFailure("scroll blocked");
+
+    try std.testing.expectError(error.MockError, builder.build());
+}
+
+test "failure: window.scrollTo rejects non-integer coordinates" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<script>window.scrollTo(1.5, 20);</script>"),
+    );
 }
 
 test "contract: Harness.setFiles updates selection and fires change" {
@@ -2084,6 +2145,22 @@ test "contract: Harness.fromHtmlWithUrl exposes Location href and navigation met
     try std.testing.expectEqualStrings("https://example.test:8443/href", subject.mocksMut().location().navigations()[1]);
     try std.testing.expectEqualStrings("https://example.test:8443/replace", subject.mocksMut().location().navigations()[2]);
     try std.testing.expectEqualStrings("https://example.test:8443/replace", subject.mocksMut().location().navigations()[3]);
+}
+
+test "contract: Harness.fromHtmlWithUrl exposes window scroll aliases and resets them on navigation" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtmlWithUrl(
+        allocator,
+        "https://example.test:8443/start?x#old",
+        "<main id='out'></main><script>const before = String(window.scrollX) + ':' + String(window.scrollY) + ':' + String(window.pageXOffset) + ':' + String(window.pageYOffset); window.scrollTo(10, 20); window.scrollBy(-3, 5); const afterScroll = String(window.scrollX) + ':' + String(window.scrollY) + ':' + String(window.pageXOffset) + ':' + String(window.pageYOffset); document.location = 'https://example.test:8443/next'; const afterNavigation = String(window.scrollX) + ':' + String(window.scrollY) + ':' + String(window.pageXOffset) + ':' + String(window.pageYOffset) + ':' + window.location.href; document.getElementById('out').textContent = before + '|' + afterScroll + '|' + afterNavigation;</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "0:0:0:0|7:25:7:25|0:0:0:0:https://example.test:8443/next");
+    try std.testing.expectEqualStrings(
+        "https://example.test:8443/next",
+        subject.mocksMut().location().currentUrl().?,
+    );
 }
 
 test "contract: Harness.fromHtmlWithUrl exposes window.history navigation methods" {

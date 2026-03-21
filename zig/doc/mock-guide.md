@@ -1,12 +1,27 @@
 # Mock Guide
 
-`Harness.mocksMut()` returns the typed test-only `MockRegistry`. Use it when a test needs deterministic network, dialogs, clipboard, location, matchMedia, download, file-input, or storage behavior, including seeding `window.localStorage` and `window.sessionStorage` before inline scripts run.
+`Harness.mocksMut()` returns the typed test-only `MockRegistry`. Use it when a test needs deterministic network, dialogs, clipboard, location, open/close/print/scroll, matchMedia, download, file-input, or storage behavior, including seeding `window.localStorage`, `window.sessionStorage`, `window.open()`, `window.close()`, `window.print()`, `window.scrollTo()`, and `window.scrollBy()` before inline scripts run.
 
 The registry is intentionally narrow:
 
 - it exposes families, not a bag of `set_*` helpers
 - each family carries its own capture and reset semantics
 - `resetAll()` clears every family between scenarios
+
+## Current Mock Families
+
+- fetch
+- dialogs
+- clipboard
+- location
+- open
+- close
+- print
+- scroll
+- matchMedia
+- downloads
+- file_input
+- storage
 
 ## Minimal Example
 
@@ -55,6 +70,139 @@ pub fn main() !void {
 }
 ```
 
+## Open/Print Example
+
+```zig
+const std = @import("std");
+const bt = @import("browser_tester_zig");
+
+pub fn main() !void {
+    var harness = try bt.Harness.fromHtml(
+        std.heap.page_allocator,
+        "<main id='out'></main><script>window.open('https://app.local/popup', '_blank', 'noopener'); window.print(); document.getElementById('out').textContent = 'booted';</script>",
+    );
+    defer harness.deinit();
+
+    try harness.open("https://app.local/settings");
+    try harness.print();
+    try std.testing.expectEqual(@as(usize, 2), harness.mocksMut().open().calls().len);
+    try std.testing.expectEqualStrings(
+        "https://app.local/popup",
+        harness.mocksMut().open().calls()[0].url.?,
+    );
+    try std.testing.expectEqualStrings(
+        "https://app.local/settings",
+        harness.mocksMut().open().calls()[1].url.?,
+    );
+    try std.testing.expectEqual(@as(usize, 2), harness.mocksMut().print().calls().len);
+}
+```
+
+## Close Example
+
+```zig
+const std = @import("std");
+const bt = @import("browser_tester_zig");
+
+pub fn main() !void {
+    var harness = try bt.Harness.fromHtml(
+        std.heap.page_allocator,
+        "<main id='out'></main><script>window.close(); document.getElementById('out').textContent = 'closed';</script>",
+    );
+    defer harness.deinit();
+
+    try harness.close();
+    try harness.assertValue("#out", "closed");
+    try std.testing.expectEqual(@as(usize, 2), harness.mocksMut().close().calls().len);
+}
+```
+
+## Scroll Example
+
+```zig
+const std = @import("std");
+const bt = @import("browser_tester_zig");
+
+pub fn main() !void {
+    var harness = try bt.Harness.fromHtml(std.heap.page_allocator, "<main></main>");
+    defer harness.deinit();
+
+    try harness.scrollTo(10, 20);
+    try harness.scrollBy(-5, 3);
+    try std.testing.expectEqual(@as(usize, 2), harness.mocksMut().scroll().calls().len);
+    try std.testing.expectEqual(.To, harness.mocksMut().scroll().calls()[0].method);
+    try std.testing.expectEqual(@as(i64, 10), harness.mocksMut().scroll().calls()[0].x);
+    try std.testing.expectEqual(@as(i64, 20), harness.mocksMut().scroll().calls()[0].y);
+    try std.testing.expectEqual(.By, harness.mocksMut().scroll().calls()[1].method);
+    try std.testing.expectEqual(@as(i64, -5), harness.mocksMut().scroll().calls()[1].x);
+    try std.testing.expectEqual(@as(i64, 3), harness.mocksMut().scroll().calls()[1].y);
+}
+```
+
+## Open/Print Failure Example
+
+```zig
+const std = @import("std");
+const bt = @import("browser_tester_zig");
+
+pub fn main() !void {
+    var builder = bt.Harness.builder(std.heap.page_allocator);
+    defer builder.deinit();
+
+    _ = builder.html("<script>window.open('https://app.local/popup', '_blank', 'noopener');</script>");
+    builder.openFailure("popup blocked");
+
+    try std.testing.expectError(error.MockError, builder.build());
+}
+```
+
+```zig
+const std = @import("std");
+const bt = @import("browser_tester_zig");
+
+pub fn main() !void {
+    var builder = bt.Harness.builder(std.heap.page_allocator);
+    defer builder.deinit();
+
+    _ = builder.html("<script>window.print();</script>");
+    builder.printFailure("print blocked");
+
+    try std.testing.expectError(error.MockError, builder.build());
+}
+```
+
+```zig
+const std = @import("std");
+const bt = @import("browser_tester_zig");
+
+pub fn main() !void {
+    var builder = bt.Harness.builder(std.heap.page_allocator);
+    defer builder.deinit();
+
+    _ = builder.html("<script>window.close();</script>");
+    builder.closeFailure("window closed");
+
+    try std.testing.expectError(error.MockError, builder.build());
+}
+```
+
+## Scroll Failure Example
+
+```zig
+const std = @import("std");
+const bt = @import("browser_tester_zig");
+
+pub fn main() !void {
+    var builder = bt.Harness.builder(std.heap.page_allocator);
+    defer builder.deinit();
+
+    _ = builder.html("<script>window.scrollTo(10, 20);</script>");
+    builder.scrollFailure("scroll blocked");
+
+    try std.testing.expectError(error.MockError, builder.build());
+}
+```
+
 ## Storage Example
 
 ```zig
@@ -85,6 +233,10 @@ Call capture records the inputs requested by the test:
 - `fetch.calls()` records requested URLs
 - `dialogs.alertMessages()`, `confirmMessages()`, and `promptMessages()` record dialog text
 - `location.navigations()` records navigated URLs
+- `open.calls()` records requested popup URLs, targets, and feature strings from `Harness.open(...)` and inline `window.open(...)`
+- `close.calls()` records close invocations from `Harness.close()` and inline `window.close()`
+- `print.calls()` records print invocations from `Harness.print()` and inline `window.print()`
+- `scroll.calls()` records scroll method and coordinate pairs from `Harness.scrollTo(...)`, `Harness.scrollBy(...)`, and inline `window.scrollTo(...)` / `window.scrollBy(...)`
 - `fileInput.selections()` records selector/file lists
 
 Artifact capture records the side effects a test needs to inspect:
@@ -111,6 +263,9 @@ The public mock API fails explicitly when the test has not seeded the required s
 - `Harness.confirm()` and `Harness.prompt()` return `error.MockError` when the queue is empty
 - `Harness.readClipboard()` returns `error.MockError` when clipboard text has not been seeded
 - `Harness.captureDownload()` returns `error.MockError` for blank file names
+- `Harness.open()` / `Harness.close()` / `Harness.print()` return `error.MockError` when the corresponding mock family was seeded to fail
+- `Harness.scrollTo()` / `Harness.scrollBy()` return `error.MockError` when the corresponding mock family was seeded to fail
+- `window.open()` / `window.close()` / `window.print()` / `window.scrollTo()` / `window.scrollBy()` return `error.MockError` during bootstrap when `HarnessBuilder.openFailure(...)` / `HarnessBuilder.closeFailure(...)` / `HarnessBuilder.printFailure(...)` / `HarnessBuilder.scrollFailure(...)` were used
 - `window.matchMedia()` returns `error.MockError` when no matching rule exists or a failure rule was seeded
 - `window.localStorage.setItem(...)`, `window.localStorage.removeItem(...)`, `window.localStorage.clear()`, `window.sessionStorage.setItem(...)`, `window.sessionStorage.removeItem(...)`, and `window.sessionStorage.clear()` return `error.ScriptRuntime` when called with the wrong arity or on unsupported members
 - `window.localStorage.key(index)` and `window.sessionStorage.key(index)` return `null` when the index is out of range
@@ -125,6 +280,10 @@ The public mock API fails explicitly when the test has not seeded the required s
 - dialog queues and capture logs
 - clipboard seed and write capture
 - location current URL and navigation capture
+- open call capture and failure state
+- close call capture and failure state
+- print call capture and failure state
+- scroll call capture and failure state
 - matchMedia query rules and call capture
 - download artifacts
 - file-input selections

@@ -17,7 +17,9 @@ pub const HarnessBuilder = struct {
     local_storage: std.ArrayListUnmanaged(session.StorageSeed) = .{},
     session_storage: std.ArrayListUnmanaged(session.StorageSeed) = .{},
     open_failure_value: ?[]const u8 = null,
+    close_failure_value: ?[]const u8 = null,
     print_failure_value: ?[]const u8 = null,
+    scroll_failure_value: ?[]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator) HarnessBuilder {
         return .{ .allocator = allocator };
@@ -65,8 +67,18 @@ pub const HarnessBuilder = struct {
         return self;
     }
 
+    pub fn closeFailure(self: *HarnessBuilder, value: []const u8) *HarnessBuilder {
+        self.close_failure_value = value;
+        return self;
+    }
+
     pub fn printFailure(self: *HarnessBuilder, value: []const u8) *HarnessBuilder {
         self.print_failure_value = value;
+        return self;
+    }
+
+    pub fn scrollFailure(self: *HarnessBuilder, value: []const u8) *HarnessBuilder {
+        self.scroll_failure_value = value;
         return self;
     }
 
@@ -84,7 +96,9 @@ pub const HarnessBuilder = struct {
                 .local_storage = self.local_storage.items,
                 .session_storage = self.session_storage.items,
                 .open_failure = self.open_failure_value,
+                .close_failure = self.close_failure_value,
                 .print_failure = self.print_failure_value,
+                .scroll_failure = self.scroll_failure_value,
             },
         );
         return Harness{
@@ -238,8 +252,20 @@ pub const Harness = struct {
         return self.session.open(url_source, null, null);
     }
 
+    pub fn close(self: *Harness) errors.Result(void) {
+        return self.session.close();
+    }
+
     pub fn print(self: *Harness) errors.Result(void) {
         return self.session.print();
+    }
+
+    pub fn scrollTo(self: *Harness, x: i64, y: i64) errors.Result(void) {
+        return self.session.scrollTo(x, y);
+    }
+
+    pub fn scrollBy(self: *Harness, x: i64, y: i64) errors.Result(void) {
+        return self.session.scrollBy(x, y);
     }
 
     pub fn captureDownload(
@@ -1272,6 +1298,27 @@ test "regression: phase 30 history.state payloads resolve on the copied html sna
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: phase 31 window scroll aliases resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>const before = String(window.scrollX) + ':' + String(window.scrollY) + ':' + String(window.pageXOffset) + ':' + String(window.pageYOffset); window.scrollTo(10, 20); window.scrollBy(-3, 5); const afterScroll = String(window.scrollX) + ':' + String(window.scrollY) + ':' + String(window.pageXOffset) + ':' + String(window.pageYOffset); window.location = 'https://example.test:8443/next'; const afterNavigation = String(window.scrollX) + ':' + String(window.scrollY) + ':' + String(window.pageXOffset) + ':' + String(window.pageYOffset); document.getElementById('out').textContent = before + '|' + afterScroll + '|' + afterNavigation;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtmlWithUrl(allocator, "https://example.test:8443/start?x#old", html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "0:0:0:0|7:25:7:25|0:0:0:0");
+    try std.testing.expectEqualStrings(
+        "https://example.test:8443/next",
+        subject.mocksMut().location().currentUrl().?,
+    );
+    try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().location().navigations().len);
+    try std.testing.expectEqualStrings("https://example.test:8443/next", subject.mocksMut().location().navigations()[0]);
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
 test "regression: phase 27 document.baseURI and element.baseURI aliases resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<main id='root'><span id='child'></span></main><div id='out'></div><script>const root = document.getElementById('root'); const child = document.getElementById('child'); document.getElementById('out').textContent = document.baseURI + ':' + root.baseURI + ':' + child.baseURI;</script>";
@@ -1459,9 +1506,9 @@ test "regression: matchMedia mock resolves on the copied html snapshot" {
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
-test "regression: open and print mocks resolve on the copied html snapshot" {
+test "regression: open, close, and print mocks resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
-    const original = "<main id='root'><div id='out'></div><script>window.open('https://example.test/popup', '_blank', 'noopener'); window.print(); document.getElementById('out').textContent = 'done';</script></main>";
+    const original = "<main id='root'><div id='out'></div><script>window.open('https://example.test/popup', '_blank', 'noopener'); window.close(); window.print(); document.getElementById('out').textContent = 'done';</script></main>";
     var html_bytes = try allocator.dupe(u8, original);
     defer allocator.free(html_bytes);
 
@@ -1484,6 +1531,7 @@ test "regression: open and print mocks resolve on the copied html snapshot" {
         "noopener",
         subject.mocksMut().open().calls()[0].features.?,
     );
+    try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().close().calls().len);
     try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().print().calls().len);
     try std.testing.expectEqualStrings(original, subject.html().?);
 }

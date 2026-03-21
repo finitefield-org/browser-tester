@@ -101,6 +101,9 @@ struct RecordingHost {
     document_head_result: Option<ElementHandle>,
     document_body_result: Option<ElementHandle>,
     document_active_element_result: Option<ElementHandle>,
+    document_has_focus_result: bool,
+    document_visibility_state_result: String,
+    document_hidden_result: bool,
     document_title_result: String,
     document_location_result: String,
     document_compat_mode_result: String,
@@ -120,6 +123,16 @@ struct RecordingHost {
     window_close_error: Option<String>,
     window_print_calls: usize,
     window_print_error: Option<String>,
+    navigator_user_agent: String,
+    navigator_platform: String,
+    navigator_language: String,
+    navigator_cookie_enabled: bool,
+    navigator_on_line: bool,
+    window_scroll_calls: Vec<(String, i64, i64)>,
+    window_scroll_error: Option<String>,
+    window_scroll_x: i64,
+    window_scroll_y: i64,
+    window_device_pixel_ratio_result: f64,
     match_media_matches: BTreeMap<String, bool>,
     match_media_calls: Vec<String>,
     local_storage: BTreeMap<String, String>,
@@ -180,6 +193,9 @@ struct RecordingHost {
     document_head_calls: usize,
     document_body_calls: usize,
     document_active_element_calls: usize,
+    document_has_focus_calls: usize,
+    document_visibility_state_calls: usize,
+    document_hidden_calls: usize,
     document_title_calls: usize,
     document_set_title_calls: Vec<String>,
     document_location_calls: usize,
@@ -540,6 +556,18 @@ impl RecordingHost {
         self.document_active_element_result = result;
     }
 
+    fn seed_document_has_focus(&mut self, result: bool) {
+        self.document_has_focus_result = result;
+    }
+
+    fn seed_document_visibility_state(&mut self, result: impl Into<String>) {
+        self.document_visibility_state_result = result.into();
+    }
+
+    fn seed_document_hidden(&mut self, result: bool) {
+        self.document_hidden_result = result;
+    }
+
     fn seed_document_title(&mut self, result: impl Into<String>) {
         self.document_title_result = result.into();
     }
@@ -570,6 +598,29 @@ impl RecordingHost {
 
     fn seed_window_print_error(&mut self, message: impl Into<String>) {
         self.window_print_error = Some(message.into());
+    }
+
+    fn seed_window_scroll_error(&mut self, message: impl Into<String>) {
+        self.window_scroll_error = Some(message.into());
+    }
+
+    fn seed_window_device_pixel_ratio(&mut self, result: f64) {
+        self.window_device_pixel_ratio_result = result;
+    }
+
+    fn seed_navigator(
+        &mut self,
+        user_agent: impl Into<String>,
+        platform: impl Into<String>,
+        language: impl Into<String>,
+        cookie_enabled: bool,
+        on_line: bool,
+    ) {
+        self.navigator_user_agent = user_agent.into();
+        self.navigator_platform = platform.into();
+        self.navigator_language = language.into();
+        self.navigator_cookie_enabled = cookie_enabled;
+        self.navigator_on_line = on_line;
     }
 
     fn seed_match_media_result(&mut self, query: impl Into<String>, matches: bool) {
@@ -672,6 +723,21 @@ impl HostBindings for RecordingHost {
         Ok(self.document_active_element_result)
     }
 
+    fn document_has_focus(&mut self) -> bt_script::Result<bool> {
+        self.document_has_focus_calls += 1;
+        Ok(self.document_has_focus_result)
+    }
+
+    fn document_visibility_state(&mut self) -> bt_script::Result<String> {
+        self.document_visibility_state_calls += 1;
+        Ok(self.document_visibility_state_result.clone())
+    }
+
+    fn document_hidden(&mut self) -> bt_script::Result<bool> {
+        self.document_hidden_calls += 1;
+        Ok(self.document_hidden_result)
+    }
+
     fn document_title(&mut self) -> bt_script::Result<String> {
         self.document_title_calls += 1;
         Ok(self.document_title_result.clone())
@@ -749,6 +815,66 @@ impl HostBindings for RecordingHost {
             return Err(bt_script::ScriptError::new(message.clone()));
         }
         Ok(())
+    }
+
+    fn window_navigator_user_agent(&mut self) -> bt_script::Result<String> {
+        Ok(self.navigator_user_agent.clone())
+    }
+
+    fn window_navigator_platform(&mut self) -> bt_script::Result<String> {
+        Ok(self.navigator_platform.clone())
+    }
+
+    fn window_navigator_language(&mut self) -> bt_script::Result<String> {
+        Ok(self.navigator_language.clone())
+    }
+
+    fn window_navigator_cookie_enabled(&mut self) -> bt_script::Result<bool> {
+        Ok(self.navigator_cookie_enabled)
+    }
+
+    fn window_navigator_on_line(&mut self) -> bt_script::Result<bool> {
+        Ok(self.navigator_on_line)
+    }
+
+    fn window_scroll_to(&mut self, x: i64, y: i64) -> bt_script::Result<()> {
+        self.window_scroll_calls.push(("scrollTo".to_string(), x, y));
+        if let Some(message) = &self.window_scroll_error {
+            return Err(bt_script::ScriptError::new(message.clone()));
+        }
+        self.window_scroll_x = x;
+        self.window_scroll_y = y;
+        Ok(())
+    }
+
+    fn window_scroll_by(&mut self, x: i64, y: i64) -> bt_script::Result<()> {
+        self.window_scroll_calls.push(("scrollBy".to_string(), x, y));
+        if let Some(message) = &self.window_scroll_error {
+            return Err(bt_script::ScriptError::new(message.clone()));
+        }
+        self.window_scroll_x += x;
+        self.window_scroll_y += y;
+        Ok(())
+    }
+
+    fn window_scroll_x(&mut self) -> bt_script::Result<i64> {
+        Ok(self.window_scroll_x)
+    }
+
+    fn window_scroll_y(&mut self) -> bt_script::Result<i64> {
+        Ok(self.window_scroll_y)
+    }
+
+    fn window_page_x_offset(&mut self) -> bt_script::Result<i64> {
+        Ok(self.window_scroll_x)
+    }
+
+    fn window_page_y_offset(&mut self) -> bt_script::Result<i64> {
+        Ok(self.window_scroll_y)
+    }
+
+    fn window_device_pixel_ratio(&mut self) -> bt_script::Result<f64> {
+        Ok(self.window_device_pixel_ratio_result)
     }
 
     fn match_media(&mut self, query: &str) -> bt_script::Result<MediaQueryListState> {
@@ -1861,6 +1987,139 @@ fn runtime_resolves_document_active_element_access() {
 }
 
 #[test]
+fn runtime_resolves_document_has_focus_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_document_has_focus(true);
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = String(document.hasFocus());",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.hasFocus should resolve through host bindings");
+
+    assert_eq!(host.document_has_focus_calls, 1);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("true")
+    );
+}
+
+#[test]
+fn runtime_resolves_document_visibility_state_and_hidden_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_document_visibility_state("visible");
+    host.seed_document_hidden(false);
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = document.visibilityState + ':' + String(document.hidden);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.visibilityState should resolve through host bindings");
+
+    assert_eq!(host.document_visibility_state_calls, 1);
+    assert_eq!(host.document_hidden_calls, 1);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("visible:false")
+    );
+}
+
+#[test]
+fn runtime_rejects_document_visibility_state_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "document.visibilityState = 'hidden';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("document.visibilityState should be read-only");
+
+    assert!(error.message().contains("unsupported assignment target"));
+    assert!(error.message().contains("visibilityState"));
+}
+
+#[test]
+fn runtime_rejects_document_hidden_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("document.hidden = true;", "inline-script", &mut host)
+        .expect_err("document.hidden should be read-only");
+
+    assert!(error.message().contains("unsupported assignment target"));
+    assert!(error.message().contains("hidden"));
+}
+
+#[test]
+fn runtime_resolves_window_device_pixel_ratio_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_window_device_pixel_ratio(2.0);
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = String(window.devicePixelRatio);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.devicePixelRatio should resolve through host bindings");
+
+    assert_eq!(host.window_device_pixel_ratio_result, 2.0);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("2")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_device_pixel_ratio_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.devicePixelRatio = 2;", "inline-script", &mut host)
+        .expect_err("window.devicePixelRatio should be read-only");
+
+    assert!(error.message().contains("unsupported assignment target"));
+    assert!(error.message().contains("devicePixelRatio"));
+}
+
+#[test]
+fn runtime_rejects_document_has_focus_with_arguments() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "document.hasFocus(true);",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("document.hasFocus should reject arguments");
+
+    assert!(error.message().contains("document.hasFocus() expects no arguments"));
+}
+
+#[test]
 fn runtime_resolves_document_compat_mode_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -2126,6 +2385,122 @@ fn runtime_rejects_window_print_wrong_arity() {
 
     assert!(error.to_string().contains("print() expects no arguments"));
     assert_eq!(host.window_print_calls, 0);
+}
+
+#[test]
+fn runtime_rejects_window_navigator_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.userAgent = 'x';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.navigator should be read-only");
+
+    assert!(error.to_string().contains("cannot assign to `userAgent` on navigator value"));
+}
+
+#[test]
+fn runtime_rejects_window_navigator_on_line_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.onLine = false;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.navigator.onLine should be read-only");
+
+    assert!(error.to_string().contains("cannot assign to `onLine` on navigator value"));
+}
+
+#[test]
+fn runtime_resolves_window_navigator_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_navigator("browser-tester-next", "unknown", "en-US", true, true);
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = window.navigator.userAgent + ':' + window.navigator.platform + ':' + window.navigator.language + ':' + String(window.navigator.cookieEnabled) + ':' + String(window.navigator.onLine);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.navigator should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("browser-tester-next:unknown:en-US:true:true")
+    );
+}
+
+#[test]
+fn runtime_resolves_window_scroll_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "window.scrollTo(10, 20); window.scrollBy(-5, 3); document.getElementById('out').textContent = String(window.scrollX) + ':' + String(window.scrollY) + ':' + String(window.pageXOffset) + ':' + String(window.pageYOffset);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.scroll should resolve through host bindings");
+
+    assert_eq!(
+        host.window_scroll_calls,
+        vec![
+            ("scrollTo".to_string(), 10, 20),
+            ("scrollBy".to_string(), -5, 3),
+        ]
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("5:23:5:23")
+    );
+}
+
+#[test]
+fn runtime_propagates_window_scroll_host_failures() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_window_scroll_error("scroll blocked");
+
+    let error = runtime
+        .eval_program("window.scrollTo(1, 2);", "inline-script", &mut host)
+        .expect_err("window.scrollTo should propagate host failures");
+
+    assert!(error.to_string().contains("scroll blocked"));
+    assert_eq!(
+        host.window_scroll_calls,
+        vec![("scrollTo".to_string(), 1, 2)]
+    );
+}
+
+#[test]
+fn runtime_rejects_window_scroll_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.scrollTo(1, 2, 3);", "inline-script", &mut host)
+        .expect_err("window.scrollTo should reject too many arguments");
+
+    assert!(error
+        .to_string()
+        .contains("scrollTo() expects at most two arguments"));
+    assert!(host.window_scroll_calls.is_empty());
 }
 
 #[test]

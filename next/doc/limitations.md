@@ -14,13 +14,13 @@ What exists today:
 - listener registration through the script host seam
 - target-phase event dispatch and form-control state updates
 - `click`, `type_text`, `set_checked`, `submit`, `dispatch`, `assert_value`, and `assert_checked`
-- explicit mock families, debug hooks, and public mock actions for `fetch`, dialogs, clipboard, close, open, print, location, file input, and download capture
+- explicit mock families, debug hooks, and public mock actions for `fetch`, dialogs, clipboard, close, open, print, scroll, location, file input, and download capture
 - contract, regression, and property test suites
 - quick and hardening test profiles plus a publication checklist
 - script-side `document.querySelector` and `element.querySelector` are available
 - script-side `querySelectorAll` is available with minimal `NodeList` support (`length`, `item`)
 - script-side `document.childNodes` is available with live `NodeList` support (`length`, `item`)
-- script-side `document.documentElement`, `document.head`, `document.body`, `document.activeElement`, `window.children` as an alias of `document.children`, `document.title`, `window.title`, `document.location`, `window.location`, `document.URL`, `document.documentURI`, `document.baseURI`, `element.baseURI`, `document.origin`, `document.referrer`, `window.name`, `window.origin`, `element.origin`, `window.localStorage`, `window.sessionStorage`, `document.currentScript`, `document.readyState`, `document.compatMode`, `document.characterSet` / `document.charset` / `document.contentType` during inline bootstrap are available
+- script-side `document.documentElement`, `document.head`, `document.body`, `document.activeElement`, `document.hasFocus()`, `window.children` as an alias of `document.children`, `document.title`, `window.title`, `document.location`, `window.location`, `document.URL`, `document.documentURI`, `document.baseURI`, `element.baseURI`, `document.origin`, `document.referrer`, `window.name`, `window.origin`, `element.origin`, `window.navigator` (`userAgent`, `platform`, `language`, `cookieEnabled`, `onLine`), `window.devicePixelRatio`, `window.localStorage`, `window.sessionStorage`, `window.scrollX`, `window.scrollY`, `window.pageXOffset`, `window.pageYOffset`, `document.currentScript`, `document.readyState`, `document.compatMode`, `document.characterSet` / `document.charset` / `document.contentType` / `document.visibilityState` / `document.hidden` during inline bootstrap are available
 - script-side `template.content` is available on `<template>` elements with live `NodeList` / `HTMLCollection` support (`length`, `item`, `namedItem`)
 - script-side `Element.children` is available with minimal `HTMLCollection` support (`length`, `item`, `namedItem`)
 - script-side `document.children` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
@@ -61,7 +61,7 @@ What does not exist yet:
 
 ## Important Consequence
 
-Public methods such as `focus`, `blur`, `set_select_value`, `fetch`, `confirm`, `prompt`, `read_clipboard`, `write_clipboard`, `print`, `open`, `close`, `navigate`, `set_files`, and `capture_download` are now supported and dispatch or capture through the same deterministic runtime.
+Public methods such as `focus`, `blur`, `set_select_value`, `fetch`, `confirm`, `prompt`, `read_clipboard`, `write_clipboard`, `print`, `open`, `close`, `scroll_to`, `scroll_by`, `navigate`, `set_files`, and `capture_download` are now supported and dispatch or capture through the same deterministic runtime.
 
 ## Still Out of Scope
 

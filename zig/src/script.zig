@@ -1292,6 +1292,18 @@ fn evalMember(
             if (std.mem.eql(u8, member.property, "children")) {
                 break :blk Value{ .html_collection = .{ .root = host.domStore().documentId() } };
             }
+            if (std.mem.eql(u8, member.property, "scrollX")) {
+                break :blk Value{ .number = @floatFromInt(host.windowScrollX()) };
+            }
+            if (std.mem.eql(u8, member.property, "scrollY")) {
+                break :blk Value{ .number = @floatFromInt(host.windowScrollY()) };
+            }
+            if (std.mem.eql(u8, member.property, "pageXOffset")) {
+                break :blk Value{ .number = @floatFromInt(host.windowPageXOffset()) };
+            }
+            if (std.mem.eql(u8, member.property, "pageYOffset")) {
+                break :blk Value{ .number = @floatFromInt(host.windowPageYOffset()) };
+            }
             if (std.mem.eql(u8, member.property, "title")) {
                 break :blk Value{ .string = host.documentTitle() };
             }
@@ -1777,9 +1789,37 @@ fn evalMethodCall(
                 null;
             try host.open(url, target, features);
             break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "close")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            try host.close();
+            break :blk Value{ .undefined_value = {} };
         } else if (std.mem.eql(u8, method, "print")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             try host.print();
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "scrollTo")) blk: {
+            if (args.len > 2) return error.ScriptRuntime;
+            const x = if (args.len >= 1)
+                try scrollCoordinate(try evalExpr(allocator, host, bindings, args[0]), "scrollTo")
+            else
+                0;
+            const y = if (args.len >= 2)
+                try scrollCoordinate(try evalExpr(allocator, host, bindings, args[1]), "scrollTo")
+            else
+                0;
+            try host.scrollTo(x, y);
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "scrollBy")) blk: {
+            if (args.len > 2) return error.ScriptRuntime;
+            const x = if (args.len >= 1)
+                try scrollCoordinate(try evalExpr(allocator, host, bindings, args[0]), "scrollBy")
+            else
+                0;
+            const y = if (args.len >= 2)
+                try scrollCoordinate(try evalExpr(allocator, host, bindings, args[1]), "scrollBy")
+            else
+                0;
+            try host.scrollBy(x, y);
             break :blk Value{ .undefined_value = {} };
         } else if (std.mem.eql(u8, method, "matchMedia")) blk: {
             if (args.len != 1) return error.ScriptRuntime;
@@ -4617,6 +4657,27 @@ fn historyDeltaFromValue(allocator: std.mem.Allocator, value: Value) errors.Resu
             const text = try asString(allocator, value);
             const trimmed = std.mem.trim(u8, text, " \t\r\n");
             break :blk std.fmt.parseInt(isize, trimmed, 10) catch error.ScriptRuntime;
+        },
+    };
+}
+
+fn scrollCoordinate(value: Value, method: []const u8) errors.Result(i64) {
+    return switch (value) {
+        .number => |number| blk: {
+            if (!std.math.isFinite(number)) return error.ScriptRuntime;
+            if (std.math.round(number) != number) return error.ScriptRuntime;
+            const min = @as(f64, @floatFromInt(std.math.minInt(i64)));
+            const max = @as(f64, @floatFromInt(std.math.maxInt(i64)));
+            if (number < min or number > max) return error.ScriptRuntime;
+            break :blk @as(i64, @intFromFloat(number));
+        },
+        .string => |text| std.fmt.parseInt(i64, text, 10) catch {
+            _ = method;
+            return error.ScriptRuntime;
+        },
+        else => {
+            _ = method;
+            return error.ScriptRuntime;
         },
     };
 }

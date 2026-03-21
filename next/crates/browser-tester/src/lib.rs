@@ -5,11 +5,11 @@ use std::fmt;
 pub use bt_dom::{DomStore, NodeId};
 use bt_runtime::SessionError;
 pub use bt_runtime::{
-    ClipboardMocks, DebugState, DialogMocks, DownloadCapture, DownloadMocks, FetchCall,
-    FetchErrorRule, FetchMocks, FetchResponse, FetchResponseRule, FileInputMocks,
-    FileInputSelection, LocationMocks, MatchMediaCall, MatchMediaMocks, MockRegistry, OpenCall,
-    OpenMocks, PrintCall, PrintMocks, ScheduledTimer, Scheduler, Session, SessionConfig,
-    StorageSeeds, CloseCall, CloseMocks,
+    ClipboardMocks, CloseCall, CloseMocks, DebugState, DialogMocks, DownloadCapture,
+    DownloadMocks, FetchCall, FetchErrorRule, FetchMocks, FetchResponse, FetchResponseRule,
+    FileInputMocks, FileInputSelection, LocationMocks, MatchMediaCall, MatchMediaMocks,
+    MockRegistry, OpenCall, OpenMocks, PrintCall, PrintMocks, ScrollCall, ScrollMethod,
+    ScrollMocks, ScheduledTimer, Scheduler, Session, SessionConfig, StorageSeeds,
 };
 pub use bt_script::{HostBindings, ScriptError, ScriptRuntime};
 
@@ -127,6 +127,7 @@ pub struct HarnessBuilder {
     open_failure: Option<String>,
     close_failure: Option<String>,
     print_failure: Option<String>,
+    scroll_failure: Option<String>,
 }
 
 impl HarnessBuilder {
@@ -184,6 +185,11 @@ impl HarnessBuilder {
         self
     }
 
+    pub fn scroll_failure(mut self, message: impl Into<String>) -> Self {
+        self.scroll_failure = Some(message.into());
+        self
+    }
+
     pub fn build(self) -> Result<Harness> {
         let mut local_storage = self.local_storage;
         for (query, matches) in self.match_media {
@@ -200,6 +206,9 @@ impl HarnessBuilder {
         }
         if let Some(message) = self.print_failure {
             local_storage.insert("__browser_tester_print_failure__".to_string(), message);
+        }
+        if let Some(message) = self.scroll_failure {
+            local_storage.insert("__browser_tester_scroll_failure__".to_string(), message);
         }
         let config = SessionConfig {
             url: self.url.unwrap_or_else(|| SessionConfig::default().url),
@@ -332,6 +341,14 @@ impl Harness {
 
     pub fn print(&mut self) -> Result<()> {
         self.session.print().map_err(map_session_error)
+    }
+
+    pub fn scroll_to(&mut self, x: i64, y: i64) -> Result<()> {
+        self.session.scroll_to(x, y).map_err(map_session_error)
+    }
+
+    pub fn scroll_by(&mut self, x: i64, y: i64) -> Result<()> {
+        self.session.scroll_by(x, y).map_err(map_session_error)
     }
 
     pub fn close(&mut self) -> Result<()> {
@@ -550,6 +567,10 @@ impl<'a> MockRegistryView<'a> {
 
     pub fn print(&mut self) -> &mut PrintMocks {
         self.inner.print_mut()
+    }
+
+    pub fn scroll(&mut self) -> &mut ScrollMocks {
+        self.inner.scroll_mut()
     }
 
     pub fn downloads(&mut self) -> &mut DownloadMocks {

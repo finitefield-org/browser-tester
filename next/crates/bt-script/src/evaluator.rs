@@ -49,6 +49,7 @@ fn as_string(value: &Value) -> String {
         Value::RadioNodeList(_) => "[object RadioNodeList]".to_string(),
         Value::Storage(_) => "[object Storage]".to_string(),
         Value::MediaQueryList(_) => "[object MediaQueryList]".to_string(),
+        Value::Navigator => "[object Navigator]".to_string(),
         Value::CollectionIterator(_) => "[object Iterator]".to_string(),
         Value::IteratorResult(_) => "[object IteratorResult]".to_string(),
         Value::CollectionEntry(_) => "[object IteratorEntry]".to_string(),
@@ -197,6 +198,9 @@ fn eval_assignment<H: HostBindings>(
                 (Value::MediaQueryList(_), property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on media query list value"
                 ))),
+                (Value::Navigator, property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on navigator value"
+                ))),
                 (Value::Document, property) | (Value::Window, property) => Err(ScriptError::new(
                     format!("unsupported assignment target: {property}"),
                 )),
@@ -246,6 +250,13 @@ fn eval_expr<H: HostBindings>(
             let left = eval_expr(left, env, host)?;
             let right = eval_expr(right, env, host)?;
             Ok(eval_add(left, right))
+        }
+        Expr::UnaryNeg(expr) => {
+            let value = eval_expr(expr, env, host)?;
+            match value {
+                Value::Number(number) => Ok(Value::Number(-number)),
+                _ => Err(ScriptError::new("unary - expects a number")),
+            }
         }
         Expr::ArrowFunction(function) => Ok(Value::Function(function.clone())),
     }
@@ -382,6 +393,10 @@ fn eval_member<H: HostBindings>(
         }
         Value::Window if property == "document" => Ok(Value::Document),
         Value::Document if property == "defaultView" => Ok(Value::Window),
+        Value::Document if property == "visibilityState" => {
+            Ok(Value::String(host.document_visibility_state()?))
+        }
+        Value::Document if property == "hidden" => Ok(Value::Boolean(host.document_hidden()?)),
         Value::Window if property == "children" => Ok(Value::HtmlCollection(
             HtmlCollectionTarget::DocumentChildren,
         )),
@@ -391,9 +406,40 @@ fn eval_member<H: HostBindings>(
         Value::Window if property == "origin" => Ok(Value::String(host.document_origin()?)),
         Value::Window if property == "localStorage" => Ok(Value::Storage(StorageTarget::Local)),
         Value::Window if property == "sessionStorage" => Ok(Value::Storage(StorageTarget::Session)),
+        Value::Window if property == "navigator" => Ok(Value::Navigator),
+        Value::Window if property == "scrollX" => {
+            Ok(Value::Number(host.window_scroll_x()? as f64))
+        }
+        Value::Window if property == "scrollY" => {
+            Ok(Value::Number(host.window_scroll_y()? as f64))
+        }
+        Value::Window if property == "pageXOffset" => {
+            Ok(Value::Number(host.window_page_x_offset()? as f64))
+        }
+        Value::Window if property == "pageYOffset" => {
+            Ok(Value::Number(host.window_page_y_offset()? as f64))
+        }
+        Value::Window if property == "devicePixelRatio" => {
+            Ok(Value::Number(host.window_device_pixel_ratio()?))
+        }
         Value::MediaQueryList(list) if property == "matches" => Ok(Value::Boolean(list.matches())),
         Value::MediaQueryList(list) if property == "media" => {
             Ok(Value::String(list.media().to_string()))
+        }
+        Value::Navigator if property == "userAgent" => {
+            Ok(Value::String(host.window_navigator_user_agent()?))
+        }
+        Value::Navigator if property == "platform" => {
+            Ok(Value::String(host.window_navigator_platform()?))
+        }
+        Value::Navigator if property == "language" => {
+            Ok(Value::String(host.window_navigator_language()?))
+        }
+        Value::Navigator if property == "cookieEnabled" => {
+            Ok(Value::Boolean(host.window_navigator_cookie_enabled()?))
+        }
+        Value::Navigator if property == "onLine" => {
+            Ok(Value::Boolean(host.window_navigator_on_line()?))
         }
         Value::Element(element) if property == "textContent" => {
             Ok(Value::String(host.element_text_content(element)?))
@@ -518,6 +564,7 @@ fn eval_member<H: HostBindings>(
         Value::RadioNodeList(target) if property == "value" => {
             Ok(Value::String(radio_node_list_value(&target, host)?))
         }
+        Value::Navigator => Err(unsupported_member_access(property, "navigator")),
         Value::Element(_) => Err(unsupported_member_access(property, "element")),
         Value::ClassList(_) => Err(unsupported_member_access(property, "class list")),
         Value::Dataset(element) => {
@@ -593,7 +640,12 @@ fn eval_call<H: HostBindings>(
             eval_method_call(object_value, property, args, env, host)
         }
         Expr::ArrowFunction(_) => Err(ScriptError::new("arrow functions are not callable")),
-        Expr::String(_) | Expr::Number(_) | Expr::Boolean(_) | Expr::Null | Expr::Undefined => {
+        Expr::String(_)
+        | Expr::Number(_)
+        | Expr::Boolean(_)
+        | Expr::Null
+        | Expr::Undefined
+        | Expr::UnaryNeg(_) => {
             Err(ScriptError::new("invalid call target"))
         }
         Expr::Call { .. } | Expr::BinaryAdd { .. } => {
@@ -624,6 +676,12 @@ fn eval_method_call<H: HostBindings>(
                     )));
                 };
                 Ok(Value::Element(element))
+            }
+            "hasFocus" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("document.hasFocus() expects no arguments"));
+                }
+                Ok(Value::Boolean(host.document_has_focus()?))
             }
             "querySelector" => query_selector(QuerySelectorTarget::Document, args, env, host),
             "querySelectorAll" => {
@@ -681,6 +739,8 @@ fn eval_method_call<H: HostBindings>(
                 host.window_print()?;
                 Ok(Value::Undefined)
             }
+            "scrollTo" => window_scroll_to(args, env, host),
+            "scrollBy" => window_scroll_by(args, env, host),
             "matchMedia" => {
                 let [query_expr] = args else {
                     return Err(ScriptError::new(
@@ -778,6 +838,9 @@ fn eval_method_call<H: HostBindings>(
         },
         Value::StyleSheet(_) => Err(ScriptError::new(format!(
             "cannot call `{method}` on a style sheet value"
+        ))),
+        Value::Navigator => Err(ScriptError::new(format!(
+            "cannot call `{method}` on a navigator value"
         ))),
         Value::Node(_) => Err(ScriptError::new(format!(
             "cannot call `{method}` on a node value"
@@ -2055,6 +2118,54 @@ fn storage_key<H: HostBindings>(
     })
 }
 
+fn window_scroll_to<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.len() > 2 {
+        return Err(ScriptError::new("scrollTo() expects at most two arguments"));
+    }
+
+    let x = if let Some(expr) = args.first() {
+        scroll_coordinate(&eval_expr(expr, env, host)?, "scrollTo")?
+    } else {
+        0
+    };
+    let y = if let Some(expr) = args.get(1) {
+        scroll_coordinate(&eval_expr(expr, env, host)?, "scrollTo")?
+    } else {
+        0
+    };
+
+    host.window_scroll_to(x, y)?;
+    Ok(Value::Undefined)
+}
+
+fn window_scroll_by<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.len() > 2 {
+        return Err(ScriptError::new("scrollBy() expects at most two arguments"));
+    }
+
+    let x = if let Some(expr) = args.first() {
+        scroll_coordinate(&eval_expr(expr, env, host)?, "scrollBy")?
+    } else {
+        0
+    };
+    let y = if let Some(expr) = args.get(1) {
+        scroll_coordinate(&eval_expr(expr, env, host)?, "scrollBy")?
+    } else {
+        0
+    };
+
+    host.window_scroll_by(x, y)?;
+    Ok(Value::Undefined)
+}
+
 fn eval_add(left: Value, right: Value) -> Value {
     match (left, right) {
         (Value::Number(lhs), Value::Number(rhs)) => Value::Number(lhs + rhs),
@@ -2071,6 +2182,7 @@ fn is_truthy(value: &Value) -> bool {
         Value::Element(_)
         | Value::ClassList(_)
         | Value::Dataset(_)
+        | Value::Navigator
         | Value::HtmlCollection(_)
         | Value::StyleSheetList(_)
         | Value::StyleSheet(_)
@@ -2097,6 +2209,22 @@ fn index_from_value(value: &Value) -> Option<usize> {
         }
         Value::String(value) => value.parse::<usize>().ok(),
         _ => None,
+    }
+}
+
+fn scroll_coordinate(value: &Value, method: &str) -> Result<i64> {
+    match value {
+        Value::Number(number)
+            if number.is_finite()
+                && number.fract() == 0.0
+                && *number >= i64::MIN as f64
+                && *number <= i64::MAX as f64 => Ok(*number as i64),
+        Value::String(value) => value.parse::<i64>().map_err(|_| {
+            ScriptError::new(format!("{method}() expects integer coordinates"))
+        }),
+        _ => Err(ScriptError::new(format!(
+            "{method}() expects integer coordinates"
+        ))),
     }
 }
 

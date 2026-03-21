@@ -58,7 +58,7 @@ Delivered in this workspace:
 
 - fake clock helpers (`nowMs`, `advanceTime`, `flush`)
 - typed mock registry (`mocksMut`)
-- fetch, clipboard, dialog, location, matchMedia, and file-input mocks
+- fetch, clipboard, dialog, open, close, print, scroll, location, matchMedia, and file-input mocks
 - download capture
 
 Phase 4 is complete in this workspace.
@@ -117,13 +117,13 @@ The minimal inline style declaration slice, including comment stripping, `!impor
 
 ## Phase 9: Document and Window Surface Expansion
 
-- `document.documentElement`, `document.head`, `document.body`, `document.activeElement`, `document.referrer`, `document.dir`, `window.children`, and `window.name`
+- `document.documentElement`, `document.head`, `document.body`, `document.activeElement`, `document.referrer`, `document.dir`, `window.children`, `window.scrollX`, `window.scrollY`, `window.pageXOffset`, `window.pageYOffset`, and `window.name`
 - `document.title` and `window.title`
 - `document.location` and `window.location` as a limited `Location` host object (`href`, `assign()`, `replace()`, `reload()`)
 - `document.URL`, `document.documentURI`, `document.baseURI`, `document.compatMode`, `document.characterSet`, `document.charset`, and `document.contentType`
 - `document.origin`, `window.origin`, `Element.baseURI`, and `Element.origin`
 
-The document and window alias slice is implemented in this workspace now, including the document metadata, `document.referrer`, `document.dir`, `window.children`, and `window.name` aliases used during inline script bootstrap.
+The document and window alias slice is implemented in this workspace now, including the document metadata, `document.referrer`, `document.dir`, `window.children`, `window.scrollX`, `window.scrollY`, `window.pageXOffset`, `window.pageYOffset`, and `window.name` aliases used during inline script bootstrap.
 
 ## Phase 10: Limited Navigation Model
 

@@ -173,6 +173,17 @@ fn document_active_element_tracks_focus_state() -> browser_tester_next::Result<(
 }
 
 #[test]
+fn document_has_focus_tracks_focus_state() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::from_html(
+        "<input id='first'><div id='out'></div><script>document.getElementById('first').addEventListener('focus', () => { document.getElementById('out').textContent = String(document.hasFocus()); });</script>",
+    )?;
+
+    harness.focus("#first")?;
+    harness.assert_text("#out", "true")?;
+    Ok(())
+}
+
+#[test]
 fn window_children_are_publicly_supported() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<div id='root'><span id='first'>First</span><span id='second'>Second</span></div><div id='out'></div><script>const children = document.defaultView.children; document.getElementById('out').textContent = String(children.length) + ':' + children.item(0).textContent + ':' + children.item(1).textContent + ':' + String(children.namedItem('first')) + ':' + String(children.namedItem('missing'));</script>",
@@ -219,6 +230,27 @@ fn document_content_type_is_publicly_supported() -> browser_tester_next::Result<
     )?;
 
     harness.assert_text("#out", "text/html")?;
+    Ok(())
+}
+
+#[test]
+fn document_visibility_state_and_hidden_are_publicly_supported() -> browser_tester_next::Result<()>
+{
+    let harness = Harness::from_html(
+        "<main id='out'></main><script>document.getElementById('out').textContent = document.visibilityState + ':' + String(document.hidden);</script>",
+    )?;
+
+    harness.assert_text("#out", "visible:false")?;
+    Ok(())
+}
+
+#[test]
+fn window_device_pixel_ratio_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='out'></main><script>document.getElementById('out').textContent = String(window.devicePixelRatio);</script>",
+    )?;
+
+    harness.assert_text("#out", "1")?;
     Ok(())
 }
 
@@ -342,6 +374,54 @@ fn print_is_publicly_supported_and_captured() -> browser_tester_next::Result<()>
 }
 
 #[test]
+fn navigator_metadata_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='out'></main><script>document.getElementById('out').textContent = window.navigator.userAgent + ':' + window.navigator.platform + ':' + window.navigator.language + ':' + String(window.navigator.cookieEnabled) + ':' + String(window.navigator.onLine);</script>",
+    )?;
+
+    harness.assert_text("#out", "browser-tester-next:unknown:en-US:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn scroll_is_publicly_supported_and_captured() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::from_html(
+        "<main id='out'></main><script>window.scrollTo(10, 20); document.getElementById('out').textContent = 'done';</script>",
+    )?;
+
+    harness.scroll_by(-5, 3)?;
+    assert_eq!(harness.mocks_mut().scroll().calls().len(), 2);
+    assert_eq!(
+        harness.mocks_mut().scroll().calls()[0],
+        browser_tester_next::ScrollCall {
+            method: browser_tester_next::ScrollMethod::To,
+            x: 10,
+            y: 20,
+        }
+    );
+    assert_eq!(
+        harness.mocks_mut().scroll().calls()[1],
+        browser_tester_next::ScrollCall {
+            method: browser_tester_next::ScrollMethod::By,
+            x: -5,
+            y: 3,
+        }
+    );
+    harness.assert_text("#out", "done")?;
+    Ok(())
+}
+
+#[test]
+fn scroll_position_aliases_are_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='out'></main><script>window.scrollTo(10, 20); window.scrollBy(-5, 3); document.getElementById('out').textContent = String(window.scrollX) + ':' + String(window.scrollY) + ':' + String(window.pageXOffset) + ':' + String(window.pageYOffset);</script>",
+    )?;
+
+    harness.assert_text("#out", "5:23:5:23")?;
+    Ok(())
+}
+
+#[test]
 fn close_is_publicly_supported_and_captured() -> browser_tester_next::Result<()> {
     let mut harness = Harness::from_html(
         "<main id='out'></main><script>window.close(); document.getElementById('out').textContent = 'done';</script>",
@@ -378,6 +458,18 @@ fn open_is_publicly_supported_and_captured() -> browser_tester_next::Result<()> 
         Some("https://example.test/direct")
     );
     harness.assert_text("#out", "done")?;
+    Ok(())
+}
+
+#[test]
+fn scroll_failure_can_be_seeded_from_the_builder() -> browser_tester_next::Result<()> {
+    let error = Harness::builder()
+        .scroll_failure("scroll blocked")
+        .html("<main id='out'></main><script>window.scrollTo(10, 20);</script>")
+        .build()
+        .expect_err("scroll failures should fail bootstrap when window.scrollTo runs");
+
+    assert!(error.to_string().contains("scroll blocked"));
     Ok(())
 }
 

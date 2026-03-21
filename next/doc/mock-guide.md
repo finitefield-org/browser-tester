@@ -11,6 +11,7 @@ Even in Phase 0, the workspace already reserves explicit families so runtime beh
 - `print`
 - `open`
 - `close`
+- `scroll`
 - `location`
 - `downloads`
 - `file_input`
@@ -32,6 +33,8 @@ Phase 4 adds thin public actions on `Harness` for the mock families that need to
 - `print()`
 - `open(url)`
 - `close()`
+- `scroll_to(x, y)`
+- `scroll_by(dx, dy)`
 - `navigate(url)`
 - `set_files(selector, files)`
 - `capture_download(file_name, bytes)`
@@ -66,6 +69,7 @@ fn main() -> browser_tester_next::Result<()> {
     harness.print()?;
     harness.open("https://app.local/popup")?;
     harness.close()?;
+    harness.scroll_to(0, 120)?;
     harness.set_files("#upload", ["report.csv"])?;
     harness.capture_download("report.csv", b"downloaded bytes".to_vec())?;
     harness.navigate("https://app.local/next")?;
@@ -77,6 +81,7 @@ fn main() -> browser_tester_next::Result<()> {
     assert_eq!(harness.mocks_mut().print().calls().len(), 1);
     assert_eq!(harness.mocks_mut().open().calls().len(), 1);
     assert_eq!(harness.mocks_mut().close().calls().len(), 1);
+    assert_eq!(harness.mocks_mut().scroll().calls().len(), 1);
     assert_eq!(harness.mocks_mut().location().navigations().len(), 1);
     assert_eq!(harness.mocks_mut().file_input().selections().len(), 1);
     {
@@ -153,6 +158,13 @@ fn main() -> browser_tester_next::Result<()> {
         .expect_err("open failure should fail bootstrap when window.open runs");
     assert!(open_error.to_string().contains("popup blocked"));
 
+    let scroll_error = Harness::builder()
+        .scroll_failure("scroll blocked")
+        .html("<script>window.scrollTo(0, 120);</script>")
+        .build()
+        .expect_err("scroll failure should fail bootstrap when window.scrollTo runs");
+    assert!(scroll_error.to_string().contains("scroll blocked"));
+
     let close_error = Harness::builder()
         .close_failure("window closed")
         .html("<script>window.close();</script>")
@@ -192,6 +204,7 @@ Examples:
 - `print`: call capture through the registry and `Harness::print(...)`, plus optional builder-seeded bootstrap failure
 - `open`: call capture through the registry and `Harness::open(...)`, plus optional builder-seeded bootstrap failure for `window.open(...)`; the mock returns `undefined` rather than a popup `WindowProxy`
 - `close`: call capture through the registry and `Harness::close(...)`, plus optional builder-seeded bootstrap failure for `window.close(...)`
+- `scroll`: call capture through the registry and `Harness::scroll_to(...)` / `Harness::scroll_by(...)`, plus optional builder-seeded bootstrap failure for `window.scrollTo(...)` / `window.scrollBy(...)`
 - `matchMedia`: query seed state and call capture for `window.matchMedia(...)`
 
 ## Why the Registry Shape Matters

@@ -43,6 +43,10 @@ fn reset_all_clears_every_mock_family() {
     registry.close_mut().record_call();
     registry.print_mut().fail("print blocked");
     registry.print_mut().record_call();
+    registry.scroll_mut().fail("scroll blocked");
+    registry
+        .scroll_mut()
+        .record_call(bt_runtime::ScrollMethod::To, 10, 20);
 
     registry
         .file_input_mut()
@@ -68,6 +72,7 @@ fn reset_all_clears_every_mock_family() {
     assert!(registry.open().calls().is_empty());
     assert!(registry.close().calls().is_empty());
     assert!(registry.print().calls().is_empty());
+    assert!(registry.scroll().calls().is_empty());
     assert!(registry.downloads().artifacts().is_empty());
     assert!(registry.file_input().selections().is_empty());
     assert!(registry.storage().local().is_empty());
@@ -100,6 +105,24 @@ fn session_rejects_unsupported_selector_syntax_in_closest_explicitly() {
             && error.to_string().contains("descendant combinators like `A B`")
             && error.to_string().contains("child combinators like `A > B`")
     );
+}
+
+#[test]
+fn session_scroll_position_resets_on_navigation() {
+    let mut session = Session::new(SessionConfig::default()).expect("session should build");
+
+    session.scroll_to(10, 20).expect("scroll should succeed");
+    session.scroll_by(-5, 3).expect("scroll should succeed");
+    assert_eq!(session.window_scroll_x(), 5);
+    assert_eq!(session.window_scroll_y(), 23);
+    assert_eq!(session.window_page_x_offset(), 5);
+    assert_eq!(session.window_page_y_offset(), 23);
+
+    session
+        .navigate("https://example.test/next")
+        .expect("navigation should succeed");
+    assert_eq!(session.window_scroll_x(), 0);
+    assert_eq!(session.window_scroll_y(), 0);
 }
 
 #[test]
@@ -988,6 +1011,39 @@ fn session_exposes_document_content_type_regression() {
 }
 
 #[test]
+fn session_exposes_document_visibility_state_and_hidden_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = document.visibilityState + ':' + String(document.hidden);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.visibilityState should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "visible:false");
+}
+
+#[test]
+fn session_exposes_window_device_pixel_ratio_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = String(window.devicePixelRatio);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("window.devicePixelRatio should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "1");
+    assert_eq!(session.window_device_pixel_ratio(), 1.0);
+}
+
+#[test]
 fn session_exposes_document_referrer_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -1594,6 +1650,38 @@ fn session_resolves_document_active_element_regression() {
     session.focus_node(field_id).expect("focus should work");
 
     assert_eq!(session.dom().text_content_for_node(out_id), "field");
+}
+
+#[test]
+fn session_resolves_document_has_focus_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='out'></div><script>document.getElementById('out').textContent = String(document.hasFocus());</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.hasFocus should be wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "false");
+}
+
+#[test]
+fn session_resolves_window_navigator_on_line_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='out'></div><script>document.getElementById('out').textContent = String(window.navigator.onLine);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("navigator.onLine should be wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "true");
 }
 
 #[test]

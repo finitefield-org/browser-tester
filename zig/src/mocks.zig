@@ -283,7 +283,98 @@ pub const OpenMocks = struct {
     }
 };
 
-pub const PrintCall = struct {};
+pub const CloseCall = struct {
+    _reserved: u8 = 0,
+};
+
+pub const CloseMocks = struct {
+    allocator: std.mem.Allocator,
+    failure_message: ?[]const u8 = null,
+    call_log: std.ArrayListUnmanaged(CloseCall) = .{},
+
+    pub fn init(allocator: std.mem.Allocator) CloseMocks {
+        return .{
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *CloseMocks) void {
+        self.call_log.deinit(self.allocator);
+    }
+
+    pub fn fail(self: *CloseMocks, message: []const u8) bt_errors.Result(void) {
+        self.failure_message = try self.allocator.dupe(u8, message);
+    }
+
+    pub fn recordCall(self: *CloseMocks) bt_errors.Result(void) {
+        try self.call_log.append(self.allocator, .{});
+        if (self.failure_message != null) return error.MockError;
+        return;
+    }
+
+    pub fn calls(self: *const CloseMocks) []const CloseCall {
+        return self.call_log.items;
+    }
+
+    pub fn reset(self: *CloseMocks) void {
+        self.failure_message = null;
+        self.call_log = .{};
+    }
+};
+
+pub const ScrollMethod = enum {
+    To,
+    By,
+};
+
+pub const ScrollCall = struct {
+    method: ScrollMethod,
+    x: i64,
+    y: i64,
+};
+
+pub const ScrollMocks = struct {
+    allocator: std.mem.Allocator,
+    failure_message: ?[]const u8 = null,
+    call_log: std.ArrayListUnmanaged(ScrollCall) = .{},
+
+    pub fn init(allocator: std.mem.Allocator) ScrollMocks {
+        return .{
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *ScrollMocks) void {
+        self.call_log.deinit(self.allocator);
+    }
+
+    pub fn fail(self: *ScrollMocks, message: []const u8) bt_errors.Result(void) {
+        self.failure_message = try self.allocator.dupe(u8, message);
+    }
+
+    pub fn recordCall(self: *ScrollMocks, method: ScrollMethod, x: i64, y: i64) bt_errors.Result(void) {
+        try self.call_log.append(self.allocator, .{
+            .method = method,
+            .x = x,
+            .y = y,
+        });
+        if (self.failure_message != null) return error.MockError;
+        return;
+    }
+
+    pub fn calls(self: *const ScrollMocks) []const ScrollCall {
+        return self.call_log.items;
+    }
+
+    pub fn reset(self: *ScrollMocks) void {
+        self.failure_message = null;
+        self.call_log = .{};
+    }
+};
+
+pub const PrintCall = struct {
+    _reserved: u8 = 0,
+};
 
 pub const PrintMocks = struct {
     allocator: std.mem.Allocator,
@@ -557,7 +648,9 @@ pub const MockRegistry = struct {
     dialogs_mocks: DialogMocks,
     clipboard_mocks: ClipboardMocks,
     open_mocks: OpenMocks,
+    close_mocks: CloseMocks,
     print_mocks: PrintMocks,
+    scroll_mocks: ScrollMocks,
     location_mocks: LocationMocks,
     match_media_mocks: MatchMediaMocks,
     downloads_mocks: DownloadMocks,
@@ -570,7 +663,9 @@ pub const MockRegistry = struct {
             .dialogs_mocks = DialogMocks.init(allocator),
             .clipboard_mocks = ClipboardMocks.init(allocator),
             .open_mocks = OpenMocks.init(allocator),
+            .close_mocks = CloseMocks.init(allocator),
             .print_mocks = PrintMocks.init(allocator),
+            .scroll_mocks = ScrollMocks.init(allocator),
             .location_mocks = LocationMocks.init(allocator),
             .match_media_mocks = MatchMediaMocks.init(allocator),
             .downloads_mocks = DownloadMocks.init(allocator),
@@ -584,7 +679,9 @@ pub const MockRegistry = struct {
         self.dialogs_mocks.deinit();
         self.clipboard_mocks.deinit();
         self.open_mocks.deinit();
+        self.close_mocks.deinit();
         self.print_mocks.deinit();
+        self.scroll_mocks.deinit();
         self.location_mocks.deinit();
         self.match_media_mocks.deinit();
         self.downloads_mocks.deinit();
@@ -608,8 +705,16 @@ pub const MockRegistry = struct {
         return &self.open_mocks;
     }
 
+    pub fn close(self: *MockRegistry) *CloseMocks {
+        return &self.close_mocks;
+    }
+
     pub fn print(self: *MockRegistry) *PrintMocks {
         return &self.print_mocks;
+    }
+
+    pub fn scroll(self: *MockRegistry) *ScrollMocks {
+        return &self.scroll_mocks;
     }
 
     pub fn location(self: *MockRegistry) *LocationMocks {
@@ -637,7 +742,9 @@ pub const MockRegistry = struct {
         self.dialogs_mocks.reset();
         self.clipboard_mocks.reset();
         self.open_mocks.reset();
+        self.close_mocks.reset();
         self.print_mocks.reset();
+        self.scroll_mocks.reset();
         self.location_mocks.reset();
         self.match_media_mocks.reset();
         self.downloads_mocks.reset();

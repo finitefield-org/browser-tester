@@ -29,6 +29,7 @@ const MATCH_MEDIA_SEED_PREFIX: &str = "__browser_tester_match_media__";
 const OPEN_FAILURE_SEED_KEY: &str = "__browser_tester_open_failure__";
 const CLOSE_FAILURE_SEED_KEY: &str = "__browser_tester_close_failure__";
 const PRINT_FAILURE_SEED_KEY: &str = "__browser_tester_print_failure__";
+const SCROLL_FAILURE_SEED_KEY: &str = "__browser_tester_scroll_failure__";
 
 impl Default for SessionConfig {
     fn default() -> Self {
@@ -515,6 +516,57 @@ impl PrintMocks {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScrollMethod {
+    To,
+    By,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScrollCall {
+    pub method: ScrollMethod,
+    pub x: i64,
+    pub y: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScrollMocks {
+    failure: Option<String>,
+    calls: Vec<ScrollCall>,
+}
+
+impl ScrollMocks {
+    pub fn fail(&mut self, message: impl Into<String>) {
+        self.failure = Some(message.into());
+    }
+
+    pub fn clear_failure(&mut self) {
+        self.failure = None;
+    }
+
+    fn invoke(&mut self, method: ScrollMethod, x: i64, y: i64) -> Result<(), String> {
+        self.record_call(method, x, y);
+        if let Some(message) = &self.failure {
+            return Err(message.clone());
+        }
+
+        Ok(())
+    }
+
+    pub fn record_call(&mut self, method: ScrollMethod, x: i64, y: i64) {
+        self.calls.push(ScrollCall { method, x, y });
+    }
+
+    pub fn calls(&self) -> &[ScrollCall] {
+        &self.calls
+    }
+
+    pub fn reset(&mut self) {
+        self.failure = None;
+        self.calls.clear();
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DownloadCapture {
     pub file_name: String,
@@ -679,6 +731,7 @@ pub struct MockRegistry {
     open: OpenMocks,
     close: CloseMocks,
     print: PrintMocks,
+    scroll: ScrollMocks,
     downloads: DownloadMocks,
     file_input: FileInputMocks,
     storage: StorageSeeds,
@@ -749,6 +802,14 @@ impl MockRegistry {
         &mut self.print
     }
 
+    pub fn scroll(&self) -> &ScrollMocks {
+        &self.scroll
+    }
+
+    pub fn scroll_mut(&mut self) -> &mut ScrollMocks {
+        &mut self.scroll
+    }
+
     pub fn downloads(&self) -> &DownloadMocks {
         &self.downloads
     }
@@ -782,6 +843,7 @@ impl MockRegistry {
         self.open.reset();
         self.close.reset();
         self.print.reset();
+        self.scroll.reset();
         self.downloads.reset();
         self.file_input.reset();
         self.storage.reset();
@@ -831,6 +893,8 @@ pub struct Session {
     current_script: Option<NodeId>,
     document_ready_state: DocumentReadyState,
     window_name: String,
+    scroll_x: i64,
+    scroll_y: i64,
 }
 
 impl Session {
@@ -858,6 +922,8 @@ impl Session {
                 mocks.close_mut().fail(value.clone());
             } else if key == PRINT_FAILURE_SEED_KEY {
                 mocks.print_mut().fail(value.clone());
+            } else if key == SCROLL_FAILURE_SEED_KEY {
+                mocks.scroll_mut().fail(value.clone());
             } else {
                 mocks.storage_mut().seed_local(key.clone(), value.clone());
             }
@@ -881,6 +947,8 @@ impl Session {
             current_script: None,
             document_ready_state: DocumentReadyState::Loading,
             window_name: String::new(),
+            scroll_x: 0,
+            scroll_y: 0,
         };
         session.bootstrap_inline_scripts()?;
         session.document_ready_state = DocumentReadyState::Complete;
@@ -1111,6 +1179,26 @@ impl Session {
             .map_err(SessionError::Mock)
     }
 
+    pub fn scroll_to(&mut self, x: i64, y: i64) -> Result<(), SessionError> {
+        self.mocks
+            .scroll_mut()
+            .invoke(ScrollMethod::To, x, y)
+            .map_err(SessionError::Mock)?;
+        self.scroll_x = x;
+        self.scroll_y = y;
+        Ok(())
+    }
+
+    pub fn scroll_by(&mut self, x: i64, y: i64) -> Result<(), SessionError> {
+        self.mocks
+            .scroll_mut()
+            .invoke(ScrollMethod::By, x, y)
+            .map_err(SessionError::Mock)?;
+        self.scroll_x += x;
+        self.scroll_y += y;
+        Ok(())
+    }
+
     pub fn close(&mut self) -> Result<(), SessionError> {
         self.mocks
             .close_mut()
@@ -1184,6 +1272,8 @@ impl Session {
         location.record_navigation(url.to_string());
         self.dom
             .set_target_fragment(Self::fragment_identifier_from_url(url));
+        self.scroll_x = 0;
+        self.scroll_y = 0;
         Ok(())
     }
 
@@ -2157,6 +2247,18 @@ impl Session {
         Ok(self.dom.document_element_id().map(Self::node_id_to_handle))
     }
 
+    pub fn document_has_focus(&self) -> bool {
+        self.focused_node.is_some()
+    }
+
+    pub fn document_visibility_state(&self) -> &'static str {
+        "visible"
+    }
+
+    pub fn document_hidden(&self) -> bool {
+        false
+    }
+
     pub fn document_title(&self) -> String {
         self.dom.document_title()
     }
@@ -2201,6 +2303,46 @@ impl Session {
 
     pub fn set_window_name(&mut self, value: &str) {
         self.window_name = value.to_string();
+    }
+
+    pub fn window_navigator_user_agent(&self) -> &'static str {
+        "browser-tester-next"
+    }
+
+    pub fn window_navigator_platform(&self) -> &'static str {
+        "unknown"
+    }
+
+    pub fn window_navigator_language(&self) -> &'static str {
+        "en-US"
+    }
+
+    pub fn window_navigator_cookie_enabled(&self) -> bool {
+        true
+    }
+
+    pub fn window_navigator_on_line(&self) -> bool {
+        true
+    }
+
+    pub fn window_scroll_x(&self) -> i64 {
+        self.scroll_x
+    }
+
+    pub fn window_scroll_y(&self) -> i64 {
+        self.scroll_y
+    }
+
+    pub fn window_page_x_offset(&self) -> i64 {
+        self.scroll_x
+    }
+
+    pub fn window_page_y_offset(&self) -> i64 {
+        self.scroll_y
+    }
+
+    pub fn window_device_pixel_ratio(&self) -> f64 {
+        1.0
     }
 
     fn storage_map(&self, target: StorageTarget) -> &BTreeMap<String, String> {
@@ -2852,6 +2994,18 @@ impl HostBindings for Session {
         Session::document_active_element(self)
     }
 
+    fn document_has_focus(&mut self) -> bt_script::Result<bool> {
+        Ok(Session::document_has_focus(self))
+    }
+
+    fn document_visibility_state(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_visibility_state(self).to_string())
+    }
+
+    fn document_hidden(&mut self) -> bt_script::Result<bool> {
+        Ok(Session::document_hidden(self))
+    }
+
     fn document_title(&mut self) -> bt_script::Result<String> {
         Ok(Session::document_title(self))
     }
@@ -2913,6 +3067,54 @@ impl HostBindings for Session {
 
     fn window_print(&mut self) -> bt_script::Result<()> {
         Session::print(self).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_navigator_user_agent(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_user_agent(self).to_string())
+    }
+
+    fn window_navigator_platform(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_platform(self).to_string())
+    }
+
+    fn window_navigator_language(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_language(self).to_string())
+    }
+
+    fn window_navigator_cookie_enabled(&mut self) -> bt_script::Result<bool> {
+        Ok(Session::window_navigator_cookie_enabled(self))
+    }
+
+    fn window_navigator_on_line(&mut self) -> bt_script::Result<bool> {
+        Ok(Session::window_navigator_on_line(self))
+    }
+
+    fn window_scroll_x(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_scroll_x(self))
+    }
+
+    fn window_scroll_y(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_scroll_y(self))
+    }
+
+    fn window_page_x_offset(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_page_x_offset(self))
+    }
+
+    fn window_page_y_offset(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_page_y_offset(self))
+    }
+
+    fn window_device_pixel_ratio(&mut self) -> bt_script::Result<f64> {
+        Ok(Session::window_device_pixel_ratio(self))
+    }
+
+    fn window_scroll_to(&mut self, x: i64, y: i64) -> bt_script::Result<()> {
+        Session::scroll_to(self, x, y).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_scroll_by(&mut self, x: i64, y: i64) -> bt_script::Result<()> {
+        Session::scroll_by(self, x, y).map_err(|error| ScriptError::new(error.to_string()))
     }
 
     fn window_name(&mut self) -> bt_script::Result<String> {

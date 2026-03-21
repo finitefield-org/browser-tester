@@ -343,6 +343,7 @@ pub enum ScriptValue {
     StyleSheetList(StyleSheetListTarget),
     Storage(StorageTarget),
     MediaQueryList(MediaQueryListState),
+    Navigator,
     StyleSheet(StyleSheetTarget),
     Node(NodeHandle),
     NodeList(NodeListTarget),
@@ -433,6 +434,18 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("document.activeElement"))
     }
 
+    fn document_has_focus(&mut self) -> Result<bool> {
+        Err(ScriptError::phase_not_ready("document.hasFocus"))
+    }
+
+    fn document_visibility_state(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("document.visibilityState"))
+    }
+
+    fn document_hidden(&mut self) -> Result<bool> {
+        Err(ScriptError::phase_not_ready("document.hidden"))
+    }
+
     fn document_title(&mut self) -> Result<String> {
         Err(ScriptError::phase_not_ready("document.title"))
     }
@@ -488,6 +501,54 @@ pub trait HostBindings {
 
     fn window_print(&mut self) -> Result<()> {
         Err(ScriptError::phase_not_ready("window.print"))
+    }
+
+    fn window_navigator_user_agent(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("window.navigator.userAgent"))
+    }
+
+    fn window_navigator_platform(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("window.navigator.platform"))
+    }
+
+    fn window_navigator_language(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("window.navigator.language"))
+    }
+
+    fn window_navigator_cookie_enabled(&mut self) -> Result<bool> {
+        Err(ScriptError::phase_not_ready("window.navigator.cookieEnabled"))
+    }
+
+    fn window_navigator_on_line(&mut self) -> Result<bool> {
+        Err(ScriptError::phase_not_ready("window.navigator.onLine"))
+    }
+
+    fn window_scroll_x(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready("window.scrollX"))
+    }
+
+    fn window_scroll_y(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready("window.scrollY"))
+    }
+
+    fn window_page_x_offset(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready("window.pageXOffset"))
+    }
+
+    fn window_page_y_offset(&mut self) -> Result<i64> {
+        Err(ScriptError::phase_not_ready("window.pageYOffset"))
+    }
+
+    fn window_device_pixel_ratio(&mut self) -> Result<f64> {
+        Err(ScriptError::phase_not_ready("window.devicePixelRatio"))
+    }
+
+    fn window_scroll_to(&mut self, _x: i64, _y: i64) -> Result<()> {
+        Err(ScriptError::phase_not_ready("window.scrollTo"))
+    }
+
+    fn window_scroll_by(&mut self, _x: i64, _y: i64) -> Result<()> {
+        Err(ScriptError::phase_not_ready("window.scrollBy"))
     }
 
     fn window_name(&mut self) -> Result<String> {

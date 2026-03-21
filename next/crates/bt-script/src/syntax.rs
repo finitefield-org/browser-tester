@@ -28,5 +28,6 @@ pub(crate) enum Expr {
     Member { object: Box<Expr>, property: String },
     Call { callee: Box<Expr>, args: Vec<Expr> },
     BinaryAdd { left: Box<Expr>, right: Box<Expr> },
+    UnaryNeg(Box<Expr>),
     ArrowFunction(ScriptFunction),
 }

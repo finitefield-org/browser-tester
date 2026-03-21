@@ -113,6 +113,18 @@ fn builder_print_failure_seed_does_not_leak_into_local_storage() -> browser_test
 }
 
 #[test]
+fn builder_scroll_failure_seed_does_not_leak_into_local_storage() -> browser_tester_next::Result<()>
+{
+    let mut harness = Harness::builder()
+        .scroll_failure("scroll blocked")
+        .build()?;
+
+    assert!(harness.debug().local_storage().is_empty());
+    assert_eq!(harness.mocks_mut().scroll().calls().len(), 0);
+    Ok(())
+}
+
+#[test]
 fn builder_close_failure_seed_does_not_leak_into_local_storage() -> browser_tester_next::Result<()> {
     let mut harness = Harness::builder()
         .close_failure("window closed")

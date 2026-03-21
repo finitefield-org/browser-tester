@@ -16,7 +16,9 @@ pub const SessionConfig = struct {
     local_storage: []const StorageSeed = &.{},
     session_storage: []const StorageSeed = &.{},
     open_failure: ?[]const u8 = null,
+    close_failure: ?[]const u8 = null,
     print_failure: ?[]const u8 = null,
+    scroll_failure: ?[]const u8 = null,
 };
 
 const HistoryEntry = struct {
@@ -127,6 +129,8 @@ pub const Session = struct {
     mock_registry: mocks.MockRegistry,
     history: HistoryModel,
     clock_ms: i64 = 0,
+    scroll_x: i64 = 0,
+    scroll_y: i64 = 0,
     window_name: []const u8 = "",
 
     pub fn init(allocator: std.mem.Allocator, config: SessionConfig) errors.Result(Session) {
@@ -181,13 +185,21 @@ pub const Session = struct {
         if (config.open_failure) |message| {
             try mock_registry.open().fail(message);
         }
+        if (config.close_failure) |message| {
+            try mock_registry.close().fail(message);
+        }
         if (config.print_failure) |message| {
             try mock_registry.print().fail(message);
+        }
+        if (config.scroll_failure) |message| {
+            try mock_registry.scroll().fail(message);
         }
         try mock_registry.location().setCurrent(url_copy);
         var history = try HistoryModel.init(arena_alloc, url_copy);
         errdefer history.deinit();
         var window_name: []const u8 = "";
+        var scroll_x: i64 = 0;
+        var scroll_y: i64 = 0;
         if (html_copy) |html_source| {
             try dom_store.bootstrapHtml(html_source);
         }
@@ -200,10 +212,14 @@ pub const Session = struct {
                 .location = mock_registry.location(),
                 .match_media = mock_registry.matchMedia(),
                 .open_mocks = mock_registry.open(),
+                .close_mocks = mock_registry.close(),
                 .print_mocks = mock_registry.print(),
+                .scroll_mocks = mock_registry.scroll(),
                 .history = &history,
                 .allocator = arena.allocator(),
                 .window_name = &window_name,
+                .scroll_x = &scroll_x,
+                .scroll_y = &scroll_y,
                 .storage = mock_registry.storage(),
             };
             try script_runtime.bootstrapInlineScripts(allocator, &bootstrap_host);
@@ -224,6 +240,8 @@ pub const Session = struct {
             .mock_registry = mock_registry,
             .history = history,
             .clock_ms = 0,
+            .scroll_x = scroll_x,
+            .scroll_y = scroll_y,
             .window_name = window_name,
         };
     }
@@ -291,6 +309,7 @@ pub const Session = struct {
 
         const target = try self.history.push(null, trimmed);
         try syncLocationState(self.mock_registry.location(), &self.dom_store, target, true);
+        self.resetScrollPosition();
         return;
     }
 
@@ -300,12 +319,14 @@ pub const Session = struct {
 
         const target = try self.history.replace(null, trimmed);
         try syncLocationState(self.mock_registry.location(), &self.dom_store, target, true);
+        self.resetScrollPosition();
         return;
     }
 
     pub fn reloadLocation(self: *Session) errors.Result(void) {
         const target = self.history.current();
         try syncLocationState(self.mock_registry.location(), &self.dom_store, target, true);
+        self.resetScrollPosition();
         return;
     }
 
@@ -398,6 +419,27 @@ pub const Session = struct {
     pub fn setWindowName(self: *Session, value: []const u8) errors.Result(void) {
         self.window_name = try self.arena.allocator().dupe(u8, value);
         return;
+    }
+
+    pub fn windowScrollX(self: *const Session) i64 {
+        return self.scroll_x;
+    }
+
+    pub fn windowScrollY(self: *const Session) i64 {
+        return self.scroll_y;
+    }
+
+    pub fn windowPageXOffset(self: *const Session) i64 {
+        return self.scroll_x;
+    }
+
+    pub fn windowPageYOffset(self: *const Session) i64 {
+        return self.scroll_y;
+    }
+
+    fn resetScrollPosition(self: *Session) void {
+        self.scroll_x = 0;
+        self.scroll_y = 0;
     }
 
     fn storageMap(self: *const Session, target: script.StorageTarget) *std.StringArrayHashMapUnmanaged([]const u8) {
@@ -521,8 +563,27 @@ pub const Session = struct {
         return;
     }
 
+    pub fn close(self: *Session) errors.Result(void) {
+        try self.mock_registry.close().recordCall();
+        return;
+    }
+
     pub fn print(self: *Session) errors.Result(void) {
         try self.mock_registry.print().recordCall();
+        return;
+    }
+
+    pub fn scrollTo(self: *Session, x: i64, y: i64) errors.Result(void) {
+        try self.mock_registry.scroll().recordCall(.To, x, y);
+        self.scroll_x = x;
+        self.scroll_y = y;
+        return;
+    }
+
+    pub fn scrollBy(self: *Session, x: i64, y: i64) errors.Result(void) {
+        try self.mock_registry.scroll().recordCall(.By, x, y);
+        self.scroll_x = std.math.add(i64, self.scroll_x, x) catch return error.ScriptRuntime;
+        self.scroll_y = std.math.add(i64, self.scroll_y, y) catch return error.ScriptRuntime;
         return;
     }
 
@@ -891,10 +952,14 @@ const BootstrapHost = struct {
     location: *mocks.LocationMocks,
     match_media: *mocks.MatchMediaMocks,
     open_mocks: *mocks.OpenMocks,
+    close_mocks: *mocks.CloseMocks,
     print_mocks: *mocks.PrintMocks,
+    scroll_mocks: *mocks.ScrollMocks,
     history: *HistoryModel,
     allocator: std.mem.Allocator,
     window_name: *[]const u8,
+    scroll_x: *i64,
+    scroll_y: *i64,
     storage: *mocks.StorageSeeds,
     current_script: ?dom.NodeId = null,
 
@@ -953,6 +1018,27 @@ const BootstrapHost = struct {
     pub fn setWindowName(self: *BootstrapHost, value: []const u8) errors.Result(void) {
         self.window_name.* = try self.allocator.dupe(u8, value);
         return;
+    }
+
+    pub fn windowScrollX(self: *const BootstrapHost) i64 {
+        return self.scroll_x.*;
+    }
+
+    pub fn windowScrollY(self: *const BootstrapHost) i64 {
+        return self.scroll_y.*;
+    }
+
+    pub fn windowPageXOffset(self: *const BootstrapHost) i64 {
+        return self.scroll_x.*;
+    }
+
+    pub fn windowPageYOffset(self: *const BootstrapHost) i64 {
+        return self.scroll_y.*;
+    }
+
+    fn resetScrollPosition(self: *BootstrapHost) void {
+        self.scroll_x.* = 0;
+        self.scroll_y.* = 0;
     }
 
     fn storageMap(self: *const BootstrapHost, target: script.StorageTarget) *std.StringArrayHashMapUnmanaged([]const u8) {
@@ -1047,6 +1133,7 @@ const BootstrapHost = struct {
 
         const target = try self.history.push(null, trimmed);
         try syncLocationState(self.location, self.dom_store, target, true);
+        self.resetScrollPosition();
         return;
     }
 
@@ -1056,12 +1143,14 @@ const BootstrapHost = struct {
 
         const target = try self.history.replace(null, trimmed);
         try syncLocationState(self.location, self.dom_store, target, true);
+        self.resetScrollPosition();
         return;
     }
 
     pub fn reloadLocation(self: *BootstrapHost) errors.Result(void) {
         const target = self.history.current();
         try syncLocationState(self.location, self.dom_store, target, true);
+        self.resetScrollPosition();
         return;
     }
 
@@ -1129,8 +1218,27 @@ const BootstrapHost = struct {
         return;
     }
 
+    pub fn close(self: *BootstrapHost) errors.Result(void) {
+        try self.close_mocks.recordCall();
+        return;
+    }
+
     pub fn print(self: *BootstrapHost) errors.Result(void) {
         try self.print_mocks.recordCall();
+        return;
+    }
+
+    pub fn scrollTo(self: *BootstrapHost, x: i64, y: i64) errors.Result(void) {
+        try self.scroll_mocks.recordCall(.To, x, y);
+        self.scroll_x.* = x;
+        self.scroll_y.* = y;
+        return;
+    }
+
+    pub fn scrollBy(self: *BootstrapHost, x: i64, y: i64) errors.Result(void) {
+        try self.scroll_mocks.recordCall(.By, x, y);
+        self.scroll_x.* = std.math.add(i64, self.scroll_x.*, x) catch return error.ScriptRuntime;
+        self.scroll_y.* = std.math.add(i64, self.scroll_y.*, y) catch return error.ScriptRuntime;
         return;
     }
 

@@ -87,12 +87,12 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_additive(&mut self) -> Result<Expr> {
-        let mut expr = self.parse_postfix()?;
+        let mut expr = self.parse_unary()?;
         loop {
             self.skip_ws_and_comments();
             if self.peek_char() == Some('+') && self.peek_next_char() != Some('=') {
                 self.pos += 1;
-                let rhs = self.parse_postfix()?;
+                let rhs = self.parse_unary()?;
                 expr = Expr::BinaryAdd {
                     left: Box::new(expr),
                     right: Box::new(rhs),
@@ -102,6 +102,17 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(expr)
+    }
+
+    fn parse_unary(&mut self) -> Result<Expr> {
+        self.skip_ws_and_comments();
+        if self.peek_char() == Some('-') {
+            self.pos += 1;
+            let expr = self.parse_unary()?;
+            return Ok(Expr::UnaryNeg(Box::new(expr)));
+        }
+
+        self.parse_postfix()
     }
 
     fn parse_postfix(&mut self) -> Result<Expr> {

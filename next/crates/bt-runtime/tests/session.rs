@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use bt_runtime::{Session, SessionConfig};
+use bt_runtime::{ScrollMethod, Session, SessionConfig};
 
 #[test]
 fn session_keeps_builder_configuration() {
@@ -916,6 +916,25 @@ fn session_resolves_document_active_element_through_inline_scripts() {
 }
 
 #[test]
+fn session_document_has_focus_tracks_focus_state() {
+    let mut session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<input id='first'><div id='out'></div>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should build");
+
+    let first_id = session.dom().select("#first").unwrap()[0];
+    assert!(!session.document_has_focus());
+
+    session.focus_node(first_id).expect("focus should work");
+    assert!(session.document_has_focus());
+
+    session.blur_node(first_id).expect("blur should work");
+    assert!(!session.document_has_focus());
+}
+
+#[test]
 fn session_resolves_document_style_sheets_through_inline_scripts() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -1212,6 +1231,22 @@ fn session_exposes_document_content_type() {
 
     let out_id = session.dom().select("#out").unwrap()[0];
     assert_eq!(session.dom().text_content_for_node(out_id), "text/html");
+}
+
+#[test]
+fn session_exposes_document_visibility_state_and_hidden() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = document.visibilityState + ':' + String(document.hidden);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.visibilityState should resolve through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "visible:false");
 }
 
 #[test]
@@ -1616,6 +1651,73 @@ fn session_print_records_calls_through_the_registry() {
 }
 
 #[test]
+fn session_exposes_window_navigator_metadata() {
+    let session = Session::new(SessionConfig::default()).expect("session should build");
+
+    assert_eq!(session.window_navigator_user_agent(), "browser-tester-next");
+    assert_eq!(session.window_navigator_platform(), "unknown");
+    assert_eq!(session.window_navigator_language(), "en-US");
+    assert!(session.window_navigator_cookie_enabled());
+    assert!(session.window_navigator_on_line());
+}
+
+#[test]
+fn session_exposes_window_device_pixel_ratio() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = String(window.devicePixelRatio);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should expose window.devicePixelRatio");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "1");
+    assert_eq!(session.window_device_pixel_ratio(), 1.0);
+}
+
+#[test]
+fn session_scroll_records_calls_through_the_registry() {
+    let mut session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>window.scrollTo(10, 20); document.getElementById('out').textContent = 'done';</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should build");
+
+    session
+        .scroll_by(-5, 3)
+        .expect("scroll should succeed by default");
+
+    assert_eq!(session.mocks().scroll().calls().len(), 2);
+    assert_eq!(
+        session.mocks().scroll().calls()[0],
+        bt_runtime::ScrollCall {
+            method: ScrollMethod::To,
+            x: 10,
+            y: 20,
+        }
+    );
+    assert_eq!(
+        session.mocks().scroll().calls()[1],
+        bt_runtime::ScrollCall {
+            method: ScrollMethod::By,
+            x: -5,
+            y: 3,
+        }
+    );
+    assert_eq!(session.window_scroll_x(), 5);
+    assert_eq!(session.window_scroll_y(), 23);
+    assert_eq!(session.window_page_x_offset(), 5);
+    assert_eq!(session.window_page_y_offset(), 23);
+}
+
+#[test]
 fn session_close_records_calls_through_the_registry() {
     let mut session = Session::new(SessionConfig::default()).expect("session should build");
 
@@ -1685,6 +1787,24 @@ fn session_rejects_open_failure_seed_during_bootstrap() {
     .expect_err("open failure seed should fail bootstrap when window.open runs");
 
     assert!(error.to_string().contains("popup blocked"));
+}
+
+#[test]
+fn session_rejects_scroll_failure_seed_during_bootstrap() {
+    let mut local_storage = BTreeMap::new();
+    local_storage.insert(
+        "__browser_tester_scroll_failure__".to_string(),
+        "scroll blocked".to_string(),
+    );
+
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<main id='out'></main><script>window.scrollTo(10, 20);</script>".to_string()),
+        local_storage,
+    })
+    .expect_err("scroll failure seed should fail bootstrap when window.scrollTo runs");
+
+    assert!(error.to_string().contains("scroll blocked"));
 }
 
 #[test]
