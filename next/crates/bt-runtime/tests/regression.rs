@@ -76,7 +76,19 @@ fn session_rejects_unsupported_selector_syntax_in_closest_explicitly() {
     .expect_err("broader CSS parsing inside :where should fail explicitly");
 
     assert!(error.to_string().contains("Script error"));
-    assert!(error.to_string().contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`"));
+    assert!(
+        error
+            .to_string()
+            .contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr]")
+            && error.to_string().contains("optional attribute selector flags like `[attr=value i]` and `[attr=value s]`")
+            && error.to_string().contains("bounded logical pseudo-classes like `:not(.primary)`")
+            && error.to_string().contains("state pseudo-classes like `:checked`, `:disabled`, `:enabled`, `:indeterminate`, `:default`, `:valid`, `:invalid`, `:in-range`, and `:out-of-range`")
+            && error
+                .to_string()
+                .contains("form-editable state pseudo-classes also include `:read-only` and `:read-write`")
+            && error.to_string().contains("descendant combinators like `A B`")
+            && error.to_string().contains("child combinators like `A > B`")
+    );
 }
 
 #[test]
@@ -201,6 +213,45 @@ fn session_resolves_document_location_without_special_handling_regression() {
 }
 
 #[test]
+fn session_reports_current_script_during_inline_bootstrap_and_null_elsewhere() {
+    let mut session = Session::new(SessionConfig {
+        url: "https://example.test/start".to_string(),
+        html: Some(
+            "<main id='out'></main><button id='button'></button><script id='first'>document.getElementById('out').textContent = document.currentScript.getAttribute('id');</script><script id='second'>document.getElementById('out').textContent += ':' + document.currentScript.getAttribute('id'); document.getElementById('button').addEventListener('click', () => { document.getElementById('out').textContent += ':' + String(document.currentScript); });</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.currentScript should remain available during inline script bootstrap");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "first:second");
+
+    let button_id = session.dom().select("#button").unwrap()[0];
+    session.click_node(button_id).unwrap();
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "first:second:null");
+}
+
+#[test]
+fn session_reports_document_ready_state_loading_during_bootstrap_and_complete_afterwards() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/start".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = document.readyState;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.readyState should remain available during inline bootstrap");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "loading");
+    assert_eq!(session.document_ready_state(), "complete");
+}
+
+#[test]
 fn document_url_assignment_is_rejected_regression() {
     let error = Session::new(SessionConfig {
         url: "https://example.test/start".to_string(),
@@ -268,6 +319,25 @@ fn session_resolves_any_link_pseudo_class_regression() {
 }
 
 #[test]
+fn session_resolves_defined_pseudo_class_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><x-widget id='widget'></x-widget><svg id='svg'><text id='svg-text'>Hi</text></svg></main><div id='out'></div><script>const defined = document.querySelectorAll(':defined'); const widget = document.getElementById('widget'); const svg = document.getElementById('svg'); document.getElementById('out').textContent = defined.item(0).getAttribute('id') + ':' + defined.item(1).getAttribute('id') + ':' + defined.item(2).getAttribute('id') + ':' + String(widget.matches(':defined')) + ':' + String(svg.matches(':defined'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("defined selector should resolve through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "root:svg:svg-text:false:true"
+    );
+}
+
+#[test]
 fn session_resolves_dir_pseudo_class_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -302,6 +372,111 @@ fn session_resolves_placeholder_shown_pseudo_class_regression() {
     assert_eq!(
         session.dom().text_content_for_node(out_id),
         "2:name:0:false:false"
+    );
+}
+
+#[test]
+fn session_resolves_indeterminate_pseudo_class_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><progress id='loading'></progress><form id='signup'><input type='radio' name='mode' id='mode-a'><input type='radio' name='mode' id='mode-b'></form><form id='chosen'><input type='radio' name='picked' id='picked-a' checked><input type='radio' name='picked' id='picked-b'></form><div id='out'></div><script>const before = document.querySelectorAll(':indeterminate'); document.getElementById('mode-b').setAttribute('checked', ''); const after = document.querySelectorAll(':indeterminate'); document.getElementById('out').textContent = String(before.length) + ':' + before.item(0).getAttribute('id') + ':' + String(after.length) + ':' + String(document.getElementById('picked-a').matches(':indeterminate')) + ':' + String(document.getElementById('loading').matches(':indeterminate'));</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("indeterminate selector should resolve through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "3:loading:1:false:true"
+    );
+}
+
+#[test]
+fn session_resolves_read_only_and_read_write_pseudo_classes_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='name' value='Ada'><input id='readonly' value='Bee' readonly><textarea id='bio'>Hello</textarea><div id='editable' contenteditable='true'>Edit</div><select id='mode'><option value='a'>A</option></select><button id='button'>Button</button><div id='out'></div><script>const readWrite = document.querySelectorAll(':read-write'); const readOnly = document.querySelectorAll(':read-only'); document.getElementById('out').textContent = String(readWrite.length) + ':' + readWrite.item(0).getAttribute('id') + ':' + readWrite.item(1).getAttribute('id') + ':' + readWrite.item(2).getAttribute('id') + ':' + String(readOnly.item(0).matches(':read-only')) + ':' + String(document.getElementById('readonly').matches(':read-only')) + ':' + String(document.getElementById('mode').matches(':read-only')) + ':' + String(document.getElementById('button').matches(':read-only'));</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("read-only/read-write selectors should resolve through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "3:name:bio:editable:true:true:true:true"
+    );
+}
+
+#[test]
+fn session_resolves_valid_and_invalid_pseudo_classes_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='filled' type='text' required value='Ada'><input id='empty' type='text' required><input id='check' type='checkbox' required><input id='check-ok' type='checkbox' required checked><textarea id='bio' required></textarea><select id='mode' required><option value='a' selected>A</option><option value='b'>B</option></select><div id='out'></div><script>document.getElementById('empty').value = 'Bee'; document.getElementById('check').setAttribute('checked', '');</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("valid/invalid selectors should resolve through Session");
+
+    let valid_ids = session.dom().select(":valid").unwrap();
+    let invalid_ids = session.dom().select(":invalid").unwrap();
+    let filled_id = session.dom().select("#filled").unwrap()[0];
+    let empty_id = session.dom().select("#empty").unwrap()[0];
+    let check_id = session.dom().select("#check").unwrap()[0];
+    let check_ok_id = session.dom().select("#check-ok").unwrap()[0];
+    let bio_id = session.dom().select("#bio").unwrap()[0];
+    let mode_id = session.dom().select("#mode").unwrap()[0];
+
+    assert_eq!(
+        valid_ids,
+        vec![filled_id, empty_id, check_id, check_ok_id, mode_id]
+    );
+    assert_eq!(invalid_ids, vec![bio_id]);
+}
+
+#[test]
+fn session_resolves_in_range_and_out_of_range_pseudo_classes_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='low' type='number' min='2' max='6' value='1'><input id='high' type='number' min='2' max='6' value='7'><input id='in-range' type='number' min='2' max='6' value='4'><div id='out'></div><script>const inRange = document.querySelectorAll(':in-range'); const outOfRange = document.querySelectorAll(':out-of-range'); document.getElementById('out').textContent = String(inRange.length) + ':' + inRange.item(0).getAttribute('id') + ':' + String(outOfRange.length) + ':' + outOfRange.item(0).getAttribute('id') + ':' + outOfRange.item(1).getAttribute('id');</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("in-range/out-of-range selectors should resolve through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "1:in-range:2:low:high"
+    );
+}
+
+#[test]
+fn session_rejects_read_only_selector_syntax_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='name' value='Ada'></main><div id='out'></div><script>document.querySelector(':read-only()');</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("malformed read-only selector should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported selector `:read-only()`")
     );
 }
 
@@ -363,7 +538,19 @@ fn session_rejects_out_of_range_hex_escape_selectors_explicitly() {
     .expect_err("out-of-range hex escapes should fail explicitly");
 
     assert!(error.to_string().contains("Script error"));
-    assert!(error.to_string().contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`"));
+    assert!(
+        error
+            .to_string()
+            .contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr]")
+            && error.to_string().contains("optional attribute selector flags like `[attr=value i]` and `[attr=value s]`")
+            && error.to_string().contains("bounded logical pseudo-classes like `:not(.primary)`")
+            && error.to_string().contains("state pseudo-classes like `:checked`, `:disabled`, `:enabled`, `:indeterminate`, `:default`, `:valid`, `:invalid`, `:in-range`, and `:out-of-range`")
+            && error
+                .to_string()
+                .contains("form-editable state pseudo-classes also include `:read-only` and `:read-write`")
+            && error.to_string().contains("descendant combinators like `A B`")
+            && error.to_string().contains("child combinators like `A > B`")
+    );
 }
 
 #[test]
@@ -422,6 +609,25 @@ fn session_resolves_radio_node_list_regression() {
 }
 
 #[test]
+fn session_resolves_radio_node_list_entries_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><form id='signup'><input type='radio' name='mode' id='mode-a' value='a'><input type='radio' name='mode' id='mode-b' value='b'></form></div><div id='out'></div><script>const elements = document.getElementById('signup').elements; const named = elements.namedItem('mode'); const entries = named.entries(); const first = entries.next(); const second = entries.next(); const third = entries.next(); document.getElementById('out').textContent = String(named.length) + ':' + String(first.value.index) + ':' + first.value.value + ':' + String(second.value.index) + ':' + second.value.value + ':' + String(third.done);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("radio node list entries should remain available");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "2:0:[object Element]:1:[object Element]:true"
+    );
+}
+
+#[test]
 fn session_resolves_document_scripts_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -456,6 +662,25 @@ fn session_resolves_document_style_sheets_regression() {
     assert_eq!(
         session.dom().text_content_for_node(out_id),
         "2:1:[object CSSStyleSheet]:null"
+    );
+}
+
+#[test]
+fn session_resolves_document_style_sheets_entries_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><style id='first-style'>.primary { color: red; }</style><link id='first-link' rel='stylesheet' href='a.css'><link id='ignored-link' rel='preload' href='b.css'></div><div id='out'></div><script>const out = document.getElementById('out'); const sheets = document.styleSheets; const keys = sheets.keys(); const values = sheets.values(); const entries = sheets.entries(); const key = keys.next(); const value = values.next(); const entry = entries.next(); out.textContent = String(sheets.length) + ':' + String(key.value) + ':' + String(value.value) + ':' + String(entry.value.index) + ':' + String(entry.value.value);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.styleSheets iterator helpers should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "2:0:[object CSSStyleSheet]:0:[object CSSStyleSheet]"
     );
 }
 
@@ -522,7 +747,7 @@ fn session_resolves_child_nodes_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
         html: Some(
-            "<main id='root'>Hello<span>World</span></main><div id='out'></div><script>const nodes = document.getElementById('root').childNodes; const before = nodes.length; const first = nodes.item(0); document.getElementById('root').innerHTML += '<!--tail-->'; document.getElementById('out').textContent = String(before) + ':' + String(nodes.length) + ':' + first.nodeName + ':' + String(nodes.item(1).nodeType) + ':' + nodes.item(2).nodeName;</script>"
+            "<main id='root'>Hello<span>World</span></main><div id='out'></div><script>const rootNode = document.childNodes.item(0); const nodes = rootNode.childNodes; const before = nodes.length; const first = nodes.item(0); document.getElementById('root').innerHTML += '<!--tail-->'; document.getElementById('out').textContent = String(before) + ':' + String(nodes.length) + ':' + first.nodeName + ':' + String(nodes.item(1).nodeType) + ':' + nodes.item(2).nodeName;</script>"
                 .to_string(),
         ),
         local_storage: BTreeMap::new(),
@@ -776,6 +1001,25 @@ fn session_resolves_collection_iterator_helpers_regression() {
 }
 
 #[test]
+fn session_resolves_collection_entries_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><span class='item'>One</span><span class='item'>Two</span></main><div id='out'></div><script>const docEntries = document.childNodes.entries(); const childEntries = document.getElementById('root').children.entries(); const firstDoc = docEntries.next(); const secondDoc = docEntries.next(); const firstChild = childEntries.next(); const secondChild = childEntries.next(); document.getElementById('out').textContent = String(firstDoc.value.index) + ':' + firstDoc.value.value.nodeName + ':' + String(secondDoc.value.index) + ':' + secondDoc.value.value.nodeName + ':' + String(firstChild.value.index) + ':' + firstChild.value.value.textContent + ':' + String(secondChild.value.index) + ':' + secondChild.value.value.textContent;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("collection entries should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:main:1:div:0:One:1:Two"
+    );
+}
+
+#[test]
 fn session_resolves_get_elements_by_tag_name_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -986,7 +1230,7 @@ fn session_resolves_first_last_and_nth_of_type_pseudo_classes_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
         html: Some(
-            "<main id='root'><div id='type-parent'><span id='first-span'>one</span><em id='first-em'>first</em><span id='middle-span'>two</span><em id='last-em'>last</em><span id='last-span'>three</span></div><div id='out'></div><script>const firstSpan = document.querySelector('#first-span:first-of-type'); const lastSpan = document.querySelector('#last-span:last-of-type'); const middleSpan = document.querySelector('#middle-span:nth-of-type(2)'); const middleFromEnd = document.querySelector('#middle-span:nth-last-of-type(2)'); const firstEm = document.querySelector('#first-em:first-of-type'); const lastEm = document.querySelector('#last-em:last-of-type'); document.getElementById('out').textContent = String(firstSpan.matches('#first-span:first-of-type')) + ':' + String(lastSpan.matches('#last-span:last-of-type')) + ':' + String(middleSpan.matches('#middle-span:nth-of-type(2)')) + ':' + String(middleFromEnd.matches('#middle-span:nth-last-of-type(2)')) + ':' + String(firstEm.matches('#first-em:first-of-type')) + ':' + String(lastEm.matches('#last-em:last-of-type'));</script></main>"
+            "<main id='root'><div id='type-parent'><span id='first-span' class='skip'>one</span><em id='first-em'>first</em><span id='middle-span' class='match'>two</span><em id='last-em'>last</em><span id='last-span' class='match'>three</span></div><div id='out'></div><script>const firstSpan = document.querySelector('#first-span:first-of-type'); const lastSpan = document.querySelector('#last-span:last-of-type'); const middleSpan = document.querySelector('#middle-span:nth-of-type(2)'); const filteredMiddle = document.querySelector('#middle-span:nth-of-type(1 of .match)'); const filteredLast = document.querySelector('#last-span:nth-last-of-type(1 of .match)'); const middleFromEnd = document.querySelector('#middle-span:nth-last-of-type(2)'); const firstEm = document.querySelector('#first-em:first-of-type'); const lastEm = document.querySelector('#last-em:last-of-type'); document.getElementById('out').textContent = String(firstSpan.matches('#first-span:first-of-type')) + ':' + String(lastSpan.matches('#last-span:last-of-type')) + ':' + String(middleSpan.matches('#middle-span:nth-of-type(2)')) + ':' + String(filteredMiddle.matches('#middle-span:nth-of-type(1 of .match)')) + ':' + String(filteredLast.matches('#last-span:nth-last-of-type(1 of .match)')) + ':' + String(middleFromEnd.matches('#middle-span:nth-last-of-type(2)')) + ':' + String(firstEm.matches('#first-em:first-of-type')) + ':' + String(lastEm.matches('#last-em:last-of-type'));</script></main>"
                 .to_string(),
         ),
         local_storage: BTreeMap::new(),
@@ -996,8 +1240,25 @@ fn session_resolves_first_last_and_nth_of_type_pseudo_classes_regression() {
     let out_id = session.dom().select("#out").unwrap()[0];
     assert_eq!(
         session.dom().text_content_for_node(out_id),
-        "true:true:true:true:true:true"
+        "true:true:true:true:true:true:true:true"
     );
+}
+
+#[test]
+fn session_rejects_unsupported_nth_of_type_selector_syntax_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><section id='child'>child</section></main><script>document.querySelector('#child:nth-of-type(1 of .child, )');</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("malformed :nth-of-type selector should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(error.to_string().contains("unsupported selector"));
+    assert!(error.to_string().contains(".child,"));
 }
 
 #[test]
@@ -1073,7 +1334,19 @@ fn session_rejects_unsupported_not_argument_syntax_explicitly() {
     .expect_err("broader CSS parsing inside :not should fail explicitly");
 
     assert!(error.to_string().contains("Script error"));
-    assert!(error.to_string().contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`"));
+    assert!(
+        error
+            .to_string()
+            .contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr]")
+            && error.to_string().contains("optional attribute selector flags like `[attr=value i]` and `[attr=value s]`")
+            && error.to_string().contains("bounded logical pseudo-classes like `:not(.primary)`")
+            && error.to_string().contains("state pseudo-classes like `:checked`, `:disabled`, `:enabled`, `:indeterminate`, `:default`, `:valid`, `:invalid`, `:in-range`, and `:out-of-range`")
+            && error
+                .to_string()
+                .contains("form-editable state pseudo-classes also include `:read-only` and `:read-write`")
+            && error.to_string().contains("descendant combinators like `A B`")
+            && error.to_string().contains("child combinators like `A > B`")
+    );
 }
 
 #[test]
@@ -1274,6 +1547,22 @@ fn session_rejects_select_options_on_non_select_elements_explicitly() {
         local_storage: BTreeMap::new(),
     })
     .expect_err("non-select elements should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(error.to_string().contains("node is not a select element"));
+}
+
+#[test]
+fn session_rejects_select_options_add_on_datalist_elements_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><select id='mode'><option id='first' value='a'>A</option></select><datalist id='list'><option id='extra' value='b'>B</option></datalist><script>document.getElementById('list').options.add(document.getElementById('extra'));</script></div>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("datalist options should not support add()");
 
     assert!(error.to_string().contains("Script error"));
     assert!(error.to_string().contains("node is not a select element"));

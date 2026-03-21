@@ -2,9 +2,10 @@ use std::collections::BTreeMap;
 
 use crate::syntax::{AssignTarget, Expr, Program, Statement};
 use crate::{
-    CollectionIteratorHandle, HostBindings, HtmlCollectionNamedItem, HtmlCollectionScope,
-    HtmlCollectionTarget, ListenerTarget, NodeHandle, NodeListTarget, RadioNodeListTarget, Result,
-    ScriptError, ScriptValue as Value, StyleSheetListTarget, StyleSheetTarget,
+    CollectionEntryHandle, CollectionIteratorHandle, HostBindings, HtmlCollectionNamedItem,
+    HtmlCollectionScope, HtmlCollectionTarget, ListenerTarget, NodeHandle, NodeListTarget,
+    RadioNodeListTarget, Result, ScriptError, ScriptValue as Value, StyleSheetListTarget,
+    StyleSheetTarget,
 };
 
 pub(crate) fn eval_program<H: HostBindings>(program: &Program, host: &mut H) -> Result<()> {
@@ -48,6 +49,7 @@ fn as_string(value: &Value) -> String {
         Value::RadioNodeList(_) => "[object RadioNodeList]".to_string(),
         Value::CollectionIterator(_) => "[object Iterator]".to_string(),
         Value::IteratorResult(_) => "[object IteratorResult]".to_string(),
+        Value::CollectionEntry(_) => "[object IteratorEntry]".to_string(),
         Value::Document => "[object Document]".to_string(),
         Value::Window => "[object Window]".to_string(),
         Value::Event(_) => "[object Event]".to_string(),
@@ -149,6 +151,9 @@ fn eval_assignment<H: HostBindings>(
                 ))),
                 (Value::Node(_), property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on node value"
+                ))),
+                (Value::CollectionEntry(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on iterator entry value"
                 ))),
                 (Value::CollectionIterator(_), property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on iterator value"
@@ -291,6 +296,15 @@ fn eval_member<H: HostBindings>(
         }
         Value::Document if property == "baseURI" => Ok(Value::String(host.document_base_uri()?)),
         Value::Document if property == "origin" => Ok(Value::String(host.document_origin()?)),
+        Value::Document if property == "currentScript" => {
+            Ok(match host.document_current_script()? {
+                Some(element) => Value::Element(element),
+                None => Value::Null,
+            })
+        }
+        Value::Document if property == "readyState" => {
+            Ok(Value::String(host.document_ready_state()?))
+        }
         Value::Document if property == "head" => Ok(match host.document_head()? {
             Some(element) => Value::Element(element),
             None => Value::Null,
@@ -416,6 +430,9 @@ fn eval_member<H: HostBindings>(
         Value::Event(event) if property == "eventPhase" => {
             Ok(Value::Number(event.event_phase() as u8 as f64))
         }
+        Value::Node(node) if property == "childNodes" => Ok(Value::NodeList(
+            NodeListTarget::ChildNodes(HtmlCollectionScope::Node(node)),
+        )),
         Value::Node(node) if property == "textContent" => {
             Ok(Value::String(host.node_text_content(node)?))
         }
@@ -435,6 +452,10 @@ fn eval_member<H: HostBindings>(
             Ok(result.value().unwrap_or(Value::Undefined))
         }
         Value::IteratorResult(result) if property == "done" => Ok(Value::Boolean(result.done())),
+        Value::CollectionEntry(entry) if property == "index" => {
+            Ok(Value::Number(entry.index() as f64))
+        }
+        Value::CollectionEntry(entry) if property == "value" => Ok(entry.value()),
         Value::ClassList(element) if property == "length" => {
             let length = class_list_tokens(element, host)?.len();
             Ok(Value::Number(length as f64))
@@ -485,6 +506,7 @@ fn eval_member<H: HostBindings>(
         Value::RadioNodeList(_) => Err(unsupported_member_access(property, "radio node list")),
         Value::CollectionIterator(_) => Err(unsupported_member_access(property, "iterator")),
         Value::IteratorResult(_) => Err(unsupported_member_access(property, "iterator result")),
+        Value::CollectionEntry(_) => Err(unsupported_member_access(property, "iterator entry")),
         Value::Function(_) => Err(unsupported_member_access(property, "function")),
         Value::TemplateContent(_) => Err(unsupported_member_access(property, "template content")),
     }
@@ -640,12 +662,18 @@ fn eval_method_call<H: HostBindings>(
             "forEach" => html_collection_for_each(&collection, args, env, host),
             "keys" => html_collection_keys(&collection, host),
             "values" => html_collection_values(&collection, host),
+            "entries" => html_collection_entries(&collection, host),
+            "add" => html_collection_select_options_add(&collection, args, env, host),
+            "remove" => html_collection_select_options_remove(&collection, args, env, host),
             other => Err(ScriptError::new(format!(
                 "unsupported HTMLCollection method: {other}"
             ))),
         },
         Value::StyleSheetList(target) => match method {
             "item" => style_sheet_list_item(&target, args, env, host),
+            "keys" => style_sheet_list_keys(&target, host),
+            "values" => style_sheet_list_values(&target, host),
+            "entries" => style_sheet_list_entries(&target, host),
             other => Err(ScriptError::new(format!(
                 "unsupported StyleSheetList method: {other}"
             ))),
@@ -676,6 +704,7 @@ fn eval_method_call<H: HostBindings>(
             "forEach" => node_list_for_each(&target, args, env, host),
             "keys" => node_list_keys(&target, host),
             "values" => node_list_values(&target, host),
+            "entries" => node_list_entries(&target, host),
             other => Err(ScriptError::new(format!(
                 "unsupported NodeList method: {other}"
             ))),
@@ -685,6 +714,7 @@ fn eval_method_call<H: HostBindings>(
             "forEach" => radio_node_list_for_each(&target, args, env, host),
             "keys" => radio_node_list_keys(&target, host),
             "values" => radio_node_list_values(&target, host),
+            "entries" => radio_node_list_entries(&target, host),
             other => Err(ScriptError::new(format!(
                 "unsupported RadioNodeList method: {other}"
             ))),
@@ -695,6 +725,9 @@ fn eval_method_call<H: HostBindings>(
                 "unsupported iterator method: {other}"
             ))),
         },
+        Value::CollectionEntry(_) => Err(ScriptError::new(format!(
+            "cannot call `{method}` on an iterator entry value"
+        ))),
         Value::IteratorResult(_) => Err(ScriptError::new(format!(
             "cannot call `{method}` on an iterator result value"
         ))),
@@ -1287,6 +1320,58 @@ fn html_collection_named_item<H: HostBindings>(
     )
 }
 
+fn html_collection_select_options_add<H: HostBindings>(
+    collection: &HtmlCollectionTarget,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [option_expr] = args else {
+        return Err(ScriptError::new(
+            "select.options.add() expects exactly one argument",
+        ));
+    };
+
+    let option = eval_element_handle(option_expr, env, host, "select.options.add")?;
+    match collection {
+        HtmlCollectionTarget::SelectOptions(element) => {
+            host.html_collection_select_options_add(*element, option)?;
+            Ok(Value::Undefined)
+        }
+        _ => Err(ScriptError::new(
+            "add() is only supported on select.options in this workspace",
+        )),
+    }
+}
+
+fn html_collection_select_options_remove<H: HostBindings>(
+    collection: &HtmlCollectionTarget,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [index_expr] = args else {
+        return Err(ScriptError::new(
+            "select.options.remove() expects exactly one argument",
+        ));
+    };
+
+    let index_value = eval_expr(index_expr, env, host)?;
+    let Some(index) = index_from_value(&index_value) else {
+        return Ok(Value::Undefined);
+    };
+
+    match collection {
+        HtmlCollectionTarget::SelectOptions(element) => {
+            host.html_collection_select_options_remove(*element, index)?;
+            Ok(Value::Undefined)
+        }
+        _ => Err(ScriptError::new(
+            "remove() is only supported on select.options in this workspace",
+        )),
+    }
+}
+
 fn html_collection_for_each<H: HostBindings>(
     collection: &HtmlCollectionTarget,
     args: &[Expr],
@@ -1345,6 +1430,16 @@ fn html_collection_values<H: HostBindings>(
     ))
 }
 
+fn html_collection_entries<H: HostBindings>(
+    collection: &HtmlCollectionTarget,
+    host: &mut H,
+) -> Result<Value> {
+    let items = html_collection_items(collection, host)?;
+    Ok(collection_entries(
+        items.into_iter().map(Value::Element).collect(),
+    ))
+}
+
 fn style_sheet_list_item<H: HostBindings>(
     target: &StyleSheetListTarget,
     args: &[Expr],
@@ -1367,6 +1462,44 @@ fn style_sheet_list_item<H: HostBindings>(
         .copied()
         .map(|handle| Value::StyleSheet(StyleSheetTarget::OwnerNode(handle)))
         .unwrap_or(Value::Null))
+}
+
+fn style_sheet_list_keys<H: HostBindings>(
+    target: &StyleSheetListTarget,
+    host: &mut H,
+) -> Result<Value> {
+    let items = style_sheet_list_items(target, host)?;
+    Ok(collection_iterator(
+        (0..items.len())
+            .map(|index| Value::Number(index as f64))
+            .collect(),
+    ))
+}
+
+fn style_sheet_list_values<H: HostBindings>(
+    target: &StyleSheetListTarget,
+    host: &mut H,
+) -> Result<Value> {
+    let items = style_sheet_list_items(target, host)?;
+    Ok(collection_iterator(
+        items
+            .into_iter()
+            .map(|handle| Value::StyleSheet(StyleSheetTarget::OwnerNode(handle)))
+            .collect(),
+    ))
+}
+
+fn style_sheet_list_entries<H: HostBindings>(
+    target: &StyleSheetListTarget,
+    host: &mut H,
+) -> Result<Value> {
+    let items = style_sheet_list_items(target, host)?;
+    Ok(collection_entries(
+        items
+            .into_iter()
+            .map(|handle| Value::StyleSheet(StyleSheetTarget::OwnerNode(handle)))
+            .collect(),
+    ))
 }
 
 fn html_collection_items<H: HostBindings>(
@@ -1563,6 +1696,13 @@ fn node_list_values<H: HostBindings>(target: &NodeListTarget, host: &mut H) -> R
     ))
 }
 
+fn node_list_entries<H: HostBindings>(target: &NodeListTarget, host: &mut H) -> Result<Value> {
+    let items = node_list_items(target, host)?;
+    Ok(collection_entries(
+        items.into_iter().map(NodeListItem::into_value).collect(),
+    ))
+}
+
 fn radio_node_list_keys<H: HostBindings>(
     target: &RadioNodeListTarget,
     host: &mut H,
@@ -1581,6 +1721,16 @@ fn radio_node_list_values<H: HostBindings>(
 ) -> Result<Value> {
     let items = radio_node_list_items(target, host)?;
     Ok(collection_iterator(
+        items.into_iter().map(Value::Element).collect(),
+    ))
+}
+
+fn radio_node_list_entries<H: HostBindings>(
+    target: &RadioNodeListTarget,
+    host: &mut H,
+) -> Result<Value> {
+    let items = radio_node_list_items(target, host)?;
+    Ok(collection_entries(
         items.into_iter().map(Value::Element).collect(),
     ))
 }
@@ -1671,6 +1821,16 @@ fn collection_iterator(items: Vec<Value>) -> Value {
     Value::CollectionIterator(CollectionIteratorHandle::new(items))
 }
 
+fn collection_entries(items: Vec<Value>) -> Value {
+    collection_iterator(
+        items
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| Value::CollectionEntry(CollectionEntryHandle::new(index, value)))
+            .collect(),
+    )
+}
+
 fn eval_add(left: Value, right: Value) -> Value {
     match (left, right) {
         (Value::Number(lhs), Value::Number(rhs)) => Value::Number(lhs + rhs),
@@ -1696,6 +1856,7 @@ fn is_truthy(value: &Value) -> bool {
         | Value::TemplateContent(_)
         | Value::CollectionIterator(_)
         | Value::IteratorResult(_)
+        | Value::CollectionEntry(_)
         | Value::Document
         | Value::Window
         | Value::Function(_)

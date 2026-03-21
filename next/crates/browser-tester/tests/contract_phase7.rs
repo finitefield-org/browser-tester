@@ -232,6 +232,16 @@ fn script_simple_pseudo_classes_work_end_to_end() -> browser_tester_next::Result
 }
 
 #[test]
+fn script_default_pseudo_class_works_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><form id='form'><input id='submit' type='submit'><input id='agree' type='checkbox' checked><input id='mode-a' type='radio' name='mode'><input id='mode-b' type='radio' name='mode' checked><select id='select'><option id='first' value='a'>A</option><option id='selected' value='b' selected>B</option></select></form></main><div id='out'></div><script>const defaults = document.querySelectorAll(':default'); const submit = document.querySelector('#submit:default'); const agree = document.querySelector('#agree:default'); const radio = document.querySelector('#mode-b:default'); const selected = document.querySelector('#selected:default'); document.getElementById('out').textContent = String(defaults.length) + ':' + submit.getAttribute('id') + ':' + agree.getAttribute('id') + ':' + radio.getAttribute('id') + ':' + selected.getAttribute('id');</script>",
+    )?;
+
+    harness.assert_text("#out", "4:submit:agree:mode-b:selected")?;
+    Ok(())
+}
+
+#[test]
 fn script_root_and_empty_pseudo_classes_work_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><section id='empty-comment'><!-- gap --></section><section id='empty'></section><section id='non-empty'>content</section><div id='out'>seed</div></main><script>const root = document.querySelector(':root'); const empties = document.querySelectorAll('#root :empty'); const emptyComment = document.getElementById('empty-comment'); const nonEmpty = document.getElementById('non-empty'); document.getElementById('out').textContent = String(root.matches(':root')) + ':' + String(empties.length) + ':' + empties.item(0).matches(':empty') + ':' + empties.item(1).matches(':empty') + ':' + String(emptyComment.matches(':empty')) + ':' + String(nonEmpty.matches(':empty'));</script>",
@@ -256,10 +266,10 @@ fn script_only_child_and_only_of_type_pseudo_classes_work_end_to_end()
 fn script_first_last_and_nth_of_type_pseudo_classes_work_end_to_end()
 -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
-        "<main id='root'><div id='type-parent'><span id='first-span'>one</span><em id='first-em'>first</em><span id='middle-span'>two</span><em id='last-em'>last</em><span id='last-span'>three</span></div><div id='out'>seed</div><script>const firstSpan = document.querySelector('#first-span:first-of-type'); const lastSpan = document.querySelector('#last-span:last-of-type'); const middleSpan = document.querySelector('#middle-span:nth-of-type(2)'); const middleFromEnd = document.querySelector('#middle-span:nth-last-of-type(2)'); const firstEm = document.querySelector('#first-em:first-of-type'); const lastEm = document.querySelector('#last-em:last-of-type'); document.getElementById('out').textContent = String(firstSpan.matches('#first-span:first-of-type')) + ':' + String(lastSpan.matches('#last-span:last-of-type')) + ':' + String(middleSpan.matches('#middle-span:nth-of-type(2)')) + ':' + String(middleFromEnd.matches('#middle-span:nth-last-of-type(2)')) + ':' + String(firstEm.matches('#first-em:first-of-type')) + ':' + String(lastEm.matches('#last-em:last-of-type'));</script></main>",
+        "<main id='root'><div id='type-parent'><span id='first-span' class='skip'>one</span><em id='first-em'>first</em><span id='middle-span' class='match'>two</span><em id='last-em'>last</em><span id='last-span' class='match'>three</span></div><div id='out'>seed</div><script>const firstSpan = document.querySelector('#first-span:first-of-type'); const lastSpan = document.querySelector('#last-span:last-of-type'); const middleSpan = document.querySelector('#middle-span:nth-of-type(2)'); const filteredMiddle = document.querySelector('#middle-span:nth-of-type(1 of .match)'); const filteredLast = document.querySelector('#last-span:nth-last-of-type(1 of .match)'); const middleFromEnd = document.querySelector('#middle-span:nth-last-of-type(2)'); const firstEm = document.querySelector('#first-em:first-of-type'); const lastEm = document.querySelector('#last-em:last-of-type'); document.getElementById('out').textContent = String(firstSpan.matches('#first-span:first-of-type')) + ':' + String(lastSpan.matches('#last-span:last-of-type')) + ':' + String(middleSpan.matches('#middle-span:nth-of-type(2)')) + ':' + String(filteredMiddle.matches('#middle-span:nth-of-type(1 of .match)')) + ':' + String(filteredLast.matches('#last-span:nth-last-of-type(1 of .match)')) + ':' + String(middleFromEnd.matches('#middle-span:nth-last-of-type(2)')) + ':' + String(firstEm.matches('#first-em:first-of-type')) + ':' + String(lastEm.matches('#last-em:last-of-type'));</script></main>",
     )?;
 
-    harness.assert_text("#out", "true:true:true:true:true:true")?;
+    harness.assert_text("#out", "true:true:true:true:true:true:true:true")?;
     Ok(())
 }
 
@@ -364,6 +374,16 @@ fn script_any_link_pseudo_class_works_end_to_end() -> browser_tester_next::Resul
 }
 
 #[test]
+fn script_defined_pseudo_class_works_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><x-widget id='widget'></x-widget><svg id='svg'><text id='svg-text'>Hi</text></svg></main><div id='out'></div><script>const defined = document.querySelectorAll(':defined'); const widget = document.getElementById('widget'); const svg = document.getElementById('svg'); document.getElementById('out').textContent = defined.item(0).getAttribute('id') + ':' + defined.item(1).getAttribute('id') + ':' + defined.item(2).getAttribute('id') + ':' + String(widget.matches(':defined')) + ':' + String(svg.matches(':defined'));</script>",
+    )?;
+
+    harness.assert_text("#out", "root:svg:svg-text:false:true")?;
+    Ok(())
+}
+
+#[test]
 fn script_dir_pseudo_class_works_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root' dir='rtl'><section id='section'><div id='child'>Child</div></section><p id='ltr' dir='ltr'>LTR</p><div id='auto' dir='auto'><span id='auto-child'>Auto</span></div></main><div id='out'></div><script>const dir = document.querySelector(':dir(rtl)'); const dirAll = document.querySelectorAll(':dir(rtl)'); const section = document.querySelector('#section:dir(rtl)'); const child = document.getElementById('child').closest(':dir(rtl)'); const autoChild = document.querySelector('#auto-child:dir(rtl)'); document.getElementById('out').textContent = dir.getAttribute('id') + ':' + String(dirAll.length) + ':' + section.getAttribute('id') + ':' + child.getAttribute('id') + ':' + autoChild.getAttribute('id');</script>",
@@ -381,6 +401,71 @@ fn script_placeholder_shown_pseudo_class_works_end_to_end() -> browser_tester_ne
 
     harness.assert_text("#out", "2:name:0:false:false")?;
     Ok(())
+}
+
+#[test]
+fn script_read_only_and_read_write_pseudo_classes_work_end_to_end()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><input id='name' value='Ada'><input id='readonly' value='Bee' readonly><textarea id='bio'>Hello</textarea><div id='editable' contenteditable='true'>Edit</div><select id='mode'><option value='a'>A</option></select><button id='button'>Button</button></main><div id='out'></div><script>const readWrite = document.querySelectorAll(':read-write'); const readOnly = document.querySelectorAll(':read-only'); document.getElementById('out').textContent = String(readWrite.length) + ':' + readWrite.item(0).getAttribute('id') + ':' + readWrite.item(1).getAttribute('id') + ':' + readWrite.item(2).getAttribute('id') + ':' + String(readOnly.item(0).matches(':read-only')) + ':' + String(document.getElementById('readonly').matches(':read-only')) + ':' + String(document.getElementById('mode').matches(':read-only')) + ':' + String(document.getElementById('button').matches(':read-only'));</script>",
+    )?;
+
+    harness.assert_text("#out", "3:name:bio:editable:true:true:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn script_read_only_and_read_write_pseudo_classes_fail_explicitly() {
+    let error = Harness::from_html("<main id='root'><input id='name' value='Ada'></main><div id='out'></div><script>document.querySelector(':read-only()');</script>")
+        .expect_err("malformed read-only selector should fail explicitly");
+
+    let message = error.to_string();
+    assert!(message.contains("Script error"));
+    assert!(message.contains("unsupported selector `:read-only()`"));
+}
+
+#[test]
+fn script_valid_and_invalid_pseudo_classes_work_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><input id='filled' type='text' required value='Ada'><input id='empty' type='text' required><input id='check' type='checkbox' required><input id='check-ok' type='checkbox' required checked><textarea id='bio' required></textarea><select id='mode' required><option value='a' selected>A</option><option value='b'>B</option></select></main><div id='out'></div><script>const beforeValid = document.querySelectorAll(':valid'); const beforeInvalid = document.querySelectorAll(':invalid'); document.getElementById('empty').value = 'Bee'; document.getElementById('check').setAttribute('checked', ''); const afterValid = document.querySelectorAll(':valid'); const afterInvalid = document.querySelectorAll(':invalid'); const empty = document.getElementById('empty'); const check = document.getElementById('check'); document.getElementById('out').textContent = String(beforeValid.length) + ':' + beforeValid.item(0).getAttribute('id') + ':' + beforeValid.item(1).getAttribute('id') + ':' + beforeValid.item(2).getAttribute('id') + ':' + String(beforeInvalid.length) + ':' + beforeInvalid.item(0).getAttribute('id') + ':' + beforeInvalid.item(1).getAttribute('id') + ':' + beforeInvalid.item(2).getAttribute('id') + ':' + String(afterValid.length) + ':' + String(afterInvalid.length) + ':' + String(empty.matches(':valid')) + ':' + String(check.matches(':valid'));</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "3:filled:check-ok:mode:3:empty:check:bio:5:1:true:true",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn script_valid_and_invalid_pseudo_classes_fail_explicitly() {
+    let error = Harness::from_html("<main id='root'><input id='name' type='text' required></main><div id='out'></div><script>document.querySelector(':valid()');</script>")
+        .expect_err("malformed valid selector should fail explicitly");
+
+    let message = error.to_string();
+    assert!(message.contains("Script error"));
+    assert!(message.contains("unsupported selector `:valid()`"));
+}
+
+#[test]
+fn script_in_range_and_out_of_range_pseudo_classes_work_end_to_end()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><input id='low' type='number' min='2' max='6' value='1'><input id='high' type='number' min='2' max='6' value='7'><input id='in-range' type='number' min='2' max='6' value='4'><div id='out'></div><script>const inRange = document.querySelectorAll(':in-range'); const outOfRange = document.querySelectorAll(':out-of-range'); document.getElementById('out').textContent = String(inRange.length) + ':' + inRange.item(0).getAttribute('id') + ':' + String(outOfRange.length) + ':' + outOfRange.item(0).getAttribute('id') + ':' + outOfRange.item(1).getAttribute('id') + ':' + String(document.getElementById('in-range').matches(':in-range')) + ':' + String(document.getElementById('low').matches(':out-of-range')) + ':' + String(document.getElementById('high').matches(':out-of-range'));</script></main>",
+    )?;
+
+    harness.assert_text("#out", "1:in-range:2:low:high:true:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn script_in_range_and_out_of_range_pseudo_classes_fail_explicitly() {
+    let error = Harness::from_html("<main id='root'><input id='name' type='number' min='2' max='6' value='4'></main><div id='out'></div><script>document.querySelector(':in-range()');</script>")
+        .expect_err("malformed in-range selector should fail explicitly");
+
+    let message = error.to_string();
+    assert!(message.contains("Script error"));
+    assert!(message.contains("unsupported selector `:in-range()`"));
 }
 
 #[test]
@@ -510,7 +595,15 @@ fn unsupported_element_matches_selector_fails_explicitly() {
 
     let message = error.to_string();
     assert!(message.contains("Script error"));
-    assert!(message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`"));
+    assert!(
+        message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr]")
+            && message.contains("optional attribute selector flags like `[attr=value i]` and `[attr=value s]`")
+            && message.contains("bounded logical pseudo-classes like `:not(.primary)`")
+            && message.contains("state pseudo-classes like `:checked`, `:disabled`, `:enabled`, `:indeterminate`, `:default`, `:valid`, `:invalid`, `:in-range`, and `:out-of-range`")
+            && message.contains("form-editable state pseudo-classes also include `:read-only` and `:read-write`")
+            && message.contains("descendant combinators like `A B`")
+            && message.contains("child combinators like `A > B`")
+    );
 }
 
 #[test]
@@ -522,7 +615,15 @@ fn unsupported_element_closest_selector_fails_explicitly() {
 
     let message = error.to_string();
     assert!(message.contains("Script error"));
-    assert!(message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`"));
+    assert!(
+        message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr]")
+            && message.contains("optional attribute selector flags like `[attr=value i]` and `[attr=value s]`")
+            && message.contains("bounded logical pseudo-classes like `:not(.primary)`")
+            && message.contains("state pseudo-classes like `:checked`, `:disabled`, `:enabled`, `:indeterminate`, `:default`, `:valid`, `:invalid`, `:in-range`, and `:out-of-range`")
+            && message.contains("form-editable state pseudo-classes also include `:read-only` and `:read-write`")
+            && message.contains("descendant combinators like `A B`")
+            && message.contains("child combinators like `A > B`")
+    );
 }
 
 #[test]
@@ -595,4 +696,17 @@ fn unsupported_script_first_of_type_selector_syntax_fails_explicitly() {
     let message = error.to_string();
     assert!(message.contains("Script error"));
     assert!(message.contains("unsupported selector `#child:first-of-type()`"));
+}
+
+#[test]
+fn unsupported_script_nth_of_type_selector_syntax_fails_explicitly() {
+    let error = Harness::from_html(
+        "<main id='root'><section id='child'>child</section></main><script>document.querySelector('#child:nth-of-type(1 of .child, )');</script>",
+    )
+    .expect_err("malformed :nth-of-type selector should fail explicitly");
+
+    let message = error.to_string();
+    assert!(message.contains("Script error"));
+    assert!(message.contains("unsupported selector"));
+    assert!(message.contains(".child,"));
 }

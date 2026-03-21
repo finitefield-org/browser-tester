@@ -88,6 +88,16 @@ fn collection_iterator_helpers_update_live_script_views_end_to_end()
 }
 
 #[test]
+fn collection_entries_update_live_script_views_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><span class='item'>First</span><span class='item'>Second</span></main><div id='out'></div><script>const docEntries = document.childNodes.entries(); const childEntries = document.getElementById('root').children.entries(); const firstDoc = docEntries.next(); const secondDoc = docEntries.next(); const firstChild = childEntries.next(); const secondChild = childEntries.next(); document.getElementById('out').textContent = String(firstDoc.value.index) + ':' + firstDoc.value.value.nodeName + ':' + String(secondDoc.value.index) + ':' + secondDoc.value.value.nodeName + ':' + String(firstChild.value.index) + ':' + firstChild.value.value.textContent + ':' + String(secondChild.value.index) + ':' + secondChild.value.value.textContent;</script>",
+    )?;
+
+    harness.assert_text("#out", "0:main:1:div:0:First:1:Second")?;
+    Ok(())
+}
+
+#[test]
 fn document_scripts_are_live_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><script id='first-script'></script></main><div id='out'></div><script>const out = document.getElementById('out'); const scripts = document.scripts; const before = scripts.length; const first = scripts.namedItem('first-script'); document.getElementById('root').textContent = 'gone'; out.textContent = String(before) + ':' + String(scripts.length) + ':' + String(first) + ':' + String(scripts.namedItem('missing'));</script>",
@@ -104,6 +114,19 @@ fn document_style_sheets_are_live_end_to_end() -> browser_tester_next::Result<()
     )?;
 
     harness.assert_text("#out", "2:0:[object CSSStyleSheet]:null")?;
+    Ok(())
+}
+
+#[test]
+fn document_style_sheets_iterator_helpers_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><style id='first-style'>.primary { color: red; }</style><link id='first-link' rel='stylesheet' href='a.css'><link id='ignored-link' rel='preload' href='b.css'></main><div id='out'></div><script>const sheets = document.styleSheets; const keys = sheets.keys(); const values = sheets.values(); const entries = sheets.entries(); const key = keys.next(); const value = values.next(); const entry = entries.next(); document.getElementById('out').textContent = String(sheets.length) + ':' + String(key.value) + ':' + String(value.value) + ':' + String(entry.value.index) + ':' + String(entry.value.value);</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "2:0:[object CSSStyleSheet]:0:[object CSSStyleSheet]",
+    )?;
     Ok(())
 }
 
@@ -154,12 +177,12 @@ fn document_children_are_live_end_to_end() -> browser_tester_next::Result<()> {
 #[test]
 fn child_nodes_are_live_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
-        "<!--pre--><main id='root'>Hello<span>World</span><!--tail--></main><div id='out'></div><script>const docNodes = document.childNodes; const rootNodes = document.getElementById('root').childNodes; const docFirst = docNodes.item(0); const docSecond = docNodes.item(1); const rootValues = rootNodes.values(); const firstRoot = rootValues.next(); const secondRoot = rootValues.next(); const thirdRoot = rootValues.next(); document.getElementById('out').textContent = String(docNodes.length) + ':' + docFirst.nodeName + ':' + String(docFirst.nodeType) + ':' + String(docFirst) + ':' + docSecond.nodeName + ':' + String(docSecond.nodeType) + ':' + firstRoot.value.nodeName + ':' + String(firstRoot.value.nodeType) + ':' + firstRoot.value.textContent + ':' + secondRoot.value.nodeName + ':' + String(secondRoot.value.nodeType) + ':' + secondRoot.value.textContent + ':' + thirdRoot.value.nodeName + ':' + String(thirdRoot.value.nodeType) + ':' + thirdRoot.value.textContent;</script>",
+        "<!--pre--><main id='root'>Hello<span>World</span><!--tail--></main><div id='out'></div><script>const docNodes = document.childNodes; const rootNode = docNodes.item(1); const rootNodes = rootNode.childNodes; const docFirst = docNodes.item(0); const docSecond = docNodes.item(1); const rootValues = rootNodes.values(); const firstRoot = rootValues.next(); const secondRoot = rootValues.next(); const thirdRoot = rootValues.next(); document.getElementById('out').textContent = String(docNodes.length) + ':' + docFirst.nodeName + ':' + String(docFirst.nodeType) + ':' + String(docFirst) + ':' + docSecond.nodeName + ':' + String(docSecond.nodeType) + ':' + rootNode.nodeName + ':' + firstRoot.value.nodeName + ':' + String(firstRoot.value.nodeType) + ':' + firstRoot.value.textContent + ':' + secondRoot.value.nodeName + ':' + String(secondRoot.value.nodeType) + ':' + secondRoot.value.textContent + ':' + thirdRoot.value.nodeName + ':' + String(thirdRoot.value.nodeType) + ':' + thirdRoot.value.textContent;</script>",
     )?;
 
     harness.assert_text(
         "#out",
-        "4:#comment:8:[object Node]:main:1:#text:3:Hello:span:1:World:#comment:8:",
+        "4:#comment:8:[object Node]:main:1:main:#text:3:Hello:span:1:World:#comment:8:",
     )?;
     Ok(())
 }
@@ -443,6 +466,29 @@ fn select_selected_options_are_live_end_to_end() -> browser_tester_next::Result<
     harness.assert_exists("#third")?;
     harness.assert_exists("#fourth")?;
     Ok(())
+}
+
+#[test]
+fn select_options_collection_add_and_remove_are_live_end_to_end()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><select id='mode'><option id='first' value='a'>A</option></select><option id='extra' value='b'>B</option><div id='out'></div><script>const select = document.getElementById('mode'); const extra = document.getElementById('extra'); const before = select.options.length; select.options.add(extra); const afterAdd = select.options.length; select.options.remove(0); document.getElementById('out').textContent = String(before) + ':' + String(afterAdd) + ':' + String(select.options.length) + ':' + select.options.item(0).getAttribute('id') + ':' + String(select.options.namedItem('first'));</script></main>",
+    )?;
+
+    harness.assert_text("#out", "1:2:1:extra:null")?;
+    harness.assert_exists("#mode > #extra")?;
+    assert!(harness.assert_exists("#first").is_err());
+    Ok(())
+}
+
+#[test]
+fn select_options_collection_rejects_datalist_mutation_end_to_end() {
+    let error = Harness::from_html(
+        "<main id='root'><select id='mode'><option id='first' value='a'>A</option></select><datalist id='list'><option id='extra' value='b'>B</option></datalist><script>document.getElementById('list').options.add(document.getElementById('extra'));</script></main>",
+    )
+    .expect_err("datalist options should not support select.options.add");
+
+    assert!(error.to_string().contains("node is not a select element"));
 }
 
 #[test]

@@ -269,6 +269,76 @@ pub const LocationMocks = struct {
     }
 };
 
+pub const MatchMediaRule = struct {
+    query: []const u8,
+    matches: bool = false,
+    is_failure: bool = false,
+};
+
+pub const MatchMediaCall = struct {
+    query: []const u8,
+};
+
+pub const MatchMediaMocks = struct {
+    allocator: std.mem.Allocator,
+    rule_log: std.ArrayListUnmanaged(MatchMediaRule) = .{},
+    call_log: std.ArrayListUnmanaged(MatchMediaCall) = .{},
+
+    pub fn init(allocator: std.mem.Allocator) MatchMediaMocks {
+        return .{
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *MatchMediaMocks) void {
+        self.rule_log.deinit(self.allocator);
+        self.call_log.deinit(self.allocator);
+    }
+
+    pub fn seedMatch(
+        self: *MatchMediaMocks,
+        query: []const u8,
+        matches: bool,
+    ) bt_errors.Result(void) {
+        try self.rule_log.append(self.allocator, .{
+            .query = try self.allocator.dupe(u8, query),
+            .matches = matches,
+        });
+    }
+
+    pub fn fail(self: *MatchMediaMocks, query: []const u8) bt_errors.Result(void) {
+        try self.rule_log.append(self.allocator, .{
+            .query = try self.allocator.dupe(u8, query),
+            .is_failure = true,
+        });
+    }
+
+    pub fn recordCall(self: *MatchMediaMocks, query: []const u8) bt_errors.Result(void) {
+        try self.call_log.append(self.allocator, .{
+            .query = try self.allocator.dupe(u8, query),
+        });
+    }
+
+    pub fn calls(self: *const MatchMediaMocks) []const MatchMediaCall {
+        return self.call_log.items;
+    }
+
+    pub fn findRule(self: *const MatchMediaMocks, query: []const u8) ?MatchMediaRule {
+        var index: usize = self.rule_log.items.len;
+        while (index > 0) {
+            index -= 1;
+            const rule = self.rule_log.items[index];
+            if (std.mem.eql(u8, rule.query, query)) return rule;
+        }
+        return null;
+    }
+
+    pub fn reset(self: *MatchMediaMocks) void {
+        self.rule_log = .{};
+        self.call_log = .{};
+    }
+};
+
 pub const DownloadCapture = struct {
     file_name: []const u8,
     bytes: []const u8,
@@ -399,6 +469,7 @@ pub const MockRegistry = struct {
     dialogs_mocks: DialogMocks,
     clipboard_mocks: ClipboardMocks,
     location_mocks: LocationMocks,
+    match_media_mocks: MatchMediaMocks,
     downloads_mocks: DownloadMocks,
     file_input_mocks: FileInputMocks,
     storage_seeds: StorageSeeds,
@@ -409,6 +480,7 @@ pub const MockRegistry = struct {
             .dialogs_mocks = DialogMocks.init(allocator),
             .clipboard_mocks = ClipboardMocks.init(allocator),
             .location_mocks = LocationMocks.init(allocator),
+            .match_media_mocks = MatchMediaMocks.init(allocator),
             .downloads_mocks = DownloadMocks.init(allocator),
             .file_input_mocks = FileInputMocks.init(allocator),
             .storage_seeds = StorageSeeds.init(allocator),
@@ -420,6 +492,7 @@ pub const MockRegistry = struct {
         self.dialogs_mocks.deinit();
         self.clipboard_mocks.deinit();
         self.location_mocks.deinit();
+        self.match_media_mocks.deinit();
         self.downloads_mocks.deinit();
         self.file_input_mocks.deinit();
         self.storage_seeds.deinit();
@@ -441,6 +514,10 @@ pub const MockRegistry = struct {
         return &self.location_mocks;
     }
 
+    pub fn matchMedia(self: *MockRegistry) *MatchMediaMocks {
+        return &self.match_media_mocks;
+    }
+
     pub fn downloads(self: *MockRegistry) *DownloadMocks {
         return &self.downloads_mocks;
     }
@@ -458,6 +535,7 @@ pub const MockRegistry = struct {
         self.dialogs_mocks.reset();
         self.clipboard_mocks.reset();
         self.location_mocks.reset();
+        self.match_media_mocks.reset();
         self.downloads_mocks.reset();
         self.file_input_mocks.reset();
         self.storage_seeds.reset();

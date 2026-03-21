@@ -1663,9 +1663,14 @@ fn runtime_resolves_document_origin_and_element_origin_aliases() {
         .expect("document.origin should resolve through host bindings");
 
     assert_eq!(host.document_origin_calls, 2);
-    assert_eq!(host.element_origin_calls, vec![ElementHandle::new(1), ElementHandle::new(2)]);
     assert_eq!(
-        host.text_content.get(&ElementHandle::new(1)).map(String::as_str),
+        host.element_origin_calls,
+        vec![ElementHandle::new(1), ElementHandle::new(2)]
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
         Some(
             "https://example.test:8443:https://example.test:8443:https://example.test:8443:https://example.test:8443"
         )
@@ -2136,6 +2141,45 @@ fn runtime_resolves_form_elements_radio_node_list_access() {
             (ElementHandle::new(1), "mode".to_string()),
             (ElementHandle::new(1), "mode".to_string()),
         ]
+    );
+}
+
+#[test]
+fn runtime_resolves_form_elements_radio_node_list_entries_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("signup", ElementHandle::new(1), "Signup");
+    host.seed_element("radio-a", ElementHandle::new(2), "");
+    host.seed_element("radio-b", ElementHandle::new(3), "");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_value(ElementHandle::new(2), "a");
+    host.seed_value(ElementHandle::new(3), "b");
+    host.seed_checked(ElementHandle::new(2), true);
+    host.seed_checked(ElementHandle::new(3), false);
+
+    host.seed_html_collection_form_elements_items(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2), ElementHandle::new(3)],
+    );
+    host.seed_html_collection_form_elements_named_items(
+        ElementHandle::new(1),
+        "mode",
+        vec![ElementHandle::new(2), ElementHandle::new(3)],
+    );
+
+    runtime
+        .eval_program(
+            "const elements = document.getElementById('signup').elements; const named = elements.namedItem('mode'); const entries = named.entries(); const first = entries.next(); const second = entries.next(); const third = entries.next(); document.getElementById('out').textContent = String(named.length) + ':' + String(first.value.index) + ':' + first.value.value + ':' + String(second.value.index) + ':' + second.value.value + ':' + String(third.done);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("radio node list entries should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("2:0:[object Element]:1:[object Element]:true")
     );
 }
 
@@ -2611,6 +2655,14 @@ fn runtime_resolves_child_nodes_access() {
             NodeHandle::new(22),
         ],
     );
+    host.seed_node_child_nodes_items(
+        HtmlCollectionScope::Node(NodeHandle::new(11)),
+        vec![
+            NodeHandle::new(20),
+            NodeHandle::new(21),
+            NodeHandle::new(22),
+        ],
+    );
     host.seed_node_name(NodeHandle::new(10), "#comment");
     host.seed_node_type(NodeHandle::new(10), 8);
     host.seed_node_text_content(NodeHandle::new(10), "");
@@ -2629,7 +2681,7 @@ fn runtime_resolves_child_nodes_access() {
 
     runtime
         .eval_program(
-            "const docNodes = document.childNodes; const rootNodes = document.getElementById('root').childNodes; const docFirst = docNodes.item(0); const docSecond = docNodes.item(1); const rootValues = rootNodes.values(); const firstRoot = rootValues.next(); const secondRoot = rootValues.next(); const thirdRoot = rootValues.next(); document.getElementById('out').textContent = String(docNodes.length) + ':' + docFirst.nodeName + ':' + String(docFirst.nodeType) + ':' + String(docFirst) + ':' + docSecond.nodeName + ':' + String(docSecond.nodeType) + ':' + firstRoot.value.nodeName + ':' + String(firstRoot.value.nodeType) + ':' + firstRoot.value.textContent + ':' + secondRoot.value.nodeName + ':' + String(secondRoot.value.nodeType) + ':' + secondRoot.value.textContent + ':' + thirdRoot.value.nodeName + ':' + String(thirdRoot.value.nodeType) + ':' + thirdRoot.value.textContent;",
+            "const docNodes = document.childNodes; const rootNode = docNodes.item(1); const rootNodes = rootNode.childNodes; const docFirst = docNodes.item(0); const docSecond = docNodes.item(1); const rootValues = rootNodes.values(); const firstRoot = rootValues.next(); const secondRoot = rootValues.next(); const thirdRoot = rootValues.next(); document.getElementById('out').textContent = String(docNodes.length) + ':' + docFirst.nodeName + ':' + String(docFirst.nodeType) + ':' + String(docFirst) + ':' + docSecond.nodeName + ':' + String(docSecond.nodeType) + ':' + rootNode.nodeName + ':' + firstRoot.value.nodeName + ':' + String(firstRoot.value.nodeType) + ':' + firstRoot.value.textContent + ':' + secondRoot.value.nodeName + ':' + String(secondRoot.value.nodeType) + ':' + secondRoot.value.textContent + ':' + thirdRoot.value.nodeName + ':' + String(thirdRoot.value.nodeType) + ':' + thirdRoot.value.textContent;",
             "inline-script",
             &mut host,
         )
@@ -2639,14 +2691,15 @@ fn runtime_resolves_child_nodes_access() {
         host.text_content
             .get(&ElementHandle::new(2))
             .map(String::as_str),
-        Some("2:#comment:8:[object Node]:main:1:#text:3:Hello:span:1:Inner:#comment:8:")
+        Some("2:#comment:8:[object Node]:main:1:main:#text:3:Hello:span:1:Inner:#comment:8:")
     );
     assert_eq!(
         host.node_child_nodes_items_calls,
         vec![
             HtmlCollectionScope::Document,
             HtmlCollectionScope::Document,
-            HtmlCollectionScope::Element(ElementHandle::new(1)),
+            HtmlCollectionScope::Document,
+            HtmlCollectionScope::Node(NodeHandle::new(11)),
             HtmlCollectionScope::Document
         ]
     );
@@ -2654,6 +2707,7 @@ fn runtime_resolves_child_nodes_access() {
         host.node_name_calls,
         vec![
             NodeHandle::new(10),
+            NodeHandle::new(11),
             NodeHandle::new(11),
             NodeHandle::new(20),
             NodeHandle::new(21),
@@ -2904,6 +2958,30 @@ fn runtime_resolves_document_style_sheets_access() {
         Some("2:[object CSSStyleSheet]:null")
     );
     assert_eq!(host.document_style_sheets_items_calls, 3);
+}
+
+#[test]
+fn runtime_resolves_document_style_sheets_entries_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_document_style_sheets_items(vec![ElementHandle::new(1), ElementHandle::new(2)]);
+
+    runtime
+        .eval_program(
+            "const sheets = document.styleSheets; const keys = sheets.keys(); const values = sheets.values(); const entries = sheets.entries(); const key = keys.next(); const value = values.next(); const entry = entries.next(); document.getElementById('out').textContent = String(sheets.length) + ':' + String(key.value) + ':' + String(value.value) + ':' + String(entry.value.index) + ':' + String(entry.value.value);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.styleSheets iterator helpers should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("2:0:[object CSSStyleSheet]:0:[object CSSStyleSheet]")
+    );
+    assert_eq!(host.document_style_sheets_items_calls, 4);
 }
 
 #[test]
@@ -3435,23 +3513,45 @@ fn runtime_supports_collection_iterator_helpers() {
 }
 
 #[test]
-fn runtime_rejects_collection_entries_helpers() {
+fn runtime_supports_collection_entries_helpers() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
-    host.seed_element("out", ElementHandle::new(1), "");
-    host.seed_document_query_selector_all(".item", vec![ElementHandle::new(1)]);
+    host.seed_element("root", ElementHandle::new(1), "");
+    host.seed_element("first", ElementHandle::new(2), "One");
+    host.seed_element("second", ElementHandle::new(3), "Two");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_node_child_nodes_items(
+        HtmlCollectionScope::Document,
+        vec![NodeHandle::new(10), NodeHandle::new(11)],
+    );
+    host.seed_node_name(NodeHandle::new(10), "main");
+    host.seed_node_type(NodeHandle::new(10), 1);
+    host.seed_node_text_content(NodeHandle::new(10), "");
+    host.seed_node_name(NodeHandle::new(11), "div");
+    host.seed_node_type(NodeHandle::new(11), 1);
+    host.seed_node_text_content(NodeHandle::new(11), "");
+    host.seed_element_children(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2), ElementHandle::new(3)],
+    );
 
-    let error = runtime
+    runtime
         .eval_program(
-            "document.querySelectorAll('.item').entries();",
+            "const docEntries = document.childNodes.entries(); const childEntries = document.getElementById('root').children.entries(); const firstDoc = docEntries.next(); const secondDoc = docEntries.next(); const thirdDoc = docEntries.next(); const firstChild = childEntries.next(); const secondChild = childEntries.next(); const thirdChild = childEntries.next(); document.getElementById('out').textContent = String(firstDoc.value.index) + ':' + firstDoc.value.value.nodeName + ':' + String(secondDoc.value.index) + ':' + secondDoc.value.value.nodeName + ':' + String(thirdDoc.done) + ':' + String(firstChild.value.index) + ':' + firstChild.value.value.textContent + ':' + String(secondChild.value.index) + ':' + secondChild.value.value.textContent + ':' + String(thirdChild.done);",
             "inline-script",
             &mut host,
         )
-        .expect_err("entries helper should remain unsupported");
+        .expect("collection entries helpers should dispatch through the script runtime");
 
-    assert!(
-        error
-            .to_string()
-            .contains("unsupported NodeList method: entries")
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("0:main:1:div:true:0:One:1:Two:true")
     );
+    assert_eq!(
+        host.node_child_nodes_items_calls,
+        vec![HtmlCollectionScope::Document]
+    );
+    assert_eq!(host.element_children_calls, vec![ElementHandle::new(1)]);
 }

@@ -87,7 +87,41 @@ fn simple_pseudo_classes_work_with_public_assert_exists() -> browser_tester_next
     harness.assert_exists("button:enabled")?;
     harness.assert_exists("input:checked")?;
     harness.assert_exists("option:checked")?;
+    harness.assert_exists("input:default")?;
+    harness.assert_exists("option:default")?;
     harness.assert_exists("select:last-child")?;
+    Ok(())
+}
+
+#[test]
+fn default_pseudo_class_works_with_public_assert_exists() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><form id='form'><input id='submit' type='submit'><input id='agree' type='checkbox' checked><input id='mode-a' type='radio' name='mode'><input id='mode-b' type='radio' name='mode' checked><select id='select'><option id='first' value='a'>A</option><option id='selected' value='b' selected>B</option></select></form></main>",
+    )?;
+
+    harness.assert_exists(":default")?;
+    harness.assert_exists("#submit:default")?;
+    harness.assert_exists("#agree:default")?;
+    harness.assert_exists("#mode-b:default")?;
+    harness.assert_exists("#selected:default")?;
+    Ok(())
+}
+
+#[test]
+fn indeterminate_pseudo_class_works_with_public_assert_exists() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><progress id='loading'></progress><form id='signup'><input type='radio' name='mode' id='mode-a'><input type='radio' name='mode' id='mode-b'></form><form id='chosen'><input type='radio' name='picked' id='picked-a' checked><input type='radio' name='picked' id='picked-b'></form></main>",
+    )?;
+
+    harness.assert_exists(":indeterminate")?;
+    harness.assert_exists("progress:indeterminate")?;
+    harness.assert_exists("input:indeterminate")?;
+    harness
+        .assert_exists("#picked-a:indeterminate")
+        .expect_err("checked radio groups should not be indeterminate");
+    harness
+        .assert_exists(":indeterminate()")
+        .expect_err("malformed indeterminate selector should fail explicitly");
     Ok(())
 }
 
@@ -124,13 +158,16 @@ fn only_child_and_only_of_type_pseudo_classes_work_with_public_assert_exists()
 fn first_last_and_nth_of_type_pseudo_classes_work_with_public_assert_exists()
 -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
-        "<main id='root'><div id='type-parent'><span id='first-span'>one</span><em id='first-em'>first</em><span id='middle-span'>two</span><em id='last-em'>last</em><span id='last-span'>three</span></div></main>",
+        "<main id='root'><div id='type-parent'><span id='first-span' class='skip'>one</span><em id='first-em'>first</em><span id='middle-span' class='match'>two</span><em id='last-em'>last</em><span id='last-span' class='match'>three</span></div></main>",
     )?;
 
     harness.assert_exists("#first-span:first-of-type")?;
     harness.assert_exists("#last-span:last-of-type")?;
     harness.assert_exists("#middle-span:nth-of-type(2)")?;
+    harness.assert_exists("#middle-span:nth-of-type(1 of .match)")?;
+    harness.assert_exists("#last-span:nth-of-type(2 of .match)")?;
     harness.assert_exists("#middle-span:nth-last-of-type(2)")?;
+    harness.assert_exists("#last-span:nth-last-of-type(1 of .match)")?;
     harness.assert_exists("#first-em:first-of-type")?;
     harness.assert_exists("#last-em:last-of-type")?;
     Ok(())
@@ -246,6 +283,96 @@ fn placeholder_shown_pseudo_class_works_with_public_assert_exists()
 }
 
 #[test]
+fn read_only_and_read_write_pseudo_classes_work_with_public_assert_exists()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><input id='name' value='Ada'><input id='readonly' value='Bee' readonly><textarea id='bio'>Hello</textarea><div id='editable' contenteditable='true'>Edit</div><select id='mode'><option value='a'>A</option></select><button id='button'>Button</button></main>",
+    )?;
+
+    harness.assert_exists(":read-write")?;
+    harness.assert_exists("#name:read-write")?;
+    harness.assert_exists("#bio:read-write")?;
+    harness.assert_exists("#editable:read-write")?;
+    harness.assert_exists(":read-only")?;
+    harness.assert_exists("#readonly:read-only")?;
+    harness.assert_exists("#mode:read-only")?;
+    harness.assert_exists("#button:read-only")?;
+
+    let error = harness
+        .assert_exists(":read-only()")
+        .expect_err("malformed read-only selector should fail explicitly");
+    let message = error.to_string();
+    assert!(message.contains("Selector error"));
+    assert!(message.contains("unsupported selector `:read-only()`"));
+    Ok(())
+}
+
+#[test]
+fn valid_and_invalid_pseudo_classes_work_with_public_assert_exists()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><input id='filled' type='text' required value='Ada'><input id='empty' type='text' required><input id='check' type='checkbox' required><input id='check-ok' type='checkbox' required checked><input id='low' type='number' min='2' max='6' value='1'><input id='high' type='number' min='2' max='6' value='7'><input id='in-range' type='number' min='2' max='6' value='4'><textarea id='bio' required></textarea><select id='mode' required><option value='a' selected>A</option><option value='b'>B</option></select><button id='button'>Button</button></main>",
+    )?;
+
+    harness.assert_exists(":valid")?;
+    harness.assert_exists(":invalid")?;
+    harness.assert_exists(":in-range")?;
+    harness.assert_exists(":out-of-range")?;
+    harness.assert_exists("#filled:valid")?;
+    harness.assert_exists("#check-ok:valid")?;
+    harness.assert_exists("#in-range:in-range")?;
+    harness.assert_exists("#low:out-of-range")?;
+    harness.assert_exists("#high:out-of-range")?;
+    harness.assert_exists("#mode:valid")?;
+    harness.assert_exists("#empty:invalid")?;
+    harness.assert_exists("#check:invalid")?;
+    harness.assert_exists("#low:invalid")?;
+    harness.assert_exists("#high:invalid")?;
+    harness.assert_exists("#bio:invalid")?;
+
+    let error = harness
+        .assert_exists(":valid()")
+        .expect_err("malformed valid selector should fail explicitly");
+    let message = error.to_string();
+    assert!(message.contains("Selector error"));
+    assert!(message.contains("unsupported selector `:valid()`"));
+    Ok(())
+}
+
+#[test]
+fn range_input_without_explicit_value_defaults_to_in_range() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html("<main id='root'><input id='slider' type='range'></main>")?;
+
+    harness.assert_exists(":in-range")?;
+    harness.assert_exists("#slider:in-range")?;
+    harness.assert_exists("#slider:valid")?;
+    harness.assert_exists("#slider:not(:out-of-range)")?;
+    Ok(())
+}
+
+#[test]
+fn in_range_and_out_of_range_pseudo_classes_work_with_public_assert_exists()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><input id='low' type='number' min='2' max='6' value='1'><input id='high' type='number' min='2' max='6' value='7'><input id='in-range' type='number' min='2' max='6' value='4'><input id='plain' type='text' value='4'></main>",
+    )?;
+
+    harness.assert_exists(":in-range")?;
+    harness.assert_exists(":out-of-range")?;
+    harness.assert_exists("#in-range:in-range")?;
+    harness.assert_exists("#low:out-of-range")?;
+    harness.assert_exists("#high:out-of-range")?;
+
+    let error = harness
+        .assert_exists(":in-range()")
+        .expect_err("malformed in-range selector should fail explicitly");
+    let message = error.to_string();
+    assert!(message.contains("Selector error"));
+    assert!(message.contains("unsupported selector `:in-range()`"));
+    Ok(())
+}
+
+#[test]
 fn any_link_pseudo_class_works_with_public_assert_exists() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><a id='docs' href='/docs'>Docs</a><a id='plain'>Plain</a><area id='map' href='/map'></main>",
@@ -262,6 +389,32 @@ fn any_link_pseudo_class_works_with_public_assert_exists() -> browser_tester_nex
     let message = error.to_string();
     assert!(message.contains("Selector error"));
     assert!(message.contains("unsupported selector `:link()`"));
+    Ok(())
+}
+
+#[test]
+fn defined_pseudo_class_works_with_public_assert_exists() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='main'><x-widget id='widget'></x-widget><svg id='svg'><text id='svg-text'>Hi</text></svg></main>",
+    )?;
+
+    harness.assert_exists(":defined")?;
+    harness.assert_exists("#main:defined")?;
+    harness.assert_exists("#svg:defined")?;
+    harness.assert_exists("#svg-text:defined")?;
+    harness
+        .assert_exists("#widget:defined")
+        .expect_err("custom elements without definition should not match :defined");
+    harness
+        .assert_exists("#widget:not(:defined)")
+        .expect("undefined custom element should match :not(:defined)");
+
+    let error = harness
+        .assert_exists(":defined()")
+        .expect_err("malformed defined selector should fail explicitly");
+    let message = error.to_string();
+    assert!(message.contains("Selector error"));
+    assert!(message.contains("unsupported selector `:defined()`"));
     Ok(())
 }
 
@@ -347,7 +500,13 @@ fn unsupported_selector_syntax_is_reported_explicitly() -> browser_tester_next::
     let message = error.to_string();
     assert!(message.contains("Selector error"));
     assert!(
-        message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`")
+        message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr]")
+            && message.contains("optional attribute selector flags like `[attr=value i]` and `[attr=value s]`")
+            && message.contains("bounded logical pseudo-classes like `:not(.primary)`")
+            && message.contains("state pseudo-classes like `:checked`, `:disabled`, `:enabled`, `:indeterminate`, `:default`, `:valid`, `:invalid`, `:in-range`, and `:out-of-range`")
+            && message.contains("form-editable state pseudo-classes also include `:read-only` and `:read-write`")
+            && message.contains("descendant combinators like `A B`")
+            && message.contains("child combinators like `A > B`")
     );
     Ok(())
 }
@@ -362,7 +521,13 @@ fn unsupported_not_argument_syntax_is_reported_explicitly() -> browser_tester_ne
     let message = error.to_string();
     assert!(message.contains("Selector error"));
     assert!(
-        message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`")
+        message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr]")
+            && message.contains("optional attribute selector flags like `[attr=value i]` and `[attr=value s]`")
+            && message.contains("bounded logical pseudo-classes like `:not(.primary)`")
+            && message.contains("state pseudo-classes like `:checked`, `:disabled`, `:enabled`, `:indeterminate`, `:default`, `:valid`, `:invalid`, `:in-range`, and `:out-of-range`")
+            && message.contains("form-editable state pseudo-classes also include `:read-only` and `:read-write`")
+            && message.contains("descendant combinators like `A B`")
+            && message.contains("child combinators like `A > B`")
     );
     Ok(())
 }
@@ -434,5 +599,20 @@ fn unsupported_first_of_type_selector_syntax_is_reported_explicitly()
     let message = error.to_string();
     assert!(message.contains("Selector error"));
     assert!(message.contains("unsupported selector `#child:first-of-type()`"));
+    Ok(())
+}
+
+#[test]
+fn unsupported_nth_of_type_selector_syntax_is_reported_explicitly()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html("<main id='root'><section id='child'>child</section></main>")?;
+    let error = harness
+        .assert_exists("#child:nth-of-type(1 of .child, )")
+        .expect_err("malformed :nth-of-type selector should fail explicitly");
+
+    let message = error.to_string();
+    assert!(message.contains("Selector error"));
+    assert!(message.contains("unsupported selector"));
+    assert!(message.contains(".child,"));
     Ok(())
 }

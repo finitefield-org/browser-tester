@@ -149,9 +149,13 @@ pub const ScriptRuntime = struct {
         }
 
         for (script_ids.items) |script_id| {
-            const source = try store.textContent(allocator, script_id);
-            defer allocator.free(source);
-            try self.evalScriptSourceWithBindings(allocator, host, source, "inline-script", &.{});
+            {
+                host.setCurrentScript(script_id);
+                defer host.setCurrentScript(null);
+                const source = try store.textContent(allocator, script_id);
+                defer allocator.free(source);
+                try self.evalScriptSourceWithBindings(allocator, host, source, "inline-script", &.{});
+            }
         }
 
         return;
@@ -233,6 +237,16 @@ const IteratorResult = struct {
     done: bool,
 };
 
+const CollectionEntry = struct {
+    index: usize,
+    value: Value,
+};
+
+const MediaQueryList = struct {
+    media: []const u8,
+    matches: bool,
+};
+
 const Value = union(enum) {
     undefined_value,
     null_value,
@@ -247,8 +261,10 @@ const Value = union(enum) {
     node_list: NodeList,
     html_collection: HtmlCollection,
     radio_node_list: RadioNodeList,
+    media_query_list: MediaQueryList,
     collection_iterator: *CollectionIteratorState,
     iterator_result: *IteratorResult,
+    collection_entry: *CollectionEntry,
     document_scripts,
     document_anchors,
     document_style_sheets,
@@ -796,6 +812,21 @@ fn evalAssignment(
 ) errors.Result(void) {
     const object = try evalExpr(allocator, host, bindings, target.object);
     switch (object) {
+        .document, .window => {
+            if (std.mem.eql(u8, target.property, "title")) {
+                const text = try asString(allocator, value);
+                try host.setDocumentTitle(text);
+                return;
+            }
+
+            if (std.mem.eql(u8, target.property, "location")) {
+                const text = try asString(allocator, value);
+                try host.navigate(text);
+                return;
+            }
+
+            return error.ScriptRuntime;
+        },
         .element => |element| {
             if (std.mem.eql(u8, target.property, "innerHTML")) {
                 const html = try asString(allocator, value);
@@ -920,6 +951,46 @@ fn evalMember(
             if (std.mem.eql(u8, member.property, "defaultView")) {
                 break :blk Value{ .window = {} };
             }
+            if (std.mem.eql(u8, member.property, "documentElement")) {
+                if (host.documentElement()) |element| {
+                    break :blk Value{ .element = element };
+                }
+                break :blk Value{ .null_value = {} };
+            }
+            if (std.mem.eql(u8, member.property, "head")) {
+                if (host.documentHead()) |element| {
+                    break :blk Value{ .element = element };
+                }
+                break :blk Value{ .null_value = {} };
+            }
+            if (std.mem.eql(u8, member.property, "body")) {
+                if (host.documentBody()) |element| {
+                    break :blk Value{ .element = element };
+                }
+                break :blk Value{ .null_value = {} };
+            }
+            if (std.mem.eql(u8, member.property, "title")) {
+                break :blk Value{ .string = host.documentTitle() };
+            }
+            if (std.mem.eql(u8, member.property, "readyState")) {
+                break :blk Value{ .string = host.documentReadyState() };
+            }
+            if (std.mem.eql(u8, member.property, "currentScript")) {
+                if (host.currentScript()) |script_id| {
+                    break :blk Value{ .element = script_id };
+                }
+                break :blk Value{ .null_value = {} };
+            }
+            if (std.mem.eql(u8, member.property, "location") or
+                std.mem.eql(u8, member.property, "URL") or
+                std.mem.eql(u8, member.property, "documentURI") or
+                std.mem.eql(u8, member.property, "baseURI"))
+            {
+                break :blk Value{ .string = host.currentLocationUrl() };
+            }
+            if (std.mem.eql(u8, member.property, "origin")) {
+                break :blk Value{ .string = try originFromUrl(allocator, host.currentLocationUrl()) };
+            }
             if (std.mem.eql(u8, member.property, "images")) {
                 break :blk Value{ .html_collection = .{ .root = host.domStore().documentId(), .kind = .document_images } };
             }
@@ -968,10 +1039,21 @@ fn evalMember(
             }
             break :blk error.ScriptRuntime;
         },
-        .window => if (std.mem.eql(u8, member.property, "document"))
-            Value{ .document = {} }
-        else
-            error.ScriptRuntime,
+        .window => blk: {
+            if (std.mem.eql(u8, member.property, "document")) {
+                break :blk Value{ .document = {} };
+            }
+            if (std.mem.eql(u8, member.property, "title")) {
+                break :blk Value{ .string = host.documentTitle() };
+            }
+            if (std.mem.eql(u8, member.property, "location")) {
+                break :blk Value{ .string = host.currentLocationUrl() };
+            }
+            if (std.mem.eql(u8, member.property, "origin")) {
+                break :blk Value{ .string = try originFromUrl(allocator, host.currentLocationUrl()) };
+            }
+            break :blk error.ScriptRuntime;
+        },
         .element => |element| blk: {
             if (std.mem.eql(u8, member.property, "content")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
@@ -1060,6 +1142,12 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "checked")) {
                 break :blk Value{ .boolean = host.domStore().checkedForNode(element) orelse false };
+            }
+            if (std.mem.eql(u8, member.property, "baseURI")) {
+                break :blk Value{ .string = host.currentLocationUrl() };
+            }
+            if (std.mem.eql(u8, member.property, "origin")) {
+                break :blk Value{ .string = try originFromUrl(allocator, host.currentLocationUrl()) };
             }
             if (std.mem.eql(u8, member.property, "cells")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
@@ -1181,6 +1269,15 @@ fn evalMember(
             }
             break :blk error.ScriptRuntime;
         },
+        .media_query_list => |mql| blk: {
+            if (std.mem.eql(u8, member.property, "matches")) {
+                break :blk Value{ .boolean = mql.matches };
+            }
+            if (std.mem.eql(u8, member.property, "media")) {
+                break :blk Value{ .string = mql.media };
+            }
+            break :blk error.ScriptRuntime;
+        },
         .dataset => blk: {
             const attribute_name = try datasetAttributeName(allocator, member.property);
             const value = host.domStore().getAttribute(object.dataset, attribute_name) catch |err| switch (err) {
@@ -1207,6 +1304,15 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "done")) {
                 break :blk Value{ .boolean = result.done };
+            }
+            break :blk error.ScriptRuntime;
+        },
+        .collection_entry => |entry| blk: {
+            if (std.mem.eql(u8, member.property, "index")) {
+                break :blk Value{ .number = @floatFromInt(entry.index) };
+            }
+            if (std.mem.eql(u8, member.property, "value")) {
+                break :blk entry.value;
             }
             break :blk error.ScriptRuntime;
         },
@@ -1352,6 +1458,15 @@ fn evalMethodCall(
         } else error.ScriptRuntime,
         .window => if (std.mem.eql(u8, method, "document")) Value{ .document = {} } else if (std.mem.eql(u8, method, "addEventListener")) blk: {
             break :blk try registerListener(allocator, host, bindings, .window, args);
+        } else if (std.mem.eql(u8, method, "matchMedia")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const query_value = try evalExpr(allocator, host, bindings, args[0]);
+            const query = try asString(allocator, query_value);
+            const matches = try host.matchMedia(query);
+            break :blk Value{ .media_query_list = .{
+                .media = query,
+                .matches = matches,
+            } };
         } else error.ScriptRuntime,
         .element => |element| if (std.mem.eql(u8, method, "textContent")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
@@ -1531,6 +1646,9 @@ fn evalMethodCall(
         } else if (std.mem.eql(u8, method, "values")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk try documentScriptsValues(allocator, host);
+        } else if (std.mem.eql(u8, method, "entries")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try documentScriptsEntries(allocator, host);
         } else if (std.mem.eql(u8, method, "namedItem")) blk: {
             if (args.len != 1) return error.ScriptRuntime;
             const name_value = try evalExpr(allocator, host, bindings, args[0]);
@@ -1557,6 +1675,9 @@ fn evalMethodCall(
         } else if (std.mem.eql(u8, method, "values")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk try documentAnchorsValues(allocator, host);
+        } else if (std.mem.eql(u8, method, "entries")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try documentAnchorsEntries(allocator, host);
         } else if (std.mem.eql(u8, method, "namedItem")) blk: {
             if (args.len != 1) return error.ScriptRuntime;
             const name_value = try evalExpr(allocator, host, bindings, args[0]);
@@ -1577,6 +1698,15 @@ fn evalMethodCall(
                 break :blk Value{ .null_value = {} };
             }
             break :blk Value{ .style_sheet = sheets[index] };
+        } else if (std.mem.eql(u8, method, "keys")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try documentStyleSheetsKeys(allocator, host);
+        } else if (std.mem.eql(u8, method, "values")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try documentStyleSheetsValues(allocator, host);
+        } else if (std.mem.eql(u8, method, "entries")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try documentStyleSheetsEntries(allocator, host);
         } else error.ScriptRuntime,
         .template_content => |_| error.ScriptRuntime,
         .class_list => |element| if (std.mem.eql(u8, method, "contains")) blk: {
@@ -1701,6 +1831,9 @@ fn evalMethodCall(
         } else if (std.mem.eql(u8, method, "values")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk try nodeListValues(allocator, host, list);
+        } else if (std.mem.eql(u8, method, "entries")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try nodeListEntries(allocator, host, list);
         } else if (std.mem.eql(u8, method, "forEach")) blk: {
             break :blk try nodeListForEach(allocator, host, bindings, list, args);
         } else error.ScriptRuntime,
@@ -1725,6 +1858,13 @@ fn evalMethodCall(
         } else if (std.mem.eql(u8, method, "values")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk try htmlCollectionValues(allocator, host, collection);
+        } else if (std.mem.eql(u8, method, "entries")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try htmlCollectionEntries(allocator, host, collection);
+        } else if (std.mem.eql(u8, method, "add")) blk: {
+            break :blk try htmlCollectionSelectOptionsAdd(allocator, host, bindings, collection, args);
+        } else if (std.mem.eql(u8, method, "remove")) blk: {
+            break :blk try htmlCollectionSelectOptionsRemove(allocator, host, bindings, collection, args);
         } else if (std.mem.eql(u8, method, "forEach")) blk: {
             break :blk try htmlCollectionForEach(allocator, host, bindings, collection, args);
         } else error.ScriptRuntime,
@@ -1738,6 +1878,19 @@ fn evalMethodCall(
                 break :blk Value{ .null_value = {} };
             }
             break :blk Value{ .element = items[index] };
+        } else if (std.mem.eql(u8, method, "keys")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try radioNodeListKeys(allocator, host, list);
+        } else if (std.mem.eql(u8, method, "values")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try radioNodeListValues(allocator, host, list);
+        } else if (std.mem.eql(u8, method, "entries")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try radioNodeListEntries(allocator, host, list);
+        } else error.ScriptRuntime,
+        .media_query_list => if (std.mem.eql(u8, method, "toString")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk Value{ .string = "[object MediaQueryList]" };
         } else error.ScriptRuntime,
         .collection_iterator => |iterator| if (std.mem.eql(u8, method, "next")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
@@ -1751,7 +1904,7 @@ fn evalMethodCall(
             };
             break :blk Value{ .undefined_value = {} };
         } else error.ScriptRuntime,
-        .iterator_result => error.ScriptRuntime,
+        .iterator_result, .collection_entry => error.ScriptRuntime,
         .event => |event| if (std.mem.eql(u8, method, "preventDefault")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             event.preventDefault();
@@ -2013,6 +2166,14 @@ fn nodeLikeMember(
     node_id: dom.NodeId,
     property: []const u8,
 ) errors.Result(?Value) {
+    if (std.mem.eql(u8, property, "baseURI")) {
+        return Value{ .string = host.currentLocationUrl() };
+    }
+
+    if (std.mem.eql(u8, property, "origin")) {
+        return Value{ .string = try originFromUrl(allocator, host.currentLocationUrl()) };
+    }
+
     if (std.mem.eql(u8, property, "nodeName")) {
         const name = host.domStore().nodeNameForNode(node_id) orelse return error.ScriptRuntime;
         return Value{ .string = name };
@@ -2071,6 +2232,25 @@ fn collectionIteratorFromValues(
     return Value{ .collection_iterator = state };
 }
 
+fn collectionEntriesFromValues(
+    allocator: std.mem.Allocator,
+    items: []Value,
+) errors.Result(Value) {
+    var entries = try allocator.alloc(Value, items.len);
+    errdefer allocator.free(entries);
+
+    for (items, 0..) |item, index| {
+        const entry = try allocator.create(CollectionEntry);
+        entry.* = .{
+            .index = index,
+            .value = item,
+        };
+        entries[index] = Value{ .collection_entry = entry };
+    }
+
+    return try collectionIteratorFromValues(allocator, entries);
+}
+
 fn collectionIteratorFromNodeIds(
     allocator: std.mem.Allocator,
     node_ids: []const dom.NodeId,
@@ -2088,6 +2268,35 @@ fn collectionIteratorFromNodeIds(
     }
 
     return try collectionIteratorFromValues(allocator, items);
+}
+
+fn collectionEntriesFromNodeIds(
+    allocator: std.mem.Allocator,
+    node_ids: []const dom.NodeId,
+    kind: NodeListItemKind,
+) errors.Result(Value) {
+    var items = try allocator.alloc(Value, node_ids.len);
+    errdefer allocator.free(items);
+
+    for (node_ids, 0..) |node_id, index| {
+        items[index] = collectionItemForNodeId(node_id, kind);
+    }
+
+    return try collectionEntriesFromValues(allocator, items);
+}
+
+fn collectionEntriesFromStyleSheetIds(
+    allocator: std.mem.Allocator,
+    node_ids: []const dom.NodeId,
+) errors.Result(Value) {
+    var items = try allocator.alloc(Value, node_ids.len);
+    errdefer allocator.free(items);
+
+    for (node_ids, 0..) |node_id, index| {
+        items[index] = Value{ .style_sheet = node_id };
+    }
+
+    return try collectionEntriesFromValues(allocator, items);
 }
 
 fn collectionIteratorNext(
@@ -2129,6 +2338,16 @@ fn nodeListValues(
     return try collectionIteratorFromNodeIds(allocator, items, list.item_kind, false);
 }
 
+fn nodeListEntries(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    list: NodeList,
+) errors.Result(Value) {
+    const items = try nodeListCurrentIds(allocator, host, list);
+    defer allocator.free(items);
+    return try collectionEntriesFromNodeIds(allocator, items, list.item_kind);
+}
+
 fn htmlCollectionKeys(
     allocator: std.mem.Allocator,
     host: anytype,
@@ -2147,6 +2366,16 @@ fn htmlCollectionValues(
     const items = try htmlCollectionCurrentIds(allocator, host, collection);
     defer allocator.free(items);
     return try collectionIteratorFromNodeIds(allocator, items, .element, false);
+}
+
+fn htmlCollectionEntries(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    collection: HtmlCollection,
+) errors.Result(Value) {
+    const items = try htmlCollectionCurrentIds(allocator, host, collection);
+    defer allocator.free(items);
+    return try collectionEntriesFromNodeIds(allocator, items, .element);
 }
 
 fn documentScriptsItems(
@@ -2176,6 +2405,15 @@ fn documentScriptsValues(
     const scripts = try documentScriptsItems(allocator, host);
     defer allocator.free(scripts);
     return try collectionIteratorFromNodeIds(allocator, scripts, .element, false);
+}
+
+fn documentScriptsEntries(
+    allocator: std.mem.Allocator,
+    host: anytype,
+) errors.Result(Value) {
+    const scripts = try documentScriptsItems(allocator, host);
+    defer allocator.free(scripts);
+    return try collectionEntriesFromNodeIds(allocator, scripts, .element);
 }
 
 fn documentScriptsNamedItem(
@@ -2242,6 +2480,15 @@ fn documentAnchorsValues(
     const anchors = try documentAnchorsItems(allocator, host);
     defer allocator.free(anchors);
     return try collectionIteratorFromNodeIds(allocator, anchors, .element, false);
+}
+
+fn documentAnchorsEntries(
+    allocator: std.mem.Allocator,
+    host: anytype,
+) errors.Result(Value) {
+    const anchors = try documentAnchorsItems(allocator, host);
+    defer allocator.free(anchors);
+    return try collectionEntriesFromNodeIds(allocator, anchors, .element);
 }
 
 fn documentAnchorsNamedItem(
@@ -2325,6 +2572,55 @@ fn datalistOptionsItems(
     datalist_id: dom.NodeId,
 ) errors.Result([]dom.NodeId) {
     return try selectOptionsItems(allocator, host, datalist_id);
+}
+
+fn htmlCollectionSelectOptionsAdd(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    collection: HtmlCollection,
+    args: []*Expr,
+) errors.Result(Value) {
+    if (collection.kind != .select_options) return error.ScriptRuntime;
+    if (args.len != 1) return error.ScriptRuntime;
+
+    const option = try evalElementHandle(allocator, host, bindings, args[0]);
+    const tag_name = host.domStore().tagNameForNode(option) orelse return error.ScriptRuntime;
+    if (!std.mem.eql(u8, tag_name, "option")) return error.ScriptRuntime;
+
+    _ = host.domStoreMut().appendChild(collection.root, option) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+
+    return Value{ .undefined_value = {} };
+}
+
+fn htmlCollectionSelectOptionsRemove(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    collection: HtmlCollection,
+    args: []*Expr,
+) errors.Result(Value) {
+    if (collection.kind != .select_options) return error.ScriptRuntime;
+    if (args.len != 1) return error.ScriptRuntime;
+
+    const index_value = try evalExpr(allocator, host, bindings, args[0]);
+    const index = optionalNodeListIndex(index_value) orelse return Value{ .undefined_value = {} };
+
+    const items = try selectOptionsItems(allocator, host, collection.root);
+    defer allocator.free(items);
+    if (index >= items.len) {
+        return Value{ .undefined_value = {} };
+    }
+
+    host.domStoreMut().removeNode(items[index]) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+
+    return Value{ .undefined_value = {} };
 }
 
 fn documentSelectItems(
@@ -2544,6 +2840,38 @@ fn documentStyleSheetsItems(
 
     try appendStyleSheetIds(allocator, host, host.domStore().documentId(), &filtered);
     return try allocator.dupe(dom.NodeId, filtered.items);
+}
+
+fn documentStyleSheetsKeys(
+    allocator: std.mem.Allocator,
+    host: anytype,
+) errors.Result(Value) {
+    const sheets = try documentStyleSheetsItems(allocator, host);
+    defer allocator.free(sheets);
+    return try collectionIteratorFromNodeIds(allocator, sheets, .element, true);
+}
+
+fn documentStyleSheetsValues(
+    allocator: std.mem.Allocator,
+    host: anytype,
+) errors.Result(Value) {
+    const sheets = try documentStyleSheetsItems(allocator, host);
+    defer allocator.free(sheets);
+    var items = try allocator.alloc(Value, sheets.len);
+    errdefer allocator.free(items);
+    for (sheets, 0..) |sheet_id, index| {
+        items[index] = Value{ .style_sheet = sheet_id };
+    }
+    return try collectionIteratorFromValues(allocator, items);
+}
+
+fn documentStyleSheetsEntries(
+    allocator: std.mem.Allocator,
+    host: anytype,
+) errors.Result(Value) {
+    const sheets = try documentStyleSheetsItems(allocator, host);
+    defer allocator.free(sheets);
+    return try collectionEntriesFromStyleSheetIds(allocator, sheets);
 }
 
 fn appendAllElementIds(
@@ -2846,6 +3174,36 @@ fn radioNodeListValue(
     return "";
 }
 
+fn radioNodeListKeys(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    list: RadioNodeList,
+) errors.Result(Value) {
+    const items = try radioNodeListCurrentIds(allocator, host, list);
+    defer allocator.free(items);
+    return try collectionIteratorFromNodeIds(allocator, items, .element, true);
+}
+
+fn radioNodeListValues(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    list: RadioNodeList,
+) errors.Result(Value) {
+    const items = try radioNodeListCurrentIds(allocator, host, list);
+    defer allocator.free(items);
+    return try collectionIteratorFromNodeIds(allocator, items, .element, false);
+}
+
+fn radioNodeListEntries(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    list: RadioNodeList,
+) errors.Result(Value) {
+    const items = try radioNodeListCurrentIds(allocator, host, list);
+    defer allocator.free(items);
+    return try collectionEntriesFromNodeIds(allocator, items, .element);
+}
+
 fn functionBindings(
     allocator: std.mem.Allocator,
     function: ScriptFunction,
@@ -3093,6 +3451,35 @@ fn evalElementArguments(
     return children;
 }
 
+fn originFromUrl(allocator: std.mem.Allocator, url: []const u8) errors.Result([]const u8) {
+    const colon_index = std.mem.indexOfScalar(u8, url, ':') orelse return allocator.dupe(u8, "null");
+    if (colon_index + 2 >= url.len) return allocator.dupe(u8, "null");
+
+    const scheme = url[0..colon_index];
+    const after_colon = url[colon_index + 1 ..];
+    if (!std.mem.startsWith(u8, after_colon, "//")) {
+        return allocator.dupe(u8, "null");
+    }
+
+    const authority_start = colon_index + 3;
+    const remainder = url[authority_start..];
+    const authority_end = std.mem.indexOfAny(u8, remainder, "/?#") orelse remainder.len;
+    const authority = remainder[0..authority_end];
+    if (authority.len == 0) {
+        return allocator.dupe(u8, "null");
+    }
+
+    var out = try allocator.alloc(u8, scheme.len + 3 + authority.len);
+    for (scheme, 0..) |byte, index| {
+        out[index] = std.ascii.toLower(byte);
+    }
+    out[scheme.len] = ':';
+    out[scheme.len + 1] = '/';
+    out[scheme.len + 2] = '/';
+    @memcpy(out[scheme.len + 3 ..], authority);
+    return out;
+}
+
 fn evalBinaryAdd(
     allocator: std.mem.Allocator,
     host: anytype,
@@ -3146,6 +3533,8 @@ fn asString(allocator: std.mem.Allocator, value: Value) errors.Result([]const u8
         .document_style_sheets => "[object StyleSheetList]",
         .style_sheet => "[object CSSStyleSheet]",
         .radio_node_list => "[object RadioNodeList]",
+        .media_query_list => "[object MediaQueryList]",
+        .collection_entry => "[object IteratorEntry]",
         .event => "[object Event]",
         .document => "[object Document]",
         .window => "[object Window]",
@@ -3167,7 +3556,7 @@ fn isTruthy(value: Value) bool {
         .boolean => |flag| flag,
         .number => |number| number != 0,
         .string => |text| text.len != 0,
-        .element, .node, .template_content, .class_list, .dataset, .node_list, .collection_iterator, .iterator_result, .html_collection, .document_scripts, .document_anchors, .document_style_sheets, .style_sheet, .radio_node_list, .event, .document, .window, .function => true,
+        .element, .node, .template_content, .class_list, .dataset, .node_list, .collection_iterator, .iterator_result, .collection_entry, .html_collection, .document_scripts, .document_anchors, .document_style_sheets, .style_sheet, .radio_node_list, .media_query_list, .event, .document, .window, .function => true,
     };
 }
 
@@ -3269,6 +3658,21 @@ fn asNodeListIndex(value: Value) errors.Result(usize) {
             break :blk @as(usize, @intFromFloat(number));
         },
         else => return error.ScriptRuntime,
+    };
+}
+
+fn optionalNodeListIndex(value: Value) ?usize {
+    return switch (value) {
+        .number => |number| blk: {
+            if (!std.math.isFinite(number)) break :blk null;
+            if (number < 0) break :blk null;
+            const floored = std.math.floor(number);
+            if (floored != number) break :blk null;
+            const max_index: f64 = @floatFromInt(std.math.maxInt(usize));
+            if (number > max_index) break :blk null;
+            break :blk @as(usize, @intFromFloat(number));
+        },
+        else => null,
     };
 }
 

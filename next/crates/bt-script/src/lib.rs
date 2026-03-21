@@ -57,6 +57,7 @@ pub enum ListenerTarget {
 pub enum HtmlCollectionScope {
     Document,
     Element(ElementHandle),
+    Node(NodeHandle),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -103,6 +104,29 @@ pub enum RadioNodeListTarget {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum StyleSheetTarget {
     OwnerNode(ElementHandle),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct CollectionEntryState {
+    index: usize,
+    value: ScriptValue,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollectionEntryHandle(Rc<RefCell<CollectionEntryState>>);
+
+impl CollectionEntryHandle {
+    pub fn new(index: usize, value: ScriptValue) -> Self {
+        Self(Rc::new(RefCell::new(CollectionEntryState { index, value })))
+    }
+
+    pub fn index(&self) -> usize {
+        self.0.borrow().index
+    }
+
+    pub fn value(&self) -> ScriptValue {
+        self.0.borrow().value.clone()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -292,6 +316,7 @@ pub enum ScriptValue {
     Node(NodeHandle),
     NodeList(NodeListTarget),
     RadioNodeList(RadioNodeListTarget),
+    CollectionEntry(CollectionEntryHandle),
     CollectionIterator(CollectionIteratorHandle),
     IteratorResult(Box<IteratorResult>),
     Document,
@@ -403,6 +428,14 @@ pub trait HostBindings {
 
     fn document_origin(&mut self) -> Result<String> {
         Err(ScriptError::phase_not_ready("document.origin"))
+    }
+
+    fn document_current_script(&mut self) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("document.currentScript"))
+    }
+
+    fn document_ready_state(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("document.readyState"))
     }
 
     fn document_query_selector(&mut self, _selector: &str) -> Result<Option<ElementHandle>> {
@@ -558,6 +591,22 @@ pub trait HostBindings {
         _name: &str,
     ) -> Result<Option<ElementHandle>> {
         Err(ScriptError::phase_not_ready("select.options"))
+    }
+
+    fn html_collection_select_options_add(
+        &mut self,
+        _element: ElementHandle,
+        _option: ElementHandle,
+    ) -> Result<()> {
+        Err(ScriptError::phase_not_ready("select.options.add"))
+    }
+
+    fn html_collection_select_options_remove(
+        &mut self,
+        _element: ElementHandle,
+        _index: usize,
+    ) -> Result<()> {
+        Err(ScriptError::phase_not_ready("select.options.remove"))
     }
 
     fn html_collection_select_selected_options_items(

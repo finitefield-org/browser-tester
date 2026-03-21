@@ -53,6 +53,77 @@ const SelectorCombinator = enum {
     general_sibling,
 };
 
+const SelectorDirValue = enum {
+    ltr,
+    rtl,
+};
+
+const SelectorPseudoClass = union(enum) {
+    scope,
+    root,
+    empty,
+    first_child,
+    last_child,
+    only_child,
+    first_of_type,
+    last_of_type,
+    only_of_type,
+    checked,
+    disabled,
+    enabled,
+    required,
+    optional,
+    link,
+    any_link,
+    defined,
+    placeholder_shown,
+    indeterminate,
+    default,
+    valid,
+    invalid,
+    in_range,
+    out_of_range,
+    read_only,
+    read_write,
+    target,
+    focus,
+    focus_within,
+    lang: std.ArrayListUnmanaged([]const u8),
+    dir: SelectorDirValue,
+    not: std.ArrayListUnmanaged(SelectorChain),
+    is: std.ArrayListUnmanaged(SelectorChain),
+    where: std.ArrayListUnmanaged(SelectorChain),
+    has: std.ArrayListUnmanaged(SelectorRelativeSelector),
+    nth_child: SelectorNthChildPattern,
+    nth_last_child: SelectorNthChildPattern,
+    nth_of_type: SelectorNthChildPattern,
+    nth_last_of_type: SelectorNthChildPattern,
+
+    fn deinit(self: *SelectorPseudoClass, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .lang => |*langs| {
+                langs.deinit(allocator);
+            },
+            .has => |*relative_selectors| {
+                for (relative_selectors.items) |*relative_selector| {
+                    relative_selector.deinit(allocator);
+                }
+                relative_selectors.deinit(allocator);
+            },
+            .not, .is, .where => |*selectors| {
+                for (selectors.items) |*chain| {
+                    chain.deinit(allocator);
+                }
+                selectors.deinit(allocator);
+            },
+            .nth_child, .nth_last_child, .nth_of_type, .nth_last_of_type => |*pattern| {
+                pattern.deinit(allocator);
+            },
+            else => {},
+        }
+    }
+};
+
 const SelectorAttributeOperator = enum {
     exists,
     equals,
@@ -75,10 +146,15 @@ const SelectorQuery = struct {
     id: ?[]const u8 = null,
     classes: std.ArrayListUnmanaged([]const u8) = .{},
     attributes: std.ArrayListUnmanaged(SelectorAttribute) = .{},
+    pseudos: std.ArrayListUnmanaged(SelectorPseudoClass) = .{},
 
     fn deinit(self: *SelectorQuery, allocator: std.mem.Allocator) void {
         self.classes.deinit(allocator);
         self.attributes.deinit(allocator);
+        for (self.pseudos.items) |*pseudo| {
+            pseudo.deinit(allocator);
+        }
+        self.pseudos.deinit(allocator);
     }
 };
 
@@ -95,11 +171,38 @@ const SelectorChain = struct {
     }
 };
 
+const SelectorNthChildPattern = struct {
+    step: isize,
+    offset: isize,
+    of_selectors: ?std.ArrayListUnmanaged(SelectorChain) = null,
+
+    fn deinit(self: *SelectorNthChildPattern, allocator: std.mem.Allocator) void {
+        if (self.of_selectors) |*selectors| {
+            for (selectors.items) |*chain| {
+                chain.deinit(allocator);
+            }
+            selectors.deinit(allocator);
+        }
+    }
+};
+
+const SelectorRelativeSelector = struct {
+    combinator: ?SelectorCombinator = null,
+    chain: SelectorChain,
+
+    fn deinit(self: *SelectorRelativeSelector, allocator: std.mem.Allocator) void {
+        self.chain.deinit(allocator);
+    }
+};
+
 pub const DomStore = struct {
     allocator: std.mem.Allocator,
     arena: std.heap.ArenaAllocator,
     nodes: std.ArrayListUnmanaged(NodeRecord) = .{},
     source_html: ?[]const u8 = null,
+    document_title: []const u8 = "",
+    focused_node: ?NodeId = null,
+    target_fragment: ?[]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator) errors.Result(DomStore) {
         var arena = std.heap.ArenaAllocator.init(allocator);
@@ -110,6 +213,9 @@ pub const DomStore = struct {
             .arena = arena,
             .nodes = .{},
             .source_html = null,
+            .document_title = "",
+            .focused_node = null,
+            .target_fragment = null,
         };
         const arena_alloc = store.arena.allocator();
         try store.nodes.append(arena_alloc, .{
@@ -130,8 +236,78 @@ pub const DomStore = struct {
         return NodeId.new(0, 0);
     }
 
+    pub fn documentElement(self: *const DomStore) ?NodeId {
+        return documentElementId(self);
+    }
+
+    pub fn documentHead(self: *const DomStore) ?NodeId {
+        const root = documentElementId(self) orelse return null;
+        const root_tag = self.tagNameForNode(root) orelse return null;
+        if (!std.mem.eql(u8, root_tag, "html")) return null;
+
+        const root_node = self.nodeAt(root) orelse return null;
+        for (root_node.children.items) |child_id| {
+            const child_tag = self.tagNameForNode(child_id) orelse continue;
+            if (std.mem.eql(u8, child_tag, "head")) {
+                return child_id;
+            }
+        }
+
+        return null;
+    }
+
+    pub fn documentBody(self: *const DomStore) ?NodeId {
+        const root = documentElementId(self) orelse return null;
+        const root_tag = self.tagNameForNode(root) orelse return null;
+        if (!std.mem.eql(u8, root_tag, "html")) return null;
+
+        const root_node = self.nodeAt(root) orelse return null;
+        for (root_node.children.items) |child_id| {
+            const child_tag = self.tagNameForNode(child_id) orelse continue;
+            if (std.mem.eql(u8, child_tag, "body")) {
+                return child_id;
+            }
+        }
+
+        return null;
+    }
+
+    pub fn documentTitle(self: *const DomStore) []const u8 {
+        return self.document_title;
+    }
+
     pub fn sourceHtml(self: *const DomStore) ?[]const u8 {
         return self.source_html;
+    }
+
+    pub fn focusedNode(self: *const DomStore) ?NodeId {
+        return self.focused_node;
+    }
+
+    pub fn setFocusedNode(self: *DomStore, focused_node: ?NodeId) void {
+        self.focused_node = focused_node;
+    }
+
+    pub fn targetFragment(self: *const DomStore) ?[]const u8 {
+        return self.target_fragment;
+    }
+
+    pub fn setTargetFragment(self: *DomStore, fragment: ?[]const u8) errors.Result(void) {
+        self.target_fragment = if (fragment) |value|
+            try self.arena.allocator().dupe(u8, value)
+        else
+            null;
+        return;
+    }
+
+    pub fn setDocumentTitle(self: *DomStore, title: []const u8) errors.Result(void) {
+        if (self.findFirstElementByTagNameInSubtree(self.documentId(), "title")) |title_id| {
+            try self.setTextContent(title_id, title);
+            return;
+        }
+
+        self.document_title = try duplicateString(self, title);
+        return;
     }
 
     pub fn records(self: *const DomStore) []const NodeRecord {
@@ -219,7 +395,8 @@ pub const DomStore = struct {
         var results: std.ArrayList(NodeId) = .empty;
         errdefer results.deinit(allocator);
 
-        try collectSelectorMatchesWithin(self, root_id, chains.items, &results, allocator);
+        const scope_root = selectorScopeRootForSearch(self, root_id);
+        try collectSelectorMatchesWithin(self, root_id, chains.items, scope_root, &results, allocator);
 
         const owned = try allocator.dupe(NodeId, results.items);
         results.deinit(allocator);
@@ -239,7 +416,8 @@ pub const DomStore = struct {
         var chains = try self.parseSelectorChains(allocator, selector);
         defer self.deinitSelectorChains(allocator, &chains);
 
-        return self.findFirstMatchingDescendant(root_id, chains.items);
+        const scope_root = selectorScopeRootForSearch(self, root_id);
+        return self.findFirstMatchingDescendant(root_id, chains.items, scope_root);
     }
 
     pub fn matchesSelector(
@@ -251,7 +429,7 @@ pub const DomStore = struct {
         var chains = try self.parseSelectorChains(allocator, selector);
         defer self.deinitSelectorChains(allocator, &chains);
 
-        return nodeMatchesAnyChain(self, node_id, chains.items);
+        return nodeMatchesAnyChain(self, node_id, chains.items, node_id);
     }
 
     pub fn closestSelector(
@@ -265,7 +443,7 @@ pub const DomStore = struct {
 
         var current = node_id;
         while (true) {
-            if (nodeMatchesAnyChain(self, current, chains.items)) {
+            if (nodeMatchesAnyChain(self, current, chains.items, node_id)) {
                 return current;
             }
             current = parentOf(self, current) orelse break;
@@ -282,6 +460,7 @@ pub const DomStore = struct {
         parsed.source_html = try parsed_alloc.dupe(u8, html);
         var parser = HtmlParser.init(html);
         try parser.parseInto(&parsed);
+        try parsed.syncDocumentTitleFromDom();
 
         self.deinit();
         self.* = parsed;
@@ -346,6 +525,7 @@ pub const DomStore = struct {
         node.children.items.len = 0;
 
         try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, node_id, 0);
+        try self.syncDocumentTitleFromDom();
         return;
     }
 
@@ -384,6 +564,7 @@ pub const DomStore = struct {
 
         try self.removeNode(node_id);
         try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, parent_id, insertion_index);
+        try self.syncDocumentTitleFromDom();
         return;
     }
 
@@ -409,6 +590,7 @@ pub const DomStore = struct {
             const fragment_root = try self.parseHtmlFragmentIntoStore(&fragment_store, parent_id, html);
             const fragment_children = fragment_store.childIds(fragment_root);
             try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, parent_id, insertion_index);
+            try self.syncDocumentTitleFromDom();
             return;
         }
 
@@ -423,6 +605,7 @@ pub const DomStore = struct {
             const fragment_root = try self.parseHtmlFragmentIntoStore(&fragment_store, node_id, html);
             const fragment_children = fragment_store.childIds(fragment_root);
             try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, node_id, 0);
+            try self.syncDocumentTitleFromDom();
             return;
         }
 
@@ -439,6 +622,7 @@ pub const DomStore = struct {
             const fragment_root = try self.parseHtmlFragmentIntoStore(&fragment_store, node_id, html);
             const fragment_children = fragment_store.childIds(fragment_root);
             try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, node_id, insertion_index);
+            try self.syncDocumentTitleFromDom();
             return;
         }
 
@@ -452,6 +636,7 @@ pub const DomStore = struct {
             const fragment_root = try self.parseHtmlFragmentIntoStore(&fragment_store, parent_id, html);
             const fragment_children = fragment_store.childIds(fragment_root);
             try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, parent_id, insertion_index);
+            try self.syncDocumentTitleFromDom();
             return;
         }
 
@@ -487,6 +672,7 @@ pub const DomStore = struct {
                 if (text.len > 0) {
                     _ = try self.addText(node_id, text);
                 }
+                try self.syncDocumentTitleFromDom();
             },
             else => return error.HtmlParse,
         }
@@ -886,8 +1072,15 @@ pub const DomStore = struct {
         }
         _ = parent_record.children.orderedRemove(parent_index);
 
+        if (self.focused_node) |focused| {
+            if (sameNodeId(focused, node_id) or self.nodeIsDescendantOf(focused, node_id)) {
+                self.focused_node = null;
+            }
+        }
+
         const record = self.nodeAtMut(node_id) orelse return error.DomError;
         record.parent = null;
+        try self.syncDocumentTitleFromDom();
         return;
     }
 
@@ -1323,6 +1516,75 @@ pub const DomStore = struct {
         return null;
     }
 
+    fn findElementByNameInSubtree(self: *const DomStore, node_id: NodeId, name: []const u8) ?NodeId {
+        const node = self.nodeAt(node_id) orelse return null;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => null,
+        };
+        if (element) |element_data| {
+            const actual_name = elementAttributeValue(element_data, "name") orelse return null;
+            if (std.mem.eql(u8, actual_name, name)) {
+                return node.id;
+            }
+        }
+
+        for (node.children.items) |child_id| {
+            if (self.findElementByNameInSubtree(child_id, name)) |found| {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    fn findFirstElementByTagNameInSubtree(self: *const DomStore, node_id: NodeId, tag_name: []const u8) ?NodeId {
+        const node = self.nodeAt(node_id) orelse return null;
+        if (switch (node.kind) {
+            .element => |element| std.mem.eql(u8, element.tag_name, tag_name),
+            else => false,
+        }) {
+            return node.id;
+        }
+
+        for (node.children.items) |child_id| {
+            if (self.findFirstElementByTagNameInSubtree(child_id, tag_name)) |found| {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    fn syncDocumentTitleFromDom(self: *DomStore) errors.Result(void) {
+        const title_id = self.findFirstElementByTagNameInSubtree(self.documentId(), "title") orelse return;
+        const title_text = try self.textContent(self.allocator, title_id);
+        defer self.allocator.free(title_text);
+        if (std.mem.eql(u8, title_text, self.document_title)) {
+            return;
+        }
+
+        self.document_title = try duplicateString(self, title_text);
+        return;
+    }
+
+    fn targetNodeForFragment(self: *const DomStore, fragment: []const u8) ?NodeId {
+        if (fragment.len == 0) return null;
+        if (self.findElementById(fragment)) |node_id| {
+            return node_id;
+        }
+        return self.findElementByNameInSubtree(self.documentId(), fragment);
+    }
+
+    fn nodeIsDescendantOf(self: *const DomStore, node_id: NodeId, ancestor_id: NodeId) bool {
+        var current = parentOf(self, node_id);
+        while (current) |current_id| {
+            if (sameNodeId(current_id, ancestor_id)) return true;
+            current = parentOf(self, current_id);
+        }
+        return false;
+    }
+
     fn ensureMutationParent(self: *const DomStore, parent: NodeId) errors.Result(void) {
         const node = self.nodeAt(parent) orelse return error.DomError;
         switch (node.kind) {
@@ -1452,6 +1714,7 @@ pub const DomStore = struct {
             insertion_pos += 1;
         }
 
+        try self.syncDocumentTitleFromDom();
         return;
     }
 
@@ -1546,20 +1809,21 @@ pub const DomStore = struct {
         self: *const DomStore,
         node_id: NodeId,
         chains: []const SelectorChain,
+        scope_root: ?NodeId,
     ) errors.Result(?NodeId) {
         const node = self.nodeAt(node_id) orelse return error.HtmlParse;
         for (node.children.items) |child_id| {
             const child = self.nodeAt(child_id) orelse return error.HtmlParse;
             switch (child.kind) {
                 .element => {
-                    if (nodeMatchesAnyChain(self, child_id, chains)) {
+                    if (nodeMatchesAnyChain(self, child_id, chains, scope_root)) {
                         return child_id;
                     }
                 },
                 else => {},
             }
 
-            if (try self.findFirstMatchingDescendant(child_id, chains)) |found| {
+            if (try self.findFirstMatchingDescendant(child_id, chains, scope_root)) |found| {
                 return found;
             }
         }
@@ -1989,6 +2253,7 @@ fn appendSelectorChains(
     chains: *std.ArrayList(SelectorChain),
 ) errors.Result(void) {
     var start: usize = 0;
+    var paren_depth: usize = 0;
     var bracket_depth: usize = 0;
     var quote: ?u8 = null;
 
@@ -2009,8 +2274,13 @@ fn appendSelectorChains(
                 if (bracket_depth == 0) return error.HtmlParse;
                 bracket_depth -= 1;
             },
+            '(' => paren_depth += 1,
+            ')' => {
+                if (paren_depth == 0) return error.HtmlParse;
+                paren_depth -= 1;
+            },
             ',' => {
-                if (bracket_depth != 0) continue;
+                if (bracket_depth != 0 or paren_depth != 0) continue;
                 const item = std.mem.trim(u8, selector[start..index], " \t\r\n");
                 if (item.len == 0) return error.HtmlParse;
                 try appendSelectorChain(allocator, chains, item);
@@ -2020,7 +2290,7 @@ fn appendSelectorChains(
         }
     }
 
-    if (quote != null or bracket_depth != 0) return error.HtmlParse;
+    if (quote != null or bracket_depth != 0 or paren_depth != 0) return error.HtmlParse;
 
     const item = std.mem.trim(u8, selector[start..], " \t\r\n");
     if (item.len == 0) return error.HtmlParse;
@@ -2106,6 +2376,12 @@ fn parseSelectorCompound(
                 pos.* += 1;
                 const token = try parseSelectorToken(selector, pos);
                 try query.classes.append(allocator, token);
+                saw_token = true;
+            },
+            ':' => {
+                pos.* += 1;
+                const pseudo = try parseSelectorPseudoClass(allocator, selector, pos);
+                try query.pseudos.append(allocator, pseudo);
                 saw_token = true;
             },
             '[' => {
@@ -2251,6 +2527,523 @@ fn parseSelectorAttributeValue(
     return selector[start..pos.*];
 }
 
+fn parseSelectorPseudoClass(
+    allocator: std.mem.Allocator,
+    selector: []const u8,
+    pos: *usize,
+) errors.Result(SelectorPseudoClass) {
+    const name = try parseSelectorToken(selector, pos);
+    if (name.len == 0) return error.HtmlParse;
+
+    if (asciiEqualIgnoreCase(name, "has")) {
+        const argument = try parseSelectorParenthesizedArgument(selector, pos);
+        const relative_selectors = try parseSelectorRelativeSelectors(allocator, argument);
+        return .{ .has = relative_selectors };
+    }
+
+    if (asciiEqualIgnoreCase(name, "lang")) {
+        const langs = try parseSelectorLangArgument(allocator, selector, pos);
+        return .{ .lang = langs };
+    }
+
+    if (asciiEqualIgnoreCase(name, "dir")) {
+        const direction = try parseSelectorDirArgument(selector, pos);
+        return .{ .dir = direction };
+    }
+
+    if (asciiEqualIgnoreCase(name, "not")) {
+        const argument = try parseSelectorParenthesizedArgument(selector, pos);
+        const selectors = try parseSelectorChainListArgument(allocator, argument);
+        return .{ .not = selectors };
+    }
+
+    if (asciiEqualIgnoreCase(name, "is")) {
+        const argument = try parseSelectorParenthesizedArgument(selector, pos);
+        const selectors = try parseSelectorChainListArgument(allocator, argument);
+        return .{ .is = selectors };
+    }
+
+    if (asciiEqualIgnoreCase(name, "where")) {
+        const argument = try parseSelectorParenthesizedArgument(selector, pos);
+        const selectors = try parseSelectorChainListArgument(allocator, argument);
+        return .{ .where = selectors };
+    }
+
+    if (asciiEqualIgnoreCase(name, "nth-child")) {
+        const pattern = try parseSelectorNthChildArgument(allocator, selector, pos);
+        return .{ .nth_child = pattern };
+    }
+
+    if (asciiEqualIgnoreCase(name, "nth-last-child")) {
+        const pattern = try parseSelectorNthChildArgument(allocator, selector, pos);
+        return .{ .nth_last_child = pattern };
+    }
+
+    if (asciiEqualIgnoreCase(name, "nth-of-type")) {
+        const pattern = try parseSelectorNthChildArgument(allocator, selector, pos);
+        return .{ .nth_of_type = pattern };
+    }
+
+    if (asciiEqualIgnoreCase(name, "nth-last-of-type")) {
+        const pattern = try parseSelectorNthChildArgument(allocator, selector, pos);
+        return .{ .nth_last_of_type = pattern };
+    }
+
+    if (pos.* < selector.len and selector[pos.*] == '(') return error.HtmlParse;
+
+    return if (asciiEqualIgnoreCase(name, "scope"))
+        .scope
+    else if (asciiEqualIgnoreCase(name, "root"))
+        .root
+    else if (asciiEqualIgnoreCase(name, "empty"))
+        .empty
+    else if (asciiEqualIgnoreCase(name, "first-child"))
+        .first_child
+    else if (asciiEqualIgnoreCase(name, "last-child"))
+        .last_child
+    else if (asciiEqualIgnoreCase(name, "only-child"))
+        .only_child
+    else if (asciiEqualIgnoreCase(name, "first-of-type"))
+        .first_of_type
+    else if (asciiEqualIgnoreCase(name, "last-of-type"))
+        .last_of_type
+    else if (asciiEqualIgnoreCase(name, "only-of-type"))
+        .only_of_type
+    else if (asciiEqualIgnoreCase(name, "checked"))
+        .checked
+    else if (asciiEqualIgnoreCase(name, "disabled"))
+        .disabled
+    else if (asciiEqualIgnoreCase(name, "enabled"))
+        .enabled
+    else if (asciiEqualIgnoreCase(name, "required"))
+        .required
+    else if (asciiEqualIgnoreCase(name, "optional"))
+        .optional
+    else if (asciiEqualIgnoreCase(name, "link"))
+        .link
+    else if (asciiEqualIgnoreCase(name, "any-link"))
+        .any_link
+    else if (asciiEqualIgnoreCase(name, "defined"))
+        .defined
+    else if (asciiEqualIgnoreCase(name, "placeholder-shown"))
+        .placeholder_shown
+    else if (asciiEqualIgnoreCase(name, "indeterminate"))
+        .indeterminate
+    else if (asciiEqualIgnoreCase(name, "default"))
+        .default
+    else if (asciiEqualIgnoreCase(name, "valid"))
+        .valid
+    else if (asciiEqualIgnoreCase(name, "invalid"))
+        .invalid
+    else if (asciiEqualIgnoreCase(name, "in-range"))
+        .in_range
+    else if (asciiEqualIgnoreCase(name, "out-of-range"))
+        .out_of_range
+    else if (asciiEqualIgnoreCase(name, "read-only"))
+        .read_only
+    else if (asciiEqualIgnoreCase(name, "read-write"))
+        .read_write
+    else if (asciiEqualIgnoreCase(name, "target"))
+        .target
+    else if (asciiEqualIgnoreCase(name, "focus"))
+        .focus
+    else if (asciiEqualIgnoreCase(name, "focus-within"))
+        .focus_within
+    else {
+        return error.HtmlParse;
+    };
+}
+
+fn parseSelectorLangArgument(
+    allocator: std.mem.Allocator,
+    selector: []const u8,
+    pos: *usize,
+) errors.Result(std.ArrayListUnmanaged([]const u8)) {
+    const argument = try parseSelectorParenthesizedArgument(selector, pos);
+    const trimmed = std.mem.trim(u8, argument, " \t\r\n\x0c");
+    if (trimmed.len == 0) return error.HtmlParse;
+
+    var langs: std.ArrayListUnmanaged([]const u8) = .{};
+    errdefer langs.deinit(allocator);
+
+    var items = std.mem.splitScalar(u8, trimmed, ',');
+    while (items.next()) |item_raw| {
+        const item = std.mem.trim(u8, item_raw, " \t\r\n\x0c");
+        if (item.len == 0) return error.HtmlParse;
+
+        var item_pos: usize = 0;
+        const lang = try parseSelectorToken(item, &item_pos);
+        if (item_pos != item.len) return error.HtmlParse;
+
+        for (lang) |byte| {
+            if (!std.ascii.isAlphanumeric(byte) and byte != '-') return error.HtmlParse;
+        }
+
+        try langs.append(allocator, lang);
+    }
+
+    if (langs.items.len == 0) return error.HtmlParse;
+    return langs;
+}
+
+fn parseSelectorDirArgument(
+    selector: []const u8,
+    pos: *usize,
+) errors.Result(SelectorDirValue) {
+    const argument = try parseSelectorParenthesizedArgument(selector, pos);
+    const trimmed = std.mem.trim(u8, argument, " \t\r\n\x0c");
+    if (trimmed.len == 0) return error.HtmlParse;
+
+    var item_pos: usize = 0;
+    const dir = try parseSelectorToken(trimmed, &item_pos);
+    if (item_pos != trimmed.len) return error.HtmlParse;
+
+    if (asciiEqualIgnoreCase(dir, "ltr")) return .ltr;
+    if (asciiEqualIgnoreCase(dir, "rtl")) return .rtl;
+    return error.HtmlParse;
+}
+
+const NthChildArgumentSplit = struct {
+    formula: []const u8,
+    of_selectors: ?[]const u8,
+};
+
+fn parseSelectorNthChildArgument(
+    allocator: std.mem.Allocator,
+    selector: []const u8,
+    pos: *usize,
+) errors.Result(SelectorNthChildPattern) {
+    const argument = try parseSelectorParenthesizedArgument(selector, pos);
+    const split = try splitNthChildArgument(argument);
+
+    var formula: std.ArrayList(u8) = .empty;
+    defer formula.deinit(allocator);
+
+    for (split.formula) |byte| {
+        if (!isHtmlWhitespace(byte)) {
+            try formula.append(allocator, std.ascii.toLower(byte));
+        }
+    }
+
+    if (formula.items.len == 0) return error.HtmlParse;
+
+    var pattern = if (std.mem.eql(u8, formula.items, "odd")) SelectorNthChildPattern{
+        .step = 2,
+        .offset = 1,
+        .of_selectors = null,
+    } else if (std.mem.eql(u8, formula.items, "even")) SelectorNthChildPattern{
+        .step = 2,
+        .offset = 0,
+        .of_selectors = null,
+    } else if (std.mem.indexOfScalar(u8, formula.items, 'n')) |n_index| blk: {
+        if (std.mem.indexOfScalar(u8, formula.items[n_index + 1 ..], 'n') != null) {
+            return error.HtmlParse;
+        }
+
+        const step = switch (formula.items[0..n_index].len) {
+            0 => 1,
+            1 => switch (formula.items[0]) {
+                '+' => 1,
+                '-' => -1,
+                else => std.fmt.parseInt(isize, formula.items[0..n_index], 10) catch return error.HtmlParse,
+            },
+            else => std.fmt.parseInt(isize, formula.items[0..n_index], 10) catch return error.HtmlParse,
+        };
+
+        const offset = if (formula.items[n_index + 1 ..].len == 0)
+            0
+        else
+            std.fmt.parseInt(isize, formula.items[n_index + 1 ..], 10) catch return error.HtmlParse;
+
+        break :blk SelectorNthChildPattern{
+            .step = step,
+            .offset = offset,
+            .of_selectors = null,
+        };
+    } else blk: {
+        const offset = std.fmt.parseInt(isize, formula.items, 10) catch return error.HtmlParse;
+        break :blk SelectorNthChildPattern{
+            .step = 0,
+            .offset = offset,
+            .of_selectors = null,
+        };
+    };
+
+    if (split.of_selectors) |of_selectors_source| {
+        pattern.of_selectors = try parseSelectorNthChildOfSelectors(allocator, of_selectors_source);
+    }
+
+    return pattern;
+}
+
+fn splitNthChildArgument(argument: []const u8) errors.Result(NthChildArgumentSplit) {
+    const trimmed = std.mem.trim(u8, argument, " \t\r\n\x0c");
+    if (trimmed.len == 0) return error.HtmlParse;
+
+    var quote: ?u8 = null;
+    var bracket_depth: usize = 0;
+    var paren_depth: usize = 0;
+    var index: usize = 0;
+    while (index < trimmed.len) : (index += 1) {
+        const byte = trimmed[index];
+        if (quote) |current_quote| {
+            if (byte == current_quote) {
+                quote = null;
+            }
+            continue;
+        }
+
+        switch (byte) {
+            '"', '\'' => quote = byte,
+            '[' => bracket_depth += 1,
+            ']' => {
+                if (bracket_depth == 0) return error.HtmlParse;
+                bracket_depth -= 1;
+            },
+            '(' => paren_depth += 1,
+            ')' => {
+                if (paren_depth == 0) return error.HtmlParse;
+                paren_depth -= 1;
+            },
+            else => {
+                if (paren_depth != 0 or bracket_depth != 0) continue;
+                if (!isHtmlWhitespace(byte)) continue;
+
+                const formula_end = index;
+                var lookahead = index;
+                while (lookahead < trimmed.len and isHtmlWhitespace(trimmed[lookahead])) : (lookahead += 1) {}
+                if (!isOfKeyword(trimmed, lookahead)) continue;
+
+                const of_start = lookahead + 2;
+                if (of_start >= trimmed.len) return error.HtmlParse;
+                return .{
+                    .formula = std.mem.trim(u8, trimmed[0..formula_end], " \t\r\n\x0c"),
+                    .of_selectors = std.mem.trim(u8, trimmed[of_start..], " \t\r\n\x0c"),
+                };
+            },
+        }
+    }
+
+    if (quote != null or paren_depth != 0 or bracket_depth != 0) return error.HtmlParse;
+
+    return .{
+        .formula = trimmed,
+        .of_selectors = null,
+    };
+}
+
+fn isOfKeyword(bytes: []const u8, pos: usize) bool {
+    if (pos + 1 >= bytes.len) return false;
+    if (!asciiEqualIgnoreCase(bytes[pos .. pos + 2], "of")) return false;
+    if (pos + 2 >= bytes.len) return true;
+    return isHtmlWhitespace(bytes[pos + 2]);
+}
+
+fn parseSelectorNthChildOfSelectors(
+    allocator: std.mem.Allocator,
+    selector: []const u8,
+) errors.Result(std.ArrayListUnmanaged(SelectorChain)) {
+    return parseSelectorChainListArgument(allocator, selector);
+}
+
+fn parseSelectorChainListArgument(
+    allocator: std.mem.Allocator,
+    selector: []const u8,
+) errors.Result(std.ArrayListUnmanaged(SelectorChain)) {
+    var chains: std.ArrayList(SelectorChain) = .empty;
+    errdefer {
+        for (chains.items) |*chain| {
+            chain.deinit(allocator);
+        }
+        chains.deinit(allocator);
+    }
+
+    try appendSelectorChains(allocator, selector, &chains);
+    if (chains.items.len == 0) return error.HtmlParse;
+    const owned = try chains.toOwnedSlice(allocator);
+    return .{
+        .items = owned,
+        .capacity = owned.len,
+    };
+}
+
+fn parseSelectorParenthesizedArgument(
+    selector: []const u8,
+    pos: *usize,
+) errors.Result([]const u8) {
+    if (pos.* >= selector.len or selector[pos.*] != '(') return error.HtmlParse;
+    pos.* += 1;
+
+    const start = pos.*;
+    var depth: usize = 1;
+    var bracket_depth: usize = 0;
+    var quote: ?u8 = null;
+
+    while (pos.* < selector.len) {
+        const byte = selector[pos.*];
+        if (quote) |current_quote| {
+            if (byte == current_quote) {
+                quote = null;
+            }
+            pos.* += 1;
+            continue;
+        }
+
+        switch (byte) {
+            '"', '\'' => {
+                quote = byte;
+                pos.* += 1;
+            },
+            '[' => {
+                bracket_depth += 1;
+                pos.* += 1;
+            },
+            ']' => {
+                if (bracket_depth == 0) return error.HtmlParse;
+                bracket_depth -= 1;
+                pos.* += 1;
+            },
+            '(' => {
+                if (bracket_depth == 0) {
+                    depth += 1;
+                }
+                pos.* += 1;
+            },
+            ')' => {
+                if (bracket_depth == 0) {
+                    depth -= 1;
+                    if (depth == 0) {
+                        const argument = selector[start..pos.*];
+                        pos.* += 1;
+                        return argument;
+                    }
+                }
+                pos.* += 1;
+            },
+            else => {
+                pos.* += 1;
+            },
+        }
+    }
+
+    return error.HtmlParse;
+}
+
+fn parseSelectorRelativeSelectors(
+    allocator: std.mem.Allocator,
+    selector: []const u8,
+) errors.Result(std.ArrayListUnmanaged(SelectorRelativeSelector)) {
+    var relative_selectors: std.ArrayListUnmanaged(SelectorRelativeSelector) = .{};
+    errdefer {
+        for (relative_selectors.items) |*relative_selector| {
+            relative_selector.deinit(allocator);
+        }
+        relative_selectors.deinit(allocator);
+    }
+
+    const trimmed = std.mem.trim(u8, selector, " \t\r\n");
+    if (trimmed.len == 0) return error.HtmlParse;
+
+    var start: usize = 0;
+    var paren_depth: usize = 0;
+    var bracket_depth: usize = 0;
+    var quote: ?u8 = null;
+    var index: usize = 0;
+    while (index < trimmed.len) : (index += 1) {
+        const byte = trimmed[index];
+        if (quote) |current_quote| {
+            if (byte == current_quote) {
+                quote = null;
+            }
+            continue;
+        }
+
+        switch (byte) {
+            '"', '\'' => quote = byte,
+            '[' => bracket_depth += 1,
+            ']' => {
+                if (bracket_depth == 0) return error.HtmlParse;
+                bracket_depth -= 1;
+            },
+            '(' => paren_depth += 1,
+            ')' => {
+                if (paren_depth == 0) return error.HtmlParse;
+                paren_depth -= 1;
+            },
+            ',' => {
+                if (paren_depth != 0 or bracket_depth != 0) continue;
+                const item = std.mem.trim(u8, trimmed[start..index], " \t\r\n");
+                if (item.len == 0) return error.HtmlParse;
+
+                var relative_selector = try parseSelectorRelativeSelectorItem(allocator, item);
+                errdefer relative_selector.deinit(allocator);
+                try relative_selectors.append(allocator, relative_selector);
+                start = index + 1;
+            },
+            else => {},
+        }
+    }
+
+    if (quote != null or paren_depth != 0 or bracket_depth != 0) return error.HtmlParse;
+
+    const item = std.mem.trim(u8, trimmed[start..], " \t\r\n");
+    if (item.len == 0) return error.HtmlParse;
+
+    var relative_selector = try parseSelectorRelativeSelectorItem(allocator, item);
+    errdefer relative_selector.deinit(allocator);
+    try relative_selectors.append(allocator, relative_selector);
+
+    return relative_selectors;
+}
+
+fn parseSelectorRelativeSelectorItem(
+    allocator: std.mem.Allocator,
+    selector: []const u8,
+) errors.Result(SelectorRelativeSelector) {
+    const trimmed = std.mem.trim(u8, selector, " \t\r\n");
+    if (trimmed.len == 0) return error.HtmlParse;
+
+    var pos: usize = 0;
+    const had_whitespace = skipSelectorWhitespace(trimmed, &pos);
+    _ = had_whitespace;
+
+    var combinator: ?SelectorCombinator = null;
+    if (pos < trimmed.len) {
+        switch (trimmed[pos]) {
+            '>' => {
+                combinator = .child;
+                pos += 1;
+            },
+            '+' => {
+                combinator = .adjacent_sibling;
+                pos += 1;
+            },
+            '~' => {
+                combinator = .general_sibling;
+                pos += 1;
+            },
+            ',' => return error.HtmlParse,
+            else => {},
+        }
+    }
+
+    if (combinator != null) {
+        _ = skipSelectorWhitespace(trimmed, &pos);
+        if (pos >= trimmed.len) return error.HtmlParse;
+    }
+
+    const remainder = std.mem.trim(u8, trimmed[pos..], " \t\r\n");
+    if (remainder.len == 0) return error.HtmlParse;
+
+    var chain = try parseSelectorChain(allocator, remainder);
+    errdefer chain.deinit(allocator);
+
+    return .{
+        .combinator = combinator,
+        .chain = chain,
+    };
+}
+
 fn skipSelectorWhitespace(selector: []const u8, pos: *usize) bool {
     const start = pos.*;
     while (pos.* < selector.len and isHtmlWhitespace(selector[pos.*])) {
@@ -2265,6 +3058,23 @@ fn parentOf(self: *const DomStore, node_id: NodeId) ?NodeId {
     return node.parent;
 }
 
+fn documentElementId(self: *const DomStore) ?NodeId {
+    const document = self.nodeAt(self.documentId()) orelse return null;
+    for (document.children.items) |child_id| {
+        if (self.tagNameForNode(child_id) != null) {
+            return child_id;
+        }
+    }
+    return null;
+}
+
+fn selectorScopeRootForSearch(self: *const DomStore, root_id: NodeId) ?NodeId {
+    if (sameNodeId(root_id, self.documentId())) {
+        return documentElementId(self);
+    }
+    return root_id;
+}
+
 fn previousElementSibling(self: *const DomStore, node_id: NodeId) ?NodeId {
     const parent_id = parentOf(self, node_id) orelse return null;
     const parent = self.nodeAt(parent_id) orelse return null;
@@ -2277,6 +3087,651 @@ fn previousElementSibling(self: *const DomStore, node_id: NodeId) ?NodeId {
         }
     }
     return null;
+}
+
+fn nextElementSibling(self: *const DomStore, node_id: NodeId) ?NodeId {
+    const parent_id = parentOf(self, node_id) orelse return null;
+    const parent = self.nodeAt(parent_id) orelse return null;
+    const start_index = self.childIndex(parent_id, node_id) catch return null;
+    var index = start_index + 1;
+    while (index < parent.children.items.len) : (index += 1) {
+        const sibling_id = parent.children.items[index];
+        if (self.tagNameForNode(sibling_id) != null) {
+            return sibling_id;
+        }
+    }
+    return null;
+}
+
+fn firstElementChild(self: *const DomStore, parent_id: NodeId) ?NodeId {
+    const parent = self.nodeAt(parent_id) orelse return null;
+    for (parent.children.items) |child_id| {
+        if (self.tagNameForNode(child_id) != null) {
+            return child_id;
+        }
+    }
+    return null;
+}
+
+fn lastElementChild(self: *const DomStore, parent_id: NodeId) ?NodeId {
+    const parent = self.nodeAt(parent_id) orelse return null;
+    var index = parent.children.items.len;
+    while (index > 0) {
+        index -= 1;
+        const child_id = parent.children.items[index];
+        if (self.tagNameForNode(child_id) != null) {
+            return child_id;
+        }
+    }
+    return null;
+}
+
+fn isOnlyElementChild(self: *const DomStore, node_id: NodeId) bool {
+    const parent_id = parentOf(self, node_id) orelse return false;
+    return sameNodeId(firstElementChild(self, parent_id) orelse return false, node_id) and sameNodeId(lastElementChild(self, parent_id) orelse return false, node_id);
+}
+
+fn isFirstElementChild(self: *const DomStore, node_id: NodeId) bool {
+    const parent_id = parentOf(self, node_id) orelse return false;
+    return sameNodeId(firstElementChild(self, parent_id) orelse return false, node_id);
+}
+
+fn isLastElementChild(self: *const DomStore, node_id: NodeId) bool {
+    const parent_id = parentOf(self, node_id) orelse return false;
+    return sameNodeId(lastElementChild(self, parent_id) orelse return false, node_id);
+}
+
+fn isFirstElementOfType(self: *const DomStore, node_id: NodeId) bool {
+    const parent_id = parentOf(self, node_id) orelse return false;
+    const node_tag = self.tagNameForNode(node_id) orelse return false;
+    const parent = self.nodeAt(parent_id) orelse return false;
+    for (parent.children.items) |child_id| {
+        if (!sameNodeId(child_id, node_id) and self.tagNameForNode(child_id) != null and std.mem.eql(u8, self.tagNameForNode(child_id).?, node_tag)) {
+            return false;
+        }
+        if (sameNodeId(child_id, node_id)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn isLastElementOfType(self: *const DomStore, node_id: NodeId) bool {
+    const parent_id = parentOf(self, node_id) orelse return false;
+    const node_tag = self.tagNameForNode(node_id) orelse return false;
+    const parent = self.nodeAt(parent_id) orelse return false;
+    var seen_self = false;
+    var index = parent.children.items.len;
+    while (index > 0) {
+        index -= 1;
+        const child_id = parent.children.items[index];
+        if (!sameNodeId(child_id, node_id) and self.tagNameForNode(child_id) != null and std.mem.eql(u8, self.tagNameForNode(child_id).?, node_tag)) {
+            return false;
+        }
+        if (sameNodeId(child_id, node_id)) {
+            seen_self = true;
+            break;
+        }
+    }
+    return seen_self;
+}
+
+fn isOnlyElementOfType(self: *const DomStore, node_id: NodeId) bool {
+    const node_tag = self.tagNameForNode(node_id) orelse return false;
+    const parent_id = parentOf(self, node_id) orelse return false;
+    const parent = self.nodeAt(parent_id) orelse return false;
+    var seen_self = false;
+    for (parent.children.items) |child_id| {
+        const child_tag = self.tagNameForNode(child_id) orelse continue;
+        if (!std.mem.eql(u8, child_tag, node_tag)) continue;
+        if (sameNodeId(child_id, node_id)) {
+            seen_self = true;
+            continue;
+        }
+        return false;
+    }
+    return seen_self;
+}
+
+fn isEmptyElement(self: *const DomStore, node_id: NodeId) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    switch (node.kind) {
+        .element => {},
+        else => return false,
+    }
+
+    for (node.children.items) |child_id| {
+        const child = self.nodeAt(child_id) orelse return false;
+        switch (child.kind) {
+            .comment => {},
+            else => return false,
+        }
+    }
+    return true;
+}
+
+fn isLinkPseudo(self: *const DomStore, node_id: NodeId) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return false,
+    };
+    if (std.mem.eql(u8, element.tag_name, "a") or std.mem.eql(u8, element.tag_name, "area")) {
+        return elementAttributeValue(element, "href") != null;
+    }
+    return false;
+}
+
+fn isDefinedPseudoClass(self: *const DomStore, node_id: NodeId) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return false,
+    };
+
+    if (self.serializationNamespaceForNode(node_id) != .html) return true;
+    return std.mem.indexOfScalar(u8, element.tag_name, '-') == null;
+}
+
+fn isCheckedPseudo(self: *const DomStore, node_id: NodeId) bool {
+    if (self.checkedForNode(node_id)) |checked| {
+        return checked;
+    }
+    return self.isOptionSelected(node_id);
+}
+
+fn isDisabledPseudo(self: *const DomStore, node_id: NodeId) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return false,
+    };
+
+    if (!isFormStatePseudoCandidate(element.tag_name)) return false;
+    return elementAttributeValue(element, "disabled") != null;
+}
+
+fn isEnabledPseudo(self: *const DomStore, node_id: NodeId) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return false,
+    };
+
+    if (!isFormStatePseudoCandidate(element.tag_name)) return false;
+    return elementAttributeValue(element, "disabled") == null;
+}
+
+fn isRequiredPseudo(self: *const DomStore, node_id: NodeId) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return false,
+    };
+
+    if (!isRequiredPseudoCandidate(element.tag_name)) return false;
+    return elementAttributeValue(element, "required") != null;
+}
+
+fn isOptionalPseudo(self: *const DomStore, node_id: NodeId) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return false,
+    };
+
+    if (!isRequiredPseudoCandidate(element.tag_name)) return false;
+    return elementAttributeValue(element, "required") == null;
+}
+
+fn isPlaceholderShownPseudo(self: *const DomStore, node_id: NodeId) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return false,
+    };
+
+    if (!(std.mem.eql(u8, element.tag_name, "input") or std.mem.eql(u8, element.tag_name, "textarea"))) {
+        return false;
+    }
+
+    if (elementAttributeValue(element, "placeholder") == null) {
+        return false;
+    }
+
+    if (std.mem.eql(u8, element.tag_name, "input")) {
+        const value = elementAttributeValue(element, "value") orelse "";
+        return value.len == 0;
+    }
+
+    return isEmptyElement(self, node_id);
+}
+
+fn isIndeterminatePseudoClass(self: *const DomStore, node_id: NodeId) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return false,
+    };
+
+    if (std.mem.eql(u8, element.tag_name, "progress")) {
+        return elementAttributeValue(element, "value") == null;
+    }
+
+    if (!std.mem.eql(u8, element.tag_name, "input")) {
+        return false;
+    }
+
+    if (!isCheckableInputType(elementAttributeValue(element, "type"))) {
+        return false;
+    }
+
+    const name = elementAttributeValue(element, "name") orelse return false;
+    const scope_root = radioGroupScopeRoot(self, node_id);
+    var descendants: std.ArrayList(NodeId) = .empty;
+    defer descendants.deinit(self.allocator);
+    self.collectSubtreeNodes(scope_root, &descendants, self.allocator) catch return false;
+
+    for (descendants.items) |descendant_id| {
+        const descendant = self.nodeAt(descendant_id) orelse continue;
+        const descendant_element = switch (descendant.kind) {
+            .element => |descendant_element| descendant_element,
+            else => continue,
+        };
+
+        if (!std.mem.eql(u8, descendant_element.tag_name, "input")) continue;
+        if (!isCheckableInputType(elementAttributeValue(descendant_element, "type"))) continue;
+        if (!std.mem.eql(u8, elementAttributeValue(descendant_element, "name") orelse "", name)) continue;
+        if (self.checkedForNode(descendant_id) == true) return false;
+    }
+
+    return true;
+}
+
+fn isDefaultPseudoClass(self: *const DomStore, node_id: NodeId) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return false,
+    };
+
+    if (std.mem.eql(u8, element.tag_name, "option")) {
+        return self.isOptionSelected(node_id);
+    }
+
+    if (std.mem.eql(u8, element.tag_name, "input")) {
+        const input_type = elementAttributeValue(element, "type");
+        if (isCheckableInputType(input_type)) {
+            return self.checkedForNode(node_id) == true;
+        }
+
+        if (std.mem.eql(u8, input_type orelse "text", "submit") or std.mem.eql(u8, input_type orelse "text", "image")) {
+            return isDefaultSubmitButton(self, node_id);
+        }
+        return false;
+    }
+
+    if (std.mem.eql(u8, element.tag_name, "button")) {
+        return isDefaultSubmitButton(self, node_id);
+    }
+
+    return false;
+}
+
+fn isValidPseudoClass(self: *const DomStore, node_id: NodeId) bool {
+    if (!isValidityFormControlCandidate(self, node_id)) return false;
+    return !isInvalidPseudoClass(self, node_id);
+}
+
+fn isInvalidPseudoClass(self: *const DomStore, node_id: NodeId) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return false,
+    };
+
+    if (std.mem.eql(u8, element.tag_name, "textarea")) {
+        const value = self.textContent(self.allocator, node_id) catch return false;
+        defer self.allocator.free(value);
+        return elementAttributeValue(element, "required") != null and value.len == 0;
+    }
+
+    if (std.mem.eql(u8, element.tag_name, "select")) {
+        const value = self.selectValueForNode(self.allocator, node_id) catch return false;
+        defer self.allocator.free(value);
+        return elementAttributeValue(element, "required") != null and value.len == 0;
+    }
+
+    if (!std.mem.eql(u8, element.tag_name, "input")) {
+        return false;
+    }
+
+    const input_type = elementAttributeValue(element, "type");
+    if (std.mem.eql(u8, input_type orelse "text", "hidden")) {
+        return false;
+    }
+
+    if (isCheckableInputType(input_type)) {
+        return elementAttributeValue(element, "required") != null and self.checkedForNode(node_id) != true;
+    }
+
+    if (isRangeInputType(input_type)) {
+        const value = self.inputValueForNode(self.allocator, node_id) catch return false;
+        defer self.allocator.free(value);
+        return isOutOfRangePseudoClass(self, node_id) or (elementAttributeValue(element, "required") != null and value.len == 0);
+    }
+
+    if (isFileInputType(input_type) or isTextInputType(input_type)) {
+        const value = self.inputValueForNode(self.allocator, node_id) catch return false;
+        defer self.allocator.free(value);
+        return elementAttributeValue(element, "required") != null and value.len == 0;
+    }
+
+    return false;
+}
+
+fn isInRangePseudoClass(self: *const DomStore, node_id: NodeId) bool {
+    const current_value = numericRangeValue(self, node_id) orelse return false;
+    const bounds = numericRangeLimits(self, node_id) orelse return false;
+
+    if (bounds.min) |min| {
+        if (current_value < min) return false;
+    }
+    if (bounds.max) |max| {
+        if (current_value > max) return false;
+    }
+
+    return true;
+}
+
+fn isOutOfRangePseudoClass(self: *const DomStore, node_id: NodeId) bool {
+    const current_value = numericRangeValue(self, node_id) orelse return false;
+    const bounds = numericRangeLimits(self, node_id) orelse return false;
+
+    if (bounds.min) |min| {
+        if (current_value < min) return true;
+    }
+    if (bounds.max) |max| {
+        if (current_value > max) return true;
+    }
+
+    return false;
+}
+
+fn isReadOnlyPseudoClass(self: *const DomStore, node_id: NodeId) bool {
+    return !isReadWritePseudoClass(self, node_id);
+}
+
+fn isReadWritePseudoClass(self: *const DomStore, node_id: NodeId) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return false,
+    };
+
+    if (isContentEditableElement(element)) {
+        return true;
+    }
+
+    if (std.mem.eql(u8, element.tag_name, "textarea")) {
+        return elementAttributeValue(element, "disabled") == null and elementAttributeValue(element, "readonly") == null;
+    }
+
+    if (std.mem.eql(u8, element.tag_name, "input")) {
+        const input_type = elementAttributeValue(element, "type");
+        return isTextInputType(input_type) and elementAttributeValue(element, "disabled") == null and elementAttributeValue(element, "readonly") == null;
+    }
+
+    return false;
+}
+
+fn isValidityFormControlCandidate(self: *const DomStore, node_id: NodeId) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return false,
+    };
+
+    if (std.mem.eql(u8, element.tag_name, "textarea") or std.mem.eql(u8, element.tag_name, "select")) {
+        return true;
+    }
+
+    if (!std.mem.eql(u8, element.tag_name, "input")) {
+        return false;
+    }
+
+    const input_type = elementAttributeValue(element, "type");
+    return !std.mem.eql(u8, input_type orelse "text", "hidden") and (isTextInputType(input_type) or isCheckableInputType(input_type) or isFileInputType(input_type));
+}
+
+fn isDefaultSubmitButton(self: *const DomStore, node_id: NodeId) bool {
+    const form_id = formAncestorOf(self, node_id) orelse return false;
+    var descendants: std.ArrayList(NodeId) = .empty;
+    defer descendants.deinit(self.allocator);
+    self.collectSubtreeNodes(form_id, &descendants, self.allocator) catch return false;
+
+    for (descendants.items) |candidate_id| {
+        if (isSubmitButtonCandidate(self, candidate_id)) {
+            return sameNodeId(candidate_id, node_id);
+        }
+    }
+
+    return false;
+}
+
+fn isSubmitButtonCandidate(self: *const DomStore, node_id: NodeId) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return false,
+    };
+
+    if (elementAttributeValue(element, "disabled") != null) {
+        return false;
+    }
+
+    if (std.mem.eql(u8, element.tag_name, "button")) {
+        return !std.mem.eql(u8, elementAttributeValue(element, "type") orelse "submit", "button");
+    }
+
+    if (std.mem.eql(u8, element.tag_name, "input")) {
+        const input_type = elementAttributeValue(element, "type") orelse "text";
+        return std.mem.eql(u8, input_type, "submit") or std.mem.eql(u8, input_type, "image");
+    }
+
+    return false;
+}
+
+fn formAncestorOf(self: *const DomStore, node_id: NodeId) ?NodeId {
+    var current = parentOf(self, node_id);
+    while (current) |ancestor_id| {
+        const node = self.nodeAt(ancestor_id) orelse break;
+        if (switch (node.kind) {
+            .element => |element| std.mem.eql(u8, element.tag_name, "form"),
+            else => false,
+        }) {
+            return ancestor_id;
+        }
+        current = parentOf(self, ancestor_id);
+    }
+
+    return null;
+}
+
+fn radioGroupScopeRoot(self: *const DomStore, node_id: NodeId) NodeId {
+    var current = parentOf(self, node_id);
+    while (current) |ancestor_id| {
+        const node = self.nodeAt(ancestor_id) orelse break;
+        if (switch (node.kind) {
+            .element => |element| std.mem.eql(u8, element.tag_name, "form"),
+            else => false,
+        }) {
+            return ancestor_id;
+        }
+        current = parentOf(self, ancestor_id);
+    }
+
+    return documentElementId(self) orelse self.documentId();
+}
+
+fn isContentEditableElement(element: ElementData) bool {
+    const value = elementAttributeValue(element, "contenteditable") orelse return false;
+    const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+    return trimmed.len == 0 or asciiEqualIgnoreCase(trimmed, "true") or asciiEqualIgnoreCase(trimmed, "plaintext-only");
+}
+
+const NumericRangeLimits = struct {
+    min: ?f64,
+    max: ?f64,
+};
+
+fn isRangeInputType(input_type: ?[]const u8) bool {
+    const value = input_type orelse "text";
+    return std.mem.eql(u8, value, "number") or std.mem.eql(u8, value, "range");
+}
+
+fn numericRangeValue(self: *const DomStore, node_id: NodeId) ?f64 {
+    const node = self.nodeAt(node_id) orelse return null;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return null,
+    };
+
+    const input_type = elementAttributeValue(element, "type");
+    if (!isRangeInputType(input_type)) return null;
+
+    const value = elementAttributeValue(element, "value") orelse return null;
+    const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+    if (trimmed.len == 0) return null;
+    return std.fmt.parseFloat(f64, trimmed) catch return null;
+}
+
+fn numericRangeLimits(self: *const DomStore, node_id: NodeId) ?NumericRangeLimits {
+    const node = self.nodeAt(node_id) orelse return null;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return null,
+    };
+
+    const input_type = elementAttributeValue(element, "type");
+    if (!isRangeInputType(input_type)) return null;
+
+    const min = if (elementAttributeValue(element, "min")) |value| blk: {
+        const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+        if (trimmed.len == 0) break :blk null;
+        break :blk std.fmt.parseFloat(f64, trimmed) catch null;
+    } else null;
+
+    const max = if (elementAttributeValue(element, "max")) |value| blk: {
+        const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+        if (trimmed.len == 0) break :blk null;
+        break :blk std.fmt.parseFloat(f64, trimmed) catch null;
+    } else null;
+
+    if (std.mem.eql(u8, input_type orelse "text", "number") and min == null and max == null) {
+        return null;
+    }
+
+    return .{
+        .min = if (std.mem.eql(u8, input_type orelse "text", "range")) (min orelse 0.0) else min,
+        .max = if (std.mem.eql(u8, input_type orelse "text", "range")) (max orelse 100.0) else max,
+    };
+}
+
+fn isLangPseudoClass(self: *const DomStore, node_id: NodeId, langs: []const []const u8) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    switch (node.kind) {
+        .element => {},
+        else => return false,
+    }
+
+    var current = node_id;
+    while (true) {
+        const current_node = self.nodeAt(current) orelse return false;
+        switch (current_node.kind) {
+            .element => |element| {
+                if (elementAttributeValue(element, "lang")) |value| {
+                    const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+                    if (trimmed.len > 0) {
+                        for (langs) |lang| {
+                            if (langMatchesRange(trimmed, lang)) return true;
+                        }
+                        return false;
+                    }
+                } else if (elementAttributeValue(element, "xml:lang")) |value| {
+                    const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+                    if (trimmed.len > 0) {
+                        for (langs) |lang| {
+                            if (langMatchesRange(trimmed, lang)) return true;
+                        }
+                        return false;
+                    }
+                }
+
+                if (parentOf(self, current)) |parent_id| {
+                    current = parent_id;
+                    continue;
+                }
+                break;
+            },
+            .document => break,
+            else => return false,
+        }
+    }
+
+    return false;
+}
+
+fn isDirPseudoClass(self: *const DomStore, node_id: NodeId, dir: SelectorDirValue) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    switch (node.kind) {
+        .element => {},
+        else => return false,
+    }
+
+    return inheritedDirectionality(self, node_id) == dir;
+}
+
+fn inheritedDirectionality(self: *const DomStore, node_id: NodeId) SelectorDirValue {
+    var current = node_id;
+    while (true) {
+        const current_node = self.nodeAt(current) orelse break;
+        switch (current_node.kind) {
+            .element => |element| {
+                if (elementAttributeValue(element, "dir")) |value| {
+                    const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+                    if (trimmed.len == 0) {
+                        if (parentOf(self, current)) |parent_id| {
+                            current = parent_id;
+                            continue;
+                        }
+                        break;
+                    }
+
+                    if (asciiEqualIgnoreCase(trimmed, "ltr")) return .ltr;
+                    if (asciiEqualIgnoreCase(trimmed, "rtl")) return .rtl;
+                }
+
+                if (parentOf(self, current)) |parent_id| {
+                    current = parent_id;
+                    continue;
+                }
+                break;
+            },
+            .document => break,
+            else => break,
+        }
+    }
+
+    return .ltr;
+}
+
+fn isFormStatePseudoCandidate(tag_name: []const u8) bool {
+    return std.mem.eql(u8, tag_name, "input") or std.mem.eql(u8, tag_name, "button") or std.mem.eql(u8, tag_name, "select") or std.mem.eql(u8, tag_name, "textarea") or std.mem.eql(u8, tag_name, "option") or std.mem.eql(u8, tag_name, "optgroup") or std.mem.eql(u8, tag_name, "fieldset");
+}
+
+fn isRequiredPseudoCandidate(tag_name: []const u8) bool {
+    return std.mem.eql(u8, tag_name, "input") or std.mem.eql(u8, tag_name, "select") or std.mem.eql(u8, tag_name, "textarea");
 }
 
 fn sameNodeId(left: NodeId, right: NodeId) bool {
@@ -2479,13 +3934,14 @@ fn collectSelectorMatches(
     self: *const DomStore,
     node_id: NodeId,
     chains: []const SelectorChain,
+    scope_root: ?NodeId,
     results: *std.ArrayList(NodeId),
     allocator: std.mem.Allocator,
 ) errors.Result(void) {
     const node = self.nodeAt(node_id) orelse return error.HtmlParse;
     switch (node.kind) {
         .element => {
-            if (nodeMatchesAnyChain(self, node_id, chains)) {
+            if (nodeMatchesAnyChain(self, node_id, chains, scope_root)) {
                 try results.append(allocator, node_id);
             }
         },
@@ -2493,7 +3949,7 @@ fn collectSelectorMatches(
     }
 
     for (node.children.items) |child_id| {
-        try collectSelectorMatches(self, child_id, chains, results, allocator);
+        try collectSelectorMatches(self, child_id, chains, scope_root, results, allocator);
     }
 }
 
@@ -2501,6 +3957,7 @@ fn collectSelectorMatchesWithin(
     self: *const DomStore,
     node_id: NodeId,
     chains: []const SelectorChain,
+    scope_root: ?NodeId,
     results: *std.ArrayList(NodeId),
     allocator: std.mem.Allocator,
 ) errors.Result(void) {
@@ -2509,28 +3966,28 @@ fn collectSelectorMatchesWithin(
         const child = self.nodeAt(child_id) orelse return error.HtmlParse;
         switch (child.kind) {
             .element => {
-                if (nodeMatchesAnyChain(self, child_id, chains)) {
+                if (nodeMatchesAnyChain(self, child_id, chains, scope_root)) {
                     try results.append(allocator, child_id);
                 }
             },
             else => {},
         }
 
-        try collectSelectorMatchesWithin(self, child_id, chains, results, allocator);
+        try collectSelectorMatchesWithin(self, child_id, chains, scope_root, results, allocator);
     }
 }
 
-fn nodeMatchesAnyChain(self: *const DomStore, node_id: NodeId, chains: []const SelectorChain) bool {
+fn nodeMatchesAnyChain(self: *const DomStore, node_id: NodeId, chains: []const SelectorChain, scope_root: ?NodeId) bool {
     for (chains) |chain| {
-        if (nodeMatchesSelectorChain(self, node_id, &chain)) return true;
+        if (nodeMatchesSelectorChain(self, node_id, &chain, scope_root)) return true;
     }
     return false;
 }
 
-fn nodeMatchesSelectorChain(self: *const DomStore, node_id: NodeId, chain: *const SelectorChain) bool {
+fn nodeMatchesSelectorChain(self: *const DomStore, node_id: NodeId, chain: *const SelectorChain, scope_root: ?NodeId) bool {
     if (chain.parts.items.len == 0) return false;
     const last_index = chain.parts.items.len - 1;
-    return nodeMatchesSelectorChainPart(self, node_id, chain.parts.items, chain.relations.items, last_index);
+    return nodeMatchesSelectorChainPart(self, node_id, chain.parts.items, chain.relations.items, last_index, scope_root);
 }
 
 fn nodeMatchesSelectorChainPart(
@@ -2539,19 +3996,20 @@ fn nodeMatchesSelectorChainPart(
     parts: []const SelectorQuery,
     relations: []const SelectorCombinator,
     index: usize,
+    scope_root: ?NodeId,
 ) bool {
-    if (!nodeMatchesSelectorQuery(self, node_id, parts[index])) return false;
+    if (!nodeMatchesSelectorQuery(self, node_id, parts[index], scope_root)) return false;
     if (index == 0) return true;
 
     return switch (relations[index - 1]) {
         .child => blk: {
             const parent_id = parentOf(self, node_id) orelse break :blk false;
-            break :blk nodeMatchesSelectorChainPart(self, parent_id, parts, relations, index - 1);
+            break :blk nodeMatchesSelectorChainPart(self, parent_id, parts, relations, index - 1, scope_root);
         },
         .descendant => blk: {
             var ancestor = parentOf(self, node_id);
             while (ancestor) |ancestor_id| {
-                if (nodeMatchesSelectorChainPart(self, ancestor_id, parts, relations, index - 1)) {
+                if (nodeMatchesSelectorChainPart(self, ancestor_id, parts, relations, index - 1, scope_root)) {
                     break :blk true;
                 }
                 ancestor = parentOf(self, ancestor_id);
@@ -2560,12 +4018,12 @@ fn nodeMatchesSelectorChainPart(
         },
         .adjacent_sibling => blk: {
             const sibling_id = previousElementSibling(self, node_id) orelse break :blk false;
-            break :blk nodeMatchesSelectorChainPart(self, sibling_id, parts, relations, index - 1);
+            break :blk nodeMatchesSelectorChainPart(self, sibling_id, parts, relations, index - 1, scope_root);
         },
         .general_sibling => blk: {
             var sibling = previousElementSibling(self, node_id);
             while (sibling) |sibling_id| {
-                if (nodeMatchesSelectorChainPart(self, sibling_id, parts, relations, index - 1)) {
+                if (nodeMatchesSelectorChainPart(self, sibling_id, parts, relations, index - 1, scope_root)) {
                     break :blk true;
                 }
                 sibling = previousElementSibling(self, sibling_id);
@@ -2575,7 +4033,7 @@ fn nodeMatchesSelectorChainPart(
     };
 }
 
-fn nodeMatchesSelectorQuery(self: *const DomStore, node_id: NodeId, query: SelectorQuery) bool {
+fn nodeMatchesSelectorQuery(self: *const DomStore, node_id: NodeId, query: SelectorQuery, scope_root: ?NodeId) bool {
     const node = self.nodeAt(node_id) orelse return false;
     const element = switch (node.kind) {
         .element => |element| element,
@@ -2599,7 +4057,398 @@ fn nodeMatchesSelectorQuery(self: *const DomStore, node_id: NodeId, query: Selec
         if (!elementMatchesAttribute(element, attribute)) return false;
     }
 
+    for (query.pseudos.items) |pseudo| {
+        if (!nodeMatchesPseudoClass(self, node_id, pseudo, scope_root)) return false;
+    }
+
     return true;
+}
+
+fn isTargetPseudoClass(self: *const DomStore, node_id: NodeId) bool {
+    const fragment = self.targetFragment() orelse return false;
+    const node = self.nodeAt(node_id) orelse return false;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return false,
+    };
+
+    if (elementAttributeValue(element, "id")) |id| {
+        if (std.mem.eql(u8, id, fragment)) return true;
+    }
+    if (elementAttributeValue(element, "name")) |name| {
+        if (std.mem.eql(u8, name, fragment)) return true;
+    }
+
+    if (self.targetNodeForFragment(fragment)) |target| {
+        return sameNodeId(target, node_id);
+    }
+
+    return false;
+}
+
+fn isFocusPseudoClass(self: *const DomStore, node_id: NodeId) bool {
+    return if (self.focusedNode()) |focused| sameNodeId(focused, node_id) else false;
+}
+
+fn isFocusWithinPseudoClass(self: *const DomStore, node_id: NodeId) bool {
+    var current = self.focusedNode();
+    while (current) |current_id| {
+        if (sameNodeId(current_id, node_id)) return true;
+        current = parentOf(self, current_id);
+    }
+
+    return false;
+}
+
+fn isNthChild(self: *const DomStore, node_id: NodeId, pattern: SelectorNthChildPattern) bool {
+    const filters = if (pattern.of_selectors) |selectors| selectors.items else null;
+    const position = elementChildPositionFiltered(self, node_id, filters) orelse return false;
+    return matchesNthPattern(self, @intCast(position), pattern);
+}
+
+fn isNthLastChild(self: *const DomStore, node_id: NodeId, pattern: SelectorNthChildPattern) bool {
+    const filters = if (pattern.of_selectors) |selectors| selectors.items else null;
+    const position = elementChildPositionFromEndFiltered(self, node_id, filters) orelse return false;
+    return matchesNthPattern(self, @intCast(position), pattern);
+}
+
+fn isNthOfType(self: *const DomStore, node_id: NodeId, pattern: SelectorNthChildPattern) bool {
+    const filters = if (pattern.of_selectors) |selectors| selectors.items else null;
+    const position = elementSiblingPositionOfTypeFiltered(self, node_id, filters) orelse return false;
+    return matchesNthPattern(self, @intCast(position), pattern);
+}
+
+fn isNthLastOfType(self: *const DomStore, node_id: NodeId, pattern: SelectorNthChildPattern) bool {
+    const filters = if (pattern.of_selectors) |selectors| selectors.items else null;
+    const position = elementSiblingPositionFromEndOfTypeFiltered(self, node_id, filters) orelse return false;
+    return matchesNthPattern(self, @intCast(position), pattern);
+}
+
+fn elementChildPositionFiltered(
+    self: *const DomStore,
+    node_id: NodeId,
+    of_selectors: ?[]const SelectorChain,
+) ?usize {
+    const parent_id = parentOf(self, node_id) orelse return null;
+    const parent = self.nodeAt(parent_id) orelse return null;
+    var position: usize = 0;
+
+    for (parent.children.items) |child_id| {
+        const child = self.nodeAt(child_id) orelse return null;
+        switch (child.kind) {
+            .element => {
+                if (!matchesNthChildOfFilters(self, child_id, of_selectors)) {
+                    if (sameNodeId(child_id, node_id)) return null;
+                    continue;
+                }
+                position += 1;
+                if (sameNodeId(child_id, node_id)) return position;
+            },
+            else => if (sameNodeId(child_id, node_id)) return null,
+        }
+    }
+
+    return null;
+}
+
+fn elementChildPositionFromEndFiltered(
+    self: *const DomStore,
+    node_id: NodeId,
+    of_selectors: ?[]const SelectorChain,
+) ?usize {
+    const parent_id = parentOf(self, node_id) orelse return null;
+    const parent = self.nodeAt(parent_id) orelse return null;
+    var position: usize = 0;
+
+    var index = parent.children.items.len;
+    while (index > 0) {
+        index -= 1;
+        const child_id = parent.children.items[index];
+        const child = self.nodeAt(child_id) orelse return null;
+        switch (child.kind) {
+            .element => {
+                if (!matchesNthChildOfFilters(self, child_id, of_selectors)) {
+                    if (sameNodeId(child_id, node_id)) return null;
+                    continue;
+                }
+                position += 1;
+                if (sameNodeId(child_id, node_id)) return position;
+            },
+            else => if (sameNodeId(child_id, node_id)) return null,
+        }
+    }
+
+    return null;
+}
+
+fn matchesNthChildOfFilters(
+    self: *const DomStore,
+    node_id: NodeId,
+    of_selectors: ?[]const SelectorChain,
+) bool {
+    const selectors = of_selectors orelse return true;
+    for (selectors) |chain| {
+        if (nodeMatchesSelectorChain(self, node_id, &chain, null)) return true;
+    }
+    return false;
+}
+
+fn elementSiblingPositionOfTypeFiltered(
+    self: *const DomStore,
+    node_id: NodeId,
+    of_selectors: ?[]const SelectorChain,
+) ?usize {
+    const node = self.nodeAt(node_id) orelse return null;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return null,
+    };
+
+    const parent_id = node.parent orelse return null;
+    const parent = self.nodeAt(parent_id) orelse return null;
+    var matching_sibling_count: usize = 0;
+
+    for (parent.children.items) |child_id| {
+        const child = self.nodeAt(child_id) orelse return null;
+        const child_element = switch (child.kind) {
+            .element => |child_element| child_element,
+            else => continue,
+        };
+
+        if (std.mem.eql(u8, child_element.tag_name, element.tag_name) and matchesNthOfTypeFilters(self, child_id, of_selectors)) {
+            matching_sibling_count += 1;
+            if (sameNodeId(child_id, node_id)) return matching_sibling_count;
+        } else if (sameNodeId(child_id, node_id)) {
+            return null;
+        }
+    }
+
+    return null;
+}
+
+fn elementSiblingPositionFromEndOfTypeFiltered(
+    self: *const DomStore,
+    node_id: NodeId,
+    of_selectors: ?[]const SelectorChain,
+) ?usize {
+    const node = self.nodeAt(node_id) orelse return null;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return null,
+    };
+
+    const parent_id = node.parent orelse return null;
+    const parent = self.nodeAt(parent_id) orelse return null;
+    var matching_sibling_count: usize = 0;
+
+    var index = parent.children.items.len;
+    while (index > 0) {
+        index -= 1;
+        const child_id = parent.children.items[index];
+        const child = self.nodeAt(child_id) orelse return null;
+        const child_element = switch (child.kind) {
+            .element => |child_element| child_element,
+            else => continue,
+        };
+
+        if (std.mem.eql(u8, child_element.tag_name, element.tag_name) and matchesNthOfTypeFilters(self, child_id, of_selectors)) {
+            matching_sibling_count += 1;
+            if (sameNodeId(child_id, node_id)) return matching_sibling_count;
+        } else if (sameNodeId(child_id, node_id)) {
+            return null;
+        }
+    }
+
+    return null;
+}
+
+fn matchesNthOfTypeFilters(
+    self: *const DomStore,
+    node_id: NodeId,
+    of_selectors: ?[]const SelectorChain,
+) bool {
+    return matchesNthChildOfFilters(self, node_id, of_selectors);
+}
+
+fn matchesNthPattern(self: *const DomStore, position: isize, pattern: SelectorNthChildPattern) bool {
+    _ = self;
+    return switch (pattern.step) {
+        0 => position == pattern.offset and position > 0,
+        else => blk: {
+            if (pattern.step > 0) {
+                const diff = std.math.sub(isize, position, pattern.offset) catch return false;
+                if (diff < 0) break :blk false;
+                break :blk @mod(diff, pattern.step) == 0;
+            }
+
+            const step = if (pattern.step < 0) -pattern.step else pattern.step;
+            const diff = std.math.sub(isize, pattern.offset, position) catch return false;
+            if (diff < 0) break :blk false;
+            break :blk @mod(diff, step) == 0;
+        },
+    };
+}
+
+fn nodeMatchesPseudoClass(self: *const DomStore, node_id: NodeId, pseudo: SelectorPseudoClass, scope_root: ?NodeId) bool {
+    return switch (pseudo) {
+        .scope => if (scope_root) |scope_id| sameNodeId(node_id, scope_id) else false,
+        .root => sameNodeId(node_id, documentElementId(self) orelse return false),
+        .empty => isEmptyElement(self, node_id),
+        .first_child => isFirstElementChild(self, node_id),
+        .last_child => isLastElementChild(self, node_id),
+        .only_child => isOnlyElementChild(self, node_id),
+        .first_of_type => isFirstElementOfType(self, node_id),
+        .last_of_type => isLastElementOfType(self, node_id),
+        .only_of_type => isOnlyElementOfType(self, node_id),
+        .checked => isCheckedPseudo(self, node_id),
+        .disabled => isDisabledPseudo(self, node_id),
+        .enabled => isEnabledPseudo(self, node_id),
+        .required => isRequiredPseudo(self, node_id),
+        .optional => isOptionalPseudo(self, node_id),
+        .link => isLinkPseudo(self, node_id),
+        .any_link => isLinkPseudo(self, node_id),
+        .defined => isDefinedPseudoClass(self, node_id),
+        .placeholder_shown => isPlaceholderShownPseudo(self, node_id),
+        .indeterminate => isIndeterminatePseudoClass(self, node_id),
+        .default => isDefaultPseudoClass(self, node_id),
+        .valid => isValidPseudoClass(self, node_id),
+        .invalid => isInvalidPseudoClass(self, node_id),
+        .in_range => isInRangePseudoClass(self, node_id),
+        .out_of_range => isOutOfRangePseudoClass(self, node_id),
+        .read_only => isReadOnlyPseudoClass(self, node_id),
+        .read_write => isReadWritePseudoClass(self, node_id),
+        .target => isTargetPseudoClass(self, node_id),
+        .focus => isFocusPseudoClass(self, node_id),
+        .focus_within => isFocusWithinPseudoClass(self, node_id),
+        .lang => |langs| isLangPseudoClass(self, node_id, langs.items),
+        .dir => |dir| isDirPseudoClass(self, node_id, dir),
+        .not => |selectors| blk: {
+            for (selectors.items) |chain| {
+                if (nodeMatchesSelectorChain(self, node_id, &chain, scope_root)) break :blk false;
+            }
+            break :blk true;
+        },
+        .is => |selectors| blk: {
+            for (selectors.items) |chain| {
+                if (nodeMatchesSelectorChain(self, node_id, &chain, scope_root)) break :blk true;
+            }
+            break :blk false;
+        },
+        .where => |selectors| blk: {
+            for (selectors.items) |chain| {
+                if (nodeMatchesSelectorChain(self, node_id, &chain, scope_root)) break :blk true;
+            }
+            break :blk false;
+        },
+        .has => |relative_selectors| blk: {
+            for (relative_selectors.items) |relative_selector| {
+                if (matchesSelectorRelativeSelector(self, node_id, relative_selector, scope_root)) {
+                    break :blk true;
+                }
+            }
+            break :blk false;
+        },
+        .nth_child => |pattern| isNthChild(self, node_id, pattern),
+        .nth_last_child => |pattern| isNthLastChild(self, node_id, pattern),
+        .nth_of_type => |pattern| isNthOfType(self, node_id, pattern),
+        .nth_last_of_type => |pattern| isNthLastOfType(self, node_id, pattern),
+    };
+}
+
+fn matchesSelectorRelativeSelector(
+    self: *const DomStore,
+    node_id: NodeId,
+    relative_selector: SelectorRelativeSelector,
+    scope_root: ?NodeId,
+) bool {
+    const subject_scope = scope_root orelse node_id;
+
+    if (relative_selector.combinator) |combinator| {
+        return switch (combinator) {
+            .child => hasChildMatchingChain(self, node_id, &relative_selector.chain, subject_scope),
+            .adjacent_sibling => hasAdjacentSiblingMatchingChain(self, node_id, &relative_selector.chain, subject_scope),
+            .general_sibling => hasGeneralSiblingMatchingChain(self, node_id, &relative_selector.chain, subject_scope),
+            .descendant => hasDescendantMatchingChain(self, node_id, &relative_selector.chain, subject_scope),
+        };
+    }
+
+    if (relative_selector.chain.parts.items.len == 1 and chainStartsWithScope(&relative_selector.chain)) {
+        return nodeMatchesSelectorChain(self, node_id, &relative_selector.chain, subject_scope);
+    }
+
+    return hasDescendantMatchingChain(self, node_id, &relative_selector.chain, subject_scope);
+}
+
+fn chainStartsWithScope(chain: *const SelectorChain) bool {
+    if (chain.parts.items.len == 0) return false;
+    const first = chain.parts.items[0];
+    for (first.pseudos.items) |pseudo| {
+        switch (pseudo) {
+            .scope => return true,
+            else => {},
+        }
+    }
+    return false;
+}
+
+fn hasDescendantMatchingChain(
+    self: *const DomStore,
+    node_id: NodeId,
+    chain: *const SelectorChain,
+    scope_root: ?NodeId,
+) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    for (node.children.items) |child_id| {
+        if (nodeMatchesSelectorChain(self, child_id, chain, scope_root)) {
+            return true;
+        }
+        if (hasDescendantMatchingChain(self, child_id, chain, scope_root)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn hasChildMatchingChain(
+    self: *const DomStore,
+    node_id: NodeId,
+    chain: *const SelectorChain,
+    scope_root: ?NodeId,
+) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    for (node.children.items) |child_id| {
+        if (nodeMatchesSelectorChain(self, child_id, chain, scope_root)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn hasAdjacentSiblingMatchingChain(
+    self: *const DomStore,
+    node_id: NodeId,
+    chain: *const SelectorChain,
+    scope_root: ?NodeId,
+) bool {
+    const sibling_id = nextElementSibling(self, node_id) orelse return false;
+    return nodeMatchesSelectorChain(self, sibling_id, chain, scope_root);
+}
+
+fn hasGeneralSiblingMatchingChain(
+    self: *const DomStore,
+    node_id: NodeId,
+    chain: *const SelectorChain,
+    scope_root: ?NodeId,
+) bool {
+    var sibling = nextElementSibling(self, node_id);
+    while (sibling) |sibling_id| {
+        if (nodeMatchesSelectorChain(self, sibling_id, chain, scope_root)) {
+            return true;
+        }
+        sibling = nextElementSibling(self, sibling_id);
+    }
+
+    return false;
 }
 
 fn elementMatchesAttribute(element: ElementData, condition: SelectorAttribute) bool {
@@ -2821,6 +4670,13 @@ fn asciiEqualIgnoreCase(left: []const u8, right: []const u8) bool {
         if (std.ascii.toLower(byte) != std.ascii.toLower(right[index])) return false;
     }
     return true;
+}
+
+fn langMatchesRange(lang: []const u8, range: []const u8) bool {
+    if (asciiEqualIgnoreCase(lang, range)) return true;
+    if (lang.len <= range.len) return false;
+    if (lang[range.len] != '-') return false;
+    return asciiEqualIgnoreCase(lang[0..range.len], range);
 }
 
 test "phase one: bootstrapHtml builds a nested tree" {
@@ -3088,6 +4944,390 @@ test "phase six: selector expansion matches sibling combinators" {
     try std.testing.expectEqual(@as(usize, 2), general.len);
     try std.testing.expectEqual(NodeId.new(6, 0), general[0]);
     try std.testing.expectEqual(NodeId.new(8, 0), general[1]);
+}
+
+test "phase six: selector expansion matches :has pseudo-class" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml(
+        "<main id='root'><section id='first' class='child'>First</section><section id='child' class='child'><div id='grandchild' class='grandchild'>Grand</div></section></main>",
+    );
+
+    const by_descendant = try store.select(allocator, "main:has(section .grandchild)");
+    defer allocator.free(by_descendant);
+    try std.testing.expectEqual(@as(usize, 1), by_descendant.len);
+    try std.testing.expectEqual(NodeId.new(1, 0), by_descendant[0]);
+
+    const by_child = try store.select(allocator, "main:has(> .child)");
+    defer allocator.free(by_child);
+    try std.testing.expectEqual(@as(usize, 1), by_child.len);
+    try std.testing.expectEqual(NodeId.new(1, 0), by_child[0]);
+
+    const by_list = try store.select(allocator, "main:has(#missing, #child)");
+    defer allocator.free(by_list);
+    try std.testing.expectEqual(@as(usize, 1), by_list.len);
+    try std.testing.expectEqual(NodeId.new(1, 0), by_list[0]);
+
+    const section = store.findElementById("child").?;
+    try std.testing.expect(try store.matchesSelector(allocator, section, ":has(.grandchild)"));
+    try std.testing.expect(!try store.matchesSelector(allocator, section, ":has(.missing)"));
+}
+
+test "phase six: selector expansion matches :lang and :dir pseudo-classes" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml(
+        "<main id='root' lang='en-US' dir='rtl'><section id='section'><span id='leaf'>Leaf</span></section><article id='article' xml:lang='fr'><span id='french'>Bonjour</span></article></main>",
+    );
+
+    const by_lang_list = try store.select(allocator, "section:lang(fr, en)");
+    defer allocator.free(by_lang_list);
+    try std.testing.expectEqual(@as(usize, 1), by_lang_list.len);
+    try std.testing.expectEqual(NodeId.new(2, 0), by_lang_list[0]);
+
+    const by_xml_lang = try store.select(allocator, "span:lang(fr)");
+    defer allocator.free(by_xml_lang);
+    try std.testing.expectEqual(@as(usize, 1), by_xml_lang.len);
+    try std.testing.expectEqual(NodeId.new(6, 0), by_xml_lang[0]);
+
+    const by_dir = try store.select(allocator, "section:dir(rtl)");
+    defer allocator.free(by_dir);
+    try std.testing.expectEqual(@as(usize, 1), by_dir.len);
+    try std.testing.expectEqual(NodeId.new(2, 0), by_dir[0]);
+
+    const not_dir = try store.select(allocator, "section:dir(ltr)");
+    defer allocator.free(not_dir);
+    try std.testing.expectEqual(@as(usize, 0), not_dir.len);
+
+    const leaf = store.findElementById("leaf").?;
+    try std.testing.expect(try store.matchesSelector(allocator, leaf, ":lang(en)"));
+}
+
+test "phase six: selector expansion matches structural and state pseudo-classes" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml(
+        "<main id='root'><section id='buttons'><button id='first' class='primary' disabled>First</button><button id='second' class='secondary'>Second</button></section><div id='empty'></div><div id='not-empty'>x</div><input id='agree' type='checkbox' checked><input id='field' required><input id='optional'><textarea id='bio' placeholder='Bio'></textarea><a id='docs' href='/docs'>Docs</a><section id='types'><span id='only-span'>Span</span><button id='other'>Other</button></section></main>",
+    );
+
+    const root = try store.select(allocator, ":root");
+    defer allocator.free(root);
+    try std.testing.expectEqual(@as(usize, 1), root.len);
+    try std.testing.expectEqualStrings("root", (try store.getAttribute(root[0], "id")).?);
+
+    const first_child = try store.select(allocator, "#buttons > button:first-child");
+    defer allocator.free(first_child);
+    try std.testing.expectEqual(@as(usize, 1), first_child.len);
+    try std.testing.expectEqualStrings("first", (try store.getAttribute(first_child[0], "id")).?);
+
+    const last_child = try store.select(allocator, "#buttons > button:last-child");
+    defer allocator.free(last_child);
+    try std.testing.expectEqual(@as(usize, 1), last_child.len);
+    try std.testing.expectEqualStrings("second", (try store.getAttribute(last_child[0], "id")).?);
+
+    const first_of_type = try store.select(allocator, "#buttons > button:first-of-type");
+    defer allocator.free(first_of_type);
+    try std.testing.expectEqual(@as(usize, 1), first_of_type.len);
+    try std.testing.expectEqualStrings("first", (try store.getAttribute(first_of_type[0], "id")).?);
+
+    const last_of_type = try store.select(allocator, "#buttons > button:last-of-type");
+    defer allocator.free(last_of_type);
+    try std.testing.expectEqual(@as(usize, 1), last_of_type.len);
+    try std.testing.expectEqualStrings("second", (try store.getAttribute(last_of_type[0], "id")).?);
+
+    const only_of_type = try store.select(allocator, "#types > span:only-of-type");
+    defer allocator.free(only_of_type);
+    try std.testing.expectEqual(@as(usize, 1), only_of_type.len);
+    try std.testing.expectEqualStrings("only-span", (try store.getAttribute(only_of_type[0], "id")).?);
+
+    const only_child = try store.select(allocator, "#buttons > button:only-child");
+    defer allocator.free(only_child);
+    try std.testing.expectEqual(@as(usize, 0), only_child.len);
+
+    const empty = try store.select(allocator, "#empty:empty");
+    defer allocator.free(empty);
+    try std.testing.expectEqual(@as(usize, 1), empty.len);
+    try std.testing.expectEqualStrings("empty", (try store.getAttribute(empty[0], "id")).?);
+
+    const not_empty = try store.select(allocator, "#not-empty:empty");
+    defer allocator.free(not_empty);
+    try std.testing.expectEqual(@as(usize, 0), not_empty.len);
+
+    const checked = try store.select(allocator, "#agree:checked");
+    defer allocator.free(checked);
+    try std.testing.expectEqual(@as(usize, 1), checked.len);
+    try std.testing.expectEqualStrings("agree", (try store.getAttribute(checked[0], "id")).?);
+
+    const disabled = try store.select(allocator, "#first:disabled");
+    defer allocator.free(disabled);
+    try std.testing.expectEqual(@as(usize, 1), disabled.len);
+    try std.testing.expectEqualStrings("first", (try store.getAttribute(disabled[0], "id")).?);
+
+    const enabled = try store.select(allocator, "#second:enabled");
+    defer allocator.free(enabled);
+    try std.testing.expectEqual(@as(usize, 1), enabled.len);
+    try std.testing.expectEqualStrings("second", (try store.getAttribute(enabled[0], "id")).?);
+
+    const required = try store.select(allocator, "#field:required");
+    defer allocator.free(required);
+    try std.testing.expectEqual(@as(usize, 1), required.len);
+    try std.testing.expectEqualStrings("field", (try store.getAttribute(required[0], "id")).?);
+
+    const optional = try store.select(allocator, "#optional:optional");
+    defer allocator.free(optional);
+    try std.testing.expectEqual(@as(usize, 1), optional.len);
+    try std.testing.expectEqualStrings("optional", (try store.getAttribute(optional[0], "id")).?);
+
+    const link = try store.select(allocator, "#docs:link");
+    defer allocator.free(link);
+    try std.testing.expectEqual(@as(usize, 1), link.len);
+    try std.testing.expectEqualStrings("docs", (try store.getAttribute(link[0], "id")).?);
+
+    const any_link = try store.select(allocator, "#docs:any-link");
+    defer allocator.free(any_link);
+    try std.testing.expectEqual(@as(usize, 1), any_link.len);
+    try std.testing.expectEqualStrings("docs", (try store.getAttribute(any_link[0], "id")).?);
+
+    const placeholder_shown = try store.select(allocator, "#bio:placeholder-shown");
+    defer allocator.free(placeholder_shown);
+    try std.testing.expectEqual(@as(usize, 1), placeholder_shown.len);
+    try std.testing.expectEqualStrings("bio", (try store.getAttribute(placeholder_shown[0], "id")).?);
+
+    const is_buttons = try store.select(allocator, "#buttons > button:is(.primary, .secondary)");
+    defer allocator.free(is_buttons);
+    try std.testing.expectEqual(@as(usize, 2), is_buttons.len);
+    try std.testing.expectEqualStrings("first", (try store.getAttribute(is_buttons[0], "id")).?);
+    try std.testing.expectEqualStrings("second", (try store.getAttribute(is_buttons[1], "id")).?);
+
+    const where_buttons = try store.select(allocator, "#buttons > button:where(.primary, .secondary)");
+    defer allocator.free(where_buttons);
+    try std.testing.expectEqual(@as(usize, 2), where_buttons.len);
+    try std.testing.expectEqualStrings("first", (try store.getAttribute(where_buttons[0], "id")).?);
+    try std.testing.expectEqualStrings("second", (try store.getAttribute(where_buttons[1], "id")).?);
+
+    const not_buttons = try store.select(allocator, "#buttons > button:not(.missing, .secondary)");
+    defer allocator.free(not_buttons);
+    try std.testing.expectEqual(@as(usize, 1), not_buttons.len);
+    try std.testing.expectEqualStrings("first", (try store.getAttribute(not_buttons[0], "id")).?);
+}
+
+test "phase six: selector expansion matches defined pseudo-class" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml(
+        "<main id='root'><x-widget id='widget'></x-widget><svg id='svg'><text id='svg-text'>Hi</text></svg></main>",
+    );
+
+    const defined = try store.select(allocator, ":defined");
+    defer allocator.free(defined);
+    try std.testing.expectEqual(@as(usize, 3), defined.len);
+    try std.testing.expectEqualStrings("root", (try store.getAttribute(defined[0], "id")).?);
+    try std.testing.expectEqualStrings("svg", (try store.getAttribute(defined[1], "id")).?);
+    try std.testing.expectEqualStrings("svg-text", (try store.getAttribute(defined[2], "id")).?);
+
+    const widget_defined = try store.select(allocator, "#widget:defined");
+    defer allocator.free(widget_defined);
+    try std.testing.expectEqual(@as(usize, 0), widget_defined.len);
+
+    const svg_defined = try store.select(allocator, "#svg:defined");
+    defer allocator.free(svg_defined);
+    try std.testing.expectEqual(@as(usize, 1), svg_defined.len);
+    try std.testing.expectEqualStrings("svg", (try store.getAttribute(svg_defined[0], "id")).?);
+}
+
+test "phase six: selector expansion matches default and indeterminate pseudo-classes" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml(
+        "<main id='root'><progress id='loading'></progress><form id='signup'><input type='radio' name='mode' id='mode-a'><input type='radio' name='mode' id='mode-b'></form><form id='chosen'><input type='radio' name='picked' id='picked-a' checked><input type='radio' name='picked' id='picked-b'></form><form id='form'><input id='submit' type='submit'><input id='agree' type='checkbox' checked><input id='mode-c' type='radio' name='mode2'><input id='mode-d' type='radio' name='mode2' checked><select id='select'><option id='first' value='a'>A</option><option id='selected' value='b' selected>B</option></select></form></main>",
+    );
+
+    const defaults = try store.select(allocator, ":default");
+    defer allocator.free(defaults);
+    try std.testing.expectEqual(@as(usize, 5), defaults.len);
+    try std.testing.expectEqualStrings("picked-a", (try store.getAttribute(defaults[0], "id")).?);
+    try std.testing.expectEqualStrings("submit", (try store.getAttribute(defaults[1], "id")).?);
+    try std.testing.expectEqualStrings("agree", (try store.getAttribute(defaults[2], "id")).?);
+    try std.testing.expectEqualStrings("mode-d", (try store.getAttribute(defaults[3], "id")).?);
+    try std.testing.expectEqualStrings("selected", (try store.getAttribute(defaults[4], "id")).?);
+
+    const indeterminate = try store.select(allocator, ":indeterminate");
+    defer allocator.free(indeterminate);
+    try std.testing.expectEqual(@as(usize, 3), indeterminate.len);
+    try std.testing.expectEqualStrings("loading", (try store.getAttribute(indeterminate[0], "id")).?);
+    try std.testing.expectEqualStrings("mode-a", (try store.getAttribute(indeterminate[1], "id")).?);
+    try std.testing.expectEqualStrings("mode-b", (try store.getAttribute(indeterminate[2], "id")).?);
+}
+
+test "phase six: selector expansion matches read-only and read-write pseudo-classes" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml(
+        "<main id='root'><input id='name' value='Ada'><input id='readonly' value='Bee' readonly><textarea id='bio'>Hello</textarea><div id='editable' contenteditable='true'>Edit</div><select id='mode'><option id='option' value='a'>A</option></select><button id='button'>Button</button></main>",
+    );
+
+    const read_write = try store.select(allocator, ":read-write");
+    defer allocator.free(read_write);
+    try std.testing.expectEqual(@as(usize, 3), read_write.len);
+    try std.testing.expectEqualStrings("name", (try store.getAttribute(read_write[0], "id")).?);
+    try std.testing.expectEqualStrings("bio", (try store.getAttribute(read_write[1], "id")).?);
+    try std.testing.expectEqualStrings("editable", (try store.getAttribute(read_write[2], "id")).?);
+
+    const read_only = try store.select(allocator, ":read-only");
+    defer allocator.free(read_only);
+    try std.testing.expectEqual(@as(usize, 5), read_only.len);
+    try std.testing.expectEqualStrings("root", (try store.getAttribute(read_only[0], "id")).?);
+    try std.testing.expectEqualStrings("readonly", (try store.getAttribute(read_only[1], "id")).?);
+    try std.testing.expectEqualStrings("mode", (try store.getAttribute(read_only[2], "id")).?);
+    try std.testing.expectEqualStrings("option", (try store.getAttribute(read_only[3], "id")).?);
+    try std.testing.expectEqualStrings("button", (try store.getAttribute(read_only[4], "id")).?);
+}
+
+test "phase six: selector expansion matches validation and range pseudo-classes" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml(
+        "<main id='root'><input id='filled' type='text' required value='Ada'><input id='empty' type='text' required><input id='check' type='checkbox' required><input id='check-ok' type='checkbox' required checked><input id='low' type='number' min='2' max='6' value='1'><input id='high' type='number' min='2' max='6' value='7'><input id='in-range' type='number' min='2' max='6' value='4'><textarea id='bio' required></textarea><select id='mode' required><option value='a' selected>A</option><option value='b'>B</option></select><button id='button'>Button</button></main>",
+    );
+
+    const valid = try store.select(allocator, ":valid");
+    defer allocator.free(valid);
+    try std.testing.expectEqual(@as(usize, 4), valid.len);
+    try std.testing.expectEqualStrings("filled", (try store.getAttribute(valid[0], "id")).?);
+    try std.testing.expectEqualStrings("check-ok", (try store.getAttribute(valid[1], "id")).?);
+    try std.testing.expectEqualStrings("in-range", (try store.getAttribute(valid[2], "id")).?);
+    try std.testing.expectEqualStrings("mode", (try store.getAttribute(valid[3], "id")).?);
+
+    const invalid = try store.select(allocator, ":invalid");
+    defer allocator.free(invalid);
+    try std.testing.expectEqual(@as(usize, 5), invalid.len);
+    try std.testing.expectEqualStrings("empty", (try store.getAttribute(invalid[0], "id")).?);
+    try std.testing.expectEqualStrings("check", (try store.getAttribute(invalid[1], "id")).?);
+    try std.testing.expectEqualStrings("low", (try store.getAttribute(invalid[2], "id")).?);
+    try std.testing.expectEqualStrings("high", (try store.getAttribute(invalid[3], "id")).?);
+    try std.testing.expectEqualStrings("bio", (try store.getAttribute(invalid[4], "id")).?);
+
+    const in_range = try store.select(allocator, ":in-range");
+    defer allocator.free(in_range);
+    try std.testing.expectEqual(@as(usize, 1), in_range.len);
+    try std.testing.expectEqualStrings("in-range", (try store.getAttribute(in_range[0], "id")).?);
+
+    const out_of_range = try store.select(allocator, ":out-of-range");
+    defer allocator.free(out_of_range);
+    try std.testing.expectEqual(@as(usize, 2), out_of_range.len);
+    try std.testing.expectEqualStrings("low", (try store.getAttribute(out_of_range[0], "id")).?);
+    try std.testing.expectEqualStrings("high", (try store.getAttribute(out_of_range[1], "id")).?);
+}
+
+test "phase six: selector expansion matches scope pseudo-class" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml("<main id='root'><section id='section'><div id='child'>Child</div></section></main>");
+
+    const doc_scope = try store.querySelector(allocator, ":scope");
+    try std.testing.expect(doc_scope != null);
+    try std.testing.expectEqualStrings("root", (try store.getAttribute(doc_scope.?, "id")).?);
+
+    const root = store.findElementById("root").?;
+    const section = try store.querySelectorWithin(allocator, root, ":scope > section");
+    try std.testing.expect(section != null);
+    try std.testing.expectEqualStrings("section", (try store.getAttribute(section.?, "id")).?);
+
+    const missing = try store.querySelectorWithin(allocator, root, ":scope");
+    try std.testing.expect(missing == null);
+
+    try std.testing.expect(try store.matchesSelector(allocator, root, ":scope"));
+
+    const child = store.findElementById("child").?;
+    const closest = try store.closestSelector(allocator, child, ":scope");
+    try std.testing.expect(closest != null);
+    try std.testing.expectEqualStrings("child", (try store.getAttribute(closest.?, "id")).?);
+}
+
+test "phase six: selector expansion matches focus target and nth pseudo-classes" {
+    const allocator = std.testing.allocator;
+    var store = try DomStore.init(allocator);
+    defer store.deinit();
+
+    try store.bootstrapHtml("<main id='root'><section id='panel'><input id='field'></section><section id='list'><span id='a' class='match'>A</span><div id='b'>B</div><span id='c'>C</span><div id='d' class='match'>D</div></section><a id='fallback' name='named'>Target</a></main>");
+
+    const field = store.findElementById("field").?;
+    const panel = store.findElementById("panel").?;
+    const root = store.findElementById("root").?;
+    const fallback = store.findElementById("fallback").?;
+    store.setFocusedNode(field);
+    try store.setTargetFragment("named");
+
+    const focus = try store.select(allocator, ":focus");
+    defer allocator.free(focus);
+    try std.testing.expectEqual(@as(usize, 1), focus.len);
+    try std.testing.expectEqual(field, focus[0]);
+
+    const focus_within = try store.select(allocator, "#panel:focus-within");
+    defer allocator.free(focus_within);
+    try std.testing.expectEqual(@as(usize, 1), focus_within.len);
+    try std.testing.expectEqual(panel, focus_within[0]);
+
+    const root_focus_within = try store.select(allocator, "#root:focus-within");
+    defer allocator.free(root_focus_within);
+    try std.testing.expectEqual(@as(usize, 1), root_focus_within.len);
+    try std.testing.expectEqual(root, root_focus_within[0]);
+
+    const target = try store.select(allocator, ":target");
+    defer allocator.free(target);
+    try std.testing.expectEqual(@as(usize, 1), target.len);
+    try std.testing.expectEqual(fallback, target[0]);
+
+    const nth_child = try store.select(allocator, "#list > span:nth-child(1)");
+    defer allocator.free(nth_child);
+    try std.testing.expectEqual(@as(usize, 1), nth_child.len);
+    try std.testing.expectEqualStrings("a", (try store.getAttribute(nth_child[0], "id")).?);
+
+    const nth_last_child = try store.select(allocator, "#list > span:nth-last-child(2)");
+    defer allocator.free(nth_last_child);
+    try std.testing.expectEqual(@as(usize, 1), nth_last_child.len);
+    try std.testing.expectEqualStrings("c", (try store.getAttribute(nth_last_child[0], "id")).?);
+
+    const nth_of_type = try store.select(allocator, "#list > div:nth-of-type(2)");
+    defer allocator.free(nth_of_type);
+    try std.testing.expectEqual(@as(usize, 1), nth_of_type.len);
+    try std.testing.expectEqualStrings("d", (try store.getAttribute(nth_of_type[0], "id")).?);
+
+    const nth_of_type_filtered = try store.select(allocator, "#list > span:nth-of-type(1 of .match)");
+    defer allocator.free(nth_of_type_filtered);
+    try std.testing.expectEqual(@as(usize, 1), nth_of_type_filtered.len);
+    try std.testing.expectEqualStrings("a", (try store.getAttribute(nth_of_type_filtered[0], "id")).?);
+
+    const nth_child_filtered = try store.select(allocator, "#list > .match:nth-child(1 of .match)");
+    defer allocator.free(nth_child_filtered);
+    try std.testing.expectEqual(@as(usize, 1), nth_child_filtered.len);
+    try std.testing.expectEqualStrings("a", (try store.getAttribute(nth_child_filtered[0], "id")).?);
+
+    const nth_last_child_filtered = try store.select(allocator, "#list > .match:nth-last-child(1 of .match)");
+    defer allocator.free(nth_last_child_filtered);
+    try std.testing.expectEqual(@as(usize, 1), nth_last_child_filtered.len);
+    try std.testing.expectEqualStrings("d", (try store.getAttribute(nth_last_child_filtered[0], "id")).?);
+
+    const nth_last_of_type_filtered = try store.select(allocator, "#list > div:nth-last-of-type(1 of .match)");
+    defer allocator.free(nth_last_of_type_filtered);
+    try std.testing.expectEqual(@as(usize, 1), nth_last_of_type_filtered.len);
+    try std.testing.expectEqualStrings("d", (try store.getAttribute(nth_last_of_type_filtered[0], "id")).?);
 }
 
 test "phase seven: selector single-node helpers match and climb ancestors" {

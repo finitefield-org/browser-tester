@@ -1,6 +1,6 @@
 # Mock Guide
 
-`Harness.mocksMut()` returns the typed test-only `MockRegistry`. Use it when a test needs deterministic network, dialogs, clipboard, location, download, file-input, or storage behavior.
+`Harness.mocksMut()` returns the typed test-only `MockRegistry`. Use it when a test needs deterministic network, dialogs, clipboard, location, matchMedia, download, file-input, or storage behavior.
 
 The registry is intentionally narrow:
 
@@ -35,6 +35,26 @@ pub fn main() !void {
 }
 ```
 
+## MatchMedia Example
+
+```zig
+const std = @import("std");
+const bt = @import("browser_tester_zig");
+
+pub fn main() !void {
+    var harness = try bt.Harness.fromHtml(
+        std.heap.page_allocator,
+        "<button id='toggle'>Toggle</button><div id='out'></div><script>document.getElementById('toggle').addEventListener('click', () => { const mql = window.matchMedia('(max-width: 600px)'); document.getElementById('out').textContent = String(mql) + ':' + String(mql.matches); });</script>",
+    );
+    defer harness.deinit();
+
+    try harness.mocksMut().matchMedia().seedMatch("(max-width: 600px)", true);
+    try harness.click("#toggle");
+    try harness.assertValue("#out", "[object MediaQueryList]:true");
+    try std.testing.expectEqual(@as(usize, 1), harness.mocksMut().matchMedia().calls().len);
+}
+```
+
 ## Capture Model
 
 Call capture records the inputs requested by the test:
@@ -54,6 +74,12 @@ Artifact capture records the side effects a test needs to inspect:
 
 The same capture model is what keeps the mock families predictable without exposing browser internals.
 
+`matchMedia()` is seeded by exact query string:
+
+- `matchMedia.seedMatch(query, matches)` injects the query result
+- `matchMedia.fail(query)` injects an explicit failure for the query
+- `matchMedia.calls()` records requested queries in order
+
 ## Failure Semantics
 
 The public mock API fails explicitly when the test has not seeded the required state:
@@ -62,6 +88,7 @@ The public mock API fails explicitly when the test has not seeded the required s
 - `Harness.confirm()` and `Harness.prompt()` return `error.MockError` when the queue is empty
 - `Harness.readClipboard()` returns `error.MockError` when clipboard text has not been seeded
 - `Harness.captureDownload()` returns `error.MockError` for blank file names
+- `window.matchMedia()` returns `error.MockError` when no matching rule exists or a failure rule was seeded
 - `Harness.advanceTime(-1)` returns `error.TimerError`
 - `Harness.setFiles()` returns `error.DomError` when the target is not a file input
 
@@ -73,6 +100,7 @@ The public mock API fails explicitly when the test has not seeded the required s
 - dialog queues and capture logs
 - clipboard seed and write capture
 - location current URL and navigation capture
+- matchMedia query rules and call capture
 - download artifacts
 - file-input selections
 - storage seeds

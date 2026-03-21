@@ -78,7 +78,13 @@ fn pseudo_class_selectors_still_fail_explicitly() -> browser_tester_next::Result
     let message = error.to_string();
     assert!(message.contains("Selector error"));
     assert!(
-        message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`")
+        message.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr]")
+            && message.contains("optional attribute selector flags like `[attr=value i]` and `[attr=value s]`")
+            && message.contains("bounded logical pseudo-classes like `:not(.primary)`")
+            && message.contains("state pseudo-classes like `:checked`, `:disabled`, `:enabled`, `:indeterminate`, `:default`, `:valid`, `:invalid`, `:in-range`, and `:out-of-range`")
+            && message.contains("form-editable state pseudo-classes also include `:read-only` and `:read-write`")
+            && message.contains("descendant combinators like `A B`")
+            && message.contains("child combinators like `A > B`")
     );
     Ok(())
 }

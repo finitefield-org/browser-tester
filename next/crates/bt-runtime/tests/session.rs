@@ -577,6 +577,24 @@ fn session_resolves_select_options_through_inline_scripts() {
 }
 
 #[test]
+fn session_adds_and_removes_select_options_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><select id='mode'><option id='first' value='a'>A</option></select><option id='extra' value='b'>B</option></div><div id='out'></div><script>const select = document.getElementById('mode'); const extra = document.getElementById('extra'); const before = select.options.length; select.options.add(extra); const afterAdd = select.options.length; select.options.remove(0); document.getElementById('out').textContent = String(before) + ':' + String(afterAdd) + ':' + String(select.options.length) + ':' + select.options.item(0).getAttribute('id') + ':' + String(select.options.namedItem('first'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute select.options mutation scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "1:2:1:extra:null");
+    assert_eq!(session.dom().select("#extra").unwrap().len(), 1);
+    assert!(session.dom().select("#first").unwrap().is_empty());
+}
+
+#[test]
 fn session_resolves_select_selected_options_through_inline_scripts() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),

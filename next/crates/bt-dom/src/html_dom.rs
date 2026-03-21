@@ -76,12 +76,21 @@ enum SelectorPseudoClass {
     Target,
     Lang(Vec<String>),
     AnyLink,
+    Defined,
     Dir(SelectorDirValue),
     PlaceholderShown,
+    Indeterminate,
+    Default,
     Focus,
     FocusWithin,
     Required,
     Optional,
+    Valid,
+    Invalid,
+    InRange,
+    OutOfRange,
+    ReadOnly,
+    ReadWrite,
     OnlyChild,
     OnlyOfType,
     FirstChild,
@@ -2063,14 +2072,23 @@ impl DomStore {
             SelectorPseudoClass::Target => self.is_target_pseudo_class(node_id),
             SelectorPseudoClass::Lang(langs) => self.is_lang_pseudo_class(node_id, langs),
             SelectorPseudoClass::AnyLink => self.is_any_link_pseudo_class(node_id),
+            SelectorPseudoClass::Defined => self.is_defined_pseudo_class(node_id),
             SelectorPseudoClass::Dir(dir) => self.is_dir_pseudo_class(node_id, *dir),
             SelectorPseudoClass::PlaceholderShown => {
                 self.is_placeholder_shown_pseudo_class(node_id)
             }
+            SelectorPseudoClass::Indeterminate => self.is_indeterminate_pseudo_class(node_id),
+            SelectorPseudoClass::Default => self.is_default_pseudo_class(node_id),
             SelectorPseudoClass::Focus => self.is_focus_pseudo_class(node_id),
             SelectorPseudoClass::FocusWithin => self.is_focus_within_pseudo_class(node_id),
             SelectorPseudoClass::Required => self.is_required_pseudo_class(node_id),
             SelectorPseudoClass::Optional => self.is_optional_pseudo_class(node_id),
+            SelectorPseudoClass::Valid => self.is_valid_pseudo_class(node_id),
+            SelectorPseudoClass::Invalid => self.is_invalid_pseudo_class(node_id),
+            SelectorPseudoClass::InRange => self.is_in_range_pseudo_class(node_id),
+            SelectorPseudoClass::OutOfRange => self.is_out_of_range_pseudo_class(node_id),
+            SelectorPseudoClass::ReadOnly => self.is_read_only_pseudo_class(node_id),
+            SelectorPseudoClass::ReadWrite => self.is_read_write_pseudo_class(node_id),
             SelectorPseudoClass::OnlyChild => self.is_only_child_pseudo_class(node_id),
             SelectorPseudoClass::OnlyOfType => self.is_only_of_type_pseudo_class(node_id),
             SelectorPseudoClass::FirstChild => self.is_first_child(node_id),
@@ -2347,13 +2365,22 @@ impl DomStore {
                         "empty" => SelectorPseudoClass::Empty,
                         "target" => SelectorPseudoClass::Target,
                         "link" | "any-link" => SelectorPseudoClass::AnyLink,
+                        "defined" => SelectorPseudoClass::Defined,
                         "lang" => SelectorPseudoClass::Lang(parse_lang_argument(selector, pos)?),
                         "dir" => SelectorPseudoClass::Dir(parse_dir_argument(selector, pos)?),
                         "placeholder-shown" => SelectorPseudoClass::PlaceholderShown,
+                        "indeterminate" => SelectorPseudoClass::Indeterminate,
+                        "default" => SelectorPseudoClass::Default,
                         "focus" => SelectorPseudoClass::Focus,
                         "focus-within" => SelectorPseudoClass::FocusWithin,
                         "required" => SelectorPseudoClass::Required,
                         "optional" => SelectorPseudoClass::Optional,
+                        "valid" => SelectorPseudoClass::Valid,
+                        "invalid" => SelectorPseudoClass::Invalid,
+                        "in-range" => SelectorPseudoClass::InRange,
+                        "out-of-range" => SelectorPseudoClass::OutOfRange,
+                        "read-only" => SelectorPseudoClass::ReadOnly,
+                        "read-write" => SelectorPseudoClass::ReadWrite,
                         "only-child" => SelectorPseudoClass::OnlyChild,
                         "only-of-type" => SelectorPseudoClass::OnlyOfType,
                         "first-child" => SelectorPseudoClass::FirstChild,
@@ -2526,6 +2553,21 @@ impl DomStore {
         matches!(element.tag_name.as_str(), "a" | "area") && element.attributes.contains_key("href")
     }
 
+    fn is_defined_pseudo_class(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        if element.namespace_uri == HTML_NAMESPACE_URI {
+            !element.tag_name.contains('-')
+        } else {
+            true
+        }
+    }
+
     fn target_node_for_fragment(&self, fragment: &str) -> Option<NodeId> {
         if fragment.is_empty() {
             return None;
@@ -2589,6 +2631,234 @@ impl DomStore {
 
     fn is_optional_pseudo_class(&self, node_id: NodeId) -> bool {
         self.is_optional_form_control_element(node_id)
+    }
+
+    fn is_valid_pseudo_class(&self, node_id: NodeId) -> bool {
+        self.is_validity_form_control_element(node_id) && !self.is_invalid_pseudo_class(node_id)
+    }
+
+    fn is_invalid_pseudo_class(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        match element.tag_name.as_str() {
+            "textarea" => {
+                element.attributes.contains_key("required")
+                    && self.value_for_node(node_id).is_empty()
+            }
+            "select" => {
+                element.attributes.contains_key("required")
+                    && self.value_for_node(node_id).is_empty()
+            }
+            "input" => {
+                let input_type = element.attributes.get("type").map(String::as_str);
+
+                if matches!(input_type, Some("hidden")) {
+                    return false;
+                }
+
+                if is_checkable_input_type(input_type) {
+                    element.attributes.contains_key("required")
+                        && self.checked_for_node(node_id) != Some(true)
+                } else if self.is_range_input_type(input_type) {
+                    self.is_out_of_range_pseudo_class(node_id)
+                        || (element.attributes.contains_key("required")
+                            && self.value_for_node(node_id).is_empty())
+                } else if is_file_input_type(input_type) || is_text_input_type(input_type) {
+                    element.attributes.contains_key("required")
+                        && self.value_for_node(node_id).is_empty()
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
+    fn is_in_range_pseudo_class(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        if !self.is_range_input_type(element.attributes.get("type").map(String::as_str)) {
+            return false;
+        }
+
+        let Some(current_value) = self.numeric_range_value(node_id) else {
+            return false;
+        };
+        let Some((min, max)) = self.numeric_range_limits(node_id) else {
+            return false;
+        };
+
+        if let Some(min) = min {
+            if current_value < min {
+                return false;
+            }
+        }
+        if let Some(max) = max {
+            if current_value > max {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn is_out_of_range_pseudo_class(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        if !self.is_range_input_type(element.attributes.get("type").map(String::as_str)) {
+            return false;
+        }
+
+        let Some(current_value) = self.numeric_range_value(node_id) else {
+            return false;
+        };
+        let Some((min, max)) = self.numeric_range_limits(node_id) else {
+            return false;
+        };
+
+        if let Some(min) = min {
+            if current_value < min {
+                return true;
+            }
+        }
+        if let Some(max) = max {
+            if current_value > max {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn is_validity_form_control_element(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        match element.tag_name.as_str() {
+            "textarea" | "select" => true,
+            "input" => {
+                let input_type = element.attributes.get("type").map(String::as_str);
+                !matches!(input_type, Some("hidden"))
+                    && (is_text_input_type(input_type)
+                        || self.is_range_input_type(input_type)
+                        || is_checkable_input_type(input_type)
+                        || is_file_input_type(input_type))
+            }
+            _ => false,
+        }
+    }
+
+    fn is_range_input_type(&self, input_type: Option<&str>) -> bool {
+        matches!(input_type.unwrap_or("text"), "number" | "range")
+    }
+
+    fn numeric_range_value(&self, node_id: NodeId) -> Option<f64> {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return None;
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return None;
+        };
+        let input_type = element.attributes.get("type").map(String::as_str);
+        if !self.is_range_input_type(input_type) {
+            return None;
+        }
+
+        let value = self.value_for_node(node_id);
+        let value = value.trim();
+        if value.is_empty() {
+            return if matches!(input_type, Some("range")) {
+                Some(50.0)
+            } else {
+                None
+            };
+        }
+
+        value.parse::<f64>().ok()
+    }
+
+    fn numeric_range_limits(&self, node_id: NodeId) -> Option<(Option<f64>, Option<f64>)> {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return None;
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return None;
+        };
+        let input_type = element.attributes.get("type").map(String::as_str);
+        if !self.is_range_input_type(input_type) {
+            return None;
+        }
+
+        let min = element
+            .attributes
+            .get("min")
+            .and_then(|value| value.trim().parse::<f64>().ok());
+        let max = element
+            .attributes
+            .get("max")
+            .and_then(|value| value.trim().parse::<f64>().ok());
+
+        if matches!(input_type, Some("number")) && min.is_none() && max.is_none() {
+            return None;
+        }
+
+        if matches!(input_type, Some("range")) {
+            Some((Some(min.unwrap_or(0.0)), Some(max.unwrap_or(100.0))))
+        } else {
+            Some((min, max))
+        }
+    }
+
+    fn is_read_only_pseudo_class(&self, node_id: NodeId) -> bool {
+        !self.is_read_write_pseudo_class(node_id)
+    }
+
+    fn is_read_write_pseudo_class(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        if is_content_editable_element(element) {
+            return true;
+        }
+
+        match element.tag_name.as_str() {
+            "textarea" => {
+                !element.attributes.contains_key("disabled")
+                    && !element.attributes.contains_key("readonly")
+            }
+            "input" => {
+                let input_type = element.attributes.get("type").map(String::as_str);
+                is_text_input_type(input_type)
+                    && !element.attributes.contains_key("disabled")
+                    && !element.attributes.contains_key("readonly")
+            }
+            _ => false,
+        }
     }
 
     fn inherited_directionality(&self, node_id: NodeId) -> Option<SelectorDirValue> {
@@ -2685,7 +2955,9 @@ impl DomStore {
     }
 
     fn is_nth_of_type(&self, node_id: NodeId, pattern: &SelectorNthChildPattern) -> bool {
-        let Some(position) = self.element_sibling_position_of_type(node_id) else {
+        let Some(position) = self
+            .element_sibling_position_of_type_filtered(node_id, pattern.of_selectors.as_deref())
+        else {
             return false;
         };
 
@@ -2693,7 +2965,10 @@ impl DomStore {
     }
 
     fn is_nth_last_of_type(&self, node_id: NodeId, pattern: &SelectorNthChildPattern) -> bool {
-        let Some(position) = self.element_sibling_position_from_end_of_type(node_id) else {
+        let Some(position) = self.element_sibling_position_from_end_of_type_filtered(
+            node_id,
+            pattern.of_selectors.as_deref(),
+        ) else {
             return false;
         };
 
@@ -2740,6 +3015,58 @@ impl DomStore {
     }
 
     fn element_sibling_position_from_end_of_type(&self, node_id: NodeId) -> Option<usize> {
+        self.element_sibling_position_from_end_of_type_filtered(node_id, None)
+    }
+
+    fn element_sibling_position_of_type_filtered(
+        &self,
+        node_id: NodeId,
+        of_selectors: Option<&[SelectorChain]>,
+    ) -> Option<usize> {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return None;
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return None;
+        };
+
+        let Some(parent_id) = node.parent else {
+            return None;
+        };
+        let Some(parent) = self.nodes.get(parent_id.index() as usize) else {
+            return None;
+        };
+
+        let mut matching_sibling_count = 0usize;
+        for child in &parent.children {
+            let Some(child_node) = self.nodes.get(child.index() as usize) else {
+                continue;
+            };
+            let NodeKind::Element(child_element) = &child_node.kind else {
+                continue;
+            };
+
+            if child_element.local_name == element.local_name
+                && child_element.namespace_uri == element.namespace_uri
+                && self.matches_nth_of_type_filters(*child, of_selectors)
+            {
+                matching_sibling_count += 1;
+                if *child == node_id {
+                    return Some(matching_sibling_count);
+                }
+            } else if *child == node_id {
+                return None;
+            }
+        }
+
+        None
+    }
+
+    fn element_sibling_position_from_end_of_type_filtered(
+        &self,
+        node_id: NodeId,
+        of_selectors: Option<&[SelectorChain]>,
+    ) -> Option<usize> {
         let Some(node) = self.nodes.get(node_id.index() as usize) else {
             return None;
         };
@@ -2765,6 +3092,7 @@ impl DomStore {
 
             if child_element.local_name == element.local_name
                 && child_element.namespace_uri == element.namespace_uri
+                && self.matches_nth_of_type_filters(*child, of_selectors)
             {
                 matching_sibling_count += 1;
                 if *child == node_id {
@@ -2910,6 +3238,14 @@ impl DomStore {
         }
     }
 
+    fn matches_nth_of_type_filters(
+        &self,
+        node_id: NodeId,
+        of_selectors: Option<&[SelectorChain]>,
+    ) -> bool {
+        self.matches_nth_child_of_filters(node_id, of_selectors)
+    }
+
     fn matches_nth_pattern(&self, position: isize, pattern: &SelectorNthChildPattern) -> bool {
         match pattern.step.cmp(&0) {
             std::cmp::Ordering::Equal => position == pattern.offset && position > 0,
@@ -2939,6 +3275,164 @@ impl DomStore {
         }
 
         self.checked_for_node(node_id) == Some(true)
+    }
+
+    fn is_indeterminate_pseudo_class(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        match element.tag_name.as_str() {
+            "progress" => !element.attributes.contains_key("value"),
+            "input"
+                if matches!(
+                    element.attributes.get("type").map(String::as_str),
+                    Some("radio")
+                ) =>
+            {
+                let Some(name) = element.attributes.get("name") else {
+                    return false;
+                };
+
+                self.radio_group_is_indeterminate(node_id, name)
+            }
+            _ => false,
+        }
+    }
+
+    fn is_default_pseudo_class(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        match element.tag_name.as_str() {
+            "option" => self.is_option_selected(node_id),
+            "input"
+                if matches!(
+                    element.attributes.get("type").map(String::as_str),
+                    Some("checkbox") | Some("radio")
+                ) =>
+            {
+                self.checked_for_node(node_id) == Some(true)
+            }
+            "input"
+                if matches!(
+                    element.attributes.get("type").map(String::as_str),
+                    Some("submit") | Some("image")
+                ) =>
+            {
+                self.is_default_submit_button(node_id)
+            }
+            "button" => self.is_default_submit_button(node_id),
+            _ => false,
+        }
+    }
+
+    fn is_default_submit_button(&self, node_id: NodeId) -> bool {
+        let Some(form_id) = self.form_ancestor_of(node_id) else {
+            return false;
+        };
+
+        self.collect_subtree_nodes([form_id])
+            .into_iter()
+            .find(|candidate_id| self.is_submit_button_candidate(*candidate_id))
+            == Some(node_id)
+    }
+
+    fn is_submit_button_candidate(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        if element.attributes.contains_key("disabled") {
+            return false;
+        }
+
+        match element.tag_name.as_str() {
+            "button" => !matches!(
+                element.attributes.get("type").map(String::as_str),
+                Some("button")
+            ),
+            "input" => matches!(
+                element.attributes.get("type").map(String::as_str),
+                Some("submit") | Some("image")
+            ),
+            _ => false,
+        }
+    }
+
+    fn radio_group_is_indeterminate(&self, node_id: NodeId, name: &str) -> bool {
+        let Some(scope_root) = self.radio_group_scope_root(node_id) else {
+            return false;
+        };
+
+        self.collect_subtree_nodes([scope_root])
+            .into_iter()
+            .all(|descendant_id| {
+                if descendant_id == node_id {
+                    return self.checked_for_node(descendant_id) != Some(true);
+                }
+
+                let Some(node) = self.nodes.get(descendant_id.index() as usize) else {
+                    return true;
+                };
+                let NodeKind::Element(element) = &node.kind else {
+                    return true;
+                };
+
+                if element.tag_name != "input" {
+                    return true;
+                }
+
+                if !matches!(
+                    element.attributes.get("type").map(String::as_str),
+                    Some("radio")
+                ) {
+                    return true;
+                }
+
+                if element.attributes.get("name").map(String::as_str) != Some(name) {
+                    return true;
+                }
+
+                self.checked_for_node(descendant_id) != Some(true)
+            })
+    }
+
+    fn radio_group_scope_root(&self, node_id: NodeId) -> Option<NodeId> {
+        let mut current = self.parent_of(node_id);
+        while let Some(ancestor_id) = current {
+            if self.tag_name_for(ancestor_id) == Some("form") {
+                return Some(ancestor_id);
+            }
+            current = self.parent_of(ancestor_id);
+        }
+
+        self.root_element_id()
+    }
+
+    fn form_ancestor_of(&self, node_id: NodeId) -> Option<NodeId> {
+        let mut current = self.parent_of(node_id);
+        while let Some(ancestor_id) = current {
+            if self.tag_name_for(ancestor_id) == Some("form") {
+                return Some(ancestor_id);
+            }
+            current = self.parent_of(ancestor_id);
+        }
+
+        None
     }
 
     fn is_disabled_pseudo_class(&self, node_id: NodeId) -> bool {
@@ -3127,7 +3621,7 @@ impl DomStore {
 
 fn selector_not_supported(selector: &str) -> String {
     format!(
-        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`; additional bounded structural pseudo-classes include `:root`, `:empty`, `:only-child`, `:only-of-type`, `:first-of-type`, `:last-of-type`, `:nth-of-type(2)`, and `:nth-last-of-type(2)`; additional bounded selector grammar now also includes `:scope`, `:has(...)`, `:lang(...)`, `:nth-child(... of <selector-list>)` / `:nth-last-child(... of <selector-list>)`, `:focus`, `:focus-within`, and `:target`"
+        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, `:enabled`, `:indeterminate`, `:default`, `:valid`, `:invalid`, `:in-range`, and `:out-of-range`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`; additional bounded structural pseudo-classes include `:root`, `:empty`, `:only-child`, `:only-of-type`, `:first-of-type`, `:last-of-type`, `:nth-of-type(2)`, `:nth-of-type(... of <selector-list>)`, `:nth-last-of-type(2)`, and `:nth-last-of-type(... of <selector-list>)`; additional bounded selector grammar now also includes `:scope`, `:has(...)`, `:lang(...)`, `:defined`, `:nth-child(... of <selector-list>)` / `:nth-last-child(... of <selector-list>)`, `:focus`, `:focus-within`, and `:target`; form-editable state pseudo-classes also include `:read-only` and `:read-write`"
     )
 }
 
@@ -4406,4 +4900,15 @@ fn is_checkable_input_type(input_type: Option<&str>) -> bool {
 
 fn is_file_input_type(input_type: Option<&str>) -> bool {
     matches!(input_type.unwrap_or("text"), "file")
+}
+
+fn is_content_editable_element(element: &ElementData) -> bool {
+    let Some(value) = element.attributes.get("contenteditable") else {
+        return false;
+    };
+
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "" | "true" | "plaintext-only"
+    )
 }

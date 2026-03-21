@@ -25,7 +25,6 @@ pub const Session = struct {
     script_event_listeners: std.ArrayListUnmanaged(script.ScriptListenerRecord) = .{},
     mock_registry: mocks.MockRegistry,
     clock_ms: i64 = 0,
-    focused_node: ?dom.NodeId = null,
 
     pub fn init(allocator: std.mem.Allocator, config: SessionConfig) errors.Result(Session) {
         const arena = try allocator.create(std.heap.ArenaAllocator);
@@ -66,12 +65,17 @@ pub const Session = struct {
         try mock_registry.location().setCurrent(url_copy);
         if (html_copy) |html_source| {
             try dom_store.bootstrapHtml(html_source);
+        }
+        try dom_store.setTargetFragment(fragmentIdentifierFromUrl(url_copy));
+        if (html_copy) |html_source| {
+            _ = html_source;
             var bootstrap_host = BootstrapHost{
                 .dom_store = &dom_store,
                 .listeners = &script_event_listeners,
+                .location = mock_registry.location(),
+                .match_media = mock_registry.matchMedia(),
                 .allocator = arena.allocator(),
             };
-            bootstrap_host.allocator = arena.allocator();
             try script_runtime.bootstrapInlineScripts(allocator, &bootstrap_host);
         }
 
@@ -88,7 +92,6 @@ pub const Session = struct {
             .script_event_listeners = script_event_listeners,
             .mock_registry = mock_registry,
             .clock_ms = 0,
-            .focused_node = null,
         };
     }
 
@@ -138,6 +141,41 @@ pub const Session = struct {
 
     pub fn domStoreMut(self: *Session) *dom.DomStore {
         return &self.dom_store;
+    }
+
+    pub fn currentLocationUrl(self: *const Session) []const u8 {
+        return @constCast(&self.mock_registry).location().currentUrl() orelse self.config.url;
+    }
+
+    pub fn documentElement(self: *const Session) ?dom.NodeId {
+        return self.dom_store.documentElement();
+    }
+
+    pub fn documentHead(self: *const Session) ?dom.NodeId {
+        return self.dom_store.documentHead();
+    }
+
+    pub fn documentBody(self: *const Session) ?dom.NodeId {
+        return self.dom_store.documentBody();
+    }
+
+    pub fn documentTitle(self: *const Session) []const u8 {
+        return self.dom_store.documentTitle();
+    }
+
+    pub fn documentReadyState(self: *const Session) []const u8 {
+        _ = self;
+        return "complete";
+    }
+
+    pub fn currentScript(self: *const Session) ?dom.NodeId {
+        _ = self;
+        return null;
+    }
+
+    pub fn setDocumentTitle(self: *Session, value: []const u8) errors.Result(void) {
+        try self.dom_store.setDocumentTitle(value);
+        return;
     }
 
     pub fn alert(self: *Session, message: []const u8) errors.Result(void) {
@@ -209,7 +247,12 @@ pub const Session = struct {
 
         try self.mock_registry.location().setCurrent(trimmed);
         try self.mock_registry.location().recordNavigation(trimmed);
+        try self.dom_store.setTargetFragment(fragmentIdentifierFromUrl(trimmed));
         return;
+    }
+
+    pub fn matchMedia(self: *Session, query_source: []const u8) errors.Result(bool) {
+        return matchMediaQuery(self.mock_registry.matchMedia(), query_source);
     }
 
     pub fn setFilesNode(
@@ -284,24 +327,25 @@ pub const Session = struct {
 
     pub fn focusNode(self: *Session, node_id: dom.NodeId) errors.Result(void) {
         try self.ensureElementNode(node_id);
-        if (self.focused_node) |focused| {
+        if (self.dom_store.focusedNode()) |focused| {
             if (std.meta.eql(focused, node_id)) {
                 return;
             }
         }
 
-        if (self.focused_node) |previous| {
+        if (self.dom_store.focusedNode()) |previous| {
+            self.dom_store.setFocusedNode(null);
             _ = try self.dispatchDomEvent(previous, "blur", false, false);
         }
 
-        self.focused_node = node_id;
+        self.dom_store.setFocusedNode(node_id);
         _ = try self.dispatchDomEvent(node_id, "focus", false, false);
         return;
     }
 
     pub fn blurNode(self: *Session, node_id: dom.NodeId) errors.Result(void) {
         try self.ensureElementNode(node_id);
-        if (self.focused_node) |focused| {
+        if (self.dom_store.focusedNode()) |focused| {
             if (!std.meta.eql(focused, node_id)) {
                 return;
             }
@@ -309,7 +353,7 @@ pub const Session = struct {
             return;
         }
 
-        self.focused_node = null;
+        self.dom_store.setFocusedNode(null);
         _ = try self.dispatchDomEvent(node_id, "blur", false, false);
         return;
     }
@@ -529,7 +573,10 @@ pub const Session = struct {
 const BootstrapHost = struct {
     dom_store: *dom.DomStore,
     listeners: *std.ArrayListUnmanaged(script.ScriptListenerRecord),
+    location: *mocks.LocationMocks,
+    match_media: *mocks.MatchMediaMocks,
     allocator: std.mem.Allocator,
+    current_script: ?dom.NodeId = null,
 
     pub fn domStore(self: *const BootstrapHost) *const dom.DomStore {
         return self.dom_store;
@@ -537,6 +584,58 @@ const BootstrapHost = struct {
 
     pub fn domStoreMut(self: *BootstrapHost) *dom.DomStore {
         return self.dom_store;
+    }
+
+    pub fn currentLocationUrl(self: *const BootstrapHost) []const u8 {
+        return self.location.currentUrl() orelse "";
+    }
+
+    pub fn documentElement(self: *const BootstrapHost) ?dom.NodeId {
+        return self.dom_store.documentElement();
+    }
+
+    pub fn documentHead(self: *const BootstrapHost) ?dom.NodeId {
+        return self.dom_store.documentHead();
+    }
+
+    pub fn documentBody(self: *const BootstrapHost) ?dom.NodeId {
+        return self.dom_store.documentBody();
+    }
+
+    pub fn documentTitle(self: *const BootstrapHost) []const u8 {
+        return self.dom_store.documentTitle();
+    }
+
+    pub fn documentReadyState(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "loading";
+    }
+
+    pub fn currentScript(self: *const BootstrapHost) ?dom.NodeId {
+        return self.current_script;
+    }
+
+    pub fn setCurrentScript(self: *BootstrapHost, current_script: ?dom.NodeId) void {
+        self.current_script = current_script;
+    }
+
+    pub fn setDocumentTitle(self: *BootstrapHost, value: []const u8) errors.Result(void) {
+        try self.dom_store.setDocumentTitle(value);
+        return;
+    }
+
+    pub fn navigate(self: *BootstrapHost, url_source: []const u8) errors.Result(void) {
+        const trimmed = std.mem.trim(u8, url_source, " \t\r\n");
+        if (trimmed.len == 0) return error.MockError;
+
+        try self.location.setCurrent(trimmed);
+        try self.location.recordNavigation(trimmed);
+        try self.dom_store.setTargetFragment(fragmentIdentifierFromUrl(trimmed));
+        return;
+    }
+
+    pub fn matchMedia(self: *BootstrapHost, query_source: []const u8) errors.Result(bool) {
+        return matchMediaQuery(self.match_media, query_source);
     }
 
     pub fn registerEventListener(
@@ -579,6 +678,23 @@ fn appendScriptListener(
         .handler = handler_copy,
     });
     return;
+}
+
+fn matchMediaQuery(
+    media_mocks: *mocks.MatchMediaMocks,
+    query_source: []const u8,
+) errors.Result(bool) {
+    try media_mocks.recordCall(query_source);
+
+    if (media_mocks.findRule(query_source)) |rule| {
+        if (rule.is_failure) {
+            return error.MockError;
+        }
+
+        return rule.matches;
+    }
+
+    return error.MockError;
 }
 
 fn duplicateScriptFunction(
@@ -626,6 +742,12 @@ fn isSubmitControl(tag_name: []const u8, input_type: ?[]const u8) bool {
     }
 
     return false;
+}
+
+fn fragmentIdentifierFromUrl(url: []const u8) ?[]const u8 {
+    const fragment_index = std.mem.indexOfScalar(u8, url, '#') orelse return null;
+    if (fragment_index + 1 >= url.len) return null;
+    return url[fragment_index + 1 ..];
 }
 
 test "session boots html into the dom store" {

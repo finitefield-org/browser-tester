@@ -19,6 +19,12 @@ pub struct SessionConfig {
     pub local_storage: BTreeMap<String, String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DocumentReadyState {
+    Loading,
+    Complete,
+}
+
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
@@ -574,6 +580,8 @@ pub struct Session {
     script_event_listeners: Vec<ScriptListenerRecord>,
     default_actions: Vec<DefaultActionKind>,
     focused_node: Option<NodeId>,
+    current_script: Option<NodeId>,
+    document_ready_state: DocumentReadyState,
 }
 
 impl Session {
@@ -604,8 +612,11 @@ impl Session {
                 DefaultActionKind::SubmitButton,
             ],
             focused_node: None,
+            current_script: None,
+            document_ready_state: DocumentReadyState::Loading,
         };
         session.bootstrap_inline_scripts()?;
+        session.document_ready_state = DocumentReadyState::Complete;
         Ok(session)
     }
 
@@ -1168,13 +1179,17 @@ impl Session {
 
     fn bootstrap_inline_scripts(&mut self) -> Result<(), SessionError> {
         let sources = self.collect_inline_script_sources()?;
-        for (index, source) in sources.iter().enumerate() {
-            self.eval_script_source(source, &format!("inline-script-{index}"))?;
+        for (index, (script_node_id, source)) in sources.iter().enumerate() {
+            let previous_current_script = self.current_script;
+            self.current_script = Some(*script_node_id);
+            let result = self.eval_script_source(source, &format!("inline-script-{index}"));
+            self.current_script = previous_current_script;
+            result?;
         }
         Ok(())
     }
 
-    fn collect_inline_script_sources(&self) -> Result<Vec<String>, SessionError> {
+    fn collect_inline_script_sources(&self) -> Result<Vec<(NodeId, String)>, SessionError> {
         let mut sources = Vec::new();
         self.collect_inline_script_sources_from(self.dom.document_id(), &mut sources)?;
         Ok(sources)
@@ -1183,7 +1198,7 @@ impl Session {
     fn collect_inline_script_sources_from(
         &self,
         node_id: NodeId,
-        sources: &mut Vec<String>,
+        sources: &mut Vec<(NodeId, String)>,
     ) -> Result<(), SessionError> {
         let node = &self.dom.nodes()[node_id.index() as usize];
         if let NodeKind::Element(element) = &node.kind {
@@ -1196,7 +1211,7 @@ impl Session {
 
                 let source = self.dom.text_content_for_node(node_id);
                 if !source.trim().is_empty() {
-                    sources.push(source);
+                    sources.push((node_id, source));
                 }
             }
         }
@@ -1301,6 +1316,7 @@ impl Session {
         match scope {
             HtmlCollectionScope::Document => Ok(self.dom.document_id()),
             HtmlCollectionScope::Element(element) => self.node_id_for_handle(*element),
+            HtmlCollectionScope::Node(node) => self.node_id_for_node_handle(*node),
         }
     }
 
@@ -1721,6 +1737,62 @@ impl Session {
         Ok(self.first_named_item_in_nodes(&selected_ids, name))
     }
 
+    fn select_options_add(
+        &mut self,
+        select: ElementHandle,
+        option: ElementHandle,
+    ) -> Result<(), ScriptError> {
+        let select_id = self.node_id_for_handle(select)?;
+        let Some(node) = self.dom.nodes().get(select_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a select element"));
+        };
+        if element.tag_name != "select" {
+            return Err(ScriptError::new("node is not a select element"));
+        }
+
+        let option_id = self.node_id_for_handle(option)?;
+        let Some(node) = self.dom.nodes().get(option_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not an option element"));
+        };
+        if element.tag_name != "option" {
+            return Err(ScriptError::new("node is not an option element"));
+        }
+
+        self.dom
+            .append_child(select_id, option_id)
+            .map_err(ScriptError::new)
+    }
+
+    fn select_options_remove(
+        &mut self,
+        select: ElementHandle,
+        index: usize,
+    ) -> Result<(), ScriptError> {
+        let select_id = self.node_id_for_handle(select)?;
+        let Some(node) = self.dom.nodes().get(select_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a select element"));
+        };
+        if element.tag_name != "select" {
+            return Err(ScriptError::new("node is not a select element"));
+        }
+
+        let options = self.select_options(select)?;
+        let Some(option_handle) = options.get(index).copied() else {
+            return Ok(());
+        };
+        let option_id = self.node_id_for_handle(option_handle)?;
+        self.dom.remove_node(option_id).map_err(ScriptError::new)
+    }
+
     fn document_links(&self) -> Result<Vec<ElementHandle>, ScriptError> {
         let root = self.dom.document_id();
         let mut collected = Vec::new();
@@ -1798,6 +1870,26 @@ impl Session {
 
     pub fn document_origin(&self) -> String {
         Self::origin_from_url(&self.document_location())
+    }
+
+    pub fn document_ready_state(&self) -> &'static str {
+        match self.document_ready_state {
+            DocumentReadyState::Loading => "loading",
+            DocumentReadyState::Complete => "complete",
+        }
+    }
+
+    pub fn document_current_script(&self) -> Option<ElementHandle> {
+        let script_node_id = self.current_script?;
+        let node = self.dom.nodes().get(script_node_id.index() as usize)?;
+        let NodeKind::Element(element) = &node.kind else {
+            return None;
+        };
+        if element.tag_name != "script" {
+            return None;
+        }
+
+        Some(Self::node_id_to_handle(script_node_id))
     }
 
     fn origin_from_url(url: &str) -> String {
@@ -2391,6 +2483,14 @@ impl HostBindings for Session {
         Ok(Session::document_origin(self))
     }
 
+    fn document_current_script(&mut self) -> bt_script::Result<Option<ElementHandle>> {
+        Ok(Session::document_current_script(self))
+    }
+
+    fn document_ready_state(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_ready_state(self).to_string())
+    }
+
     fn document_query_selector(
         &mut self,
         selector: &str,
@@ -2682,6 +2782,22 @@ impl HostBindings for Session {
         name: &str,
     ) -> bt_script::Result<Option<ElementHandle>> {
         Session::select_options_named_item(self, element, name)
+    }
+
+    fn html_collection_select_options_add(
+        &mut self,
+        element: ElementHandle,
+        option: ElementHandle,
+    ) -> bt_script::Result<()> {
+        Session::select_options_add(self, element, option)
+    }
+
+    fn html_collection_select_options_remove(
+        &mut self,
+        element: ElementHandle,
+        index: usize,
+    ) -> bt_script::Result<()> {
+        Session::select_options_remove(self, element, index)
     }
 
     fn html_collection_select_selected_options_items(

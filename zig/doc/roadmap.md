@@ -58,7 +58,7 @@ Delivered in this workspace:
 
 - fake clock helpers (`nowMs`, `advanceTime`, `flush`)
 - typed mock registry (`mocksMut`)
-- fetch, clipboard, dialog, location, and file-input mocks
+- fetch, clipboard, dialog, location, matchMedia, and file-input mocks
 - download capture
 
 Phase 4 is complete in this workspace.
@@ -78,6 +78,12 @@ Phase 5 is complete in this workspace.
 - descendant combinators
 - child combinators
 - sibling combinators
+- `:scope`
+- `:has(...)`
+- `:lang(...)` / `:dir(...)`
+- `:defined`
+- `:not(...)` / `:is(...)` / `:where(...)`
+- bounded structural/state pseudo-classes
 - selector hardening
 
 Phase 6 is complete in this workspace.
@@ -105,5 +111,15 @@ Phase 7 is complete in this workspace.
 - HTML serialization broadening slice 1 (`insertAdjacentHTML`)
 - HTML serialization broadening slice 2 (`template.content.innerHTML` / `DocumentFragment` serialization)
 
-The attribute reflection, class/dataset view, tree mutation, HTML serialization, and namespace-aware serialization slices are implemented in this workspace now, and collection API broadening slices 1 (`NodeList.forEach`), 2 (`document.scripts`), 3 (`document.anchors`), 4 (`NodeList.keys()` / `NodeList.values()` / `HTMLCollection.keys()` / `HTMLCollection.values()`), 5 (`Element.children` / `document.children` / `document.childNodes` / `element.childNodes` / `template.content.childNodes` / `template.content.children`), 6 (`document.forms`), 7 (`form.elements`), 8 (`select.options`), 9 (`select.selectedOptions`), 10 (`fieldset.elements`), 11 (`datalist.options`), 12 (`map.areas`), 13 (`table.tBodies`), 14 (`element.labels`), 15 (`document.images` / `document.links` / `document.embeds` / `document.plugins` / `document.applets` / `document.all`), 16 (`document.styleSheets`), 17 (`table.rows` / `tbody.rows` / `thead.rows` / `tfoot.rows` / `tr.cells`), and 18 (`getElementsByTagName` / `getElementsByTagNameNS` / `getElementsByClassName` / `getElementsByName`) are implemented as well.
-The next named work is the bounded pseudo-class slices.
+The attribute reflection, class/dataset view, tree mutation, HTML serialization, and namespace-aware serialization slices are implemented in this workspace now, and collection API broadening slices 1 (`NodeList.forEach`), 2 (`document.scripts`), 3 (`document.anchors`), 4 (`NodeList.keys()` / `NodeList.values()` / `HTMLCollection.keys()` / `HTMLCollection.values()` / `entries()`), 5 (`Element.children` / `document.children` / `document.childNodes` / `element.childNodes` / `template.content.childNodes` / `template.content.children`), 6 (`document.forms`), 7 (`form.elements`), 8 (`select.options`), 9 (`select.selectedOptions`), 10 (`fieldset.elements`), 11 (`datalist.options`), 12 (`map.areas`), 13 (`table.tBodies`), 14 (`element.labels`), 15 (`document.images` / `document.links` / `document.embeds` / `document.plugins` / `document.applets` / `document.all`), 16 (`document.styleSheets`), 17 (`table.rows` / `tbody.rows` / `thead.rows` / `tfoot.rows` / `tr.cells`), 18 (`getElementsByTagName` / `getElementsByTagNameNS` / `getElementsByClassName` / `getElementsByName`), 19 (`entries()` helpers across `NodeList`, `HTMLCollection`, `StyleSheetList`, and `RadioNodeList`), and 20 (`select.options.add()` / `select.options.remove()`) are implemented as well.
+The next named work is broader CSS parsing beyond the bounded selector engine, if a specific user-visible gap needs it.
+
+## Phase 9: Document and Window Surface Expansion
+
+- `document.documentElement`, `document.head`, `document.body`
+- `document.title` and `window.title`
+- `document.location` and `window.location`
+- `document.URL`, `document.documentURI`, `document.baseURI`
+- `document.origin`, `window.origin`, `Element.baseURI`, and `Element.origin`
+
+The document and window alias slice is implemented in this workspace now.

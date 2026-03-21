@@ -36,7 +36,7 @@ Owns:
 - internal DOM store
 - internal script runtime state
 - event listener registry
-- focused-node snapshot
+- focus/target selector-state snapshots
 - fake clock state
 - mock registry
 - future long-lived runtime state

@@ -151,15 +151,34 @@ fn document_location_is_wired_through_script_and_location_mock() -> browser_test
 }
 
 #[test]
+fn document_current_script_is_available_during_inline_bootstrap() -> browser_tester_next::Result<()>
+{
+    let harness = Harness::from_html(
+        "<main id='out'></main><script id='first'>document.getElementById('out').textContent = document.currentScript.getAttribute('id');</script><script id='second'>document.getElementById('out').textContent += ':' + document.currentScript.getAttribute('id');</script>",
+    )?;
+
+    harness.assert_text("#out", "first:second")?;
+    Ok(())
+}
+
+#[test]
+fn document_ready_state_is_loading_during_inline_bootstrap() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='out'></main><script>document.getElementById('out').textContent = document.readyState;</script>",
+    )?;
+
+    harness.assert_text("#out", "loading")?;
+    Ok(())
+}
+
+#[test]
 fn document_url_assignment_is_rejected() -> browser_tester_next::Result<()> {
     let error = Harness::from_html(
         "<main id='out'></main><script>document.URL = 'https://example.test/next';</script>",
     )
     .expect_err("document.URL should be read-only");
 
-    assert!(error
-        .to_string()
-        .contains("unsupported assignment target"));
+    assert!(error.to_string().contains("unsupported assignment target"));
     assert!(error.to_string().contains("URL"));
     Ok(())
 }

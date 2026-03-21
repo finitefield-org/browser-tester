@@ -222,6 +222,65 @@ fn simple_pseudo_classes_match_state_and_structure() {
 }
 
 #[test]
+fn indeterminate_pseudo_class_matches_progress_and_radio_groups() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><progress id='loading'></progress><form id='signup'><input type='radio' name='mode' id='mode-a'><input type='radio' name='mode' id='mode-b'></form><form id='chosen'><input type='radio' name='picked' id='picked-a' checked><input type='radio' name='picked' id='picked-b'></form></main>",
+        )
+        .expect("HTML should parse");
+
+    let loading_id = store.select("#loading").unwrap()[0];
+    let mode_a_id = store.select("#mode-a").unwrap()[0];
+    let mode_b_id = store.select("#mode-b").unwrap()[0];
+    let picked_a_id = store.select("#picked-a").unwrap()[0];
+
+    assert_eq!(
+        store.select(":indeterminate").unwrap(),
+        vec![loading_id, mode_a_id, mode_b_id]
+    );
+    assert_eq!(
+        store.select("progress:indeterminate").unwrap(),
+        vec![loading_id]
+    );
+    assert_eq!(
+        store.select("input:indeterminate").unwrap(),
+        vec![mode_a_id, mode_b_id]
+    );
+    assert!(store.select("#picked-a:indeterminate").unwrap().is_empty());
+    assert!(store.select("#picked-b:indeterminate").unwrap().is_empty());
+    assert_eq!(store.select(":indeterminate()").is_err(), true);
+    assert!(store.select("#picked-a").unwrap().contains(&picked_a_id));
+}
+
+#[test]
+fn default_pseudo_class_matches_selected_and_checked_form_controls() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><form id='form'><input id='submit' type='submit'><input id='agree' type='checkbox' checked><input id='mode-a' type='radio' name='mode'><input id='mode-b' type='radio' name='mode' checked><select id='select'><option id='first' value='a'>A</option><option id='selected' value='b' selected>B</option></select></form></main>",
+        )
+        .expect("HTML should parse");
+
+    let submit_id = store.select("#submit").unwrap()[0];
+    let agree_id = store.select("#agree").unwrap()[0];
+    let mode_b_id = store.select("#mode-b").unwrap()[0];
+    let selected_id = store.select("#selected").unwrap()[0];
+
+    assert_eq!(
+        store.select(":default").unwrap(),
+        vec![submit_id, agree_id, mode_b_id, selected_id]
+    );
+    assert_eq!(
+        store.select("input:default").unwrap(),
+        vec![submit_id, agree_id, mode_b_id]
+    );
+    assert_eq!(store.select("option:default").unwrap(), vec![selected_id]);
+    assert!(store.select("button:default").unwrap().is_empty());
+    assert!(store.select(":default()").is_err());
+}
+
+#[test]
 fn root_and_empty_pseudo_classes_match_expected_nodes() {
     let mut store = DomStore::new_empty();
     store
@@ -339,6 +398,110 @@ fn placeholder_shown_pseudo_class_matches_empty_text_controls() {
 }
 
 #[test]
+fn read_only_and_read_write_pseudo_classes_match_editable_controls() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><input id='name' value='Ada'><input id='readonly' value='Bee' readonly><textarea id='bio'>Hello</textarea><div id='editable' contenteditable='true'>Edit</div><select id='mode'><option value='a'>A</option></select><button id='button'>Button</button></main>",
+        )
+        .expect("HTML should parse");
+
+    let name_id = store.select("#name").unwrap()[0];
+    let bio_id = store.select("#bio").unwrap()[0];
+    let editable_id = store.select("#editable").unwrap()[0];
+    let readonly_id = store.select("#readonly").unwrap()[0];
+    let mode_id = store.select("#mode").unwrap()[0];
+    let button_id = store.select("#button").unwrap()[0];
+
+    assert_eq!(
+        store.select(":read-write").unwrap(),
+        vec![name_id, bio_id, editable_id]
+    );
+    assert_eq!(store.select("#name:read-write").unwrap(), vec![name_id]);
+    assert_eq!(store.select("#bio:read-write").unwrap(), vec![bio_id]);
+    assert_eq!(
+        store.select("#editable:read-write").unwrap(),
+        vec![editable_id]
+    );
+    assert_eq!(
+        store.select(":read-only").unwrap().contains(&readonly_id),
+        true
+    );
+    assert_eq!(
+        store.select("#readonly:read-only").unwrap(),
+        vec![readonly_id]
+    );
+    assert_eq!(store.select("#mode:read-only").unwrap(), vec![mode_id]);
+    assert_eq!(store.select("#button:read-only").unwrap(), vec![button_id]);
+    assert!(store.select(":read-only()").is_err());
+}
+
+#[test]
+fn valid_and_invalid_pseudo_classes_match_form_validation_state() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><input id='filled' type='text' required value='Ada'><input id='empty' type='text' required><input id='check' type='checkbox' required><input id='check-ok' type='checkbox' required checked><input id='low' type='number' min='2' max='6' value='1'><input id='high' type='number' min='2' max='6' value='7'><input id='in-range' type='number' min='2' max='6' value='4'><textarea id='bio' required></textarea><select id='mode' required><option value='a' selected>A</option><option value='b'>B</option></select><button id='button'>Button</button></main>",
+        )
+        .expect("HTML should parse");
+
+    let filled_id = store.select("#filled").unwrap()[0];
+    let empty_id = store.select("#empty").unwrap()[0];
+    let check_id = store.select("#check").unwrap()[0];
+    let check_ok_id = store.select("#check-ok").unwrap()[0];
+    let low_id = store.select("#low").unwrap()[0];
+    let high_id = store.select("#high").unwrap()[0];
+    let in_range_id = store.select("#in-range").unwrap()[0];
+    let bio_id = store.select("#bio").unwrap()[0];
+    let mode_id = store.select("#mode").unwrap()[0];
+
+    assert_eq!(
+        store.select(":valid").unwrap(),
+        vec![filled_id, check_ok_id, in_range_id, mode_id]
+    );
+    assert_eq!(
+        store.select(":invalid").unwrap(),
+        vec![empty_id, check_id, low_id, high_id, bio_id]
+    );
+    assert_eq!(store.select(":in-range").unwrap(), vec![in_range_id]);
+    assert_eq!(
+        store.select(":out-of-range").unwrap(),
+        vec![low_id, high_id]
+    );
+    assert_eq!(store.select("#filled:valid").unwrap(), vec![filled_id]);
+    assert_eq!(store.select("#check-ok:valid").unwrap(), vec![check_ok_id]);
+    assert_eq!(
+        store.select("#in-range:in-range").unwrap(),
+        vec![in_range_id]
+    );
+    assert_eq!(store.select("#low:out-of-range").unwrap(), vec![low_id]);
+    assert_eq!(store.select("#high:out-of-range").unwrap(), vec![high_id]);
+    assert_eq!(store.select("#empty:invalid").unwrap(), vec![empty_id]);
+    assert_eq!(store.select("#check:invalid").unwrap(), vec![check_id]);
+    assert_eq!(store.select("#bio:invalid").unwrap(), vec![bio_id]);
+    assert_eq!(store.select("#mode:valid").unwrap(), vec![mode_id]);
+    assert!(store.select("#button:valid").unwrap().is_empty());
+    assert!(store.select(":valid()").is_err());
+    assert!(store.select(":invalid()").is_err());
+    assert!(store.select(":in-range()").is_err());
+    assert!(store.select(":out-of-range()").is_err());
+}
+
+#[test]
+fn range_input_without_explicit_value_defaults_to_in_range() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html("<main id='root'><input id='slider' type='range'></main>")
+        .expect("HTML should parse");
+
+    let slider_id = store.select("#slider").unwrap()[0];
+
+    assert_eq!(store.select(":in-range").unwrap(), vec![slider_id]);
+    assert!(store.select(":out-of-range").unwrap().is_empty());
+    assert_eq!(store.select("#slider:valid").unwrap(), vec![slider_id]);
+}
+
+#[test]
 fn focus_pseudo_classes_match_focused_nodes() {
     let mut store = DomStore::new_empty();
     store
@@ -409,6 +572,34 @@ fn any_link_pseudo_class_matches_document_links() {
     assert_eq!(store.select("#docs:link").unwrap(), vec![docs_id]);
     assert_eq!(store.select("#map:any-link").unwrap(), vec![map_id]);
     assert!(store.select(":link()").is_err());
+}
+
+#[test]
+fn defined_pseudo_class_matches_standard_and_foreign_elements() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='main'><x-widget id='widget'></x-widget><svg id='svg'><text id='svg-text'>Hi</text></svg></main>",
+        )
+        .expect("HTML should parse");
+
+    let main_id = store.select("#main").unwrap()[0];
+    let svg_id = store.select("#svg").unwrap()[0];
+    let svg_text_id = store.select("#svg-text").unwrap()[0];
+    let widget_id = store.select("#widget").unwrap()[0];
+
+    assert_eq!(
+        store.select(":defined").unwrap(),
+        vec![main_id, svg_id, svg_text_id]
+    );
+    assert_eq!(store.select("#main:defined").unwrap(), vec![main_id]);
+    assert_eq!(store.select("#svg:defined").unwrap(), vec![svg_id]);
+    assert!(store.select("#widget:defined").unwrap().is_empty());
+    assert_eq!(
+        store.select("#widget:not(:defined)").unwrap(),
+        vec![widget_id]
+    );
+    assert!(store.select(":defined()").is_err());
 }
 
 #[test]
@@ -621,7 +812,7 @@ fn first_last_and_nth_of_type_pseudo_classes_match_expected_nodes() {
     let mut store = DomStore::new_empty();
     store
         .bootstrap_html(
-            "<main id='root'><div id='type-parent'><span id='first-span'>one</span><em id='first-em'>first</em><span id='middle-span'>two</span><em id='last-em'>last</em><span id='last-span'>three</span></div></main>",
+            "<main id='root'><div id='type-parent'><span id='first-span' class='skip'>one</span><em id='first-em'>first</em><span id='middle-span' class='match'>two</span><em id='last-em'>last</em><span id='last-span' class='match'>three</span></div></main>",
         )
         .expect("HTML should parse");
 
@@ -644,8 +835,24 @@ fn first_last_and_nth_of_type_pseudo_classes_match_expected_nodes() {
         vec![middle_span_id]
     );
     assert_eq!(
+        store
+            .select("#middle-span:nth-of-type(1 of .match)")
+            .unwrap(),
+        vec![middle_span_id]
+    );
+    assert_eq!(
+        store.select("#last-span:nth-of-type(2 of .match)").unwrap(),
+        vec![last_span_id]
+    );
+    assert_eq!(
         store.select("#middle-span:nth-last-of-type(2)").unwrap(),
         vec![middle_span_id]
+    );
+    assert_eq!(
+        store
+            .select("#last-span:nth-last-of-type(1 of .match)")
+            .unwrap(),
+        vec![last_span_id]
     );
     assert_eq!(
         store.select("#first-em:first-of-type").unwrap(),
@@ -655,6 +862,21 @@ fn first_last_and_nth_of_type_pseudo_classes_match_expected_nodes() {
         store.select("#last-em:last-of-type").unwrap(),
         vec![last_em_id]
     );
+}
+
+#[test]
+fn unsupported_nth_of_type_selector_syntax_fails_explicitly() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html("<main id='root'><section id='child'>child</section></main>")
+        .expect("HTML should parse");
+
+    let error = store
+        .select("#child:nth-of-type(1 of .child, )")
+        .expect_err("malformed :nth-of-type selector should fail explicitly");
+
+    assert!(error.contains("unsupported selector"));
+    assert!(error.contains(".child,"));
 }
 
 #[test]
@@ -812,7 +1034,13 @@ fn unsupported_pseudo_class_syntax_fails_explicitly() {
         .select("main:where([data-kind=app x])")
         .expect_err("broader CSS parsing inside :where is not supported yet");
     assert!(
-        error.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`")
+        error.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr]")
+            && error.contains("optional attribute selector flags like `[attr=value i]` and `[attr=value s]`")
+            && error.contains("bounded logical pseudo-classes like `:not(.primary)`")
+            && error.contains("state pseudo-classes like `:checked`, `:disabled`, `:enabled`, `:indeterminate`, `:default`, `:valid`, `:invalid`, `:in-range`, and `:out-of-range`")
+            && error.contains("form-editable state pseudo-classes also include `:read-only` and `:read-write`")
+            && error.contains("descendant combinators like `A B`")
+            && error.contains("child combinators like `A > B`")
     );
 }
 
@@ -825,7 +1053,13 @@ fn unsupported_not_argument_syntax_fails_explicitly() {
         .select("main:not([data-kind=app x])")
         .expect_err("broader CSS parsing inside :not is not supported yet");
     assert!(
-        error.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, and `:enabled`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`")
+        error.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr]")
+            && error.contains("optional attribute selector flags like `[attr=value i]` and `[attr=value s]`")
+            && error.contains("bounded logical pseudo-classes like `:not(.primary)`")
+            && error.contains("state pseudo-classes like `:checked`, `:disabled`, `:enabled`, `:indeterminate`, `:default`, `:valid`, `:invalid`, `:in-range`, and `:out-of-range`")
+            && error.contains("form-editable state pseudo-classes also include `:read-only` and `:read-write`")
+            && error.contains("descendant combinators like `A B`")
+            && error.contains("child combinators like `A > B`")
     );
 }
 
