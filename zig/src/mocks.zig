@@ -232,6 +232,94 @@ pub const ClipboardMocks = struct {
     }
 };
 
+pub const OpenCall = struct {
+    url: ?[]const u8,
+    target: ?[]const u8,
+    features: ?[]const u8,
+};
+
+pub const OpenMocks = struct {
+    allocator: std.mem.Allocator,
+    failure_message: ?[]const u8 = null,
+    call_log: std.ArrayListUnmanaged(OpenCall) = .{},
+
+    pub fn init(allocator: std.mem.Allocator) OpenMocks {
+        return .{
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *OpenMocks) void {
+        self.call_log.deinit(self.allocator);
+    }
+
+    pub fn fail(self: *OpenMocks, message: []const u8) bt_errors.Result(void) {
+        self.failure_message = try self.allocator.dupe(u8, message);
+    }
+
+    pub fn recordCall(
+        self: *OpenMocks,
+        url: ?[]const u8,
+        target: ?[]const u8,
+        features: ?[]const u8,
+    ) bt_errors.Result(void) {
+        try self.call_log.append(self.allocator, .{
+            .url = if (url) |value| try self.allocator.dupe(u8, value) else null,
+            .target = if (target) |value| try self.allocator.dupe(u8, value) else null,
+            .features = if (features) |value| try self.allocator.dupe(u8, value) else null,
+        });
+
+        if (self.failure_message != null) return error.MockError;
+        return;
+    }
+
+    pub fn calls(self: *const OpenMocks) []const OpenCall {
+        return self.call_log.items;
+    }
+
+    pub fn reset(self: *OpenMocks) void {
+        self.failure_message = null;
+        self.call_log = .{};
+    }
+};
+
+pub const PrintCall = struct {};
+
+pub const PrintMocks = struct {
+    allocator: std.mem.Allocator,
+    failure_message: ?[]const u8 = null,
+    call_log: std.ArrayListUnmanaged(PrintCall) = .{},
+
+    pub fn init(allocator: std.mem.Allocator) PrintMocks {
+        return .{
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *PrintMocks) void {
+        self.call_log.deinit(self.allocator);
+    }
+
+    pub fn fail(self: *PrintMocks, message: []const u8) bt_errors.Result(void) {
+        self.failure_message = try self.allocator.dupe(u8, message);
+    }
+
+    pub fn recordCall(self: *PrintMocks) bt_errors.Result(void) {
+        try self.call_log.append(self.allocator, .{});
+        if (self.failure_message != null) return error.MockError;
+        return;
+    }
+
+    pub fn calls(self: *const PrintMocks) []const PrintCall {
+        return self.call_log.items;
+    }
+
+    pub fn reset(self: *PrintMocks) void {
+        self.failure_message = null;
+        self.call_log = .{};
+    }
+};
+
 pub const LocationMocks = struct {
     allocator: std.mem.Allocator,
     current_url: ?[]const u8 = null,
@@ -420,8 +508,8 @@ pub const FileInputMocks = struct {
 
 pub const StorageSeeds = struct {
     allocator: std.mem.Allocator,
-    local_map: std.StringHashMapUnmanaged([]const u8) = .{},
-    session_map: std.StringHashMapUnmanaged([]const u8) = .{},
+    local_map: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
+    session_map: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) StorageSeeds {
         return .{
@@ -450,17 +538,17 @@ pub const StorageSeeds = struct {
         );
     }
 
-    pub fn local(self: *StorageSeeds) *std.StringHashMapUnmanaged([]const u8) {
+    pub fn local(self: *StorageSeeds) *std.StringArrayHashMapUnmanaged([]const u8) {
         return &self.local_map;
     }
 
-    pub fn session(self: *StorageSeeds) *std.StringHashMapUnmanaged([]const u8) {
+    pub fn session(self: *StorageSeeds) *std.StringArrayHashMapUnmanaged([]const u8) {
         return &self.session_map;
     }
 
     pub fn reset(self: *StorageSeeds) void {
-        self.local_map = .{};
-        self.session_map = .{};
+        self.local_map.clearRetainingCapacity();
+        self.session_map.clearRetainingCapacity();
     }
 };
 
@@ -468,6 +556,8 @@ pub const MockRegistry = struct {
     fetch_mocks: FetchMocks,
     dialogs_mocks: DialogMocks,
     clipboard_mocks: ClipboardMocks,
+    open_mocks: OpenMocks,
+    print_mocks: PrintMocks,
     location_mocks: LocationMocks,
     match_media_mocks: MatchMediaMocks,
     downloads_mocks: DownloadMocks,
@@ -479,6 +569,8 @@ pub const MockRegistry = struct {
             .fetch_mocks = FetchMocks.init(allocator),
             .dialogs_mocks = DialogMocks.init(allocator),
             .clipboard_mocks = ClipboardMocks.init(allocator),
+            .open_mocks = OpenMocks.init(allocator),
+            .print_mocks = PrintMocks.init(allocator),
             .location_mocks = LocationMocks.init(allocator),
             .match_media_mocks = MatchMediaMocks.init(allocator),
             .downloads_mocks = DownloadMocks.init(allocator),
@@ -491,6 +583,8 @@ pub const MockRegistry = struct {
         self.fetch_mocks.deinit();
         self.dialogs_mocks.deinit();
         self.clipboard_mocks.deinit();
+        self.open_mocks.deinit();
+        self.print_mocks.deinit();
         self.location_mocks.deinit();
         self.match_media_mocks.deinit();
         self.downloads_mocks.deinit();
@@ -508,6 +602,14 @@ pub const MockRegistry = struct {
 
     pub fn clipboard(self: *MockRegistry) *ClipboardMocks {
         return &self.clipboard_mocks;
+    }
+
+    pub fn open(self: *MockRegistry) *OpenMocks {
+        return &self.open_mocks;
+    }
+
+    pub fn print(self: *MockRegistry) *PrintMocks {
+        return &self.print_mocks;
     }
 
     pub fn location(self: *MockRegistry) *LocationMocks {
@@ -534,6 +636,8 @@ pub const MockRegistry = struct {
         self.fetch_mocks.reset();
         self.dialogs_mocks.reset();
         self.clipboard_mocks.reset();
+        self.open_mocks.reset();
+        self.print_mocks.reset();
         self.location_mocks.reset();
         self.match_media_mocks.reset();
         self.downloads_mocks.reset();

@@ -99,3 +99,37 @@ fn storage_seed_registry_is_available_through_the_mock_view() {
     assert!(harness.mocks_mut().storage().session().is_empty());
     assert!(harness.mocks_mut().downloads().artifacts().is_empty());
 }
+
+#[test]
+fn builder_print_failure_seed_does_not_leak_into_local_storage() -> browser_tester_next::Result<()>
+{
+    let mut harness = Harness::builder()
+        .print_failure("print blocked")
+        .build()?;
+
+    assert!(harness.debug().local_storage().is_empty());
+    assert_eq!(harness.mocks_mut().print().calls().len(), 0);
+    Ok(())
+}
+
+#[test]
+fn builder_close_failure_seed_does_not_leak_into_local_storage() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::builder()
+        .close_failure("window closed")
+        .build()?;
+
+    assert!(harness.debug().local_storage().is_empty());
+    assert_eq!(harness.mocks_mut().close().calls().len(), 0);
+    Ok(())
+}
+
+#[test]
+fn builder_open_failure_seed_does_not_leak_into_local_storage() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::builder()
+        .open_failure("popup blocked")
+        .build()?;
+
+    assert!(harness.debug().local_storage().is_empty());
+    assert_eq!(harness.mocks_mut().open().calls().len(), 0);
+    Ok(())
+}

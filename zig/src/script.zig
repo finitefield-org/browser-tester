@@ -9,6 +9,11 @@ pub const ListenerTarget = union(enum) {
     element: dom.NodeId,
 };
 
+pub const StorageTarget = enum {
+    local,
+    session,
+};
+
 pub const EventPhase = enum(u8) {
     none = 0,
     capturing = 1,
@@ -247,6 +252,129 @@ const MediaQueryList = struct {
     matches: bool,
 };
 
+const LocationState = struct {
+    host: *anyopaque,
+    current_url: []const u8,
+    current_url_fn: *const fn (*anyopaque) []const u8,
+    assign_fn: *const fn (*anyopaque, []const u8) errors.Result(void),
+    replace_fn: *const fn (*anyopaque, []const u8) errors.Result(void),
+    reload_fn: *const fn (*anyopaque) errors.Result(void),
+
+    fn refresh(self: *LocationState) void {
+        self.current_url = self.current_url_fn(self.host);
+    }
+
+    fn assign(self: *LocationState, url: []const u8) errors.Result(void) {
+        try self.assign_fn(self.host, url);
+        self.refresh();
+        return;
+    }
+
+    fn replace(self: *LocationState, url: []const u8) errors.Result(void) {
+        try self.replace_fn(self.host, url);
+        self.refresh();
+        return;
+    }
+
+    fn reload(self: *LocationState) errors.Result(void) {
+        try self.reload_fn(self.host);
+        self.refresh();
+        return;
+    }
+};
+
+const HistoryState = struct {
+    host: *anyopaque,
+    length_fn: *const fn (*anyopaque) usize,
+    state_fn: *const fn (*anyopaque) ?[]const u8,
+    back_fn: *const fn (*anyopaque) errors.Result(void),
+    forward_fn: *const fn (*anyopaque) errors.Result(void),
+    go_fn: *const fn (*anyopaque, isize) errors.Result(void),
+    push_state_fn: *const fn (*anyopaque, ?[]const u8, []const u8) errors.Result(void),
+    replace_state_fn: *const fn (*anyopaque, ?[]const u8, []const u8) errors.Result(void),
+
+    fn length(self: HistoryState) usize {
+        return self.length_fn(self.host);
+    }
+
+    fn state(self: HistoryState) ?[]const u8 {
+        return self.state_fn(self.host);
+    }
+
+    fn back(self: HistoryState) errors.Result(void) {
+        return self.back_fn(self.host);
+    }
+
+    fn forward(self: HistoryState) errors.Result(void) {
+        return self.forward_fn(self.host);
+    }
+
+    fn go(self: HistoryState, delta: isize) errors.Result(void) {
+        return self.go_fn(self.host, delta);
+    }
+
+    fn pushState(self: HistoryState, history_state: ?[]const u8, url: []const u8) errors.Result(void) {
+        return self.push_state_fn(self.host, history_state, url);
+    }
+
+    fn replaceState(self: HistoryState, history_state: ?[]const u8, url: []const u8) errors.Result(void) {
+        return self.replace_state_fn(self.host, history_state, url);
+    }
+};
+
+const StorageState = struct {
+    host: *anyopaque,
+    target: StorageTarget,
+    length_fn: *const fn (*anyopaque, StorageTarget) usize,
+    get_item_fn: *const fn (*anyopaque, StorageTarget, []const u8) ?[]const u8,
+    set_item_fn: *const fn (*anyopaque, StorageTarget, []const u8, []const u8) errors.Result(void),
+    remove_item_fn: *const fn (*anyopaque, StorageTarget, []const u8) errors.Result(void),
+    clear_fn: *const fn (*anyopaque, StorageTarget) errors.Result(void),
+    key_fn: *const fn (*anyopaque, StorageTarget, usize) ?[]const u8,
+
+    fn length(self: *const StorageState) usize {
+        return self.length_fn(self.host, self.target);
+    }
+
+    fn getItem(self: *const StorageState, storage_key: []const u8) ?[]const u8 {
+        return self.get_item_fn(self.host, self.target, storage_key);
+    }
+
+    fn setItem(self: *StorageState, storage_key: []const u8, value: []const u8) errors.Result(void) {
+        return self.set_item_fn(self.host, self.target, storage_key, value);
+    }
+
+    fn removeItem(self: *StorageState, storage_key: []const u8) errors.Result(void) {
+        return self.remove_item_fn(self.host, self.target, storage_key);
+    }
+
+    fn clear(self: *StorageState) errors.Result(void) {
+        return self.clear_fn(self.host, self.target);
+    }
+
+    fn key(self: *const StorageState, index: usize) ?[]const u8 {
+        return self.key_fn(self.host, self.target, index);
+    }
+};
+
+const StylePropertyEntry = struct {
+    name: []const u8,
+    value: []const u8,
+    important: bool = false,
+};
+
+const StyleValueEntry = struct {
+    value: []const u8,
+    important: bool,
+};
+
+const StyleDeclarationState = struct {
+    host: *anyopaque,
+    element: dom.NodeId,
+    get_attribute_fn: *const fn (*anyopaque, dom.NodeId, []const u8, std.mem.Allocator) errors.Result(?[]const u8),
+    set_attribute_fn: *const fn (*anyopaque, dom.NodeId, []const u8, []const u8) errors.Result(void),
+};
+
 const Value = union(enum) {
     undefined_value,
     null_value,
@@ -262,6 +390,10 @@ const Value = union(enum) {
     html_collection: HtmlCollection,
     radio_node_list: RadioNodeList,
     media_query_list: MediaQueryList,
+    style_declaration: *StyleDeclarationState,
+    storage: *StorageState,
+    location: *LocationState,
+    history: HistoryState,
     collection_iterator: *CollectionIteratorState,
     iterator_result: *IteratorResult,
     collection_entry: *CollectionEntry,
@@ -424,6 +556,14 @@ const Parser = struct {
         const current = self.peekChar().?;
         return switch (current) {
             '\'', '"' => self.makeExpr(.{ .string = try self.parseString() }),
+            '-' => blk: {
+                const next = self.peekNextChar() orelse break :blk error.ScriptParse;
+                if (!std.ascii.isDigit(next)) break :blk error.ScriptParse;
+                _ = self.consumeChar('-');
+                const digits = try self.parseNumber();
+                const text = try std.fmt.allocPrint(self.allocator, "-{s}", .{digits});
+                break :blk try self.makeExpr(.{ .number = text });
+            },
             '(' => blk: {
                 if (try self.tryParseArrowFunction()) |function| {
                     break :blk try self.makeExpr(.{ .arrow_function = function });
@@ -812,7 +952,7 @@ fn evalAssignment(
 ) errors.Result(void) {
     const object = try evalExpr(allocator, host, bindings, target.object);
     switch (object) {
-        .document, .window => {
+        .document => {
             if (std.mem.eql(u8, target.property, "title")) {
                 const text = try asString(allocator, value);
                 try host.setDocumentTitle(text);
@@ -821,7 +961,75 @@ fn evalAssignment(
 
             if (std.mem.eql(u8, target.property, "location")) {
                 const text = try asString(allocator, value);
-                try host.navigate(text);
+                try host.assignLocation(text);
+                return;
+            }
+
+            if (std.mem.eql(u8, target.property, "dir")) {
+                const text = try asString(allocator, value);
+                try host.setDocumentDir(text);
+                return;
+            }
+
+            return error.ScriptRuntime;
+        },
+        .window => {
+            if (std.mem.eql(u8, target.property, "name")) {
+                const text = try asString(allocator, value);
+                try host.setWindowName(text);
+                return;
+            }
+
+            if (std.mem.eql(u8, target.property, "title")) {
+                const text = try asString(allocator, value);
+                try host.setDocumentTitle(text);
+                return;
+            }
+
+            if (std.mem.eql(u8, target.property, "location")) {
+                const text = try asString(allocator, value);
+                try host.assignLocation(text);
+                return;
+            }
+
+            return error.ScriptRuntime;
+        },
+        .location => |location| {
+            if (std.mem.eql(u8, target.property, "href")) {
+                const text = try asString(allocator, value);
+                try location.assign(text);
+                return;
+            }
+
+            return error.ScriptRuntime;
+        },
+        .style_declaration => |style| {
+            if (std.mem.eql(u8, target.property, "cssText")) {
+                const text = try asString(allocator, value);
+                try styleDeclarationSetCssText(allocator, style, text);
+                return;
+            }
+
+            if (std.mem.eql(u8, target.property, "length") or
+                std.mem.eql(u8, target.property, "item") or
+                std.mem.eql(u8, target.property, "getPropertyValue") or
+                std.mem.eql(u8, target.property, "setProperty") or
+                std.mem.eql(u8, target.property, "removeProperty") or
+                std.mem.eql(u8, target.property, "toString"))
+            {
+                return error.ScriptRuntime;
+            }
+
+            const property_name = try stylePropertyName(allocator, target.property);
+            defer allocator.free(property_name);
+            const text = try asString(allocator, value);
+            try styleDeclarationSetProperty(allocator, style, property_name, text, null);
+            return;
+        },
+        .radio_node_list => |list| {
+            if (std.mem.eql(u8, target.property, "value")) {
+                const text = try asString(allocator, value);
+                try radioNodeListSetValue(allocator, host, list, text);
                 return;
             }
 
@@ -844,6 +1052,10 @@ fn evalAssignment(
                 const text = try asString(allocator, value);
                 try host.domStoreMut().setAttribute(element, "class", text);
                 return;
+            }
+
+            if (std.mem.eql(u8, target.property, "style")) {
+                return error.ScriptRuntime;
             }
 
             if (std.mem.eql(u8, target.property, "textContent")) {
@@ -969,6 +1181,23 @@ fn evalMember(
                 }
                 break :blk Value{ .null_value = {} };
             }
+            if (std.mem.eql(u8, member.property, "compatMode")) {
+                break :blk Value{ .string = host.documentCompatMode() };
+            }
+            if (std.mem.eql(u8, member.property, "characterSet") or
+                std.mem.eql(u8, member.property, "charset"))
+            {
+                break :blk Value{ .string = host.documentCharacterSet() };
+            }
+            if (std.mem.eql(u8, member.property, "contentType")) {
+                break :blk Value{ .string = host.documentContentType() };
+            }
+            if (std.mem.eql(u8, member.property, "referrer")) {
+                break :blk Value{ .string = host.documentReferrer() };
+            }
+            if (std.mem.eql(u8, member.property, "dir")) {
+                break :blk Value{ .string = host.documentDir() };
+            }
             if (std.mem.eql(u8, member.property, "title")) {
                 break :blk Value{ .string = host.documentTitle() };
             }
@@ -981,8 +1210,16 @@ fn evalMember(
                 }
                 break :blk Value{ .null_value = {} };
             }
-            if (std.mem.eql(u8, member.property, "location") or
-                std.mem.eql(u8, member.property, "URL") or
+            if (std.mem.eql(u8, member.property, "activeElement")) {
+                if (host.documentActiveElement()) |element| {
+                    break :blk Value{ .element = element };
+                }
+                break :blk Value{ .null_value = {} };
+            }
+            if (std.mem.eql(u8, member.property, "location")) {
+                break :blk try makeLocationValue(allocator, host);
+            }
+            if (std.mem.eql(u8, member.property, "URL") or
                 std.mem.eql(u8, member.property, "documentURI") or
                 std.mem.eql(u8, member.property, "baseURI"))
             {
@@ -1043,14 +1280,56 @@ fn evalMember(
             if (std.mem.eql(u8, member.property, "document")) {
                 break :blk Value{ .document = {} };
             }
+            if (std.mem.eql(u8, member.property, "name")) {
+                break :blk Value{ .string = host.windowName() };
+            }
+            if (std.mem.eql(u8, member.property, "localStorage")) {
+                break :blk try makeStorageValue(allocator, host, .local);
+            }
+            if (std.mem.eql(u8, member.property, "sessionStorage")) {
+                break :blk try makeStorageValue(allocator, host, .session);
+            }
+            if (std.mem.eql(u8, member.property, "children")) {
+                break :blk Value{ .html_collection = .{ .root = host.domStore().documentId() } };
+            }
             if (std.mem.eql(u8, member.property, "title")) {
                 break :blk Value{ .string = host.documentTitle() };
             }
             if (std.mem.eql(u8, member.property, "location")) {
-                break :blk Value{ .string = host.currentLocationUrl() };
+                break :blk try makeLocationValue(allocator, host);
+            }
+            if (std.mem.eql(u8, member.property, "history")) {
+                break :blk makeHistoryValue(host);
             }
             if (std.mem.eql(u8, member.property, "origin")) {
                 break :blk Value{ .string = try originFromUrl(allocator, host.currentLocationUrl()) };
+            }
+            break :blk error.ScriptRuntime;
+        },
+        .location => |location| blk: {
+            if (std.mem.eql(u8, member.property, "href")) {
+                break :blk Value{ .string = location.current_url };
+            }
+            if (std.mem.eql(u8, member.property, "origin")) {
+                break :blk Value{ .string = try originFromUrl(allocator, location.current_url) };
+            }
+            break :blk error.ScriptRuntime;
+        },
+        .history => |history| blk: {
+            if (std.mem.eql(u8, member.property, "length")) {
+                break :blk Value{ .number = @floatFromInt(history.length()) };
+            }
+            if (std.mem.eql(u8, member.property, "state")) {
+                if (history.state()) |state| {
+                    break :blk Value{ .string = state };
+                }
+                break :blk Value{ .null_value = {} };
+            }
+            break :blk error.ScriptRuntime;
+        },
+        .storage => |storage| blk: {
+            if (std.mem.eql(u8, member.property, "length")) {
+                break :blk Value{ .number = @floatFromInt(storage.length()) };
             }
             break :blk error.ScriptRuntime;
         },
@@ -1073,6 +1352,9 @@ fn evalMember(
             if (std.mem.eql(u8, member.property, "className")) {
                 const class_name = (try host.domStore().getAttribute(element, "class")) orelse "";
                 break :blk Value{ .string = class_name };
+            }
+            if (std.mem.eql(u8, member.property, "style")) {
+                break :blk try makeStyleDeclarationValue(allocator, host, element);
             }
             if (std.mem.eql(u8, member.property, "classList")) {
                 break :blk Value{ .class_list = element };
@@ -1217,6 +1499,27 @@ fn evalMember(
                 break :blk Value{ .number = @floatFromInt(tokens.items.len) };
             }
             break :blk error.ScriptRuntime;
+        },
+        .style_declaration => blk: {
+            if (std.mem.eql(u8, member.property, "cssText")) {
+                break :blk Value{ .string = try styleDeclarationCssText(allocator, object.style_declaration) };
+            }
+            if (std.mem.eql(u8, member.property, "length")) {
+                break :blk Value{ .number = @floatFromInt(try styleDeclarationLength(allocator, object.style_declaration)) };
+            }
+            if (std.mem.eql(u8, member.property, "item") or
+                std.mem.eql(u8, member.property, "getPropertyValue") or
+                std.mem.eql(u8, member.property, "getPropertyPriority") or
+                std.mem.eql(u8, member.property, "setProperty") or
+                std.mem.eql(u8, member.property, "removeProperty") or
+                std.mem.eql(u8, member.property, "toString"))
+            {
+                break :blk error.ScriptRuntime;
+            }
+
+            const property_name = try stylePropertyName(allocator, member.property);
+            defer allocator.free(property_name);
+            break :blk Value{ .string = try styleDeclarationGetPropertyValue(allocator, object.style_declaration, property_name) };
         },
         .node => |node_id| blk: {
             if (try nodeLikeMember(allocator, host, node_id, member.property)) |value| {
@@ -1458,6 +1761,26 @@ fn evalMethodCall(
         } else error.ScriptRuntime,
         .window => if (std.mem.eql(u8, method, "document")) Value{ .document = {} } else if (std.mem.eql(u8, method, "addEventListener")) blk: {
             break :blk try registerListener(allocator, host, bindings, .window, args);
+        } else if (std.mem.eql(u8, method, "open")) blk: {
+            if (args.len > 3) return error.ScriptRuntime;
+            const url = if (args.len >= 1)
+                try asString(allocator, try evalExpr(allocator, host, bindings, args[0]))
+            else
+                null;
+            const target = if (args.len >= 2)
+                try asString(allocator, try evalExpr(allocator, host, bindings, args[1]))
+            else
+                null;
+            const features = if (args.len >= 3)
+                try asString(allocator, try evalExpr(allocator, host, bindings, args[2]))
+            else
+                null;
+            try host.open(url, target, features);
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "print")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            try host.print();
+            break :blk Value{ .undefined_value = {} };
         } else if (std.mem.eql(u8, method, "matchMedia")) blk: {
             if (args.len != 1) return error.ScriptRuntime;
             const query_value = try evalExpr(allocator, host, bindings, args[0]);
@@ -1467,6 +1790,142 @@ fn evalMethodCall(
                 .media = query,
                 .matches = matches,
             } };
+        } else error.ScriptRuntime,
+        .location => if (std.mem.eql(u8, method, "assign")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const url_value = try evalExpr(allocator, host, bindings, args[0]);
+            const url = try asString(allocator, url_value);
+            try object.location.assign(url);
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "replace")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const url_value = try evalExpr(allocator, host, bindings, args[0]);
+            const url = try asString(allocator, url_value);
+            try object.location.replace(url);
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "reload")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            try object.location.reload();
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "toString")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk Value{ .string = object.location.current_url };
+        } else error.ScriptRuntime,
+        .history => if (std.mem.eql(u8, method, "back")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            try object.history.back();
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "forward")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            try object.history.forward();
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "go")) blk: {
+            if (args.len > 1) return error.ScriptRuntime;
+            const delta = if (args.len == 0) @as(isize, 0) else try historyDeltaFromExpr(allocator, host, bindings, args[0]);
+            try object.history.go(delta);
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "pushState")) blk: {
+            if (args.len < 2 or args.len > 3) return error.ScriptRuntime;
+            const state_value = try evalExpr(allocator, host, bindings, args[0]);
+            const state = try historyStateFromValue(allocator, state_value);
+            _ = try evalExpr(allocator, host, bindings, args[1]);
+            const url = if (args.len == 3) url_blk: {
+                const url_value = try evalExpr(allocator, host, bindings, args[2]);
+                break :url_blk try asString(allocator, url_value);
+            } else host.currentLocationUrl();
+            try object.history.pushState(state, url);
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "replaceState")) blk: {
+            if (args.len < 2 or args.len > 3) return error.ScriptRuntime;
+            const state_value = try evalExpr(allocator, host, bindings, args[0]);
+            const state = try historyStateFromValue(allocator, state_value);
+            _ = try evalExpr(allocator, host, bindings, args[1]);
+            const url = if (args.len == 3) url_blk: {
+                const url_value = try evalExpr(allocator, host, bindings, args[2]);
+                break :url_blk try asString(allocator, url_value);
+            } else host.currentLocationUrl();
+            try object.history.replaceState(state, url);
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "toString")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk Value{ .string = "[object History]" };
+        } else error.ScriptRuntime,
+        .storage => if (std.mem.eql(u8, method, "getItem")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const key_value = try evalExpr(allocator, host, bindings, args[0]);
+            const key = try asString(allocator, key_value);
+            if (object.storage.getItem(key)) |text| {
+                break :blk Value{ .string = text };
+            }
+            break :blk Value{ .null_value = {} };
+        } else if (std.mem.eql(u8, method, "setItem")) blk: {
+            if (args.len != 2) return error.ScriptRuntime;
+            const key_value = try evalExpr(allocator, host, bindings, args[0]);
+            const key = try asString(allocator, key_value);
+            const value_value = try evalExpr(allocator, host, bindings, args[1]);
+            const value = try asString(allocator, value_value);
+            try object.storage.setItem(key, value);
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "removeItem")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const key_value = try evalExpr(allocator, host, bindings, args[0]);
+            const key = try asString(allocator, key_value);
+            try object.storage.removeItem(key);
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "clear")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            try object.storage.clear();
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "key")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const index_value = try evalExpr(allocator, host, bindings, args[0]);
+            const index = try asNodeListIndex(index_value);
+            if (object.storage.key(index)) |text| {
+                break :blk Value{ .string = text };
+            }
+            break :blk Value{ .null_value = {} };
+        } else if (std.mem.eql(u8, method, "toString")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk Value{ .string = "[object Storage]" };
+        } else error.ScriptRuntime,
+        .style_declaration => if (std.mem.eql(u8, method, "getPropertyValue")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const name_value = try evalExpr(allocator, host, bindings, args[0]);
+            const name = try asString(allocator, name_value);
+            break :blk Value{ .string = try styleDeclarationGetPropertyValue(allocator, object.style_declaration, name) };
+        } else if (std.mem.eql(u8, method, "getPropertyPriority")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const name_value = try evalExpr(allocator, host, bindings, args[0]);
+            const name = try asString(allocator, name_value);
+            break :blk Value{ .string = try styleDeclarationGetPropertyPriority(allocator, object.style_declaration, name) };
+        } else if (std.mem.eql(u8, method, "setProperty")) blk: {
+            if (args.len != 2 and args.len != 3) return error.ScriptRuntime;
+            const name_value = try evalExpr(allocator, host, bindings, args[0]);
+            const name = try asString(allocator, name_value);
+            const value_value = try evalExpr(allocator, host, bindings, args[1]);
+            const text = try asString(allocator, value_value);
+            const priority = if (args.len == 3) priority_blk: {
+                const priority_value = try evalExpr(allocator, host, bindings, args[2]);
+                break :priority_blk switch (priority_value) {
+                    .undefined_value, .null_value => null,
+                    else => try asString(allocator, priority_value),
+                };
+            } else null;
+            try styleDeclarationSetProperty(allocator, object.style_declaration, name, text, priority);
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "removeProperty")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const name_value = try evalExpr(allocator, host, bindings, args[0]);
+            const name = try asString(allocator, name_value);
+            break :blk Value{ .string = try styleDeclarationRemoveProperty(allocator, object.style_declaration, name) };
+        } else if (std.mem.eql(u8, method, "item")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const index_value = try evalExpr(allocator, host, bindings, args[0]);
+            const index = try asNodeListIndex(index_value);
+            break :blk Value{ .string = try styleDeclarationItem(allocator, object.style_declaration, index) };
+        } else if (std.mem.eql(u8, method, "toString")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk Value{ .string = try styleDeclarationCssText(allocator, object.style_declaration) };
         } else error.ScriptRuntime,
         .element => |element| if (std.mem.eql(u8, method, "textContent")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
@@ -3167,11 +3626,59 @@ fn radioNodeListValue(
         const input_type = (try host.domStore().getAttribute(item, "type")) orelse "text";
         if (!std.mem.eql(u8, input_type, "radio")) continue;
         if (host.domStore().checkedForNode(item) orelse false) {
-            return try host.domStore().valueForNode(allocator, item);
+            const current_value = (try host.domStore().getAttribute(item, "value")) orelse "on";
+            return allocator.dupe(u8, current_value);
         }
     }
 
     return "";
+}
+
+fn radioNodeListSetValue(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    list: RadioNodeList,
+    value: []const u8,
+) errors.Result(void) {
+    const items = try radioNodeListCurrentIds(allocator, host, list);
+    defer allocator.free(items);
+
+    var selected: ?dom.NodeId = null;
+    for (items) |item| {
+        const node = host.domStore().nodeAt(item) orelse continue;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => continue,
+        };
+        if (!std.mem.eql(u8, element.tag_name, "input")) continue;
+        const input_type = (try host.domStore().getAttribute(item, "type")) orelse "text";
+        if (!std.mem.eql(u8, input_type, "radio")) continue;
+
+        const current_value = (try host.domStore().getAttribute(item, "value")) orelse "on";
+        const matches = if (std.mem.eql(u8, value, "on"))
+            std.mem.eql(u8, current_value, "on")
+        else
+            std.mem.eql(u8, current_value, value);
+        if (matches) {
+            selected = item;
+            break;
+        }
+    }
+
+    for (items) |item| {
+        const node = host.domStore().nodeAt(item) orelse continue;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => continue,
+        };
+        if (!std.mem.eql(u8, element.tag_name, "input")) continue;
+        const input_type = (try host.domStore().getAttribute(item, "type")) orelse "text";
+        if (!std.mem.eql(u8, input_type, "radio")) continue;
+        const checked = if (selected) |chosen| item.index == chosen.index else false;
+        try host.domStoreMut().setFormControlChecked(item, checked);
+    }
+
+    return;
 }
 
 fn radioNodeListKeys(
@@ -3519,6 +4026,7 @@ fn asString(allocator: std.mem.Allocator, value: Value) errors.Result([]const u8
         .boolean => |flag| if (flag) "true" else "false",
         .number => |number| try std.fmt.allocPrint(allocator, "{d}", .{number}),
         .string => |text| text,
+        .location => |location| location.current_url,
         .element => "[object Element]",
         .node => "[object Node]",
         .template_content => "[object DocumentFragment]",
@@ -3532,8 +4040,11 @@ fn asString(allocator: std.mem.Allocator, value: Value) errors.Result([]const u8
         .document_anchors => "[object HTMLCollection]",
         .document_style_sheets => "[object StyleSheetList]",
         .style_sheet => "[object CSSStyleSheet]",
+        .style_declaration => |style| try styleDeclarationCssText(allocator, style),
         .radio_node_list => "[object RadioNodeList]",
         .media_query_list => "[object MediaQueryList]",
+        .storage => "[object Storage]",
+        .history => "[object History]",
         .collection_entry => "[object IteratorEntry]",
         .event => "[object Event]",
         .document => "[object Document]",
@@ -3556,7 +4067,564 @@ fn isTruthy(value: Value) bool {
         .boolean => |flag| flag,
         .number => |number| number != 0,
         .string => |text| text.len != 0,
-        .element, .node, .template_content, .class_list, .dataset, .node_list, .collection_iterator, .iterator_result, .collection_entry, .html_collection, .document_scripts, .document_anchors, .document_style_sheets, .style_sheet, .radio_node_list, .media_query_list, .event, .document, .window, .function => true,
+        .element, .node, .template_content, .class_list, .dataset, .node_list, .collection_iterator, .iterator_result, .collection_entry, .html_collection, .document_scripts, .document_anchors, .document_style_sheets, .style_sheet, .style_declaration, .radio_node_list, .media_query_list, .storage, .location, .history, .event, .document, .window, .function => true,
+    };
+}
+
+fn makeLocationValue(allocator: std.mem.Allocator, host: anytype) errors.Result(Value) {
+    const Host = @TypeOf(host);
+    const state = try allocator.create(LocationState);
+    state.* = .{
+        .host = @ptrCast(host),
+        .current_url = host.currentLocationUrl(),
+        .current_url_fn = struct {
+            fn call(ptr: *anyopaque) []const u8 {
+                const typed: Host = @ptrCast(@alignCast(ptr));
+                return typed.currentLocationUrl();
+            }
+        }.call,
+        .assign_fn = struct {
+            fn call(ptr: *anyopaque, url: []const u8) errors.Result(void) {
+                const typed: Host = @ptrCast(@alignCast(ptr));
+                return typed.assignLocation(url);
+            }
+        }.call,
+        .replace_fn = struct {
+            fn call(ptr: *anyopaque, url: []const u8) errors.Result(void) {
+                const typed: Host = @ptrCast(@alignCast(ptr));
+                return typed.replaceLocation(url);
+            }
+        }.call,
+        .reload_fn = struct {
+            fn call(ptr: *anyopaque) errors.Result(void) {
+                const typed: Host = @ptrCast(@alignCast(ptr));
+                return typed.reloadLocation();
+            }
+        }.call,
+    };
+    return .{ .location = state };
+}
+
+fn makeHistoryValue(host: anytype) Value {
+    const Host = @TypeOf(host);
+    return .{
+        .history = .{
+            .host = @ptrCast(host),
+            .length_fn = struct {
+                fn call(ptr: *anyopaque) usize {
+                    const typed: Host = @ptrCast(@alignCast(ptr));
+                    return typed.historyLength();
+                }
+            }.call,
+            .state_fn = struct {
+                fn call(ptr: *anyopaque) ?[]const u8 {
+                    const typed: Host = @ptrCast(@alignCast(ptr));
+                    return typed.historyState();
+                }
+            }.call,
+            .back_fn = struct {
+                fn call(ptr: *anyopaque) errors.Result(void) {
+                    const typed: Host = @ptrCast(@alignCast(ptr));
+                    return typed.historyBack();
+                }
+            }.call,
+            .forward_fn = struct {
+                fn call(ptr: *anyopaque) errors.Result(void) {
+                    const typed: Host = @ptrCast(@alignCast(ptr));
+                    return typed.historyForward();
+                }
+            }.call,
+            .go_fn = struct {
+                fn call(ptr: *anyopaque, delta: isize) errors.Result(void) {
+                    const typed: Host = @ptrCast(@alignCast(ptr));
+                    return typed.historyGo(delta);
+                }
+            }.call,
+            .push_state_fn = struct {
+                fn call(ptr: *anyopaque, state: ?[]const u8, url: []const u8) errors.Result(void) {
+                    const typed: Host = @ptrCast(@alignCast(ptr));
+                    return typed.historyPushState(state, url);
+                }
+            }.call,
+            .replace_state_fn = struct {
+                fn call(ptr: *anyopaque, state: ?[]const u8, url: []const u8) errors.Result(void) {
+                    const typed: Host = @ptrCast(@alignCast(ptr));
+                    return typed.historyReplaceState(state, url);
+                }
+            }.call,
+        },
+    };
+}
+
+fn makeStorageValue(allocator: std.mem.Allocator, host: anytype, target: StorageTarget) errors.Result(Value) {
+    const Host = @TypeOf(host);
+    const state = try allocator.create(StorageState);
+    state.* = .{
+        .host = @ptrCast(host),
+        .target = target,
+        .length_fn = struct {
+            fn call(ptr: *anyopaque, storage_target: StorageTarget) usize {
+                const typed: Host = @ptrCast(@alignCast(ptr));
+                return typed.storageLength(storage_target);
+            }
+        }.call,
+        .get_item_fn = struct {
+            fn call(ptr: *anyopaque, storage_target: StorageTarget, key: []const u8) ?[]const u8 {
+                const typed: Host = @ptrCast(@alignCast(ptr));
+                return typed.storageGetItem(storage_target, key);
+            }
+        }.call,
+        .set_item_fn = struct {
+            fn call(ptr: *anyopaque, storage_target: StorageTarget, key: []const u8, value: []const u8) errors.Result(void) {
+                const typed: Host = @ptrCast(@alignCast(ptr));
+                return typed.storageSetItem(storage_target, key, value);
+            }
+        }.call,
+        .remove_item_fn = struct {
+            fn call(ptr: *anyopaque, storage_target: StorageTarget, key: []const u8) errors.Result(void) {
+                const typed: Host = @ptrCast(@alignCast(ptr));
+                return typed.storageRemoveItem(storage_target, key);
+            }
+        }.call,
+        .clear_fn = struct {
+            fn call(ptr: *anyopaque, storage_target: StorageTarget) errors.Result(void) {
+                const typed: Host = @ptrCast(@alignCast(ptr));
+                return typed.storageClear(storage_target);
+            }
+        }.call,
+        .key_fn = struct {
+            fn call(ptr: *anyopaque, storage_target: StorageTarget, index: usize) ?[]const u8 {
+                const typed: Host = @ptrCast(@alignCast(ptr));
+                return typed.storageKey(storage_target, index);
+            }
+        }.call,
+    };
+    return .{ .storage = state };
+}
+
+fn makeStyleDeclarationValue(allocator: std.mem.Allocator, host: anytype, element: dom.NodeId) errors.Result(Value) {
+    const Host = @TypeOf(host);
+    const state = try allocator.create(StyleDeclarationState);
+    state.* = .{
+        .host = @ptrCast(host),
+        .element = element,
+        .get_attribute_fn = struct {
+            fn call(
+                ptr: *anyopaque,
+                node: dom.NodeId,
+                name: []const u8,
+                alloc: std.mem.Allocator,
+            ) errors.Result(?[]const u8) {
+                const typed: Host = @ptrCast(@alignCast(ptr));
+                _ = alloc;
+                return typed.domStore().getAttribute(node, name);
+            }
+        }.call,
+        .set_attribute_fn = struct {
+            fn call(
+                ptr: *anyopaque,
+                node: dom.NodeId,
+                name: []const u8,
+                value: []const u8,
+            ) errors.Result(void) {
+                const typed: Host = @ptrCast(@alignCast(ptr));
+                return typed.domStoreMut().setAttribute(node, name, value);
+            }
+        }.call,
+    };
+    return .{ .style_declaration = state };
+}
+
+fn styleDeclarationCurrentText(
+    allocator: std.mem.Allocator,
+    state: *StyleDeclarationState,
+) errors.Result([]const u8) {
+    const raw = try state.get_attribute_fn(state.host, state.element, "style", allocator);
+    if (raw) |text| return allocator.dupe(u8, text);
+    return allocator.dupe(u8, "");
+}
+
+fn styleDeclarationEntries(
+    allocator: std.mem.Allocator,
+    state: *StyleDeclarationState,
+) errors.Result(std.ArrayList(StylePropertyEntry)) {
+    const raw = try styleDeclarationCurrentText(allocator, state);
+    defer allocator.free(raw);
+    return try parseStyleDeclarations(allocator, raw);
+}
+
+fn styleDeclarationCssText(
+    allocator: std.mem.Allocator,
+    state: *StyleDeclarationState,
+) errors.Result([]const u8) {
+    var entries = try styleDeclarationEntries(allocator, state);
+    defer freeStyleDeclarations(allocator, &entries);
+    return try serializeStyleDeclarations(allocator, entries.items);
+}
+
+fn styleDeclarationLength(
+    allocator: std.mem.Allocator,
+    state: *StyleDeclarationState,
+) errors.Result(usize) {
+    var entries = try styleDeclarationEntries(allocator, state);
+    defer freeStyleDeclarations(allocator, &entries);
+    return entries.items.len;
+}
+
+fn styleDeclarationItem(
+    allocator: std.mem.Allocator,
+    state: *StyleDeclarationState,
+    index: usize,
+) errors.Result([]const u8) {
+    var entries = try styleDeclarationEntries(allocator, state);
+    defer freeStyleDeclarations(allocator, &entries);
+    if (index >= entries.items.len) return allocator.dupe(u8, "");
+    return allocator.dupe(u8, entries.items[index].name);
+}
+
+fn styleDeclarationGetPropertyValue(
+    allocator: std.mem.Allocator,
+    state: *StyleDeclarationState,
+    property: []const u8,
+) errors.Result([]const u8) {
+    const name = try stylePropertyName(allocator, property);
+    defer allocator.free(name);
+
+    var entries = try styleDeclarationEntries(allocator, state);
+    defer freeStyleDeclarations(allocator, &entries);
+    for (entries.items) |entry| {
+        if (std.mem.eql(u8, entry.name, name)) {
+            return allocator.dupe(u8, entry.value);
+        }
+    }
+    return allocator.dupe(u8, "");
+}
+
+fn styleDeclarationGetPropertyPriority(
+    allocator: std.mem.Allocator,
+    state: *StyleDeclarationState,
+    property: []const u8,
+) errors.Result([]const u8) {
+    const name = try stylePropertyName(allocator, property);
+    defer allocator.free(name);
+
+    var entries = try styleDeclarationEntries(allocator, state);
+    defer freeStyleDeclarations(allocator, &entries);
+    for (entries.items) |entry| {
+        if (std.mem.eql(u8, entry.name, name)) {
+            if (entry.important) {
+                return allocator.dupe(u8, "important");
+            }
+            return allocator.dupe(u8, "");
+        }
+    }
+    return allocator.dupe(u8, "");
+}
+
+fn styleDeclarationSetCssText(
+    allocator: std.mem.Allocator,
+    state: *StyleDeclarationState,
+    text: []const u8,
+) errors.Result(void) {
+    var entries = try parseStyleDeclarations(allocator, text);
+    defer freeStyleDeclarations(allocator, &entries);
+    const css_text = try serializeStyleDeclarations(allocator, entries.items);
+    defer allocator.free(css_text);
+    try state.set_attribute_fn(state.host, state.element, "style", css_text);
+    return;
+}
+
+fn styleDeclarationSetProperty(
+    allocator: std.mem.Allocator,
+    state: *StyleDeclarationState,
+    property: []const u8,
+    value: []const u8,
+    priority: ?[]const u8,
+) errors.Result(void) {
+    const name = try stylePropertyName(allocator, property);
+    defer allocator.free(name);
+
+    const parsed = try styleDeclarationValueFromText(allocator, value, priority);
+    defer allocator.free(parsed.value);
+    if (std.mem.indexOfScalar(u8, parsed.value, ';') != null) return error.ScriptRuntime;
+
+    var entries = try styleDeclarationEntries(allocator, state);
+    defer freeStyleDeclarations(allocator, &entries);
+
+    if (parsed.value.len == 0) {
+        var index: usize = 0;
+        while (index < entries.items.len) : (index += 1) {
+            if (std.mem.eql(u8, entries.items[index].name, name)) {
+                allocator.free(entries.items[index].name);
+                allocator.free(entries.items[index].value);
+                _ = entries.orderedRemove(index);
+                break;
+            }
+        }
+    } else {
+        const value_copy = try allocator.dupe(u8, parsed.value);
+        errdefer allocator.free(value_copy);
+        var index: usize = 0;
+        while (index < entries.items.len) : (index += 1) {
+            if (std.mem.eql(u8, entries.items[index].name, name)) {
+                allocator.free(entries.items[index].value);
+                entries.items[index].value = value_copy;
+                entries.items[index].important = parsed.important;
+                break;
+            }
+        }
+
+        if (index == entries.items.len) {
+            const name_copy = try allocator.dupe(u8, name);
+            errdefer allocator.free(name_copy);
+            try entries.append(allocator, .{
+                .name = name_copy,
+                .value = value_copy,
+                .important = parsed.important,
+            });
+        }
+    }
+
+    const css_text = try serializeStyleDeclarations(allocator, entries.items);
+    defer allocator.free(css_text);
+    try state.set_attribute_fn(state.host, state.element, "style", css_text);
+    return;
+}
+
+fn styleDeclarationRemoveProperty(
+    allocator: std.mem.Allocator,
+    state: *StyleDeclarationState,
+    property: []const u8,
+) errors.Result([]const u8) {
+    const name = try stylePropertyName(allocator, property);
+    defer allocator.free(name);
+
+    var entries = try styleDeclarationEntries(allocator, state);
+    defer freeStyleDeclarations(allocator, &entries);
+
+    var removed_value = try allocator.dupe(u8, "");
+    errdefer allocator.free(removed_value);
+    var index: usize = 0;
+    while (index < entries.items.len) : (index += 1) {
+        if (std.mem.eql(u8, entries.items[index].name, name)) {
+            allocator.free(removed_value);
+            removed_value = try allocator.dupe(u8, entries.items[index].value);
+            allocator.free(entries.items[index].name);
+            allocator.free(entries.items[index].value);
+            _ = entries.orderedRemove(index);
+            break;
+        }
+    }
+
+    const css_text = try serializeStyleDeclarations(allocator, entries.items);
+    defer allocator.free(css_text);
+    try state.set_attribute_fn(state.host, state.element, "style", css_text);
+    return removed_value;
+}
+
+fn freeStyleDeclarations(allocator: std.mem.Allocator, entries: *std.ArrayList(StylePropertyEntry)) void {
+    for (entries.items) |entry| {
+        allocator.free(entry.name);
+        allocator.free(entry.value);
+    }
+    entries.deinit(allocator);
+}
+
+fn parseStyleDeclarations(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+) errors.Result(std.ArrayList(StylePropertyEntry)) {
+    var entries: std.ArrayList(StylePropertyEntry) = .empty;
+    errdefer freeStyleDeclarations(allocator, &entries);
+
+    const stripped = try stripCssComments(allocator, text);
+    defer allocator.free(stripped);
+
+    var parts = std.mem.splitScalar(u8, stripped, ';');
+    while (parts.next()) |part| {
+        const declaration = std.mem.trim(u8, part, " \t\r\n\x0c");
+        if (declaration.len == 0) continue;
+
+        const colon_index = std.mem.indexOfScalar(u8, declaration, ':') orelse return error.ScriptRuntime;
+        const name_source = std.mem.trim(u8, declaration[0..colon_index], " \t\r\n\x0c");
+        const value_source = std.mem.trim(u8, declaration[colon_index + 1 ..], " \t\r\n\x0c");
+        const name = try stylePropertyName(allocator, name_source);
+        errdefer allocator.free(name);
+        const parsed_value = try styleDeclarationValueFromText(allocator, value_source, null);
+        defer allocator.free(parsed_value.value);
+        const value = try allocator.dupe(u8, parsed_value.value);
+        errdefer allocator.free(value);
+
+        var index: usize = 0;
+        while (index < entries.items.len) : (index += 1) {
+            if (std.mem.eql(u8, entries.items[index].name, name)) {
+                allocator.free(entries.items[index].value);
+                allocator.free(name);
+                entries.items[index].value = value;
+                entries.items[index].important = parsed_value.important;
+                break;
+            }
+        }
+
+        if (index == entries.items.len) {
+            try entries.append(allocator, .{
+                .name = name,
+                .value = value,
+                .important = parsed_value.important,
+            });
+        }
+    }
+
+    return entries;
+}
+
+fn serializeStyleDeclarations(
+    allocator: std.mem.Allocator,
+    entries: []const StylePropertyEntry,
+) errors.Result([]const u8) {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+
+    for (entries, 0..) |entry, index| {
+        if (index > 0) {
+            try out.appendSlice(allocator, " ");
+        }
+        try out.appendSlice(allocator, entry.name);
+        try out.appendSlice(allocator, ": ");
+        try out.appendSlice(allocator, entry.value);
+        if (entry.important) {
+            try out.appendSlice(allocator, " !important");
+        }
+        try out.append(allocator, ';');
+    }
+
+    return try allocator.dupe(u8, out.items);
+}
+
+fn stripCssComments(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+) errors.Result([]const u8) {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+
+    var index: usize = 0;
+    while (index < text.len) {
+        if (index + 1 < text.len and text[index] == '/' and text[index + 1] == '*') {
+            const rest = text[index + 2 ..];
+            const comment_end = std.mem.indexOf(u8, rest, "*/") orelse return error.ScriptRuntime;
+            index += 2 + comment_end + 2;
+            continue;
+        }
+
+        try out.append(allocator, text[index]);
+        index += 1;
+    }
+
+    return try allocator.dupe(u8, out.items);
+}
+
+fn styleDeclarationValueFromText(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    priority: ?[]const u8,
+) errors.Result(StyleValueEntry) {
+    const trimmed_priority = if (priority) |text_value|
+        std.mem.trim(u8, text_value, " \t\r\n\x0c")
+    else
+        "";
+    if (trimmed_priority.len != 0 and !std.ascii.eqlIgnoreCase(trimmed_priority, "important")) {
+        return error.ScriptRuntime;
+    }
+
+    const trimmed_value = std.mem.trim(u8, text, " \t\r\n\x0c");
+    var value_text = trimmed_value;
+    var important = trimmed_priority.len != 0;
+    if (endsWithImportant(trimmed_value)) {
+        important = true;
+        value_text = std.mem.trimRight(u8, trimmed_value[0 .. trimmed_value.len - "!important".len], " \t\r\n\x0c");
+    }
+
+    return .{
+        .value = try allocator.dupe(u8, value_text),
+        .important = important,
+    };
+}
+
+fn endsWithImportant(text: []const u8) bool {
+    const suffix = "!important";
+    if (text.len < suffix.len) return false;
+    return std.ascii.eqlIgnoreCase(text[text.len - suffix.len ..], suffix);
+}
+
+fn stylePropertyName(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+) errors.Result([]const u8) {
+    const trimmed = std.mem.trim(u8, text, " \t\r\n\x0c");
+    if (trimmed.len == 0) return error.ScriptRuntime;
+    if (std.mem.eql(u8, trimmed, "cssFloat")) return allocator.dupe(u8, "float");
+
+    const has_hyphen = std.mem.indexOfScalar(u8, trimmed, '-') != null;
+    var has_lowercase = false;
+    for (trimmed) |byte| {
+        if (std.ascii.isLower(byte)) {
+            has_lowercase = true;
+            break;
+        }
+    }
+    const camel_case = !has_hyphen and has_lowercase;
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+
+    for (trimmed, 0..) |byte, index| {
+        switch (byte) {
+            'A'...'Z' => {
+                if (camel_case and index > 0) {
+                    try out.append(allocator, '-');
+                }
+                try out.append(allocator, std.ascii.toLower(byte));
+            },
+            'a'...'z', '0'...'9', '-', '_' => try out.append(allocator, std.ascii.toLower(byte)),
+            else => return error.ScriptRuntime,
+        }
+    }
+
+    if (out.items.len == 0) return error.ScriptRuntime;
+    return try allocator.dupe(u8, out.items);
+}
+
+fn historyDeltaFromExpr(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    expr: *Expr,
+) errors.Result(isize) {
+    const value = try evalExpr(allocator, host, bindings, expr);
+    return try historyDeltaFromValue(allocator, value);
+}
+
+fn historyDeltaFromValue(allocator: std.mem.Allocator, value: Value) errors.Result(isize) {
+    return switch (value) {
+        .number => |number| blk: {
+            if (!std.math.isFinite(number)) return error.ScriptRuntime;
+            if (std.math.round(number) != number) return error.ScriptRuntime;
+            const as_i64 = @as(i64, @intFromFloat(number));
+            break :blk std.math.cast(isize, as_i64) orelse error.ScriptRuntime;
+        },
+        else => blk: {
+            const text = try asString(allocator, value);
+            const trimmed = std.mem.trim(u8, text, " \t\r\n");
+            break :blk std.fmt.parseInt(isize, trimmed, 10) catch error.ScriptRuntime;
+        },
+    };
+}
+
+fn historyStateFromValue(allocator: std.mem.Allocator, value: Value) errors.Result(?[]const u8) {
+    return switch (value) {
+        .undefined_value, .null_value => null,
+        else => try asString(allocator, value),
     };
 }
 

@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 use bt_script::{
     ElementHandle, HostBindings, HtmlCollectionScope, HtmlCollectionTarget, ListenerTarget,
-    NodeHandle, ScriptFunction, ScriptRuntime,
+    MediaQueryListState, NodeHandle, RadioNodeListTarget, ScriptFunction, ScriptRuntime,
+    StorageTarget,
 };
 
 #[derive(Default)]
@@ -61,6 +62,7 @@ struct RecordingHost {
     document_links_items_results: Vec<ElementHandle>,
     document_anchors_items_results: Vec<ElementHandle>,
     document_style_sheets_items_results: Vec<ElementHandle>,
+    document_style_sheets_named_item_results: BTreeMap<String, Option<ElementHandle>>,
     document_children_items_results: Vec<ElementHandle>,
     node_child_nodes_items_results: BTreeMap<HtmlCollectionScope, Vec<NodeHandle>>,
     node_text_content_results: BTreeMap<NodeHandle, String>,
@@ -98,10 +100,34 @@ struct RecordingHost {
     document_document_element_result: Option<ElementHandle>,
     document_head_result: Option<ElementHandle>,
     document_body_result: Option<ElementHandle>,
+    document_active_element_result: Option<ElementHandle>,
     document_title_result: String,
     document_location_result: String,
+    document_compat_mode_result: String,
+    document_character_set_result: String,
+    document_content_type_result: String,
+    document_dir_result: String,
     document_base_uri_calls: usize,
     document_origin_calls: usize,
+    document_referrer_result: String,
+    document_referrer_calls: usize,
+    window_name_result: String,
+    window_name_calls: usize,
+    set_window_name_calls: Vec<String>,
+    window_open_calls: Vec<(Option<String>, Option<String>, Option<String>)>,
+    window_open_error: Option<String>,
+    window_close_calls: usize,
+    window_close_error: Option<String>,
+    window_print_calls: usize,
+    window_print_error: Option<String>,
+    match_media_matches: BTreeMap<String, bool>,
+    match_media_calls: Vec<String>,
+    local_storage: BTreeMap<String, String>,
+    session_storage: BTreeMap<String, String>,
+    document_compat_mode_calls: usize,
+    document_character_set_calls: usize,
+    document_content_type_calls: usize,
+    document_dir_calls: usize,
     element_base_uri_calls: Vec<ElementHandle>,
     element_origin_calls: Vec<ElementHandle>,
     element_query_selector_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
@@ -124,6 +150,7 @@ struct RecordingHost {
     document_links_items_calls: usize,
     document_anchors_items_calls: usize,
     document_style_sheets_items_calls: usize,
+    document_style_sheets_named_item_calls: Vec<String>,
     document_children_items_calls: usize,
     node_child_nodes_items_calls: Vec<HtmlCollectionScope>,
     node_text_content_calls: Vec<NodeHandle>,
@@ -152,10 +179,12 @@ struct RecordingHost {
     document_document_element_calls: usize,
     document_head_calls: usize,
     document_body_calls: usize,
+    document_active_element_calls: usize,
     document_title_calls: usize,
     document_set_title_calls: Vec<String>,
     document_location_calls: usize,
     document_set_location_calls: Vec<String>,
+    document_set_dir_calls: Vec<String>,
     element_query_selector_calls: Vec<(ElementHandle, String)>,
     element_query_selector_all_calls: Vec<(ElementHandle, String)>,
     element_closest_calls: Vec<(ElementHandle, String)>,
@@ -292,6 +321,23 @@ impl RecordingHost {
 
     fn seed_document_style_sheets_items(&mut self, result: Vec<ElementHandle>) {
         self.document_style_sheets_items_results = result;
+    }
+
+    fn seed_document_style_sheets_named_item(
+        &mut self,
+        name: impl Into<String>,
+        result: Option<ElementHandle>,
+    ) {
+        self.document_style_sheets_named_item_results
+            .insert(name.into(), result);
+    }
+
+    fn seed_local_storage(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.local_storage.insert(key.into(), value.into());
+    }
+
+    fn seed_session_storage(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.session_storage.insert(key.into(), value.into());
     }
 
     fn seed_document_children_items(&mut self, result: Vec<ElementHandle>) {
@@ -490,12 +536,56 @@ impl RecordingHost {
         self.document_body_result = result;
     }
 
+    fn seed_document_active_element(&mut self, result: Option<ElementHandle>) {
+        self.document_active_element_result = result;
+    }
+
     fn seed_document_title(&mut self, result: impl Into<String>) {
         self.document_title_result = result.into();
     }
 
     fn seed_document_location(&mut self, result: impl Into<String>) {
         self.document_location_result = result.into();
+    }
+
+    fn seed_document_compat_mode(&mut self, result: impl Into<String>) {
+        self.document_compat_mode_result = result.into();
+    }
+
+    fn seed_document_referrer(&mut self, result: impl Into<String>) {
+        self.document_referrer_result = result.into();
+    }
+
+    fn seed_window_name(&mut self, result: impl Into<String>) {
+        self.window_name_result = result.into();
+    }
+
+    fn seed_window_open_error(&mut self, message: impl Into<String>) {
+        self.window_open_error = Some(message.into());
+    }
+
+    fn seed_window_close_error(&mut self, message: impl Into<String>) {
+        self.window_close_error = Some(message.into());
+    }
+
+    fn seed_window_print_error(&mut self, message: impl Into<String>) {
+        self.window_print_error = Some(message.into());
+    }
+
+    fn seed_match_media_result(&mut self, query: impl Into<String>, matches: bool) {
+        self.match_media_matches.insert(query.into(), matches);
+    }
+
+    fn seed_document_character_set(&mut self, result: impl Into<String>) {
+        self.document_character_set_result = result.into();
+    }
+
+    fn seed_document_content_type(&mut self, result: impl Into<String>) {
+        self.document_content_type_result = result.into();
+    }
+
+    fn seed_document_dir(&mut self, result: impl Into<String>) {
+        self.document_dir_result = result.into();
     }
 
     fn seed_document_query_selector_all(
@@ -577,6 +667,11 @@ impl HostBindings for RecordingHost {
         Ok(self.document_body_result)
     }
 
+    fn document_active_element(&mut self) -> bt_script::Result<Option<ElementHandle>> {
+        self.document_active_element_calls += 1;
+        Ok(self.document_active_element_result)
+    }
+
     fn document_title(&mut self) -> bt_script::Result<String> {
         self.document_title_calls += 1;
         Ok(self.document_title_result.clone())
@@ -613,9 +708,164 @@ impl HostBindings for RecordingHost {
         Ok(origin_from_url(&self.document_location_result))
     }
 
+    fn document_referrer(&mut self) -> bt_script::Result<String> {
+        self.document_referrer_calls += 1;
+        Ok(self.document_referrer_result.clone())
+    }
+
+    fn window_name(&mut self) -> bt_script::Result<String> {
+        self.window_name_calls += 1;
+        Ok(self.window_name_result.clone())
+    }
+
+    fn window_open(
+        &mut self,
+        url: Option<&str>,
+        target: Option<&str>,
+        features: Option<&str>,
+    ) -> bt_script::Result<()> {
+        self.window_open_calls.push((
+            url.map(str::to_string),
+            target.map(str::to_string),
+            features.map(str::to_string),
+        ));
+        if let Some(message) = &self.window_open_error {
+            return Err(bt_script::ScriptError::new(message.clone()));
+        }
+        Ok(())
+    }
+
+    fn window_close(&mut self) -> bt_script::Result<()> {
+        self.window_close_calls += 1;
+        if let Some(message) = &self.window_close_error {
+            return Err(bt_script::ScriptError::new(message.clone()));
+        }
+        Ok(())
+    }
+
+    fn window_print(&mut self) -> bt_script::Result<()> {
+        self.window_print_calls += 1;
+        if let Some(message) = &self.window_print_error {
+            return Err(bt_script::ScriptError::new(message.clone()));
+        }
+        Ok(())
+    }
+
+    fn match_media(&mut self, query: &str) -> bt_script::Result<MediaQueryListState> {
+        self.match_media_calls.push(query.to_string());
+        let matches = self
+            .match_media_matches
+            .get(query)
+            .copied()
+            .ok_or_else(|| {
+                bt_script::ScriptError::new(format!("no matchMedia mock configured for `{query}`"))
+            })?;
+        Ok(MediaQueryListState::new(query, matches))
+    }
+
+    fn set_window_name(&mut self, value: &str) -> bt_script::Result<()> {
+        self.set_window_name_calls.push(value.to_string());
+        self.window_name_result = value.to_string();
+        Ok(())
+    }
+
+    fn storage_length(&mut self, target: StorageTarget) -> bt_script::Result<usize> {
+        Ok(match target {
+            StorageTarget::Local => self.local_storage.len(),
+            StorageTarget::Session => self.session_storage.len(),
+        })
+    }
+
+    fn storage_get_item(
+        &mut self,
+        target: StorageTarget,
+        key: &str,
+    ) -> bt_script::Result<Option<String>> {
+        Ok(match target {
+            StorageTarget::Local => self.local_storage.get(key).cloned(),
+            StorageTarget::Session => self.session_storage.get(key).cloned(),
+        })
+    }
+
+    fn storage_set_item(
+        &mut self,
+        target: StorageTarget,
+        key: &str,
+        value: &str,
+    ) -> bt_script::Result<()> {
+        match target {
+            StorageTarget::Local => {
+                self.local_storage
+                    .insert(key.to_string(), value.to_string());
+            }
+            StorageTarget::Session => {
+                self.session_storage
+                    .insert(key.to_string(), value.to_string());
+            }
+        }
+        Ok(())
+    }
+
+    fn storage_remove_item(&mut self, target: StorageTarget, key: &str) -> bt_script::Result<()> {
+        match target {
+            StorageTarget::Local => {
+                self.local_storage.remove(key);
+            }
+            StorageTarget::Session => {
+                self.session_storage.remove(key);
+            }
+        }
+        Ok(())
+    }
+
+    fn storage_clear(&mut self, target: StorageTarget) -> bt_script::Result<()> {
+        match target {
+            StorageTarget::Local => self.local_storage.clear(),
+            StorageTarget::Session => self.session_storage.clear(),
+        }
+        Ok(())
+    }
+
+    fn storage_key(
+        &mut self,
+        target: StorageTarget,
+        index: usize,
+    ) -> bt_script::Result<Option<String>> {
+        Ok(match target {
+            StorageTarget::Local => self.local_storage.keys().nth(index).cloned(),
+            StorageTarget::Session => self.session_storage.keys().nth(index).cloned(),
+        })
+    }
+
+    fn document_compat_mode(&mut self) -> bt_script::Result<String> {
+        self.document_compat_mode_calls += 1;
+        Ok(self.document_compat_mode_result.clone())
+    }
+
+    fn document_character_set(&mut self) -> bt_script::Result<String> {
+        self.document_character_set_calls += 1;
+        Ok(self.document_character_set_result.clone())
+    }
+
+    fn document_content_type(&mut self) -> bt_script::Result<String> {
+        self.document_content_type_calls += 1;
+        Ok(self.document_content_type_result.clone())
+    }
+
+    fn document_dir(&mut self) -> bt_script::Result<String> {
+        self.document_dir_calls += 1;
+        Ok(self.document_dir_result.clone())
+    }
+
     fn document_set_location(&mut self, value: &str) -> bt_script::Result<()> {
         self.document_set_location_calls.push(value.to_string());
         self.document_location_result = value.to_string();
+        Ok(())
+    }
+
+    fn document_set_dir(&mut self, value: &str) -> bt_script::Result<()> {
+        self.document_set_dir_calls.push(value.to_string());
+        self.document_dir_result = value.to_string();
         Ok(())
     }
 
@@ -807,6 +1057,38 @@ impl HostBindings for RecordingHost {
             .flatten()
             .into_iter()
             .collect())
+    }
+
+    fn radio_node_list_set_value(
+        &mut self,
+        target: &RadioNodeListTarget,
+        value: &str,
+    ) -> bt_script::Result<()> {
+        let RadioNodeListTarget::FormElements { element, name } = target;
+        let items = self.html_collection_form_elements_named_items(*element, name)?;
+        let mut matched = false;
+
+        for item in items {
+            let tag_name = self.element_tag_name(item)?;
+            if tag_name != "input" {
+                continue;
+            }
+
+            let Some(input_type) = self.element_get_attribute(item, "type")? else {
+                continue;
+            };
+            if !input_type.eq_ignore_ascii_case("radio") {
+                continue;
+            }
+
+            let should_check = !matched && self.element_value(item)? == value;
+            if should_check {
+                matched = true;
+            }
+            self.element_set_checked(item, should_check)?;
+        }
+
+        Ok(())
     }
 
     fn html_collection_select_options_items(
@@ -1184,6 +1466,19 @@ impl HostBindings for RecordingHost {
         Ok(self.document_style_sheets_items_results.clone())
     }
 
+    fn document_style_sheets_named_item(
+        &mut self,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.document_style_sheets_named_item_calls
+            .push(name.to_string());
+        Ok(self
+            .document_style_sheets_named_item_results
+            .get(name)
+            .copied()
+            .flatten())
+    }
+
     fn node_child_nodes_items(
         &mut self,
         scope: HtmlCollectionScope,
@@ -1536,6 +1831,385 @@ fn runtime_resolves_document_root_head_and_body_access() {
             .get(&ElementHandle::new(4))
             .map(String::as_str),
         Some("html:head:body")
+    );
+}
+
+#[test]
+fn runtime_resolves_document_active_element_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("first", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "id", "first");
+    host.seed_document_active_element(Some(ElementHandle::new(1)));
+
+    runtime
+        .eval_program(
+            "const active = document.activeElement; document.getElementById('out').textContent = String(active) + ':' + active.getAttribute('id');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.activeElement should resolve through host bindings");
+
+    assert_eq!(host.document_active_element_calls, 1);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("[object Element]:first")
+    );
+}
+
+#[test]
+fn runtime_resolves_document_compat_mode_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_document_compat_mode("CSS1Compat");
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = document.compatMode;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.compatMode should resolve through host bindings");
+
+    assert_eq!(host.document_compat_mode_calls, 1);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("CSS1Compat")
+    );
+}
+
+#[test]
+fn runtime_resolves_document_character_set_and_charset_alias_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_document_character_set("UTF-8");
+
+    runtime
+        .eval_program(
+            "const before = document.characterSet; const alias = document.charset; document.getElementById('out').textContent = before + ':' + alias;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.characterSet should resolve through host bindings");
+
+    assert_eq!(host.document_character_set_calls, 2);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("UTF-8:UTF-8")
+    );
+}
+
+#[test]
+fn runtime_resolves_document_content_type_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_document_content_type("text/html");
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = document.contentType;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.contentType should resolve through host bindings");
+
+    assert_eq!(host.document_content_type_calls, 1);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("text/html")
+    );
+}
+
+#[test]
+fn runtime_resolves_document_referrer_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_document_referrer("https://example.test/source");
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = document.referrer;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.referrer should resolve through host bindings");
+
+    assert_eq!(host.document_referrer_calls, 1);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("https://example.test/source")
+    );
+}
+
+#[test]
+fn runtime_resolves_window_name_getter_and_setter_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_window_name("seeded");
+
+    runtime
+        .eval_program(
+            "const before = window.name; window.name = 'updated'; const after = document.defaultView.name; document.getElementById('out').textContent = before + ':' + after;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.name should resolve through host bindings");
+
+    assert_eq!(host.window_name_calls, 2);
+    assert_eq!(host.set_window_name_calls, vec!["updated".to_string()]);
+    assert_eq!(host.window_name_result, "updated");
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("seeded:updated")
+    );
+}
+
+#[test]
+fn runtime_resolves_window_match_media_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_match_media_result("(prefers-color-scheme: dark)", true);
+
+    runtime
+        .eval_program(
+            "const list = window.matchMedia('(prefers-color-scheme: dark)'); document.getElementById('out').textContent = String(list.matches) + ':' + list.media + ':' + String(window.matchMedia('(prefers-color-scheme: dark)'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.matchMedia should resolve through host bindings");
+
+    assert_eq!(
+        host.match_media_calls,
+        vec![
+            "(prefers-color-scheme: dark)".to_string(),
+            "(prefers-color-scheme: dark)".to_string()
+        ]
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("true:(prefers-color-scheme: dark):[object MediaQueryList]")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_match_media_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.matchMedia();", "inline-script", &mut host)
+        .expect_err("matchMedia should require exactly one argument");
+
+    assert!(
+        error
+            .to_string()
+            .contains("matchMedia() expects exactly one argument")
+    );
+}
+
+#[test]
+fn runtime_resolves_window_print_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "window.print(); document.getElementById('out').textContent = 'done';",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.print should resolve through host bindings");
+
+    assert_eq!(host.window_print_calls, 1);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("done")
+    );
+}
+
+#[test]
+fn runtime_resolves_window_close_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "window.close(); document.getElementById('out').textContent = 'done';",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.close should resolve through host bindings");
+
+    assert_eq!(host.window_close_calls, 1);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("done")
+    );
+}
+
+#[test]
+fn runtime_propagates_window_close_host_failures() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_window_close_error("window closed");
+
+    let error = runtime
+        .eval_program("window.close();", "inline-script", &mut host)
+        .expect_err("window.close should propagate host failures");
+
+    assert!(error.to_string().contains("window closed"));
+    assert_eq!(host.window_close_calls, 1);
+}
+
+#[test]
+fn runtime_rejects_window_close_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.close(1);", "inline-script", &mut host)
+        .expect_err("window.close should reject arguments");
+
+    assert!(error.to_string().contains("close() expects no arguments"));
+    assert_eq!(host.window_close_calls, 0);
+}
+
+#[test]
+fn runtime_propagates_window_print_host_failures() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_window_print_error("print blocked");
+
+    let error = runtime
+        .eval_program("window.print();", "inline-script", &mut host)
+        .expect_err("window.print should propagate host failures");
+
+    assert!(error.to_string().contains("print blocked"));
+    assert_eq!(host.window_print_calls, 1);
+}
+
+#[test]
+fn runtime_rejects_window_print_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.print(1);", "inline-script", &mut host)
+        .expect_err("window.print should reject arguments");
+
+    assert!(error.to_string().contains("print() expects no arguments"));
+    assert_eq!(host.window_print_calls, 0);
+}
+
+#[test]
+fn runtime_resolves_window_open_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "window.open('https://example.test/popup', '_blank', 'noopener'); document.getElementById('out').textContent = 'done';",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.open should resolve through host bindings");
+
+    assert_eq!(host.window_open_calls.len(), 1);
+    assert_eq!(
+        host.window_open_calls[0],
+        (
+            Some("https://example.test/popup".to_string()),
+            Some("_blank".to_string()),
+            Some("noopener".to_string())
+        )
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("done")
+    );
+}
+
+#[test]
+fn runtime_propagates_window_open_host_failures() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_window_open_error("popup blocked");
+
+    let error = runtime
+        .eval_program("window.open('https://example.test/popup');", "inline-script", &mut host)
+        .expect_err("window.open should propagate host failures");
+
+    assert!(error.to_string().contains("popup blocked"));
+    assert_eq!(host.window_open_calls.len(), 1);
+}
+
+#[test]
+fn runtime_rejects_window_open_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.open(1, 2, 3, 4);", "inline-script", &mut host)
+        .expect_err("window.open should reject too many arguments");
+
+    assert!(error.to_string().contains("open() expects at most three arguments"));
+    assert_eq!(host.window_open_calls.len(), 0);
+}
+
+#[test]
+fn runtime_resolves_document_dir_getter_and_setter_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_document_dir("ltr");
+
+    runtime
+        .eval_program(
+            "const before = document.dir; document.dir = 'rtl'; const after = document.dir; document.getElementById('out').textContent = before + ':' + after;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.dir should resolve through host bindings");
+
+    assert_eq!(host.document_dir_calls, 2);
+    assert_eq!(host.document_set_dir_calls, vec!["rtl".to_string()]);
+    assert_eq!(host.document_dir_result, "rtl");
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("ltr:rtl")
     );
 }
 
@@ -2184,6 +2858,65 @@ fn runtime_resolves_form_elements_radio_node_list_entries_access() {
 }
 
 #[test]
+fn runtime_sets_form_elements_radio_node_list_value() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("signup", ElementHandle::new(1), "Signup");
+    host.seed_element("radio-a", ElementHandle::new(2), "");
+    host.seed_element("radio-b", ElementHandle::new(3), "");
+    host.seed_element("radio-c", ElementHandle::new(4), "");
+    host.seed_element("out", ElementHandle::new(5), "");
+    host.seed_element_tag_name(ElementHandle::new(2), "input");
+    host.seed_element_tag_name(ElementHandle::new(3), "input");
+    host.seed_element_tag_name(ElementHandle::new(4), "input");
+    host.seed_attribute(ElementHandle::new(2), "type", "radio");
+    host.seed_attribute(ElementHandle::new(3), "type", "radio");
+    host.seed_attribute(ElementHandle::new(4), "type", "radio");
+    host.seed_value(ElementHandle::new(2), "a");
+    host.seed_value(ElementHandle::new(3), "b");
+    host.seed_value(ElementHandle::new(4), "c");
+    host.seed_checked(ElementHandle::new(2), true);
+    host.seed_checked(ElementHandle::new(3), false);
+    host.seed_checked(ElementHandle::new(4), false);
+
+    host.seed_html_collection_form_elements_items(
+        ElementHandle::new(1),
+        vec![
+            ElementHandle::new(2),
+            ElementHandle::new(3),
+            ElementHandle::new(4),
+        ],
+    );
+    host.seed_html_collection_form_elements_named_items(
+        ElementHandle::new(1),
+        "mode",
+        vec![
+            ElementHandle::new(2),
+            ElementHandle::new(3),
+            ElementHandle::new(4),
+        ],
+    );
+
+    runtime
+        .eval_program(
+            "const named = document.getElementById('signup').elements.namedItem('mode'); named.value = 'b'; document.getElementById('out').textContent = named.value + ':' + String(named.item(0).checked) + ':' + String(named.item(1).checked) + ':' + String(named.item(2).checked);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("radio node list value should be assignable");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(5))
+            .map(String::as_str),
+        Some("b:false:true:false")
+    );
+    assert_eq!(host.checked.get(&ElementHandle::new(2)), Some(&false));
+    assert_eq!(host.checked.get(&ElementHandle::new(3)), Some(&true));
+    assert_eq!(host.checked.get(&ElementHandle::new(4)), Some(&false));
+}
+
+#[test]
 fn runtime_resolves_select_options_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -2638,6 +3371,37 @@ fn runtime_resolves_document_children_access() {
 }
 
 #[test]
+fn runtime_resolves_window_children_alias_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "First");
+    host.seed_element("out", ElementHandle::new(2), "Second");
+    host.seed_document_children_items(vec![ElementHandle::new(1), ElementHandle::new(2)]);
+    host.seed_document_children_named_item("root", Some(ElementHandle::new(1)));
+    host.seed_document_children_named_item("missing", None);
+
+    runtime
+        .eval_program(
+            "const children = document.defaultView.children; document.getElementById('out').textContent = String(children.length) + ':' + children.item(0).textContent + ':' + children.item(1).textContent + ':' + String(children.namedItem('root')) + ':' + String(children.namedItem('missing'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.children should resolve as an alias of document.children");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("2:First:Second:[object Element]:null")
+    );
+    assert_eq!(host.document_children_items_calls, 3);
+    assert_eq!(
+        host.document_children_named_item_calls,
+        vec!["root".to_string(), "missing".to_string()]
+    );
+}
+
+#[test]
 fn runtime_resolves_child_nodes_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -2982,6 +3746,37 @@ fn runtime_resolves_document_style_sheets_entries_access() {
         Some("2:0:[object CSSStyleSheet]:0:[object CSSStyleSheet]")
     );
     assert_eq!(host.document_style_sheets_items_calls, 4);
+}
+
+#[test]
+fn runtime_resolves_document_style_sheets_named_item_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("first-style", ElementHandle::new(1), "First");
+    host.seed_element("first-link", ElementHandle::new(2), "Second");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_document_style_sheets_items(vec![ElementHandle::new(1), ElementHandle::new(2)]);
+    host.seed_document_style_sheets_named_item("first-style", Some(ElementHandle::new(1)));
+    host.seed_document_style_sheets_named_item("missing", None);
+
+    runtime
+        .eval_program(
+            "const sheets = document.styleSheets; const first = sheets.namedItem('first-style'); document.getElementById('out').textContent = String(sheets.length) + ':' + String(first) + ':' + String(sheets.namedItem('missing'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.styleSheets namedItem should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("2:[object CSSStyleSheet]:null")
+    );
+    assert_eq!(
+        host.document_style_sheets_named_item_calls,
+        vec!["first-style".to_string(), "missing".to_string()]
+    );
 }
 
 #[test]
@@ -3554,4 +4349,54 @@ fn runtime_supports_collection_entries_helpers() {
         vec![HtmlCollectionScope::Document]
     );
     assert_eq!(host.element_children_calls, vec![ElementHandle::new(1)]);
+}
+
+#[test]
+fn runtime_supports_storage_accessors_and_methods() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_local_storage("token", "abc");
+    host.seed_session_storage("scratch", "seed");
+
+    runtime
+        .eval_program(
+            "const local = window.localStorage; const session = document.defaultView.sessionStorage; const before = String(local) + ':' + String(session) + ':' + String(local.length) + ':' + String(session.length); const token = local.getItem('token'); local.setItem('theme', 'dark'); local.removeItem('token'); session.setItem('scratch', 'xyz'); const sessionKey = session.key(0); session.clear(); document.getElementById('out').textContent = before + '|' + token + ':' + local.getItem('theme') + ':' + String(local.length) + ':' + String(local.key(0)) + ':' + String(session.length) + ':' + String(sessionKey);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("storage accessors and methods should dispatch through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("[object Storage]:[object Storage]:1:1|abc:dark:1:theme:0:scratch")
+    );
+    assert_eq!(host.local_storage.get("token").map(String::as_str), None);
+    assert_eq!(
+        host.local_storage.get("theme").map(String::as_str),
+        Some("dark")
+    );
+    assert!(host.session_storage.is_empty());
+}
+
+#[test]
+fn runtime_rejects_storage_method_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.localStorage.setItem('token');",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("storage methods should validate arity");
+
+    assert!(
+        error
+            .to_string()
+            .contains("setItem() expects exactly two arguments")
+    );
 }

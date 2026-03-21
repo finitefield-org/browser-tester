@@ -7,8 +7,9 @@ use bt_runtime::SessionError;
 pub use bt_runtime::{
     ClipboardMocks, DebugState, DialogMocks, DownloadCapture, DownloadMocks, FetchCall,
     FetchErrorRule, FetchMocks, FetchResponse, FetchResponseRule, FileInputMocks,
-    FileInputSelection, LocationMocks, MockRegistry, ScheduledTimer, Scheduler, Session,
-    SessionConfig, StorageSeeds,
+    FileInputSelection, LocationMocks, MatchMediaCall, MatchMediaMocks, MockRegistry, OpenCall,
+    OpenMocks, PrintCall, PrintMocks, ScheduledTimer, Scheduler, Session, SessionConfig,
+    StorageSeeds, CloseCall, CloseMocks,
 };
 pub use bt_script::{HostBindings, ScriptError, ScriptRuntime};
 
@@ -122,6 +123,10 @@ pub struct HarnessBuilder {
     url: Option<String>,
     html: Option<String>,
     local_storage: BTreeMap<String, String>,
+    match_media: BTreeMap<String, bool>,
+    open_failure: Option<String>,
+    close_failure: Option<String>,
+    print_failure: Option<String>,
 }
 
 impl HarnessBuilder {
@@ -152,11 +157,54 @@ impl HarnessBuilder {
         self
     }
 
+    pub fn match_media<I, K>(mut self, entries: I) -> Self
+    where
+        I: IntoIterator<Item = (K, bool)>,
+        K: Into<String>,
+    {
+        self.match_media = entries
+            .into_iter()
+            .map(|(query, matches)| (query.into(), matches))
+            .collect();
+        self
+    }
+
+    pub fn open_failure(mut self, message: impl Into<String>) -> Self {
+        self.open_failure = Some(message.into());
+        self
+    }
+
+    pub fn close_failure(mut self, message: impl Into<String>) -> Self {
+        self.close_failure = Some(message.into());
+        self
+    }
+
+    pub fn print_failure(mut self, message: impl Into<String>) -> Self {
+        self.print_failure = Some(message.into());
+        self
+    }
+
     pub fn build(self) -> Result<Harness> {
+        let mut local_storage = self.local_storage;
+        for (query, matches) in self.match_media {
+            local_storage.insert(
+                format!("__browser_tester_match_media__{query}"),
+                matches.to_string(),
+            );
+        }
+        if let Some(message) = self.open_failure {
+            local_storage.insert("__browser_tester_open_failure__".to_string(), message);
+        }
+        if let Some(message) = self.close_failure {
+            local_storage.insert("__browser_tester_close_failure__".to_string(), message);
+        }
+        if let Some(message) = self.print_failure {
+            local_storage.insert("__browser_tester_print_failure__".to_string(), message);
+        }
         let config = SessionConfig {
             url: self.url.unwrap_or_else(|| SessionConfig::default().url),
             html: self.html,
-            local_storage: self.local_storage,
+            local_storage,
         };
         let session = Session::new(config).map_err(map_session_error)?;
         Ok(Harness { session })
@@ -280,6 +328,18 @@ impl Harness {
     pub fn alert(&mut self, message: &str) -> Result<()> {
         self.session.alert(message);
         Ok(())
+    }
+
+    pub fn print(&mut self) -> Result<()> {
+        self.session.print().map_err(map_session_error)
+    }
+
+    pub fn close(&mut self) -> Result<()> {
+        self.session.close().map_err(map_session_error)
+    }
+
+    pub fn open(&mut self, url: &str) -> Result<()> {
+        self.session.open(Some(url), None, None).map_err(map_session_error)
     }
 
     pub fn confirm(&mut self, message: &str) -> Result<bool> {
@@ -474,6 +534,22 @@ impl<'a> MockRegistryView<'a> {
 
     pub fn location(&mut self) -> &mut LocationMocks {
         self.inner.location_mut()
+    }
+
+    pub fn match_media(&mut self) -> &mut MatchMediaMocks {
+        self.inner.match_media_mut()
+    }
+
+    pub fn open(&mut self) -> &mut OpenMocks {
+        self.inner.open_mut()
+    }
+
+    pub fn close(&mut self) -> &mut CloseMocks {
+        self.inner.close_mut()
+    }
+
+    pub fn print(&mut self) -> &mut PrintMocks {
+        self.inner.print_mut()
     }
 
     pub fn downloads(&mut self) -> &mut DownloadMocks {

@@ -14,13 +14,13 @@ What exists today:
 - listener registration through the script host seam
 - target-phase event dispatch and form-control state updates
 - `click`, `type_text`, `set_checked`, `submit`, `dispatch`, `assert_value`, and `assert_checked`
-- explicit mock families, debug hooks, and public mock actions for `fetch`, dialogs, clipboard, location, file input, and download capture
+- explicit mock families, debug hooks, and public mock actions for `fetch`, dialogs, clipboard, close, open, print, location, file input, and download capture
 - contract, regression, and property test suites
 - quick and hardening test profiles plus a publication checklist
 - script-side `document.querySelector` and `element.querySelector` are available
 - script-side `querySelectorAll` is available with minimal `NodeList` support (`length`, `item`)
 - script-side `document.childNodes` is available with live `NodeList` support (`length`, `item`)
-- script-side `document.documentElement`, `document.head`, `document.body`, `document.title`, `window.title`, `document.location`, `window.location`, `document.URL`, `document.documentURI`, `document.baseURI`, `element.baseURI`, `document.origin`, `window.origin`, `element.origin`, `document.currentScript`, and `document.readyState` during inline bootstrap are available
+- script-side `document.documentElement`, `document.head`, `document.body`, `document.activeElement`, `window.children` as an alias of `document.children`, `document.title`, `window.title`, `document.location`, `window.location`, `document.URL`, `document.documentURI`, `document.baseURI`, `element.baseURI`, `document.origin`, `document.referrer`, `window.name`, `window.origin`, `element.origin`, `window.localStorage`, `window.sessionStorage`, `document.currentScript`, `document.readyState`, `document.compatMode`, `document.characterSet` / `document.charset` / `document.contentType` during inline bootstrap are available
 - script-side `template.content` is available on `<template>` elements with live `NodeList` / `HTMLCollection` support (`length`, `item`, `namedItem`)
 - script-side `Element.children` is available with minimal `HTMLCollection` support (`length`, `item`, `namedItem`)
 - script-side `document.children` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
@@ -30,7 +30,7 @@ What exists today:
 - script-side `getElementsByClassName` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
 - script-side `getElementsByName` is available with live `NodeList` support (`length`, `item`)
 - script-side `document.forms` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
-- script-side `form.elements` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`); `namedItem()` can return `RadioNodeList` when multiple controls share the same name
+- script-side `form.elements` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`); `namedItem()` can return `RadioNodeList` when multiple controls share the same name, and that `RadioNodeList` exposes `entries()` plus writable `value` semantics that update the checked radio group state
 - script-side `fieldset.elements` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
 - script-side `select.options` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`, `add`, `remove`)
 - script-side `select.selectedOptions` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
@@ -43,7 +43,7 @@ What exists today:
 - script-side `document.embeds` / `document.plugins` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
 - script-side `document.anchors` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
 - script-side `document.all` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
-- script-side `document.styleSheets` is available with live `StyleSheetList` support (`length`, `item`)
+- script-side `document.styleSheets` is available with live `StyleSheetList` support (`length`, `item`, `namedItem`)
 - script-side `className`, `classList`, and `dataset` are available on `Element`
 - script-side tree mutation primitives are available on `Element`
 - script-side `innerHTML`, `outerHTML`, and `insertAdjacentHTML` are available on `Element` with bounded HTML serialization and fragment parsing
@@ -61,7 +61,7 @@ What does not exist yet:
 
 ## Important Consequence
 
-Public methods such as `focus`, `blur`, `set_select_value`, `fetch`, `confirm`, `prompt`, `read_clipboard`, `write_clipboard`, `navigate`, `set_files`, and `capture_download` are now supported and dispatch or capture through the same deterministic runtime.
+Public methods such as `focus`, `blur`, `set_select_value`, `fetch`, `confirm`, `prompt`, `read_clipboard`, `write_clipboard`, `print`, `open`, `close`, `navigate`, `set_files`, and `capture_download` are now supported and dispatch or capture through the same deterministic runtime.
 
 ## Still Out of Scope
 

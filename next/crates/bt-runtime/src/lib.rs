@@ -8,8 +8,8 @@ use bt_dom::{
 };
 use bt_script::{
     ElementHandle, EventPhase, HostBindings, HtmlCollectionScope, HtmlCollectionTarget,
-    ListenerTarget, NodeHandle, ScriptError, ScriptEventHandle, ScriptFunction, ScriptRuntime,
-    ScriptValue,
+    ListenerTarget, MediaQueryListState, NodeHandle, RadioNodeListTarget, ScriptError,
+    ScriptEventHandle, ScriptFunction, ScriptRuntime, ScriptValue, StorageTarget,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,6 +24,11 @@ enum DocumentReadyState {
     Loading,
     Complete,
 }
+
+const MATCH_MEDIA_SEED_PREFIX: &str = "__browser_tester_match_media__";
+const OPEN_FAILURE_SEED_KEY: &str = "__browser_tester_open_failure__";
+const CLOSE_FAILURE_SEED_KEY: &str = "__browser_tester_close_failure__";
+const PRINT_FAILURE_SEED_KEY: &str = "__browser_tester_print_failure__";
 
 impl Default for SessionConfig {
     fn default() -> Self {
@@ -307,6 +312,209 @@ impl LocationMocks {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MatchMediaCall {
+    pub query: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MatchMediaMocks {
+    matches: Vec<(String, bool)>,
+    calls: Vec<MatchMediaCall>,
+}
+
+impl MatchMediaMocks {
+    pub fn respond_matches(&mut self, query: impl Into<String>, matches: bool) {
+        self.matches.push((query.into(), matches));
+    }
+
+    pub fn record_call(&mut self, query: impl Into<String>) {
+        self.calls.push(MatchMediaCall {
+            query: query.into(),
+        });
+    }
+
+    pub fn resolve(&mut self, query: &str) -> Result<MediaQueryListState, String> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Err("matchMedia() requires a non-empty media query".to_string());
+        }
+
+        self.record_call(query.to_string());
+
+        if let Some((_, matches)) = self
+            .matches
+            .iter()
+            .rev()
+            .find(|(rule_query, _)| rule_query == query)
+        {
+            return Ok(MediaQueryListState::new(query, *matches));
+        }
+
+        Err(format!("no matchMedia mock configured for `{query}`"))
+    }
+
+    pub fn calls(&self) -> &[MatchMediaCall] {
+        &self.calls
+    }
+
+    pub fn reset(&mut self) {
+        self.matches.clear();
+        self.calls.clear();
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenCall {
+    pub url: Option<String>,
+    pub target: Option<String>,
+    pub features: Option<String>,
+}
+
+impl Default for OpenCall {
+    fn default() -> Self {
+        Self {
+            url: None,
+            target: None,
+            features: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OpenMocks {
+    failure: Option<String>,
+    calls: Vec<OpenCall>,
+}
+
+impl OpenMocks {
+    pub fn fail(&mut self, message: impl Into<String>) {
+        self.failure = Some(message.into());
+    }
+
+    pub fn clear_failure(&mut self) {
+        self.failure = None;
+    }
+
+    fn invoke(
+        &mut self,
+        url: Option<&str>,
+        target: Option<&str>,
+        features: Option<&str>,
+    ) -> Result<(), String> {
+        self.record_call(url, target, features);
+        if let Some(message) = &self.failure {
+            return Err(message.clone());
+        }
+
+        Ok(())
+    }
+
+    pub fn record_call(
+        &mut self,
+        url: Option<&str>,
+        target: Option<&str>,
+        features: Option<&str>,
+    ) {
+        self.calls.push(OpenCall {
+            url: url.map(str::to_string),
+            target: target.map(str::to_string),
+            features: features.map(str::to_string),
+        });
+    }
+
+    pub fn calls(&self) -> &[OpenCall] {
+        &self.calls
+    }
+
+    pub fn reset(&mut self) {
+        self.failure = None;
+        self.calls.clear();
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CloseCall;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CloseMocks {
+    failure: Option<String>,
+    calls: Vec<CloseCall>,
+}
+
+impl CloseMocks {
+    pub fn fail(&mut self, message: impl Into<String>) {
+        self.failure = Some(message.into());
+    }
+
+    pub fn clear_failure(&mut self) {
+        self.failure = None;
+    }
+
+    fn invoke(&mut self) -> Result<(), String> {
+        self.record_call();
+        if let Some(message) = &self.failure {
+            return Err(message.clone());
+        }
+
+        Ok(())
+    }
+
+    pub fn record_call(&mut self) {
+        self.calls.push(CloseCall);
+    }
+
+    pub fn calls(&self) -> &[CloseCall] {
+        &self.calls
+    }
+
+    pub fn reset(&mut self) {
+        self.failure = None;
+        self.calls.clear();
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrintCall;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrintMocks {
+    failure: Option<String>,
+    calls: Vec<PrintCall>,
+}
+
+impl PrintMocks {
+    pub fn fail(&mut self, message: impl Into<String>) {
+        self.failure = Some(message.into());
+    }
+
+    pub fn clear_failure(&mut self) {
+        self.failure = None;
+    }
+
+    fn invoke(&mut self) -> Result<(), String> {
+        self.record_call();
+        if let Some(message) = &self.failure {
+            return Err(message.clone());
+        }
+
+        Ok(())
+    }
+
+    pub fn record_call(&mut self) {
+        self.calls.push(PrintCall);
+    }
+
+    pub fn calls(&self) -> &[PrintCall] {
+        &self.calls
+    }
+
+    pub fn reset(&mut self) {
+        self.failure = None;
+        self.calls.clear();
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DownloadCapture {
     pub file_name: String,
@@ -467,6 +675,10 @@ pub struct MockRegistry {
     dialogs: DialogMocks,
     clipboard: ClipboardMocks,
     location: LocationMocks,
+    match_media: MatchMediaMocks,
+    open: OpenMocks,
+    close: CloseMocks,
+    print: PrintMocks,
     downloads: DownloadMocks,
     file_input: FileInputMocks,
     storage: StorageSeeds,
@@ -505,6 +717,38 @@ impl MockRegistry {
         &mut self.location
     }
 
+    pub fn match_media(&self) -> &MatchMediaMocks {
+        &self.match_media
+    }
+
+    pub fn match_media_mut(&mut self) -> &mut MatchMediaMocks {
+        &mut self.match_media
+    }
+
+    pub fn open(&self) -> &OpenMocks {
+        &self.open
+    }
+
+    pub fn open_mut(&mut self) -> &mut OpenMocks {
+        &mut self.open
+    }
+
+    pub fn close(&self) -> &CloseMocks {
+        &self.close
+    }
+
+    pub fn close_mut(&mut self) -> &mut CloseMocks {
+        &mut self.close
+    }
+
+    pub fn print(&self) -> &PrintMocks {
+        &self.print
+    }
+
+    pub fn print_mut(&mut self) -> &mut PrintMocks {
+        &mut self.print
+    }
+
     pub fn downloads(&self) -> &DownloadMocks {
         &self.downloads
     }
@@ -534,6 +778,10 @@ impl MockRegistry {
         self.dialogs.reset();
         self.clipboard.reset();
         self.location.reset();
+        self.match_media.reset();
+        self.open.reset();
+        self.close.reset();
+        self.print.reset();
         self.downloads.reset();
         self.file_input.reset();
         self.storage.reset();
@@ -582,6 +830,7 @@ pub struct Session {
     focused_node: Option<NodeId>,
     current_script: Option<NodeId>,
     document_ready_state: DocumentReadyState,
+    window_name: String,
 }
 
 impl Session {
@@ -594,7 +843,24 @@ impl Session {
 
         let mut mocks = MockRegistry::default();
         for (key, value) in &config.local_storage {
-            mocks.storage_mut().seed_local(key.clone(), value.clone());
+            if let Some(query) = key.strip_prefix(MATCH_MEDIA_SEED_PREFIX) {
+                let matches = value.parse::<bool>().map_err(|_| {
+                    SessionError::Mock(format!(
+                        "invalid matchMedia seed value for `{query}`: {value}"
+                    ))
+                })?;
+                mocks
+                    .match_media_mut()
+                    .respond_matches(query.to_string(), matches);
+            } else if key == OPEN_FAILURE_SEED_KEY {
+                mocks.open_mut().fail(value.clone());
+            } else if key == CLOSE_FAILURE_SEED_KEY {
+                mocks.close_mut().fail(value.clone());
+            } else if key == PRINT_FAILURE_SEED_KEY {
+                mocks.print_mut().fail(value.clone());
+            } else {
+                mocks.storage_mut().seed_local(key.clone(), value.clone());
+            }
         }
         mocks.location_mut().set_current(config.url.clone());
         dom.set_target_fragment(Self::fragment_identifier_from_url(&config.url));
@@ -614,6 +880,7 @@ impl Session {
             focused_node: None,
             current_script: None,
             document_ready_state: DocumentReadyState::Loading,
+            window_name: String::new(),
         };
         session.bootstrap_inline_scripts()?;
         session.document_ready_state = DocumentReadyState::Complete;
@@ -835,6 +1102,32 @@ impl Session {
             .downloads_mut()
             .capture(file_name.to_string(), bytes);
         Ok(())
+    }
+
+    pub fn print(&mut self) -> Result<(), SessionError> {
+        self.mocks
+            .print_mut()
+            .invoke()
+            .map_err(SessionError::Mock)
+    }
+
+    pub fn close(&mut self) -> Result<(), SessionError> {
+        self.mocks
+            .close_mut()
+            .invoke()
+            .map_err(SessionError::Mock)
+    }
+
+    pub fn open(
+        &mut self,
+        url: Option<&str>,
+        target: Option<&str>,
+        features: Option<&str>,
+    ) -> Result<(), SessionError> {
+        self.mocks
+            .open_mut()
+            .invoke(url, target, features)
+            .map_err(SessionError::Mock)
     }
 
     pub fn fetch(&mut self, url: &str) -> Result<FetchResponse, SessionError> {
@@ -1826,6 +2119,20 @@ impl Session {
         Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
     }
 
+    fn document_style_sheets_named_item(
+        &self,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| Self::is_document_style_sheet_element(element),
+        );
+        Ok(self.first_named_item_in_nodes(&collected, name))
+    }
+
     fn document_document_element(&self) -> Result<Option<ElementHandle>, ScriptError> {
         Ok(self.dom.document_element_id().map(Self::node_id_to_handle))
     }
@@ -1836,6 +2143,18 @@ impl Session {
 
     fn document_body(&self) -> Result<Option<ElementHandle>, ScriptError> {
         Ok(self.dom.body_element_id().map(Self::node_id_to_handle))
+    }
+
+    fn document_active_element(&self) -> Result<Option<ElementHandle>, ScriptError> {
+        if let Some(node_id) = self.focused_node {
+            return Ok(Some(Self::node_id_to_handle(node_id)));
+        }
+
+        if let Some(body) = self.dom.body_element_id() {
+            return Ok(Some(Self::node_id_to_handle(body)));
+        }
+
+        Ok(self.dom.document_element_id().map(Self::node_id_to_handle))
     }
 
     pub fn document_title(&self) -> String {
@@ -1872,11 +2191,91 @@ impl Session {
         Self::origin_from_url(&self.document_location())
     }
 
+    pub fn document_referrer(&self) -> String {
+        String::new()
+    }
+
+    pub fn window_name(&self) -> &str {
+        &self.window_name
+    }
+
+    pub fn set_window_name(&mut self, value: &str) {
+        self.window_name = value.to_string();
+    }
+
+    fn storage_map(&self, target: StorageTarget) -> &BTreeMap<String, String> {
+        match target {
+            StorageTarget::Local => &self.mocks.storage.local,
+            StorageTarget::Session => &self.mocks.storage.session,
+        }
+    }
+
+    fn storage_map_mut(&mut self, target: StorageTarget) -> &mut BTreeMap<String, String> {
+        match target {
+            StorageTarget::Local => &mut self.mocks.storage.local,
+            StorageTarget::Session => &mut self.mocks.storage.session,
+        }
+    }
+
+    pub fn storage_length(&self, target: StorageTarget) -> usize {
+        self.storage_map(target).len()
+    }
+
+    pub fn storage_get_item(&self, target: StorageTarget, key: &str) -> Option<String> {
+        self.storage_map(target).get(key).cloned()
+    }
+
+    pub fn storage_set_item(&mut self, target: StorageTarget, key: &str, value: &str) {
+        self.storage_map_mut(target)
+            .insert(key.to_string(), value.to_string());
+    }
+
+    pub fn storage_remove_item(&mut self, target: StorageTarget, key: &str) {
+        self.storage_map_mut(target).remove(key);
+    }
+
+    pub fn storage_clear(&mut self, target: StorageTarget) {
+        self.storage_map_mut(target).clear();
+    }
+
+    pub fn storage_key(&self, target: StorageTarget, index: usize) -> Option<String> {
+        self.storage_map(target).keys().nth(index).cloned()
+    }
+
     pub fn document_ready_state(&self) -> &'static str {
         match self.document_ready_state {
             DocumentReadyState::Loading => "loading",
             DocumentReadyState::Complete => "complete",
         }
+    }
+
+    pub fn document_compat_mode(&self) -> &'static str {
+        "CSS1Compat"
+    }
+
+    pub fn document_character_set(&self) -> &'static str {
+        "UTF-8"
+    }
+
+    pub fn document_content_type(&self) -> &'static str {
+        "text/html"
+    }
+
+    pub fn document_dir(&self) -> String {
+        self.dom
+            .document_element_id()
+            .and_then(|node_id| self.dom.get_attribute(node_id, "dir").ok().flatten())
+            .unwrap_or_default()
+    }
+
+    pub fn set_document_dir(&mut self, value: &str) -> Result<(), SessionError> {
+        let Some(document_element) = self.dom.document_element_id() else {
+            return Ok(());
+        };
+
+        self.dom
+            .set_attribute(document_element, "dir", value.to_string())
+            .map_err(SessionError::Dom)
     }
 
     pub fn document_current_script(&self) -> Option<ElementHandle> {
@@ -2449,6 +2848,10 @@ impl HostBindings for Session {
         Session::document_body(self)
     }
 
+    fn document_active_element(&mut self) -> bt_script::Result<Option<ElementHandle>> {
+        Session::document_active_element(self)
+    }
+
     fn document_title(&mut self) -> bt_script::Result<String> {
         Ok(Session::document_title(self))
     }
@@ -2483,12 +2886,110 @@ impl HostBindings for Session {
         Ok(Session::document_origin(self))
     }
 
+    fn document_referrer(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_referrer(self))
+    }
+
+    fn match_media(&mut self, query: &str) -> bt_script::Result<MediaQueryListState> {
+        self.mocks
+            .match_media_mut()
+            .resolve(query)
+            .map_err(ScriptError::new)
+    }
+
+    fn window_open(
+        &mut self,
+        url: Option<&str>,
+        target: Option<&str>,
+        features: Option<&str>,
+    ) -> bt_script::Result<()> {
+        Session::open(self, url, target, features)
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_close(&mut self) -> bt_script::Result<()> {
+        Session::close(self).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_print(&mut self) -> bt_script::Result<()> {
+        Session::print(self).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_name(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_name(self).to_string())
+    }
+
+    fn set_window_name(&mut self, value: &str) -> bt_script::Result<()> {
+        Session::set_window_name(self, value);
+        Ok(())
+    }
+
+    fn storage_length(&mut self, target: StorageTarget) -> bt_script::Result<usize> {
+        Ok(Session::storage_length(self, target))
+    }
+
+    fn storage_get_item(
+        &mut self,
+        target: StorageTarget,
+        key: &str,
+    ) -> bt_script::Result<Option<String>> {
+        Ok(Session::storage_get_item(self, target, key))
+    }
+
+    fn storage_set_item(
+        &mut self,
+        target: StorageTarget,
+        key: &str,
+        value: &str,
+    ) -> bt_script::Result<()> {
+        Session::storage_set_item(self, target, key, value);
+        Ok(())
+    }
+
+    fn storage_remove_item(&mut self, target: StorageTarget, key: &str) -> bt_script::Result<()> {
+        Session::storage_remove_item(self, target, key);
+        Ok(())
+    }
+
+    fn storage_clear(&mut self, target: StorageTarget) -> bt_script::Result<()> {
+        Session::storage_clear(self, target);
+        Ok(())
+    }
+
+    fn storage_key(
+        &mut self,
+        target: StorageTarget,
+        index: usize,
+    ) -> bt_script::Result<Option<String>> {
+        Ok(Session::storage_key(self, target, index))
+    }
+
     fn document_current_script(&mut self) -> bt_script::Result<Option<ElementHandle>> {
         Ok(Session::document_current_script(self))
     }
 
     fn document_ready_state(&mut self) -> bt_script::Result<String> {
         Ok(Session::document_ready_state(self).to_string())
+    }
+
+    fn document_compat_mode(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_compat_mode(self).to_string())
+    }
+
+    fn document_character_set(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_character_set(self).to_string())
+    }
+
+    fn document_content_type(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_content_type(self).to_string())
+    }
+
+    fn document_dir(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_dir(self))
+    }
+
+    fn document_set_dir(&mut self, value: &str) -> bt_script::Result<()> {
+        Session::set_document_dir(self, value).map_err(|error| ScriptError::new(error.to_string()))
     }
 
     fn document_query_selector(
@@ -2514,6 +3015,13 @@ impl HostBindings for Session {
 
     fn document_style_sheets_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
         Session::document_style_sheets(self)
+    }
+
+    fn document_style_sheets_named_item(
+        &mut self,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        Session::document_style_sheets_named_item(self, name)
     }
 
     fn node_child_nodes_items(
@@ -2767,6 +3275,37 @@ impl HostBindings for Session {
         name: &str,
     ) -> bt_script::Result<Vec<ElementHandle>> {
         Session::form_elements_named_items(self, element, name)
+    }
+
+    fn radio_node_list_set_value(
+        &mut self,
+        target: &RadioNodeListTarget,
+        value: &str,
+    ) -> bt_script::Result<()> {
+        let RadioNodeListTarget::FormElements { element, name } = target;
+        let items = self.html_collection_form_elements_named_items(*element, name)?;
+        let mut matched = false;
+
+        for item in items {
+            if self.element_tag_name(item)? != "input" {
+                continue;
+            }
+
+            let Some(input_type) = self.element_get_attribute(item, "type")? else {
+                continue;
+            };
+            if !input_type.eq_ignore_ascii_case("radio") {
+                continue;
+            }
+
+            let should_check = !matched && self.element_value(item)? == value;
+            if should_check {
+                matched = true;
+            }
+            self.element_set_checked(item, should_check)?;
+        }
+
+        Ok(())
     }
 
     fn html_collection_select_options_items(

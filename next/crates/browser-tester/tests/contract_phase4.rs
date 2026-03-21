@@ -162,12 +162,93 @@ fn document_current_script_is_available_during_inline_bootstrap() -> browser_tes
 }
 
 #[test]
+fn document_active_element_tracks_focus_state() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::from_html(
+        "<input id='first'><div id='out'></div><script>document.getElementById('first').addEventListener('focus', () => { document.getElementById('out').textContent = document.activeElement.getAttribute('id'); });</script>",
+    )?;
+
+    harness.focus("#first")?;
+    harness.assert_text("#out", "first")?;
+    Ok(())
+}
+
+#[test]
+fn window_children_are_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<div id='root'><span id='first'>First</span><span id='second'>Second</span></div><div id='out'></div><script>const children = document.defaultView.children; document.getElementById('out').textContent = String(children.length) + ':' + children.item(0).textContent + ':' + children.item(1).textContent + ':' + String(children.namedItem('first')) + ':' + String(children.namedItem('missing'));</script>",
+    )?;
+
+    harness.assert_text("#out", "3:FirstSecond::null:null")?;
+    Ok(())
+}
+
+#[test]
 fn document_ready_state_is_loading_during_inline_bootstrap() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='out'></main><script>document.getElementById('out').textContent = document.readyState;</script>",
     )?;
 
     harness.assert_text("#out", "loading")?;
+    Ok(())
+}
+
+#[test]
+fn document_compat_mode_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='out'></main><script>document.getElementById('out').textContent = document.compatMode;</script>",
+    )?;
+
+    harness.assert_text("#out", "CSS1Compat")?;
+    Ok(())
+}
+
+#[test]
+fn document_character_set_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='out'></main><script>document.getElementById('out').textContent = document.characterSet + ':' + document.charset;</script>",
+    )?;
+
+    harness.assert_text("#out", "UTF-8:UTF-8")?;
+    Ok(())
+}
+
+#[test]
+fn document_content_type_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='out'></main><script>document.getElementById('out').textContent = document.contentType;</script>",
+    )?;
+
+    harness.assert_text("#out", "text/html")?;
+    Ok(())
+}
+
+#[test]
+fn document_referrer_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='out'></main><script>document.getElementById('out').textContent = '[' + document.referrer + ']';</script>",
+    )?;
+
+    harness.assert_text("#out", "[]")?;
+    Ok(())
+}
+
+#[test]
+fn window_name_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='out'></main><script>const before = window.name; window.name = 'updated'; document.getElementById('out').textContent = before + ':' + document.defaultView.name;</script>",
+    )?;
+
+    harness.assert_text("#out", ":updated")?;
+    Ok(())
+}
+
+#[test]
+fn document_dir_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root' dir='ltr'><main id='out'></main><script>const before = document.dir; document.dir = 'rtl'; document.getElementById('out').textContent = before + ':' + document.dir + ':' + document.documentElement.getAttribute('dir');</script></main>",
+    )?;
+
+    harness.assert_text("#out", "ltr:rtl:rtl")?;
     Ok(())
 }
 
@@ -206,6 +287,133 @@ fn document_origin_aliases_are_publicly_supported() -> browser_tester_next::Resu
         "#out",
         "https://app.local:https://app.local:https://app.local:https://app.local",
     )?;
+    Ok(())
+}
+
+#[test]
+fn web_storage_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html_with_local_storage(
+        "<main id='out'></main><script>const local = window.localStorage; const session = document.defaultView.sessionStorage; const before = String(local) + ':' + String(session) + ':' + String(local.length) + ':' + String(session.length); const token = local.getItem('token'); local.setItem('theme', 'dark'); local.removeItem('token'); session.setItem('scratch', 'xyz'); const sessionKey = session.key(0); session.clear(); document.getElementById('out').textContent = before + '|' + token + ':' + local.getItem('theme') + ':' + String(local.length) + ':' + String(local.key(0)) + ':' + String(session.length) + ':' + String(sessionKey);</script>",
+        [("token", "abc")],
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "[object Storage]:[object Storage]:1:0|abc:dark:1:theme:0:scratch",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn match_media_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::builder()
+        .html("<main id='out'></main><script>const list = window.matchMedia('(prefers-color-scheme: dark)'); document.getElementById('out').textContent = String(list.matches) + ':' + list.media + ':' + String(window.matchMedia('(prefers-color-scheme: dark)'));</script>")
+        .match_media([("(prefers-color-scheme: dark)", true)])
+        .build()?;
+
+    harness.assert_text(
+        "#out",
+        "true:(prefers-color-scheme: dark):[object MediaQueryList]",
+    )?;
+    assert_eq!(
+        harness.mocks_mut().match_media().calls(),
+        &[
+            browser_tester_next::MatchMediaCall {
+                query: "(prefers-color-scheme: dark)".to_string(),
+            },
+            browser_tester_next::MatchMediaCall {
+                query: "(prefers-color-scheme: dark)".to_string(),
+            }
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn print_is_publicly_supported_and_captured() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::from_html(
+        "<main id='out'></main><script>window.print(); document.getElementById('out').textContent = 'done';</script>",
+    )?;
+
+    harness.print()?;
+    assert_eq!(harness.mocks_mut().print().calls().len(), 2);
+    harness.assert_text("#out", "done")?;
+    Ok(())
+}
+
+#[test]
+fn close_is_publicly_supported_and_captured() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::from_html(
+        "<main id='out'></main><script>window.close(); document.getElementById('out').textContent = 'done';</script>",
+    )?;
+
+    harness.close()?;
+    assert_eq!(harness.mocks_mut().close().calls().len(), 2);
+    harness.assert_text("#out", "done")?;
+    Ok(())
+}
+
+#[test]
+fn open_is_publicly_supported_and_captured() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::from_html(
+        "<main id='out'></main><script>window.open('https://example.test/popup', '_blank', 'noopener'); document.getElementById('out').textContent = 'done';</script>",
+    )?;
+
+    harness.open("https://example.test/direct")?;
+    assert_eq!(harness.mocks_mut().open().calls().len(), 2);
+    assert_eq!(
+        harness.mocks_mut().open().calls()[0].url.as_deref(),
+        Some("https://example.test/popup")
+    );
+    assert_eq!(
+        harness.mocks_mut().open().calls()[0].target.as_deref(),
+        Some("_blank")
+    );
+    assert_eq!(
+        harness.mocks_mut().open().calls()[0].features.as_deref(),
+        Some("noopener")
+    );
+    assert_eq!(
+        harness.mocks_mut().open().calls()[1].url.as_deref(),
+        Some("https://example.test/direct")
+    );
+    harness.assert_text("#out", "done")?;
+    Ok(())
+}
+
+#[test]
+fn close_failure_can_be_seeded_from_the_builder() -> browser_tester_next::Result<()> {
+    let error = Harness::builder()
+        .close_failure("window closed")
+        .html("<main id='out'></main><script>window.close();</script>")
+        .build()
+        .expect_err("close failures should fail bootstrap when window.close runs");
+
+    assert!(error.to_string().contains("window closed"));
+    Ok(())
+}
+
+#[test]
+fn print_failure_can_be_seeded_from_the_builder() -> browser_tester_next::Result<()> {
+    let error = Harness::builder()
+        .print_failure("print blocked")
+        .html("<main id='out'></main><script>window.print();</script>")
+        .build()
+        .expect_err("print failures should fail bootstrap when print is called");
+
+    assert!(error.to_string().contains("print blocked"));
+    Ok(())
+}
+
+#[test]
+fn open_failure_can_be_seeded_from_the_builder() -> browser_tester_next::Result<()> {
+    let error = Harness::builder()
+        .open_failure("popup blocked")
+        .html("<main id='out'></main><script>window.open('https://example.test/popup');</script>")
+        .build()
+        .expect_err("open failures should fail bootstrap when window.open runs");
+
+    assert!(error.to_string().contains("popup blocked"));
     Ok(())
 }
 

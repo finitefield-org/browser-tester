@@ -35,6 +35,14 @@ fn reset_all_clears_every_mock_family() {
     registry
         .downloads_mut()
         .capture("report.csv", b"downloaded bytes".to_vec());
+    registry.open_mut().fail("popup blocked");
+    registry
+        .open_mut()
+        .record_call(Some("https://example.test/popup"), Some("_blank"), Some("noopener"));
+    registry.close_mut().fail("window closed");
+    registry.close_mut().record_call();
+    registry.print_mut().fail("print blocked");
+    registry.print_mut().record_call();
 
     registry
         .file_input_mut()
@@ -57,6 +65,9 @@ fn reset_all_clears_every_mock_family() {
     assert!(registry.clipboard().writes().is_empty());
     assert!(registry.location().current_url().is_none());
     assert!(registry.location().navigations().is_empty());
+    assert!(registry.open().calls().is_empty());
+    assert!(registry.close().calls().is_empty());
+    assert!(registry.print().calls().is_empty());
     assert!(registry.downloads().artifacts().is_empty());
     assert!(registry.file_input().selections().is_empty());
     assert!(registry.storage().local().is_empty());
@@ -231,7 +242,10 @@ fn session_reports_current_script_during_inline_bootstrap_and_null_elsewhere() {
     session.click_node(button_id).unwrap();
 
     let out_id = session.dom().select("#out").unwrap()[0];
-    assert_eq!(session.dom().text_content_for_node(out_id), "first:second:null");
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "first:second:null"
+    );
 }
 
 #[test]
@@ -628,6 +642,25 @@ fn session_resolves_radio_node_list_entries_regression() {
 }
 
 #[test]
+fn session_clears_radio_node_list_value_when_no_radio_matches_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><form id='signup'><input type='radio' name='mode' id='mode-a' value='a' checked><input type='radio' name='mode' id='mode-b' value='b'></form></div><div id='out'></div><script>const named = document.getElementById('signup').elements.namedItem('mode'); named.value = 'missing'; document.getElementById('out').textContent = named.value + ':' + String(document.getElementById('mode-a').checked) + ':' + String(document.getElementById('mode-b').checked) + ':' + String(named.item(0).checked) + ':' + String(named.item(1).checked);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("radio node list value assignment should clear unmatched groups");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        ":false:false:false:false"
+    );
+}
+
+#[test]
 fn session_resolves_document_scripts_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -681,6 +714,25 @@ fn session_resolves_document_style_sheets_entries_regression() {
     assert_eq!(
         session.dom().text_content_for_node(out_id),
         "2:0:[object CSSStyleSheet]:0:[object CSSStyleSheet]"
+    );
+}
+
+#[test]
+fn session_resolves_document_style_sheets_named_item_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><style id='first-style'>.primary { color: red; }</style><link id='first-link' rel='stylesheet' href='a.css'><link id='ignored-link' rel='preload' href='b.css'></div><div id='out'></div><script>const out = document.getElementById('out'); const sheets = document.styleSheets; const before = sheets.length; const first = sheets.namedItem('first-style'); const second = sheets.namedItem('first-link'); document.getElementById('root').textContent = 'gone'; out.textContent = String(before) + ':' + String(sheets.length) + ':' + String(first) + ':' + String(second) + ':' + String(sheets.namedItem('missing'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.styleSheets namedItem should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "2:0:[object CSSStyleSheet]:[object CSSStyleSheet]:null"
     );
 }
 
@@ -869,21 +921,118 @@ fn session_rejects_document_applets_on_elements_explicitly() {
 }
 
 #[test]
-fn session_rejects_document_children_on_window_explicitly() {
-    let error = Session::new(SessionConfig {
+fn session_resolves_window_children_regression() {
+    let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
         html: Some(
-            "<div id='root'></div><div id='out'></div><script>document.defaultView.children.length;</script>"
+            "<div id='root'><span id='first'>First</span><span id='second'>Second</span></div><div id='out'></div><script>const children = document.defaultView.children; document.getElementById('out').textContent = String(children.length) + ':' + children.item(0).textContent + ':' + children.item(1).textContent + ':' + String(children.namedItem('first')) + ':' + String(children.namedItem('missing'));</script>"
                 .to_string(),
         ),
         local_storage: BTreeMap::new(),
     })
-    .expect_err("window children access should fail explicitly");
+    .expect("window.children should remain wired through Session");
 
-    let message = error.to_string();
-    assert!(message.contains("unsupported member access"));
-    assert!(message.contains("`children`"));
-    assert!(message.contains("window value"));
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "3:FirstSecond::null:null"
+    );
+}
+
+#[test]
+fn session_exposes_document_compat_mode_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = document.compatMode;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.compatMode should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "CSS1Compat");
+}
+
+#[test]
+fn session_exposes_document_character_set_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = document.characterSet + ':' + document.charset;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.characterSet should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "UTF-8:UTF-8");
+}
+
+#[test]
+fn session_exposes_document_content_type_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = document.contentType;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.contentType should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "text/html");
+}
+
+#[test]
+fn session_exposes_document_referrer_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = '[' + document.referrer + ']';</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.referrer should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "[]");
+}
+
+#[test]
+fn session_exposes_window_name_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>const before = window.name; window.name = 'updated'; document.getElementById('out').textContent = before + ':' + document.defaultView.name;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("window.name should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), ":updated");
+}
+
+#[test]
+fn session_exposes_document_dir_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root' dir='ltr'><div id='out'></div><script>const before = document.dir; document.dir = 'rtl'; document.getElementById('out').textContent = before + ':' + document.dir + ':' + document.documentElement.getAttribute('dir');</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.dir should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "ltr:rtl:rtl");
 }
 
 #[test]
@@ -1429,6 +1578,25 @@ fn session_resolves_focus_pseudo_classes() {
 }
 
 #[test]
+fn session_resolves_document_active_element_regression() {
+    let mut session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<input id='field'><div id='out'></div><script>document.getElementById('field').addEventListener('focus', () => { document.getElementById('out').textContent = document.activeElement.getAttribute('id'); });</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.activeElement should remain wired through Session");
+
+    let field_id = session.dom().select("#field").unwrap()[0];
+    let out_id = session.dom().select("#out").unwrap()[0];
+    session.focus_node(field_id).expect("focus should work");
+
+    assert_eq!(session.dom().text_content_for_node(out_id), "field");
+}
+
+#[test]
 fn session_resolves_target_pseudo_classes() {
     let mut session = Session::new(SessionConfig {
         url: "https://example.test/app#target".to_string(),
@@ -1775,4 +1943,44 @@ fn session_rejects_malformed_html_fragment_explicitly() {
 
     assert!(error.to_string().contains("Script error"));
     assert!(error.to_string().contains("mismatched closing tag"));
+}
+
+#[test]
+fn session_rejects_storage_method_wrong_arity_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>window.localStorage.setItem('token');</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("storage methods should validate arity explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(
+        error
+            .to_string()
+            .contains("setItem() expects exactly two arguments")
+    );
+}
+
+#[test]
+fn session_rejects_unseeded_match_media_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>window.matchMedia('(prefers-color-scheme: dark)').matches;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("matchMedia should require a configured seed");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(
+        error
+            .to_string()
+            .contains("no matchMedia mock configured for `(prefers-color-scheme: dark)`")
+    );
 }

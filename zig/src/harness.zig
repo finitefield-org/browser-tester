@@ -15,6 +15,9 @@ pub const HarnessBuilder = struct {
     url_value: ?[]const u8 = null,
     html_value: ?[]const u8 = null,
     local_storage: std.ArrayListUnmanaged(session.StorageSeed) = .{},
+    session_storage: std.ArrayListUnmanaged(session.StorageSeed) = .{},
+    open_failure_value: ?[]const u8 = null,
+    print_failure_value: ?[]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator) HarnessBuilder {
         return .{ .allocator = allocator };
@@ -22,6 +25,7 @@ pub const HarnessBuilder = struct {
 
     pub fn deinit(self: *HarnessBuilder) void {
         self.local_storage.deinit(self.allocator);
+        self.session_storage.deinit(self.allocator);
     }
 
     pub fn url(self: *HarnessBuilder, value: []const u8) *HarnessBuilder {
@@ -45,6 +49,27 @@ pub const HarnessBuilder = struct {
         });
     }
 
+    pub fn addSessionStorage(
+        self: *HarnessBuilder,
+        key: []const u8,
+        value: []const u8,
+    ) errors.Result(void) {
+        try self.session_storage.append(self.allocator, .{
+            .key = key,
+            .value = value,
+        });
+    }
+
+    pub fn openFailure(self: *HarnessBuilder, value: []const u8) *HarnessBuilder {
+        self.open_failure_value = value;
+        return self;
+    }
+
+    pub fn printFailure(self: *HarnessBuilder, value: []const u8) *HarnessBuilder {
+        self.print_failure_value = value;
+        return self;
+    }
+
     pub fn build(self: *HarnessBuilder) errors.Result(Harness) {
         const url_source = self.url_value orelse default_url;
         if (isBlank(url_source)) {
@@ -57,6 +82,9 @@ pub const HarnessBuilder = struct {
                 .url = url_source,
                 .html = self.html_value,
                 .local_storage = self.local_storage.items,
+                .session_storage = self.session_storage.items,
+                .open_failure = self.open_failure_value,
+                .print_failure = self.print_failure_value,
             },
         );
         return Harness{
@@ -108,6 +136,20 @@ pub const Harness = struct {
         return try subject_builder.build();
     }
 
+    pub fn fromHtmlWithSessionStorage(
+        allocator: std.mem.Allocator,
+        html_source: []const u8,
+        seeds: []const session.StorageSeed,
+    ) errors.Result(Harness) {
+        var subject_builder = HarnessBuilder.init(allocator);
+        defer subject_builder.deinit();
+        _ = subject_builder.html(html_source);
+        for (seeds) |seed| {
+            try subject_builder.addSessionStorage(seed.key, seed.value);
+        }
+        return try subject_builder.build();
+    }
+
     pub fn fromHtmlWithUrlAndLocalStorage(
         allocator: std.mem.Allocator,
         url_source: []const u8,
@@ -120,6 +162,22 @@ pub const Harness = struct {
         _ = subject_builder.html(html_source);
         for (seeds) |seed| {
             try subject_builder.addLocalStorage(seed.key, seed.value);
+        }
+        return try subject_builder.build();
+    }
+
+    pub fn fromHtmlWithUrlAndSessionStorage(
+        allocator: std.mem.Allocator,
+        url_source: []const u8,
+        html_source: []const u8,
+        seeds: []const session.StorageSeed,
+    ) errors.Result(Harness) {
+        var subject_builder = HarnessBuilder.init(allocator);
+        defer subject_builder.deinit();
+        _ = subject_builder.url(url_source);
+        _ = subject_builder.html(html_source);
+        for (seeds) |seed| {
+            try subject_builder.addSessionStorage(seed.key, seed.value);
         }
         return try subject_builder.build();
     }
@@ -174,6 +232,14 @@ pub const Harness = struct {
 
     pub fn writeClipboard(self: *Harness, text: []const u8) errors.Result(void) {
         return self.session.writeClipboard(text);
+    }
+
+    pub fn open(self: *Harness, url_source: []const u8) errors.Result(void) {
+        return self.session.open(url_source, null, null);
+    }
+
+    pub fn print(self: *Harness) errors.Result(void) {
+        return self.session.print();
     }
 
     pub fn captureDownload(
@@ -419,6 +485,21 @@ test "regression: phase 7 querySelectorAll methods resolve on the copied html sn
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: phase 10 universal selector resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><section><button id='first'>First</button></section><button id='second'>Second</button></main><div id='out'></div><script>document.getElementById('out').textContent = String(document.querySelectorAll('*').length) + ':' + String(document.querySelectorAll('main *').length) + ':' + String(document.querySelectorAll('main > *').length);</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "6:3:2");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
 test "regression: phase 9 NodeList.forEach resolves on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<main id='root'><button id='first'>First</button><button id='second'>Second</button></main><div id='out'></div><script>document.querySelectorAll('button').forEach((item, index, list) => { document.getElementById('out').textContent += String(index) + ':' + item.textContent + ':' + String(list.length) + ';'; item.remove(); }, null);</script>";
@@ -524,6 +605,21 @@ test "regression: phase 11 select.selectedOptions resolves on the copied html sn
     html_bytes[1] = 'Z';
 
     try subject.assertValue("#out", "1:2:A:C:D:[object Element]:null");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 11 RadioNodeList value assignment resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><form id='signup'><input type='radio' name='mode' id='mode-a' checked><input type='radio' name='mode' id='mode-b' value='b'><input type='radio' name='mode' id='mode-c' value='c'></form></main><div id='out'></div><script>const named = document.getElementById('signup').elements.namedItem('mode'); const initial = named.value; named.value = 'b'; const afterMatch = named.value; named.value = 'on'; const afterOn = named.value; const onA = String(document.getElementById('mode-a').checked); const onB = String(document.getElementById('mode-b').checked); named.value = 'missing'; document.getElementById('out').textContent = initial + ':' + afterMatch + ':' + afterOn + ':' + onA + ':' + onB + ':' + named.value + ':' + String(document.getElementById('mode-a').checked) + ':' + String(document.getElementById('mode-b').checked) + ':' + String(document.getElementById('mode-c').checked);</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "on:b:on:true:false::false:false:false");
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
@@ -867,6 +963,51 @@ test "regression: phase 8 class and dataset views resolve on the copied html sna
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: phase 8 inline style declaration surface resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><div id='box' style='color: red; background-color: white;'></div><div id='out'></div><script>const box = document.getElementById('box'); const style = box.style; const before = String(style); style.backgroundColor = 'blue'; style.setProperty('border-top-width', '2px'); style.removeProperty('color'); document.getElementById('out').textContent = before + ':' + box.getAttribute('style') + ':' + String(style.length) + ':' + style.item(0) + ':' + style.getPropertyValue('background-color');</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "color: red; background-color: white;:background-color: blue; border-top-width: 2px;:2:background-color:blue");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 8 inline style important priority resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><div id='box' style='/* lead */ color: red !important; background-color: white; /* tail */'></div><div id='out'></div><script>const box = document.getElementById('box'); const style = box.style; const before = String(style); style.setProperty('border-top-width', '2px', 'important'); document.getElementById('out').textContent = before + ':' + String(style) + ':' + box.getAttribute('style') + ':' + style.getPropertyValue('color');</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "color: red !important; background-color: white;:color: red !important; background-color: white; border-top-width: 2px !important;:color: red !important; background-color: white; border-top-width: 2px !important;:red");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 8 inline style property priority resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><div id='box' style='color: red !important; background-color: white;'></div><div id='out'></div><script>const style = document.getElementById('box').style; document.getElementById('out').textContent = style.getPropertyPriority('color') + ':' + style.getPropertyPriority('background-color') + ':' + style.getPropertyPriority('missing');</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "important::");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
 test "regression: phase 8 tree mutation primitives resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<main id='root'><section id='source'><button id='second'>Second</button><button id='third'>Third</button></section><button id='first'>First</button><div id='out'></div><script>document.getElementById('second').before(document.getElementById('first')); document.getElementById('second').after(document.getElementById('third')); document.getElementById('out').textContent = document.getElementById('source').textContent + ':' + String(document.querySelectorAll('#source > button').length) + ':' + document.querySelector('#first').textContent + ':' + document.querySelector('#third').textContent;</script></main>";
@@ -1070,6 +1211,67 @@ test "regression: phase 27 document.location and window.location aliases resolve
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: phase 28 Location href and navigation methods resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>const location = window.location; const before = location.href; location.assign('https://example.test:8443/assign'); const afterAssign = location.href; location.href = 'https://example.test:8443/href'; const afterHref = location.href; location.replace('https://example.test:8443/replace'); const afterReplace = location.href; location.reload(); const afterReload = location.href; document.getElementById('out').textContent = before + ':' + afterAssign + ':' + afterHref + ':' + afterReplace + ':' + afterReload;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtmlWithUrl(allocator, "https://example.test:8443/start?x#old", html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "https://example.test:8443/start?x#old:https://example.test:8443/assign:https://example.test:8443/href:https://example.test:8443/replace:https://example.test:8443/replace",
+    );
+    try std.testing.expectEqualStrings(
+        "https://example.test:8443/replace",
+        subject.mocksMut().location().currentUrl().?,
+    );
+    try std.testing.expectEqual(@as(usize, 4), subject.mocksMut().location().navigations().len);
+    try std.testing.expectEqualStrings("https://example.test:8443/assign", subject.mocksMut().location().navigations()[0]);
+    try std.testing.expectEqualStrings("https://example.test:8443/href", subject.mocksMut().location().navigations()[1]);
+    try std.testing.expectEqualStrings("https://example.test:8443/replace", subject.mocksMut().location().navigations()[2]);
+    try std.testing.expectEqualStrings("https://example.test:8443/replace", subject.mocksMut().location().navigations()[3]);
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 29 window.history navigation methods resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>const history = window.history; const beforeLength = history.length; history.replaceState(null, '', 'https://example.test:8443/replaced'); history.pushState(null, '', 'https://example.test:8443/pushed'); history.back(); history.forward(); history.go(-1); document.getElementById('out').textContent = String(beforeLength) + ':' + String(history.length) + ':' + String(history.state) + ':' + window.location.href;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtmlWithUrl(allocator, "https://example.test:8443/start?x#old", html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "1:2:null:https://example.test:8443/replaced");
+    try std.testing.expectEqual(@as(usize, 3), subject.mocksMut().location().navigations().len);
+    try std.testing.expectEqualStrings("https://example.test:8443/replaced", subject.mocksMut().location().navigations()[0]);
+    try std.testing.expectEqualStrings("https://example.test:8443/pushed", subject.mocksMut().location().navigations()[1]);
+    try std.testing.expectEqualStrings("https://example.test:8443/replaced", subject.mocksMut().location().navigations()[2]);
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 30 history.state payloads resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>const history = window.history; const before = String(history.state); history.replaceState('seed', '', 'https://example.test:8443/replaced'); const afterReplace = String(history.state); history.pushState('pushed', '', 'https://example.test:8443/pushed'); const afterPush = String(history.state); history.back(); const afterBack = String(history.state); document.getElementById('out').textContent = before + ':' + afterReplace + ':' + afterPush + ':' + afterBack + ':' + window.location.href;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtmlWithUrl(allocator, "https://example.test:8443/start?x#old", html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "null:seed:pushed:seed:https://example.test:8443/replaced");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
 test "regression: phase 27 document.baseURI and element.baseURI aliases resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<main id='root'><span id='child'></span></main><div id='out'></div><script>const root = document.getElementById('root'); const child = document.getElementById('child'); document.getElementById('out').textContent = document.baseURI + ':' + root.baseURI + ':' + child.baseURI;</script>";
@@ -1132,6 +1334,109 @@ test "regression: phase 29 currentScript and readyState resolve on the copied ht
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: phase 32 document.activeElement resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<html id='html'><body id='body'><input id='field'><div id='out'></div><script>document.getElementById('field').addEventListener('focus', () => { document.getElementById('out').textContent = document.activeElement.getAttribute('id'); });</script></body></html>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.focus("#field");
+    try subject.assertValue("#out", "field");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 33 document.referrer and dir resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<html id='html' dir='ltr'><body id='body'><main id='out'></main><script>const referrer = '[' + document.referrer + ']'; const before = document.dir; document.dir = 'rtl'; document.getElementById('out').textContent = referrer + ':' + before + ':' + document.dir + ':' + document.documentElement.getAttribute('dir');</script></body></html>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "[]:ltr:rtl:rtl");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 34 window.name resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>const before = window.name; window.name = 'updated'; document.getElementById('out').textContent = before + ':' + document.defaultView.name;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", ":updated");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: storage mock resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>const local = window.localStorage; const session = window.sessionStorage; const before = String(local.length) + ':' + String(session.length) + ':' + local.getItem('token') + ':' + session.getItem('session-token'); local.setItem('theme', 'dark'); local.removeItem('token'); session.setItem('scratch', 'xyz'); session.clear(); document.getElementById('out').textContent = before + '|' + String(local.length) + ':' + local.key(0) + ':' + String(session.length);</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var builder = Harness.builder(allocator);
+    defer builder.deinit();
+    _ = builder.html(html_bytes);
+    try builder.addLocalStorage("token", "abc");
+    try builder.addSessionStorage("session-token", "xyz");
+
+    var subject = try builder.build();
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "1:1:abc:xyz|1:theme:0");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+    try std.testing.expectEqualStrings("dark", subject.mocksMut().storage().local().get("theme").?);
+    try std.testing.expectEqual(@as(?[]const u8, null), subject.mocksMut().storage().local().get("token"));
+    try std.testing.expectEqual(@as(?[]const u8, null), subject.mocksMut().storage().session().get("session-token"));
+}
+
+test "regression: phase 35 fromHtmlWithUrlAndSessionStorage resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>const session = window.sessionStorage; const before = String(session.length) + ':' + session.getItem('session-token'); session.setItem('scratch', 'xyz'); session.removeItem('session-token'); document.getElementById('out').textContent = before + '|' + String(session.length) + ':' + session.getItem('scratch');</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    const seeds = [_]session.StorageSeed{
+        .{
+            .key = "session-token",
+            .value = "seed",
+        },
+    };
+
+    var subject = try Harness.fromHtmlWithUrlAndSessionStorage(
+        allocator,
+        "https://example.test/session",
+        html_bytes,
+        &seeds,
+    );
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "1:seed|1:xyz");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+    try std.testing.expectEqualStrings(
+        "https://example.test/session",
+        subject.url(),
+    );
+    try std.testing.expectEqual(@as(?[]const u8, null), subject.mocksMut().storage().session().get("session-token"));
+    try std.testing.expectEqualStrings("xyz", subject.mocksMut().storage().session().get("scratch").?);
+}
+
 test "regression: matchMedia mock resolves on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<main id='root'><button id='toggle'>Toggle</button><div id='out'></div><script>document.getElementById('toggle').addEventListener('click', () => { const mql = window.matchMedia('(max-width: 600px)'); document.getElementById('out').textContent = String(mql) + ':' + mql.media + ':' + String(mql.matches); });</script></main>";
@@ -1151,6 +1456,35 @@ test "regression: matchMedia mock resolves on the copied html snapshot" {
         "(max-width: 600px)",
         subject.mocksMut().matchMedia().calls()[0].query,
     );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: open and print mocks resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><div id='out'></div><script>window.open('https://example.test/popup', '_blank', 'noopener'); window.print(); document.getElementById('out').textContent = 'done';</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "done");
+    try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().open().calls().len);
+    try std.testing.expectEqualStrings(
+        "https://example.test/popup",
+        subject.mocksMut().open().calls()[0].url.?,
+    );
+    try std.testing.expectEqualStrings(
+        "_blank",
+        subject.mocksMut().open().calls()[0].target.?,
+    );
+    try std.testing.expectEqualStrings(
+        "noopener",
+        subject.mocksMut().open().calls()[0].features.?,
+    );
+    try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().print().calls().len);
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 

@@ -17,6 +17,10 @@ pub const FetchCall = mocks.FetchCall;
 pub const FetchResponse = mocks.FetchResponse;
 pub const DialogMocks = mocks.DialogMocks;
 pub const ClipboardMocks = mocks.ClipboardMocks;
+pub const OpenCall = mocks.OpenCall;
+pub const OpenMocks = mocks.OpenMocks;
+pub const PrintCall = mocks.PrintCall;
+pub const PrintMocks = mocks.PrintMocks;
 pub const LocationMocks = mocks.LocationMocks;
 pub const MatchMediaMocks = mocks.MatchMediaMocks;
 pub const MatchMediaRule = mocks.MatchMediaRule;
@@ -68,6 +72,82 @@ test "contract: Harness.fromHtmlWithUrlAndLocalStorage keeps explicit configurat
     );
 }
 
+test "contract: Harness.fromHtmlWithSessionStorage keeps explicit configuration" {
+    const allocator = std.testing.allocator;
+    const seeds = [_]StorageSeed{
+        .{
+            .key = "session-token",
+            .value = "seed",
+        },
+    };
+
+    var subject = try Harness.fromHtmlWithSessionStorage(
+        allocator,
+        "<main id='out'></main><script>const session = window.sessionStorage; document.getElementById('out').textContent = String(session) + ':' + String(session.length) + ':' + session.getItem('session-token') + ':' + session.key(0);</script>",
+        &seeds,
+    );
+    defer subject.deinit();
+
+    try std.testing.expectEqualStrings("https://app.local/", subject.url());
+    try subject.assertValue("#out", "[object Storage]:1:seed:session-token");
+    try std.testing.expectEqualStrings(
+        "seed",
+        subject.mocksMut().storage().session().get("session-token").?,
+    );
+}
+
+test "contract: Harness.fromHtmlWithUrlAndSessionStorage keeps explicit configuration" {
+    const allocator = std.testing.allocator;
+    const seeds = [_]StorageSeed{
+        .{
+            .key = "session-token",
+            .value = "seed",
+        },
+    };
+
+    var subject = try Harness.fromHtmlWithUrlAndSessionStorage(
+        allocator,
+        "https://app.local/tests",
+        "<main id='out'></main><script>const session = window.sessionStorage; session.setItem('scratch', 'xyz'); document.getElementById('out').textContent = session.getItem('session-token') + ':' + session.getItem('scratch') + ':' + String(session.length) + ':' + session.key(1);</script>",
+        &seeds,
+    );
+    defer subject.deinit();
+
+    try std.testing.expectEqualStrings("https://app.local/tests", subject.url());
+    try subject.assertValue("#out", "seed:xyz:2:scratch");
+    try std.testing.expectEqualStrings(
+        "seed",
+        subject.mocksMut().storage().session().get("session-token").?,
+    );
+    try std.testing.expectEqualStrings(
+        "xyz",
+        subject.mocksMut().storage().session().get("scratch").?,
+    );
+}
+
+test "contract: HarnessBuilder.addSessionStorage keeps explicit configuration" {
+    const allocator = std.testing.allocator;
+    var builder = Harness.builder(allocator);
+    defer builder.deinit();
+
+    _ = builder.url("https://app.local/tests");
+    _ = builder.html("<main id='out'></main><script>const local = window.localStorage; const session = window.sessionStorage; const before = String(local) + ':' + String(session) + ':' + String(local.length) + ':' + String(session.length); const token = local.getItem('token'); const sessionToken = session.getItem('session-token'); local.setItem('theme', 'dark'); local.removeItem('token'); session.setItem('scratch', 'xyz'); const sessionKey = session.key(1); session.clear(); document.getElementById('out').textContent = before + '|' + token + ':' + sessionToken + ':' + local.getItem('theme') + ':' + String(local.length) + ':' + String(local.key(0)) + ':' + String(session.length) + ':' + String(sessionKey);</script>");
+    try builder.addLocalStorage("token", "abc");
+    try builder.addSessionStorage("session-token", "xyz");
+
+    var subject = try builder.build();
+    defer subject.deinit();
+
+    try std.testing.expectEqualStrings("https://app.local/tests", subject.url());
+    try subject.assertValue("#out", "[object Storage]:[object Storage]:1:1|abc:xyz:dark:1:theme:0:scratch");
+    try std.testing.expectEqualStrings(
+        "dark",
+        subject.mocksMut().storage().local().get("theme").?,
+    );
+    try std.testing.expectEqual(@as(?[]const u8, null), subject.mocksMut().storage().local().get("token"));
+    try std.testing.expectEqual(@as(?[]const u8, null), subject.mocksMut().storage().session().get("session-token"));
+}
+
 test "contract: Harness.nowMs and Harness.advanceTime expose fake clock" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(allocator, "<main></main>");
@@ -88,7 +168,15 @@ test "failure: Harness.advanceTime rejects negative deltas" {
     try std.testing.expectEqual(@as(i64, 0), subject.nowMs());
 }
 
-test "contract: Harness.mocksMut exposes fetch, dialogs, clipboard, location, downloads, and storage" {
+test "failure: window.localStorage.setItem rejects missing arguments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<script>window.localStorage.setItem('theme')</script>"),
+    );
+}
+
+test "contract: Harness.mocksMut exposes fetch, dialogs, clipboard, open, print, location, downloads, and storage" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(allocator, "<main></main>");
     defer subject.deinit();
@@ -157,6 +245,8 @@ test "contract: Harness.mocksMut exposes fetch, dialogs, clipboard, location, do
         "xyz",
         subject.mocksMut().storage().session().get("session-token").?,
     );
+    try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().open().calls().len);
+    try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().print().calls().len);
 }
 
 test "contract: Harness.mocksMut.resetAll clears every family" {
@@ -172,6 +262,8 @@ test "contract: Harness.mocksMut.resetAll clears every family" {
         try mocks_view.dialogs().recordAlert("Notice");
         try mocks_view.clipboard().seedText("seeded");
         try mocks_view.clipboard().recordWrite("copied");
+        try mocks_view.open().fail("popup blocked");
+        try mocks_view.print().fail("print blocked");
         try mocks_view.location().setCurrent("https://example.test/next");
         try mocks_view.location().recordNavigation("https://example.test/next");
         try mocks_view.downloads().capture("report.csv", "downloaded bytes");
@@ -179,6 +271,12 @@ test "contract: Harness.mocksMut.resetAll clears every family" {
         try mocks_view.storage().seedLocal("token", "abc");
         try mocks_view.storage().seedSession("session-token", "xyz");
     }
+
+    try std.testing.expectError(
+        error.MockError,
+        subject.open("https://example.test/popup"),
+    );
+    try std.testing.expectError(error.MockError, subject.print());
 
     subject.mocksMut().resetAll();
 
@@ -191,6 +289,8 @@ test "contract: Harness.mocksMut.resetAll clears every family" {
     try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().dialogs().confirmMessages().len);
     try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().dialogs().promptMessages().len);
     try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().clipboard().writes().len);
+    try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().open().calls().len);
+    try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().print().calls().len);
     try std.testing.expectEqual(@as(?[]const u8, null), subject.mocksMut().location().currentUrl());
     try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().location().navigations().len);
     try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().downloads().artifacts().len);
@@ -198,6 +298,24 @@ test "contract: Harness.mocksMut.resetAll clears every family" {
     try std.testing.expectEqual(@as(?[]const u8, null), subject.mocksMut().storage().local().get("token"));
     try std.testing.expectEqual(@as(?[]const u8, null), subject.mocksMut().storage().session().get("session-token"));
     try std.testing.expectError(error.MockError, subject.readClipboard());
+}
+
+test "contract: Harness.open and Harness.print record calls through the registry" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(allocator, "<main></main>");
+    defer subject.deinit();
+
+    try subject.open("https://example.test/popup");
+    try subject.print();
+
+    try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().open().calls().len);
+    try std.testing.expectEqualStrings(
+        "https://example.test/popup",
+        subject.mocksMut().open().calls()[0].url.?,
+    );
+    try std.testing.expectEqual(@as(?[]const u8, null), subject.mocksMut().open().calls()[0].target);
+    try std.testing.expectEqual(@as(?[]const u8, null), subject.mocksMut().open().calls()[0].features);
+    try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().print().calls().len);
 }
 
 test "failure: malformed html is rejected" {
@@ -244,6 +362,19 @@ test "contract: Harness.assertExists resolves class selectors and combinators" {
     try subject.assertExists("main > section.panel > button.secondary");
 }
 
+test "contract: Harness.assertExists resolves universal selectors" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='app'><section id='child'></section></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertExists("*");
+    try subject.assertExists("main *");
+    try subject.assertExists("#app > *");
+}
+
 test "contract: Harness.fromHtml runs inline scripts during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -272,6 +403,39 @@ test "contract: Harness.fromHtml exposes currentScript and readyState during inl
     try subject.assertValue("#out", "first:loading:second:loading");
 }
 
+test "contract: Harness.fromHtml exposes document metadata and window.children during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<html id='html'><head><title>Example</title></head><body id='body'><main id='out'></main><script>const metadata = document.compatMode + ':' + document.characterSet + ':' + document.charset + ':' + document.contentType; const active = document.activeElement.getAttribute('id'); const documentChildren = document.children; const windowChildren = window.children; document.getElementById('out').textContent = metadata + ':' + active + ':' + String(documentChildren.length) + ':' + String(windowChildren.length) + ':' + documentChildren.item(0).getAttribute('id') + ':' + windowChildren.item(0).getAttribute('id');</script></body></html>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "CSS1Compat:UTF-8:UTF-8:text/html:body:1:1:html:html");
+}
+
+test "contract: Harness.fromHtml exposes document referrer and dir during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<html id='html' dir='ltr'><body id='body'><main id='out'></main><script>const referrer = '[' + document.referrer + ']'; const before = document.dir; document.dir = 'rtl'; document.getElementById('out').textContent = referrer + ':' + before + ':' + document.dir + ':' + document.documentElement.getAttribute('dir');</script></body></html>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "[]:ltr:rtl:rtl");
+}
+
+test "contract: Harness.fromHtml exposes window.name during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='out'></main><script>const before = window.name; window.name = 'updated'; document.getElementById('out').textContent = before + ':' + document.defaultView.name;</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", ":updated");
+}
+
 test "failure: Harness.fromHtml reports missing element access in inline scripts" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -290,6 +454,35 @@ test "failure: Harness.fromHtml rejects unsupported script syntax" {
         Harness.fromHtml(
             allocator,
             "<main id='out'>Before</main><script>document.getElementById('out').textContent = ;</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects property writes on window.name" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='out'></main><script>window.name.length = 1;</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects read-only document metadata assignment" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<html id='html'><body id='body'><script>document.compatMode = 'BackCompat';</script></body></html>",
+        ),
+    );
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<html id='html'><body id='body'><script>document.referrer = 'https://example.test/source';</script></body></html>",
         ),
     );
 }
@@ -494,6 +687,17 @@ test "contract: Harness.fromHtml runs form.elements RadioNodeList during bootstr
     defer subject.deinit();
 
     try subject.assertValue("#out", "2:3:0:a:1:b:c:[object RadioNodeList]");
+}
+
+test "contract: Harness.fromHtml runs RadioNodeList value assignment during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<div id='root'><form id='signup'><input type='radio' name='mode' id='mode-a' checked><input type='radio' name='mode' id='mode-b' value='b'><input type='radio' name='mode' id='mode-c' value='c'></form></div><div id='out'></div><script>const named = document.getElementById('signup').elements.namedItem('mode'); const initial = named.value; named.value = 'b'; const afterMatch = named.value; named.value = 'on'; const afterOn = named.value; const onA = String(document.getElementById('mode-a').checked); const onB = String(document.getElementById('mode-b').checked); named.value = 'missing'; document.getElementById('out').textContent = initial + ':' + afterMatch + ':' + afterOn + ':' + onA + ':' + onB + ':' + named.value + ':' + String(document.getElementById('mode-a').checked) + ':' + String(document.getElementById('mode-b').checked) + ':' + String(document.getElementById('mode-c').checked);</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "on:b:on:true:false::false:false:false");
 }
 
 test "contract: Harness.fromHtml runs select.options during bootstrap" {
@@ -837,6 +1041,45 @@ test "contract: Harness.fromHtml runs class and dataset views during bootstrap" 
     try subject.assertExists(".active");
     try subject.assertExists("[data-user-id]");
     try subject.assertExists("[data-kind=App]");
+}
+
+test "contract: Harness.fromHtml runs inline style declaration surface during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><div id='box' style='color: red; background-color: white;'></div><div id='out'></div><script>const box = document.getElementById('box'); const style = box.style; const before = style.cssText; const color = style.color; const length = style.length; const first = style.item(0); const background = style.getPropertyValue('background-color'); const removed = style.removeProperty('color'); style.backgroundColor = 'blue'; style.setProperty('border-top-width', '2px'); document.getElementById('out').textContent = before + '|' + color + '|' + String(length) + '|' + first + '|' + background + '|' + removed + '|' + box.getAttribute('style') + '|' + String(style);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "color: red; background-color: white;|red|2|color|white|red|background-color: blue; border-top-width: 2px;|background-color: blue; border-top-width: 2px;",
+    );
+}
+
+test "contract: Harness.fromHtml accepts style comments and important priority during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><div id='box' style='/* lead */ color: red !important; background-color: white; /* tail */'></div><div id='out'></div><script>const box = document.getElementById('box'); const style = box.style; const before = style.cssText; const color = style.getPropertyValue('color'); const length = style.length; const first = style.item(0); style.setProperty('border-top-width', '2px', 'important'); document.getElementById('out').textContent = before + '|' + color + '|' + String(length) + '|' + first + '|' + box.getAttribute('style') + '|' + String(style);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "color: red !important; background-color: white;|red|2|color|color: red !important; background-color: white; border-top-width: 2px !important;|color: red !important; background-color: white; border-top-width: 2px !important;",
+    );
+}
+
+test "contract: Harness.fromHtml reports style property priorities during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><div id='box' style='color: red !important; background-color: white;'></div><div id='out'></div><script>const style = document.getElementById('box').style; document.getElementById('out').textContent = style.getPropertyPriority('color') + ':' + style.getPropertyPriority('background-color') + ':' + style.getPropertyPriority('missing');</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "important::");
 }
 
 test "contract: Harness.fromHtml runs tree mutation append, prepend, and remove during bootstrap" {
@@ -1198,6 +1441,18 @@ test "failure: Harness.assertExists rejects malformed :dir selectors" {
     try std.testing.expectError(error.InvalidSelector, subject.assertExists("main:dir(up)"));
 }
 
+test "failure: Harness.fromHtmlWithUrl surfaces invalid Location.href navigation" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.MockError,
+        Harness.fromHtmlWithUrl(
+            allocator,
+            "https://example.test:8443/start?x#old",
+            "<script>window.location.href = '   ';</script>",
+        ),
+    );
+}
+
 test "contract: Harness.fromHtml resolves scope pseudo-class selectors during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -1440,6 +1695,38 @@ test "failure: Harness.fromHtml rejects empty attribute names in inline scripts"
     );
 }
 
+test "failure: Harness.fromHtml rejects malformed style declaration syntax" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='box' style='color: red;'></div><script>document.getElementById('box').style.cssText = 'color red';</script></main>",
+        ),
+    );
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='box'></div><script>document.getElementById('box').style.setProperty('bad name', 'x');</script></main>",
+        ),
+    );
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='box'></div><script>document.getElementById('box').style.setProperty('color', 'red', 'urgent');</script></main>",
+        ),
+    );
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='box'></div><script>document.getElementById('box').style.getPropertyPriority('color', 'extra');</script></main>",
+        ),
+    );
+}
+
 test "failure: Harness.fromHtml rejects whitespace classList tokens in inline scripts" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -1458,6 +1745,7 @@ test "failure: Harness.assertExists rejects malformed selectors" {
 
     try std.testing.expectError(error.InvalidSelector, subject.assertExists("main::before"));
     try std.testing.expectError(error.InvalidSelector, subject.assertExists("[data-state"));
+    try std.testing.expectError(error.InvalidSelector, subject.assertExists("main*"));
 }
 
 test "failure: Harness.assertExists rejects malformed nth pseudo-class selectors" {
@@ -1680,6 +1968,28 @@ test "failure: Harness.captureDownload rejects blank file names" {
     );
 }
 
+test "failure: HarnessBuilder.openFailure rejects bootstrap window.open" {
+    const allocator = std.testing.allocator;
+    var builder = Harness.builder(allocator);
+    defer builder.deinit();
+
+    _ = builder.html("<main id='out'></main><script>window.open('https://example.test/popup');</script>");
+    _ = builder.openFailure("popup blocked");
+
+    try std.testing.expectError(error.MockError, builder.build());
+}
+
+test "failure: HarnessBuilder.printFailure rejects bootstrap window.print" {
+    const allocator = std.testing.allocator;
+    var builder = Harness.builder(allocator);
+    defer builder.deinit();
+
+    _ = builder.html("<main id='out'></main><script>window.print();</script>");
+    _ = builder.printFailure("print blocked");
+
+    try std.testing.expectError(error.MockError, builder.build());
+}
+
 test "contract: Harness.setFiles updates selection and fires change" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -1752,6 +2062,64 @@ test "contract: Harness.fromHtmlWithUrl exposes location, URL, documentURI, and 
     );
 }
 
+test "contract: Harness.fromHtmlWithUrl exposes Location href and navigation methods" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtmlWithUrl(
+        allocator,
+        "https://example.test:8443/start?x#old",
+        "<main id='out'></main><script>const location = window.location; const before = location.href; location.assign('https://example.test:8443/assign'); const afterAssign = location.href; location.href = 'https://example.test:8443/href'; const afterHref = location.href; location.replace('https://example.test:8443/replace'); const afterReplace = location.href; location.reload(); const afterReload = location.href; document.getElementById('out').textContent = before + ':' + afterAssign + ':' + afterHref + ':' + afterReplace + ':' + afterReload;</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "https://example.test:8443/start?x#old:https://example.test:8443/assign:https://example.test:8443/href:https://example.test:8443/replace:https://example.test:8443/replace",
+    );
+    try std.testing.expectEqualStrings(
+        "https://example.test:8443/replace",
+        subject.mocksMut().location().currentUrl().?,
+    );
+    try std.testing.expectEqual(@as(usize, 4), subject.mocksMut().location().navigations().len);
+    try std.testing.expectEqualStrings("https://example.test:8443/assign", subject.mocksMut().location().navigations()[0]);
+    try std.testing.expectEqualStrings("https://example.test:8443/href", subject.mocksMut().location().navigations()[1]);
+    try std.testing.expectEqualStrings("https://example.test:8443/replace", subject.mocksMut().location().navigations()[2]);
+    try std.testing.expectEqualStrings("https://example.test:8443/replace", subject.mocksMut().location().navigations()[3]);
+}
+
+test "contract: Harness.fromHtmlWithUrl exposes window.history navigation methods" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtmlWithUrl(
+        allocator,
+        "https://example.test:8443/start?x#old",
+        "<main id='out'></main><script>const history = window.history; const beforeLength = history.length; history.replaceState(null, '', 'https://example.test:8443/replaced'); history.pushState(null, '', 'https://example.test:8443/pushed'); history.back(); history.forward(); history.go(-1); document.getElementById('out').textContent = String(beforeLength) + ':' + String(history.length) + ':' + String(history.state) + ':' + window.location.href;</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "1:2:null:https://example.test:8443/replaced",
+    );
+    try std.testing.expectEqual(@as(usize, 3), subject.mocksMut().location().navigations().len);
+    try std.testing.expectEqualStrings("https://example.test:8443/replaced", subject.mocksMut().location().navigations()[0]);
+    try std.testing.expectEqualStrings("https://example.test:8443/pushed", subject.mocksMut().location().navigations()[1]);
+    try std.testing.expectEqualStrings("https://example.test:8443/replaced", subject.mocksMut().location().navigations()[2]);
+}
+
+test "contract: Harness.fromHtmlWithUrl tracks limited history.state payloads" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtmlWithUrl(
+        allocator,
+        "https://example.test:8443/start?x#old",
+        "<main id='out'></main><script>const history = window.history; const before = String(history.state); history.replaceState('seed', '', 'https://example.test:8443/replaced'); const afterReplace = String(history.state); history.pushState('pushed', '', 'https://example.test:8443/pushed'); const afterPush = String(history.state); history.back(); const afterBack = String(history.state); document.getElementById('out').textContent = before + ':' + afterReplace + ':' + afterPush + ':' + afterBack + ':' + window.location.href;</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "null:seed:pushed:seed:https://example.test:8443/replaced",
+    );
+}
+
 test "contract: Harness.fromHtmlWithUrl exposes origin aliases" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtmlWithUrl(
@@ -1811,6 +2179,18 @@ test "failure: Harness.fromHtml rejects assignments to read-only document URL al
         Harness.fromHtml(
             allocator,
             "<main id='out'></main><script>document.URL = 'https://example.test/next';</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtmlWithUrl surfaces invalid window.history URLs" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.MockError,
+        Harness.fromHtmlWithUrl(
+            allocator,
+            "https://example.test:8443/start?x#old",
+            "<script>window.history.replaceState(null, '', '   ');</script>",
         ),
     );
 }

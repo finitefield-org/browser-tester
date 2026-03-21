@@ -199,6 +199,39 @@ fn session_resolves_document_origin_and_element_origin_aliases() {
 }
 
 #[test]
+fn session_resolves_web_storage_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>const local = window.localStorage; const session = document.defaultView.sessionStorage; const before = String(local) + ':' + String(session) + ':' + String(local.length) + ':' + String(session.length); const token = local.getItem('token'); local.setItem('theme', 'dark'); local.removeItem('token'); session.setItem('scratch', 'xyz'); const sessionKey = session.key(0); session.clear(); document.getElementById('out').textContent = before + '|' + token + ':' + local.getItem('theme') + ':' + String(local.length) + ':' + String(local.key(0)) + ':' + String(session.length) + ':' + String(sessionKey);</script>"
+                .to_string(),
+        ),
+        local_storage: {
+            let mut storage = BTreeMap::new();
+            storage.insert("token".to_string(), "abc".to_string());
+            storage
+        },
+    })
+    .expect("session should expose web storage");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "[object Storage]:[object Storage]:1:0|abc:dark:1:theme:0:scratch"
+    );
+    assert_eq!(
+        session
+            .mocks()
+            .storage()
+            .local()
+            .get("theme")
+            .map(String::as_str),
+        Some("dark")
+    );
+    assert!(session.mocks().storage().session().is_empty());
+}
+
+#[test]
 fn session_reports_script_errors_from_inline_bootstrap() {
     let error = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -561,6 +594,25 @@ fn session_resolves_form_elements_radio_node_list_through_inline_scripts() {
 }
 
 #[test]
+fn session_sets_radio_node_list_value_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><form id='signup'><input type='radio' name='mode' id='mode-a' value='a'><input type='radio' name='mode' id='mode-b' value='b'><input type='radio' name='mode' id='mode-c' value='c'></form></div><div id='out'></div><script>const named = document.getElementById('signup').elements.namedItem('mode'); named.value = 'b'; document.getElementById('out').textContent = named.value + ':' + String(document.getElementById('mode-a').checked) + ':' + String(document.getElementById('mode-b').checked) + ':' + String(document.getElementById('mode-c').checked);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute radio node list value scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "b:false:true:false"
+    );
+}
+
+#[test]
 fn session_resolves_select_options_through_inline_scripts() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -589,7 +641,10 @@ fn session_adds_and_removes_select_options_through_inline_scripts() {
     .expect("session should execute select.options mutation scripts");
 
     let out_id = session.dom().select("#out").unwrap()[0];
-    assert_eq!(session.dom().text_content_for_node(out_id), "1:2:1:extra:null");
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "1:2:1:extra:null"
+    );
     assert_eq!(session.dom().select("#extra").unwrap().len(), 1);
     assert!(session.dom().select("#first").unwrap().is_empty());
 }
@@ -842,6 +897,25 @@ fn session_resolves_document_scripts_through_inline_scripts() {
 }
 
 #[test]
+fn session_resolves_document_active_element_through_inline_scripts() {
+    let mut session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<input id='first'><div id='out'></div><script>document.getElementById('first').addEventListener('focus', () => { document.getElementById('out').textContent = document.activeElement.getAttribute('id'); });</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute document.activeElement scripts");
+
+    let first_id = session.dom().select("#first").unwrap()[0];
+    let out_id = session.dom().select("#out").unwrap()[0];
+    session.focus_node(first_id).expect("focus should work");
+
+    assert_eq!(session.dom().text_content_for_node(out_id), "first");
+}
+
+#[test]
 fn session_resolves_document_style_sheets_through_inline_scripts() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -857,6 +931,25 @@ fn session_resolves_document_style_sheets_through_inline_scripts() {
     assert_eq!(
         session.dom().text_content_for_node(out_id),
         "2:0:[object CSSStyleSheet]:[object CSSStyleSheet]:null"
+    );
+}
+
+#[test]
+fn session_resolves_document_style_sheets_named_item_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><style id='first-style'>.primary { color: red; }</style><link id='first-link' rel='stylesheet' href='a.css'><link id='ignored-link' rel='preload' href='b.css'></div><div id='out'></div><script>const sheets = document.styleSheets; const first = sheets.namedItem('first-style'); const second = sheets.namedItem('first-link'); document.getElementById('out').textContent = String(sheets.length) + ':' + String(first) + ':' + String(second) + ':' + String(sheets.namedItem('missing'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute document.styleSheets namedItem scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "2:[object CSSStyleSheet]:[object CSSStyleSheet]:null"
     );
 }
 
@@ -1055,21 +1148,155 @@ fn session_reports_document_anchors_on_non_elements_explicitly() {
 }
 
 #[test]
-fn session_reports_document_children_on_windows_explicitly() {
-    let error = Session::new(SessionConfig {
+fn session_resolves_window_children_through_default_view() {
+    let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
         html: Some(
-            "<div id='root'></div><div id='out'></div><script>document.defaultView.children.length;</script>"
+            "<div id='root'><span id='first'>First</span><span id='second'>Second</span></div><div id='out'></div><script>const children = document.defaultView.children; document.getElementById('out').textContent = String(children.length) + ':' + children.item(0).textContent + ':' + children.item(1).textContent + ':' + String(children.namedItem('first')) + ':' + String(children.namedItem('missing'));</script>"
                 .to_string(),
         ),
         local_storage: BTreeMap::new(),
     })
-    .expect_err("window children access should fail explicitly");
+    .expect("window.children should resolve through defaultView");
 
-    assert!(error.to_string().contains("Script error"));
-    assert!(error.to_string().contains("unsupported member access"));
-    assert!(error.to_string().contains("`children`"));
-    assert!(error.to_string().contains("window value"));
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "3:FirstSecond::null:null"
+    );
+}
+
+#[test]
+fn session_exposes_document_compat_mode() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = document.compatMode;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.compatMode should resolve through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "CSS1Compat");
+}
+
+#[test]
+fn session_exposes_document_character_set_and_charset_aliases() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = document.characterSet + ':' + document.charset;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.characterSet should resolve through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "UTF-8:UTF-8");
+}
+
+#[test]
+fn session_exposes_document_content_type() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = document.contentType;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.contentType should resolve through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "text/html");
+}
+
+#[test]
+fn session_exposes_document_referrer() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = '[' + document.referrer + ']';</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.referrer should resolve through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "[]");
+}
+
+#[test]
+fn session_exposes_window_name_getter_and_setter() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>const before = window.name; window.name = 'updated'; document.getElementById('out').textContent = before + ':' + document.defaultView.name;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("window.name should resolve through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), ":updated");
+}
+
+#[test]
+fn session_exposes_match_media_through_inline_scripts() {
+    let mut local_storage = BTreeMap::new();
+    local_storage.insert(
+        "__browser_tester_match_media__(prefers-color-scheme: dark)".to_string(),
+        "true".to_string(),
+    );
+
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>const list = window.matchMedia('(prefers-color-scheme: dark)'); document.getElementById('out').textContent = String(list.matches) + ':' + list.media + ':' + String(window.matchMedia('(prefers-color-scheme: dark)'));</script>"
+                .to_string(),
+        ),
+        local_storage,
+    })
+    .expect("matchMedia should resolve through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "true:(prefers-color-scheme: dark):[object MediaQueryList]"
+    );
+    assert_eq!(
+        session.mocks().match_media().calls(),
+        &[
+            bt_runtime::MatchMediaCall {
+                query: "(prefers-color-scheme: dark)".to_string(),
+            },
+            bt_runtime::MatchMediaCall {
+                query: "(prefers-color-scheme: dark)".to_string(),
+            }
+        ]
+    );
+    assert!(session.mocks().storage().local().is_empty());
+}
+
+#[test]
+fn session_exposes_document_dir_getter_and_setter() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root' dir='ltr'><div id='out'></div><script>const before = document.dir; document.dir = 'rtl'; document.getElementById('out').textContent = before + ':' + document.dir + ':' + document.documentElement.getAttribute('dir');</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.dir should resolve through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "ltr:rtl:rtl");
 }
 
 #[test]
@@ -1380,6 +1607,87 @@ fn session_wires_dialog_clipboard_and_location_mocks() {
 }
 
 #[test]
+fn session_print_records_calls_through_the_registry() {
+    let mut session = Session::new(SessionConfig::default()).expect("session should build");
+
+    session.print().expect("print should succeed by default");
+
+    assert_eq!(session.mocks().print().calls().len(), 1);
+}
+
+#[test]
+fn session_close_records_calls_through_the_registry() {
+    let mut session = Session::new(SessionConfig::default()).expect("session should build");
+
+    session.close().expect("close should succeed by default");
+
+    assert_eq!(session.mocks().close().calls().len(), 1);
+}
+
+#[test]
+fn session_open_records_calls_through_the_registry() {
+    let mut session = Session::new(SessionConfig::default()).expect("session should build");
+
+    session
+        .open(
+            Some("https://example.test/popup"),
+            Some("_blank"),
+            Some("noopener"),
+        )
+        .expect("open should succeed by default");
+
+    assert_eq!(session.mocks().open().calls().len(), 1);
+    assert_eq!(
+        session.mocks().open().calls()[0].url.as_deref(),
+        Some("https://example.test/popup")
+    );
+    assert_eq!(
+        session.mocks().open().calls()[0].target.as_deref(),
+        Some("_blank")
+    );
+    assert_eq!(
+        session.mocks().open().calls()[0].features.as_deref(),
+        Some("noopener")
+    );
+}
+
+#[test]
+fn session_rejects_close_failure_seed_during_bootstrap() {
+    let mut local_storage = BTreeMap::new();
+    local_storage.insert(
+        "__browser_tester_close_failure__".to_string(),
+        "window closed".to_string(),
+    );
+
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<main id='out'></main><script>window.close();</script>".to_string()),
+        local_storage,
+    })
+    .expect_err("close failure seed should fail bootstrap when window.close runs");
+
+    assert!(error.to_string().contains("window closed"));
+}
+
+#[test]
+fn session_rejects_open_failure_seed_during_bootstrap() {
+    let mut local_storage = BTreeMap::new();
+    local_storage.insert(
+        "__browser_tester_open_failure__".to_string(),
+        "popup blocked".to_string(),
+    );
+
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<main id='out'></main><script>window.open('https://example.test/popup');</script>".to_string()),
+        local_storage,
+    })
+    .expect_err("open failure seed should fail bootstrap when window.open runs");
+
+    assert!(error.to_string().contains("popup blocked"));
+}
+
+#[test]
 fn session_fetch_uses_mock_registry_and_reports_missing_rules() {
     let mut session = Session::new(SessionConfig::default()).expect("session should build");
 
@@ -1417,6 +1725,24 @@ fn session_fetch_uses_mock_registry_and_reports_missing_rules() {
             .to_string()
             .contains("no fetch mock configured for `https://example.test/api/missing`")
     );
+}
+
+#[test]
+fn session_rejects_print_failure_seed_during_bootstrap() {
+    let mut local_storage = BTreeMap::new();
+    local_storage.insert(
+        "__browser_tester_print_failure__".to_string(),
+        "print blocked".to_string(),
+    );
+
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<main id='out'></main><script>window.print();</script>".to_string()),
+        local_storage,
+    })
+    .expect_err("print failure seed should fail bootstrap when print is called");
+
+    assert!(error.to_string().contains("print blocked"));
 }
 
 #[test]

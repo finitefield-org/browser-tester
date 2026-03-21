@@ -112,14 +112,24 @@ Phase 7 is complete in this workspace.
 - HTML serialization broadening slice 2 (`template.content.innerHTML` / `DocumentFragment` serialization)
 
 The attribute reflection, class/dataset view, tree mutation, HTML serialization, and namespace-aware serialization slices are implemented in this workspace now, and collection API broadening slices 1 (`NodeList.forEach`), 2 (`document.scripts`), 3 (`document.anchors`), 4 (`NodeList.keys()` / `NodeList.values()` / `HTMLCollection.keys()` / `HTMLCollection.values()` / `entries()`), 5 (`Element.children` / `document.children` / `document.childNodes` / `element.childNodes` / `template.content.childNodes` / `template.content.children`), 6 (`document.forms`), 7 (`form.elements`), 8 (`select.options`), 9 (`select.selectedOptions`), 10 (`fieldset.elements`), 11 (`datalist.options`), 12 (`map.areas`), 13 (`table.tBodies`), 14 (`element.labels`), 15 (`document.images` / `document.links` / `document.embeds` / `document.plugins` / `document.applets` / `document.all`), 16 (`document.styleSheets`), 17 (`table.rows` / `tbody.rows` / `thead.rows` / `tfoot.rows` / `tr.cells`), 18 (`getElementsByTagName` / `getElementsByTagNameNS` / `getElementsByClassName` / `getElementsByName`), 19 (`entries()` helpers across `NodeList`, `HTMLCollection`, `StyleSheetList`, and `RadioNodeList`), and 20 (`select.options.add()` / `select.options.remove()`) are implemented as well.
-The next named work is broader CSS parsing beyond the bounded selector engine, if a specific user-visible gap needs it.
+The minimal inline style declaration slice, including comment stripping, `!important` priority handling, and `getPropertyPriority(...)`, is implemented; the next named work is broader CSS parsing beyond the bounded selector engine, if a specific user-visible gap needs it.
+`RadioNodeList.value` is writable in the form-elements slice, and unmatched assignments clear the checked radio group in this workspace.
 
 ## Phase 9: Document and Window Surface Expansion
 
-- `document.documentElement`, `document.head`, `document.body`
+- `document.documentElement`, `document.head`, `document.body`, `document.activeElement`, `document.referrer`, `document.dir`, `window.children`, and `window.name`
 - `document.title` and `window.title`
-- `document.location` and `window.location`
-- `document.URL`, `document.documentURI`, `document.baseURI`
+- `document.location` and `window.location` as a limited `Location` host object (`href`, `assign()`, `replace()`, `reload()`)
+- `document.URL`, `document.documentURI`, `document.baseURI`, `document.compatMode`, `document.characterSet`, `document.charset`, and `document.contentType`
 - `document.origin`, `window.origin`, `Element.baseURI`, and `Element.origin`
 
-The document and window alias slice is implemented in this workspace now.
+The document and window alias slice is implemented in this workspace now, including the document metadata, `document.referrer`, `document.dir`, `window.children`, and `window.name` aliases used during inline script bootstrap.
+
+## Phase 10: Limited Navigation Model
+
+- `window.history`
+- `history.length` and `history.state`
+- `back()`, `forward()`, and `go(delta)`
+- `pushState(...)` and `replaceState(...)`
+
+The limited history navigation slice is implemented in this workspace now.

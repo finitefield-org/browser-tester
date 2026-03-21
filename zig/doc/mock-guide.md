@@ -1,6 +1,6 @@
 # Mock Guide
 
-`Harness.mocksMut()` returns the typed test-only `MockRegistry`. Use it when a test needs deterministic network, dialogs, clipboard, location, matchMedia, download, file-input, or storage behavior.
+`Harness.mocksMut()` returns the typed test-only `MockRegistry`. Use it when a test needs deterministic network, dialogs, clipboard, location, matchMedia, download, file-input, or storage behavior, including seeding `window.localStorage` and `window.sessionStorage` before inline scripts run.
 
 The registry is intentionally narrow:
 
@@ -55,6 +55,29 @@ pub fn main() !void {
 }
 ```
 
+## Storage Example
+
+```zig
+const std = @import("std");
+const bt = @import("browser_tester_zig");
+
+pub fn main() !void {
+    var builder = bt.Harness.builder(std.heap.page_allocator);
+    defer builder.deinit();
+
+    _ = builder.html("<main id='out'></main><script>const local = window.localStorage; const session = window.sessionStorage; local.setItem('theme', 'dark'); session.setItem('scratch', 'xyz'); document.getElementById('out').textContent = local.getItem('token') + ':' + session.getItem('session-token') + '|' + local.getItem('theme') + ':' + session.getItem('scratch');</script>");
+    try builder.addLocalStorage("token", "abc");
+    try builder.addSessionStorage("session-token", "seed");
+
+    var harness = try builder.build();
+    defer harness.deinit();
+
+    try harness.assertValue("#out", "abc:seed|dark:xyz");
+    try std.testing.expectEqualStrings("dark", harness.mocksMut().storage().local().get("theme").?);
+    try std.testing.expectEqualStrings("xyz", harness.mocksMut().storage().session().get("scratch").?);
+}
+```
+
 ## Capture Model
 
 Call capture records the inputs requested by the test:
@@ -70,7 +93,7 @@ Artifact capture records the side effects a test needs to inspect:
 - `fetch.fail(...)` injects a deterministic failure
 - `clipboard.writes()` records written clipboard values and keeps the latest value available for subsequent reads
 - `downloads.artifacts()` records captured file names and bytes
-- `storage.local()` and `storage.session()` hold seeded key/value pairs for deterministic reads
+- `storage.local()` and `storage.session()` hold seeded key/value pairs for deterministic reads and reflect `setItem(...)`, `removeItem(...)`, and `clear()` mutations made through the script-side storage objects
 
 The same capture model is what keeps the mock families predictable without exposing browser internals.
 
@@ -89,6 +112,8 @@ The public mock API fails explicitly when the test has not seeded the required s
 - `Harness.readClipboard()` returns `error.MockError` when clipboard text has not been seeded
 - `Harness.captureDownload()` returns `error.MockError` for blank file names
 - `window.matchMedia()` returns `error.MockError` when no matching rule exists or a failure rule was seeded
+- `window.localStorage.setItem(...)`, `window.localStorage.removeItem(...)`, `window.localStorage.clear()`, `window.sessionStorage.setItem(...)`, `window.sessionStorage.removeItem(...)`, and `window.sessionStorage.clear()` return `error.ScriptRuntime` when called with the wrong arity or on unsupported members
+- `window.localStorage.key(index)` and `window.sessionStorage.key(index)` return `null` when the index is out of range
 - `Harness.advanceTime(-1)` returns `error.TimerError`
 - `Harness.setFiles()` returns `error.DomError` when the target is not a file input
 
@@ -103,6 +128,6 @@ The public mock API fails explicitly when the test has not seeded the required s
 - matchMedia query rules and call capture
 - download artifacts
 - file-input selections
-- storage seeds
+- storage seeds and the resulting script-side storage state
 
 That makes it safe to reuse the same harness in a test loop without carrying mock state across scenarios.

@@ -142,6 +142,7 @@ const SelectorAttribute = struct {
 };
 
 const SelectorQuery = struct {
+    universal: bool = false,
     tag: ?[]const u8 = null,
     id: ?[]const u8 = null,
     classes: std.ArrayListUnmanaged([]const u8) = .{},
@@ -286,6 +287,18 @@ pub const DomStore = struct {
 
     pub fn setFocusedNode(self: *DomStore, focused_node: ?NodeId) void {
         self.focused_node = focused_node;
+    }
+
+    pub fn activeElement(self: *const DomStore) ?NodeId {
+        if (self.focused_node) |focused| {
+            return focused;
+        }
+
+        if (self.documentBody()) |body| {
+            return body;
+        }
+
+        return self.documentElement();
     }
 
     pub fn targetFragment(self: *const DomStore) ?[]const u8 {
@@ -2365,6 +2378,14 @@ fn parseSelectorCompound(
         if (isHtmlWhitespace(byte) or isSelectorCombinatorByte(byte)) break;
 
         switch (byte) {
+            '*' => {
+                pos.* += 1;
+                if (query.universal or query.tag != null or query.id != null or query.classes.items.len > 0 or query.attributes.items.len > 0 or query.pseudos.items.len > 0) {
+                    return error.HtmlParse;
+                }
+                query.universal = true;
+                saw_token = true;
+            },
             '#' => {
                 pos.* += 1;
                 const token = try parseSelectorToken(selector, pos);
@@ -2391,7 +2412,7 @@ fn parseSelectorCompound(
             else => {
                 if (!isSelectorTokenByte(byte)) return error.HtmlParse;
                 const token = try parseSelectorToken(selector, pos);
-                if (query.tag != null) return error.HtmlParse;
+                if (query.tag != null or query.universal) return error.HtmlParse;
                 query.tag = token;
                 saw_token = true;
             },
@@ -4719,6 +4740,13 @@ test "phase one: selector subset matches ids, tags, and attributes" {
     defer allocator.free(by_tag);
     try std.testing.expectEqual(@as(usize, 1), by_tag.len);
     try std.testing.expectEqual(NodeId.new(1, 0), by_tag[0]);
+
+    const by_universal = try store.select(allocator, "*");
+    defer allocator.free(by_universal);
+    try std.testing.expectEqual(@as(usize, 3), by_universal.len);
+    try std.testing.expectEqual(NodeId.new(1, 0), by_universal[0]);
+    try std.testing.expectEqual(NodeId.new(2, 0), by_universal[1]);
+    try std.testing.expectEqual(NodeId.new(4, 0), by_universal[2]);
 
     const by_attr_exists = try store.select(allocator, "[disabled]");
     defer allocator.free(by_attr_exists);

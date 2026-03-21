@@ -4,8 +4,8 @@ use crate::syntax::{AssignTarget, Expr, Program, Statement};
 use crate::{
     CollectionEntryHandle, CollectionIteratorHandle, HostBindings, HtmlCollectionNamedItem,
     HtmlCollectionScope, HtmlCollectionTarget, ListenerTarget, NodeHandle, NodeListTarget,
-    RadioNodeListTarget, Result, ScriptError, ScriptValue as Value, StyleSheetListTarget,
-    StyleSheetTarget,
+    RadioNodeListTarget, Result, ScriptError, ScriptValue as Value, StorageTarget,
+    StyleSheetListTarget, StyleSheetTarget,
 };
 
 pub(crate) fn eval_program<H: HostBindings>(program: &Program, host: &mut H) -> Result<()> {
@@ -47,6 +47,8 @@ fn as_string(value: &Value) -> String {
         Value::Node(_) => "[object Node]".to_string(),
         Value::NodeList(_) => "[object NodeList]".to_string(),
         Value::RadioNodeList(_) => "[object RadioNodeList]".to_string(),
+        Value::Storage(_) => "[object Storage]".to_string(),
+        Value::MediaQueryList(_) => "[object MediaQueryList]".to_string(),
         Value::CollectionIterator(_) => "[object Iterator]".to_string(),
         Value::IteratorResult(_) => "[object IteratorResult]".to_string(),
         Value::CollectionEntry(_) => "[object IteratorEntry]".to_string(),
@@ -137,6 +139,10 @@ fn eval_assignment<H: HostBindings>(
                 (Value::NodeList(_), property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on node list value"
                 ))),
+                (Value::RadioNodeList(target), "value") => {
+                    host.radio_node_list_set_value(&target, &as_string(&value))?;
+                    Ok(())
+                }
                 (Value::RadioNodeList(_), property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on radio node list value"
                 ))),
@@ -165,6 +171,10 @@ fn eval_assignment<H: HostBindings>(
                     host.document_set_title(&as_string(&value))?;
                     Ok(())
                 }
+                (Value::Document, "dir") => {
+                    host.document_set_dir(&as_string(&value))?;
+                    Ok(())
+                }
                 (Value::Document, "location") => {
                     host.document_set_location(&as_string(&value))?;
                     Ok(())
@@ -173,10 +183,20 @@ fn eval_assignment<H: HostBindings>(
                     host.document_set_title(&as_string(&value))?;
                     Ok(())
                 }
+                (Value::Window, "name") => {
+                    host.set_window_name(&as_string(&value))?;
+                    Ok(())
+                }
                 (Value::Window, "location") => {
                     host.document_set_location(&as_string(&value))?;
                     Ok(())
                 }
+                (Value::Storage(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on storage value"
+                ))),
+                (Value::MediaQueryList(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on media query list value"
+                ))),
                 (Value::Document, property) | (Value::Window, property) => Err(ScriptError::new(
                     format!("unsupported assignment target: {property}"),
                 )),
@@ -296,6 +316,7 @@ fn eval_member<H: HostBindings>(
         }
         Value::Document if property == "baseURI" => Ok(Value::String(host.document_base_uri()?)),
         Value::Document if property == "origin" => Ok(Value::String(host.document_origin()?)),
+        Value::Document if property == "referrer" => Ok(Value::String(host.document_referrer()?)),
         Value::Document if property == "currentScript" => {
             Ok(match host.document_current_script()? {
                 Some(element) => Value::Element(element),
@@ -305,6 +326,16 @@ fn eval_member<H: HostBindings>(
         Value::Document if property == "readyState" => {
             Ok(Value::String(host.document_ready_state()?))
         }
+        Value::Document if property == "compatMode" => {
+            Ok(Value::String(host.document_compat_mode()?))
+        }
+        Value::Document if property == "characterSet" || property == "charset" => {
+            Ok(Value::String(host.document_character_set()?))
+        }
+        Value::Document if property == "contentType" => {
+            Ok(Value::String(host.document_content_type()?))
+        }
+        Value::Document if property == "dir" => Ok(Value::String(host.document_dir()?)),
         Value::Document if property == "head" => Ok(match host.document_head()? {
             Some(element) => Value::Element(element),
             None => Value::Null,
@@ -313,6 +344,12 @@ fn eval_member<H: HostBindings>(
             Some(element) => Value::Element(element),
             None => Value::Null,
         }),
+        Value::Document if property == "activeElement" => {
+            Ok(match host.document_active_element()? {
+                Some(element) => Value::Element(element),
+                None => Value::Null,
+            })
+        }
         Value::Document if property == "childNodes" => Ok(Value::NodeList(
             NodeListTarget::ChildNodes(HtmlCollectionScope::Document),
         )),
@@ -345,9 +382,19 @@ fn eval_member<H: HostBindings>(
         }
         Value::Window if property == "document" => Ok(Value::Document),
         Value::Document if property == "defaultView" => Ok(Value::Window),
+        Value::Window if property == "children" => Ok(Value::HtmlCollection(
+            HtmlCollectionTarget::DocumentChildren,
+        )),
+        Value::Window if property == "name" => Ok(Value::String(host.window_name()?)),
         Value::Window if property == "title" => Ok(Value::String(host.document_title()?)),
         Value::Window if property == "location" => Ok(Value::String(host.document_location()?)),
         Value::Window if property == "origin" => Ok(Value::String(host.document_origin()?)),
+        Value::Window if property == "localStorage" => Ok(Value::Storage(StorageTarget::Local)),
+        Value::Window if property == "sessionStorage" => Ok(Value::Storage(StorageTarget::Session)),
+        Value::MediaQueryList(list) if property == "matches" => Ok(Value::Boolean(list.matches())),
+        Value::MediaQueryList(list) if property == "media" => {
+            Ok(Value::String(list.media().to_string()))
+        }
         Value::Element(element) if property == "textContent" => {
             Ok(Value::String(host.element_text_content(element)?))
         }
@@ -504,6 +551,11 @@ fn eval_member<H: HostBindings>(
         Value::Node(_) => Err(unsupported_member_access(property, "node")),
         Value::NodeList(_) => Err(unsupported_member_access(property, "node list")),
         Value::RadioNodeList(_) => Err(unsupported_member_access(property, "radio node list")),
+        Value::MediaQueryList(_) => Err(unsupported_member_access(property, "media query list")),
+        Value::Storage(target) if property == "length" => {
+            Ok(Value::Number(host.storage_length(target)? as f64))
+        }
+        Value::Storage(_) => Err(unsupported_member_access(property, "storage")),
         Value::CollectionIterator(_) => Err(unsupported_member_access(property, "iterator")),
         Value::IteratorResult(_) => Err(unsupported_member_access(property, "iterator result")),
         Value::CollectionEntry(_) => Err(unsupported_member_access(property, "iterator entry")),
@@ -593,6 +645,51 @@ fn eval_method_call<H: HostBindings>(
             ))),
         },
         Value::Window => match method {
+            "open" => {
+                if args.len() > 3 {
+                    return Err(ScriptError::new("open() expects at most three arguments"));
+                }
+                let url = if let Some(expr) = args.first() {
+                    Some(as_string(&eval_expr(expr, env, host)?))
+                } else {
+                    None
+                };
+                let target = if let Some(expr) = args.get(1) {
+                    Some(as_string(&eval_expr(expr, env, host)?))
+                } else {
+                    None
+                };
+                let features = if let Some(expr) = args.get(2) {
+                    Some(as_string(&eval_expr(expr, env, host)?))
+                } else {
+                    None
+                };
+                host.window_open(url.as_deref(), target.as_deref(), features.as_deref())?;
+                Ok(Value::Undefined)
+            }
+            "close" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("close() expects no arguments"));
+                }
+                host.window_close()?;
+                Ok(Value::Undefined)
+            }
+            "print" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("print() expects no arguments"));
+                }
+                host.window_print()?;
+                Ok(Value::Undefined)
+            }
+            "matchMedia" => {
+                let [query_expr] = args else {
+                    return Err(ScriptError::new(
+                        "matchMedia() expects exactly one argument",
+                    ));
+                };
+                let query = as_string(&eval_expr(query_expr, env, host)?);
+                Ok(Value::MediaQueryList(host.match_media(&query)?))
+            }
             "addEventListener" => register_listener(ListenerTarget::Window, args, env, host),
             "document" => Ok(Value::Document),
             other => Err(ScriptError::new(format!(
@@ -671,6 +768,7 @@ fn eval_method_call<H: HostBindings>(
         },
         Value::StyleSheetList(target) => match method {
             "item" => style_sheet_list_item(&target, args, env, host),
+            "namedItem" => style_sheet_list_named_item(&target, args, env, host),
             "keys" => style_sheet_list_keys(&target, host),
             "values" => style_sheet_list_values(&target, host),
             "entries" => style_sheet_list_entries(&target, host),
@@ -719,6 +817,19 @@ fn eval_method_call<H: HostBindings>(
                 "unsupported RadioNodeList method: {other}"
             ))),
         },
+        Value::Storage(target) => match method {
+            "getItem" => storage_get_item(&target, args, env, host),
+            "setItem" => storage_set_item(&target, args, env, host),
+            "removeItem" => storage_remove_item(&target, args, env, host),
+            "clear" => storage_clear(&target, args, env, host),
+            "key" => storage_key(&target, args, env, host),
+            other => Err(ScriptError::new(format!(
+                "unsupported Storage method: {other}"
+            ))),
+        },
+        Value::MediaQueryList(_) => Err(ScriptError::new(format!(
+            "cannot call `{method}` on a media query list value"
+        ))),
         Value::CollectionIterator(iterator) => match method {
             "next" => collection_iterator_next(&iterator),
             other => Err(ScriptError::new(format!(
@@ -1464,6 +1575,27 @@ fn style_sheet_list_item<H: HostBindings>(
         .unwrap_or(Value::Null))
 }
 
+fn style_sheet_list_named_item<H: HostBindings>(
+    target: &StyleSheetListTarget,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [name_expr] = args else {
+        return Err(ScriptError::new(
+            "StyleSheetList.namedItem() expects exactly one argument",
+        ));
+    };
+
+    let name = as_string(&eval_expr(name_expr, env, host)?);
+    Ok(
+        match style_sheet_list_named_item_handle(target, &name, host)? {
+            Some(handle) => Value::StyleSheet(StyleSheetTarget::OwnerNode(handle)),
+            None => Value::Null,
+        },
+    )
+}
+
 fn style_sheet_list_keys<H: HostBindings>(
     target: &StyleSheetListTarget,
     host: &mut H,
@@ -1544,6 +1676,16 @@ fn style_sheet_list_items<H: HostBindings>(
 ) -> Result<Vec<crate::ElementHandle>> {
     match target {
         StyleSheetListTarget::Document => host.document_style_sheets_items(),
+    }
+}
+
+fn style_sheet_list_named_item_handle<H: HostBindings>(
+    target: &StyleSheetListTarget,
+    name: &str,
+    host: &mut H,
+) -> Result<Option<crate::ElementHandle>> {
+    match target {
+        StyleSheetListTarget::Document => host.document_style_sheets_named_item(name),
     }
 }
 
@@ -1831,6 +1973,88 @@ fn collection_entries(items: Vec<Value>) -> Value {
     )
 }
 
+fn storage_get_item<H: HostBindings>(
+    target: &StorageTarget,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [key_expr] = args else {
+        return Err(ScriptError::new("getItem() expects exactly one argument"));
+    };
+
+    let key = as_string(&eval_expr(key_expr, env, host)?);
+    Ok(match host.storage_get_item(target.clone(), &key)? {
+        Some(value) => Value::String(value),
+        None => Value::Null,
+    })
+}
+
+fn storage_set_item<H: HostBindings>(
+    target: &StorageTarget,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [key_expr, value_expr] = args else {
+        return Err(ScriptError::new("setItem() expects exactly two arguments"));
+    };
+
+    let key = as_string(&eval_expr(key_expr, env, host)?);
+    let value = as_string(&eval_expr(value_expr, env, host)?);
+    host.storage_set_item(target.clone(), &key, &value)?;
+    Ok(Value::Undefined)
+}
+
+fn storage_remove_item<H: HostBindings>(
+    target: &StorageTarget,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [key_expr] = args else {
+        return Err(ScriptError::new(
+            "removeItem() expects exactly one argument",
+        ));
+    };
+
+    let key = as_string(&eval_expr(key_expr, env, host)?);
+    host.storage_remove_item(target.clone(), &key)?;
+    Ok(Value::Undefined)
+}
+
+fn storage_clear<H: HostBindings>(
+    target: &StorageTarget,
+    args: &[Expr],
+    _env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new("clear() expects no arguments"));
+    }
+
+    host.storage_clear(target.clone())?;
+    Ok(Value::Undefined)
+}
+
+fn storage_key<H: HostBindings>(
+    target: &StorageTarget,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [index_expr] = args else {
+        return Err(ScriptError::new("key() expects exactly one argument"));
+    };
+
+    let index = index_from_value(&eval_expr(index_expr, env, host)?)
+        .ok_or_else(|| ScriptError::new("key() expects a non-negative integer argument"))?;
+    Ok(match host.storage_key(target.clone(), index)? {
+        Some(value) => Value::String(value),
+        None => Value::Null,
+    })
+}
+
 fn eval_add(left: Value, right: Value) -> Value {
     match (left, right) {
         (Value::Number(lhs), Value::Number(rhs)) => Value::Number(lhs + rhs),
@@ -1853,6 +2077,8 @@ fn is_truthy(value: &Value) -> bool {
         | Value::Node(_)
         | Value::NodeList(_)
         | Value::RadioNodeList(_)
+        | Value::Storage(_)
+        | Value::MediaQueryList(_)
         | Value::TemplateContent(_)
         | Value::CollectionIterator(_)
         | Value::IteratorResult(_)

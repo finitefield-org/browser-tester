@@ -14,6 +14,107 @@ pub const SessionConfig = struct {
     url: []const u8,
     html: ?[]const u8 = null,
     local_storage: []const StorageSeed = &.{},
+    session_storage: []const StorageSeed = &.{},
+    open_failure: ?[]const u8 = null,
+    print_failure: ?[]const u8 = null,
+};
+
+const HistoryEntry = struct {
+    url: []const u8,
+    state: ?[]const u8 = null,
+};
+
+const HistoryModel = struct {
+    allocator: std.mem.Allocator,
+    entries: std.ArrayListUnmanaged(HistoryEntry) = .{},
+    index: usize = 0,
+
+    fn init(allocator: std.mem.Allocator, initial_url: []const u8) errors.Result(HistoryModel) {
+        var model = HistoryModel{
+            .allocator = allocator,
+        };
+        try model.entries.append(allocator, .{
+            .url = try allocator.dupe(u8, initial_url),
+            .state = null,
+        });
+        model.index = 0;
+        return model;
+    }
+
+    fn deinit(self: *HistoryModel) void {
+        self.entries.deinit(self.allocator);
+    }
+
+    fn length(self: *const HistoryModel) usize {
+        return self.entries.items.len;
+    }
+
+    fn currentState(self: *const HistoryModel) ?[]const u8 {
+        return self.entries.items[self.index].state;
+    }
+
+    fn current(self: *const HistoryModel) []const u8 {
+        return self.entries.items[self.index].url;
+    }
+
+    fn copyState(self: *HistoryModel, state: ?[]const u8) errors.Result(?[]const u8) {
+        if (state) |value| {
+            return try self.allocator.dupe(u8, value);
+        }
+        return null;
+    }
+
+    fn push(self: *HistoryModel, state: ?[]const u8, url: []const u8) errors.Result([]const u8) {
+        if (self.index + 1 < self.entries.items.len) {
+            self.entries.items.len = self.index + 1;
+        }
+
+        const state_copy = try self.copyState(state);
+        const copied = try self.allocator.dupe(u8, url);
+        try self.entries.append(self.allocator, .{
+            .url = copied,
+            .state = state_copy,
+        });
+        self.index = self.entries.items.len - 1;
+        return copied;
+    }
+
+    fn replace(self: *HistoryModel, state: ?[]const u8, url: []const u8) errors.Result([]const u8) {
+        const state_copy = try self.copyState(state);
+        const copied = try self.allocator.dupe(u8, url);
+        if (self.entries.items.len == 0) {
+            try self.entries.append(self.allocator, .{
+                .url = copied,
+                .state = state_copy,
+            });
+            self.index = 0;
+            return copied;
+        }
+
+        self.entries.items[self.index] = .{
+            .url = copied,
+            .state = state_copy,
+        };
+        return copied;
+    }
+
+    fn go(self: *HistoryModel, delta: isize) ?[]const u8 {
+        if (delta == 0) {
+            return self.current();
+        }
+
+        if (delta < 0) {
+            const steps: usize = @intCast(@abs(delta));
+            if (steps > self.index) return null;
+            self.index -= steps;
+            return self.current();
+        }
+
+        const steps: usize = @intCast(delta);
+        if (self.index + steps >= self.entries.items.len) return null;
+        self.index += steps;
+        return self.current();
+    }
 };
 
 pub const Session = struct {
@@ -24,7 +125,9 @@ pub const Session = struct {
     script_runtime: script.ScriptRuntime,
     script_event_listeners: std.ArrayListUnmanaged(script.ScriptListenerRecord) = .{},
     mock_registry: mocks.MockRegistry,
+    history: HistoryModel,
     clock_ms: i64 = 0,
+    window_name: []const u8 = "",
 
     pub fn init(allocator: std.mem.Allocator, config: SessionConfig) errors.Result(Session) {
         const arena = try allocator.create(std.heap.ArenaAllocator);
@@ -49,6 +152,13 @@ pub const Session = struct {
                 .value = try arena_alloc.dupe(u8, seed.value),
             };
         }
+        const session_storage_copy = try arena_alloc.alloc(StorageSeed, config.session_storage.len);
+        for (config.session_storage, 0..) |seed, index| {
+            session_storage_copy[index] = .{
+                .key = try arena_alloc.dupe(u8, seed.key),
+                .value = try arena_alloc.dupe(u8, seed.value),
+            };
+        }
 
         var dom_store = try dom.DomStore.init(allocator);
         errdefer dom_store.deinit();
@@ -62,7 +172,22 @@ pub const Session = struct {
                 storage_copy[index].value,
             );
         }
+        for (config.session_storage, 0..) |_, index| {
+            try mock_registry.storage().seedSession(
+                session_storage_copy[index].key,
+                session_storage_copy[index].value,
+            );
+        }
+        if (config.open_failure) |message| {
+            try mock_registry.open().fail(message);
+        }
+        if (config.print_failure) |message| {
+            try mock_registry.print().fail(message);
+        }
         try mock_registry.location().setCurrent(url_copy);
+        var history = try HistoryModel.init(arena_alloc, url_copy);
+        errdefer history.deinit();
+        var window_name: []const u8 = "";
         if (html_copy) |html_source| {
             try dom_store.bootstrapHtml(html_source);
         }
@@ -74,7 +199,12 @@ pub const Session = struct {
                 .listeners = &script_event_listeners,
                 .location = mock_registry.location(),
                 .match_media = mock_registry.matchMedia(),
+                .open_mocks = mock_registry.open(),
+                .print_mocks = mock_registry.print(),
+                .history = &history,
                 .allocator = arena.allocator(),
+                .window_name = &window_name,
+                .storage = mock_registry.storage(),
             };
             try script_runtime.bootstrapInlineScripts(allocator, &bootstrap_host);
         }
@@ -86,17 +216,21 @@ pub const Session = struct {
                 .url = url_copy,
                 .html = html_copy,
                 .local_storage = storage_copy,
+                .session_storage = session_storage_copy,
             },
             .dom_store = dom_store,
             .script_runtime = script_runtime,
             .script_event_listeners = script_event_listeners,
             .mock_registry = mock_registry,
+            .history = history,
             .clock_ms = 0,
+            .window_name = window_name,
         };
     }
 
     pub fn deinit(self: *Session) void {
         self.mock_registry.deinit();
+        self.history.deinit();
         self.script_event_listeners.deinit(self.arena.allocator());
         self.script_runtime.deinit();
         self.dom_store.deinit();
@@ -114,6 +248,10 @@ pub const Session = struct {
 
     pub fn localStorage(self: *const Session) []const StorageSeed {
         return self.config.local_storage;
+    }
+
+    pub fn sessionStorage(self: *const Session) []const StorageSeed {
+        return self.config.session_storage;
     }
 
     pub fn nowMs(self: *const Session) i64 {
@@ -147,6 +285,76 @@ pub const Session = struct {
         return @constCast(&self.mock_registry).location().currentUrl() orelse self.config.url;
     }
 
+    pub fn assignLocation(self: *Session, url_source: []const u8) errors.Result(void) {
+        const trimmed = std.mem.trim(u8, url_source, " \t\r\n");
+        if (trimmed.len == 0) return error.MockError;
+
+        const target = try self.history.push(null, trimmed);
+        try syncLocationState(self.mock_registry.location(), &self.dom_store, target, true);
+        return;
+    }
+
+    pub fn replaceLocation(self: *Session, url_source: []const u8) errors.Result(void) {
+        const trimmed = std.mem.trim(u8, url_source, " \t\r\n");
+        if (trimmed.len == 0) return error.MockError;
+
+        const target = try self.history.replace(null, trimmed);
+        try syncLocationState(self.mock_registry.location(), &self.dom_store, target, true);
+        return;
+    }
+
+    pub fn reloadLocation(self: *Session) errors.Result(void) {
+        const target = self.history.current();
+        try syncLocationState(self.mock_registry.location(), &self.dom_store, target, true);
+        return;
+    }
+
+    pub fn historyPushState(self: *Session, state: ?[]const u8, url_source: []const u8) errors.Result(void) {
+        const trimmed = std.mem.trim(u8, url_source, " \t\r\n");
+        if (trimmed.len == 0) return error.MockError;
+
+        const target = try self.history.push(state, trimmed);
+        try syncLocationState(self.mock_registry.location(), &self.dom_store, target, false);
+        return;
+    }
+
+    pub fn historyReplaceState(self: *Session, state: ?[]const u8, url_source: []const u8) errors.Result(void) {
+        const trimmed = std.mem.trim(u8, url_source, " \t\r\n");
+        if (trimmed.len == 0) return error.MockError;
+
+        const target = try self.history.replace(state, trimmed);
+        try syncLocationState(self.mock_registry.location(), &self.dom_store, target, false);
+        return;
+    }
+
+    pub fn historyLength(self: *const Session) usize {
+        return self.history.length();
+    }
+
+    pub fn historyState(self: *const Session) ?[]const u8 {
+        return self.history.currentState();
+    }
+
+    pub fn historyBack(self: *Session) errors.Result(void) {
+        return self.historyGo(-1);
+    }
+
+    pub fn historyForward(self: *Session) errors.Result(void) {
+        return self.historyGo(1);
+    }
+
+    pub fn historyGo(self: *Session, delta: isize) errors.Result(void) {
+        if (delta == 0) {
+            try self.reloadLocation();
+            return;
+        }
+
+        if (self.history.go(delta)) |target| {
+            try syncLocationState(self.mock_registry.location(), &self.dom_store, target, true);
+        }
+        return;
+    }
+
     pub fn documentElement(self: *const Session) ?dom.NodeId {
         return self.dom_store.documentElement();
     }
@@ -161,6 +369,104 @@ pub const Session = struct {
 
     pub fn documentTitle(self: *const Session) []const u8 {
         return self.dom_store.documentTitle();
+    }
+
+    pub fn documentCompatMode(self: *const Session) []const u8 {
+        _ = self;
+        return "CSS1Compat";
+    }
+
+    pub fn documentCharacterSet(self: *const Session) []const u8 {
+        _ = self;
+        return "UTF-8";
+    }
+
+    pub fn documentContentType(self: *const Session) []const u8 {
+        _ = self;
+        return "text/html";
+    }
+
+    pub fn documentReferrer(self: *const Session) []const u8 {
+        _ = self;
+        return "";
+    }
+
+    pub fn windowName(self: *const Session) []const u8 {
+        return self.window_name;
+    }
+
+    pub fn setWindowName(self: *Session, value: []const u8) errors.Result(void) {
+        self.window_name = try self.arena.allocator().dupe(u8, value);
+        return;
+    }
+
+    fn storageMap(self: *const Session, target: script.StorageTarget) *std.StringArrayHashMapUnmanaged([]const u8) {
+        const storage = @constCast(&self.mock_registry).storage();
+        return switch (target) {
+            .local => storage.local(),
+            .session => storage.session(),
+        };
+    }
+
+    fn storageMapMut(self: *Session, target: script.StorageTarget) *std.StringArrayHashMapUnmanaged([]const u8) {
+        return self.storageMap(target);
+    }
+
+    pub fn storageLength(self: *const Session, target: script.StorageTarget) usize {
+        return self.storageMap(target).count();
+    }
+
+    pub fn storageGetItem(self: *const Session, target: script.StorageTarget, key: []const u8) ?[]const u8 {
+        return self.storageMap(target).get(key);
+    }
+
+    pub fn storageSetItem(
+        self: *Session,
+        target: script.StorageTarget,
+        key: []const u8,
+        value: []const u8,
+    ) errors.Result(void) {
+        const storage = self.storageMapMut(target);
+        if (storage.getPtr(key)) |value_ptr| {
+            value_ptr.* = try self.arena.allocator().dupe(u8, value);
+            return;
+        }
+
+        const key_copy = try self.arena.allocator().dupe(u8, key);
+        const value_copy = try self.arena.allocator().dupe(u8, value);
+        try storage.put(self.arena.allocator(), key_copy, value_copy);
+        return;
+    }
+
+    pub fn storageRemoveItem(self: *Session, target: script.StorageTarget, key: []const u8) errors.Result(void) {
+        _ = self.storageMapMut(target).orderedRemove(key);
+        return;
+    }
+
+    pub fn storageClear(self: *Session, target: script.StorageTarget) errors.Result(void) {
+        self.storageMapMut(target).clearRetainingCapacity();
+        return;
+    }
+
+    pub fn storageKey(self: *const Session, target: script.StorageTarget, index: usize) ?[]const u8 {
+        const keys = self.storageMap(target).keys();
+        if (index >= keys.len) return null;
+        return keys[index];
+    }
+
+    pub fn documentDir(self: *const Session) []const u8 {
+        const document_element = self.dom_store.documentElement() orelse return "";
+        return (self.dom_store.getAttribute(document_element, "dir") catch return "") orelse "";
+    }
+
+    pub fn setDocumentDir(self: *Session, value: []const u8) errors.Result(void) {
+        const document_element = self.dom_store.documentElement() orelse return;
+        try self.dom_store.setAttribute(document_element, "dir", value);
+        return;
+    }
+
+    pub fn documentActiveElement(self: *const Session) ?dom.NodeId {
+        return self.dom_store.activeElement();
     }
 
     pub fn documentReadyState(self: *const Session) []const u8 {
@@ -205,6 +511,21 @@ pub const Session = struct {
         return;
     }
 
+    pub fn open(
+        self: *Session,
+        url_source: ?[]const u8,
+        target: ?[]const u8,
+        features: ?[]const u8,
+    ) errors.Result(void) {
+        try self.mock_registry.open().recordCall(url_source, target, features);
+        return;
+    }
+
+    pub fn print(self: *Session) errors.Result(void) {
+        try self.mock_registry.print().recordCall();
+        return;
+    }
+
     pub fn captureDownload(
         self: *Session,
         file_name: []const u8,
@@ -242,13 +563,7 @@ pub const Session = struct {
     }
 
     pub fn navigate(self: *Session, url_source: []const u8) errors.Result(void) {
-        const trimmed = std.mem.trim(u8, url_source, " \t\r\n");
-        if (trimmed.len == 0) return error.MockError;
-
-        try self.mock_registry.location().setCurrent(trimmed);
-        try self.mock_registry.location().recordNavigation(trimmed);
-        try self.dom_store.setTargetFragment(fragmentIdentifierFromUrl(trimmed));
-        return;
+        return self.assignLocation(url_source);
     }
 
     pub fn matchMedia(self: *Session, query_source: []const u8) errors.Result(bool) {
@@ -575,7 +890,12 @@ const BootstrapHost = struct {
     listeners: *std.ArrayListUnmanaged(script.ScriptListenerRecord),
     location: *mocks.LocationMocks,
     match_media: *mocks.MatchMediaMocks,
+    open_mocks: *mocks.OpenMocks,
+    print_mocks: *mocks.PrintMocks,
+    history: *HistoryModel,
     allocator: std.mem.Allocator,
+    window_name: *[]const u8,
+    storage: *mocks.StorageSeeds,
     current_script: ?dom.NodeId = null,
 
     pub fn domStore(self: *const BootstrapHost) *const dom.DomStore {
@@ -606,6 +926,103 @@ const BootstrapHost = struct {
         return self.dom_store.documentTitle();
     }
 
+    pub fn documentCompatMode(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "CSS1Compat";
+    }
+
+    pub fn documentCharacterSet(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "UTF-8";
+    }
+
+    pub fn documentContentType(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "text/html";
+    }
+
+    pub fn documentReferrer(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "";
+    }
+
+    pub fn windowName(self: *const BootstrapHost) []const u8 {
+        return self.window_name.*;
+    }
+
+    pub fn setWindowName(self: *BootstrapHost, value: []const u8) errors.Result(void) {
+        self.window_name.* = try self.allocator.dupe(u8, value);
+        return;
+    }
+
+    fn storageMap(self: *const BootstrapHost, target: script.StorageTarget) *std.StringArrayHashMapUnmanaged([]const u8) {
+        return switch (target) {
+            .local => self.storage.local(),
+            .session => self.storage.session(),
+        };
+    }
+
+    fn storageMapMut(self: *BootstrapHost, target: script.StorageTarget) *std.StringArrayHashMapUnmanaged([]const u8) {
+        return self.storageMap(target);
+    }
+
+    pub fn storageLength(self: *const BootstrapHost, target: script.StorageTarget) usize {
+        return self.storageMap(target).count();
+    }
+
+    pub fn storageGetItem(self: *const BootstrapHost, target: script.StorageTarget, key: []const u8) ?[]const u8 {
+        return self.storageMap(target).get(key);
+    }
+
+    pub fn storageSetItem(
+        self: *BootstrapHost,
+        target: script.StorageTarget,
+        key: []const u8,
+        value: []const u8,
+    ) errors.Result(void) {
+        const storage = self.storageMapMut(target);
+        if (storage.getPtr(key)) |value_ptr| {
+            value_ptr.* = try self.allocator.dupe(u8, value);
+            return;
+        }
+
+        const key_copy = try self.allocator.dupe(u8, key);
+        const value_copy = try self.allocator.dupe(u8, value);
+        try storage.put(self.allocator, key_copy, value_copy);
+        return;
+    }
+
+    pub fn storageRemoveItem(self: *BootstrapHost, target: script.StorageTarget, key: []const u8) errors.Result(void) {
+        _ = self.storageMapMut(target).orderedRemove(key);
+        return;
+    }
+
+    pub fn storageClear(self: *BootstrapHost, target: script.StorageTarget) errors.Result(void) {
+        self.storageMapMut(target).clearRetainingCapacity();
+        return;
+    }
+
+    pub fn storageKey(self: *const BootstrapHost, target: script.StorageTarget, index: usize) ?[]const u8 {
+        const keys = self.storageMap(target).keys();
+        if (index >= keys.len) return null;
+        return keys[index];
+    }
+
+    pub fn documentDir(self: *const BootstrapHost) []const u8 {
+        const document_element = self.dom_store.documentElement() orelse return "";
+        return (self.dom_store.getAttribute(document_element, "dir") catch return "") orelse "";
+    }
+
+    pub fn setDocumentDir(self: *BootstrapHost, value: []const u8) errors.Result(void) {
+        const document_element = self.dom_store.documentElement() orelse return;
+        try self.dom_store.setAttribute(document_element, "dir", value);
+        return;
+    }
+
+    pub fn documentActiveElement(self: *const BootstrapHost) ?dom.NodeId {
+        return self.dom_store.activeElement();
+    }
+
     pub fn documentReadyState(self: *const BootstrapHost) []const u8 {
         _ = self;
         return "loading";
@@ -624,18 +1041,97 @@ const BootstrapHost = struct {
         return;
     }
 
-    pub fn navigate(self: *BootstrapHost, url_source: []const u8) errors.Result(void) {
+    pub fn assignLocation(self: *BootstrapHost, url_source: []const u8) errors.Result(void) {
         const trimmed = std.mem.trim(u8, url_source, " \t\r\n");
         if (trimmed.len == 0) return error.MockError;
 
-        try self.location.setCurrent(trimmed);
-        try self.location.recordNavigation(trimmed);
-        try self.dom_store.setTargetFragment(fragmentIdentifierFromUrl(trimmed));
+        const target = try self.history.push(null, trimmed);
+        try syncLocationState(self.location, self.dom_store, target, true);
         return;
+    }
+
+    pub fn replaceLocation(self: *BootstrapHost, url_source: []const u8) errors.Result(void) {
+        const trimmed = std.mem.trim(u8, url_source, " \t\r\n");
+        if (trimmed.len == 0) return error.MockError;
+
+        const target = try self.history.replace(null, trimmed);
+        try syncLocationState(self.location, self.dom_store, target, true);
+        return;
+    }
+
+    pub fn reloadLocation(self: *BootstrapHost) errors.Result(void) {
+        const target = self.history.current();
+        try syncLocationState(self.location, self.dom_store, target, true);
+        return;
+    }
+
+    pub fn historyLength(self: *const BootstrapHost) usize {
+        return self.history.length();
+    }
+
+    pub fn historyState(self: *const BootstrapHost) ?[]const u8 {
+        return self.history.currentState();
+    }
+
+    pub fn historyBack(self: *BootstrapHost) errors.Result(void) {
+        return self.historyGo(-1);
+    }
+
+    pub fn historyForward(self: *BootstrapHost) errors.Result(void) {
+        return self.historyGo(1);
+    }
+
+    pub fn historyGo(self: *BootstrapHost, delta: isize) errors.Result(void) {
+        if (delta == 0) {
+            try self.reloadLocation();
+            return;
+        }
+
+        if (self.history.go(delta)) |target| {
+            try syncLocationState(self.location, self.dom_store, target, true);
+        }
+        return;
+    }
+
+    pub fn historyPushState(self: *BootstrapHost, state: ?[]const u8, url_source: []const u8) errors.Result(void) {
+        const trimmed = std.mem.trim(u8, url_source, " \t\r\n");
+        if (trimmed.len == 0) return error.MockError;
+
+        const target = try self.history.push(state, trimmed);
+        try syncLocationState(self.location, self.dom_store, target, false);
+        return;
+    }
+
+    pub fn historyReplaceState(self: *BootstrapHost, state: ?[]const u8, url_source: []const u8) errors.Result(void) {
+        const trimmed = std.mem.trim(u8, url_source, " \t\r\n");
+        if (trimmed.len == 0) return error.MockError;
+
+        const target = try self.history.replace(state, trimmed);
+        try syncLocationState(self.location, self.dom_store, target, false);
+        return;
+    }
+
+    pub fn navigate(self: *BootstrapHost, url_source: []const u8) errors.Result(void) {
+        return self.assignLocation(url_source);
     }
 
     pub fn matchMedia(self: *BootstrapHost, query_source: []const u8) errors.Result(bool) {
         return matchMediaQuery(self.match_media, query_source);
+    }
+
+    pub fn open(
+        self: *BootstrapHost,
+        url_source: ?[]const u8,
+        target: ?[]const u8,
+        features: ?[]const u8,
+    ) errors.Result(void) {
+        try self.open_mocks.recordCall(url_source, target, features);
+        return;
+    }
+
+    pub fn print(self: *BootstrapHost) errors.Result(void) {
+        try self.print_mocks.recordCall();
+        return;
     }
 
     pub fn registerEventListener(
@@ -695,6 +1191,20 @@ fn matchMediaQuery(
     }
 
     return error.MockError;
+}
+
+fn syncLocationState(
+    location: *mocks.LocationMocks,
+    dom_store: *dom.DomStore,
+    url: []const u8,
+    record_navigation: bool,
+) errors.Result(void) {
+    try location.setCurrent(url);
+    if (record_navigation) {
+        try location.recordNavigation(url);
+    }
+    try dom_store.setTargetFragment(fragmentIdentifierFromUrl(url));
+    return;
 }
 
 fn duplicateScriptFunction(

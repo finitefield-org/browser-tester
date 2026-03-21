@@ -93,6 +93,35 @@ pub enum StyleSheetListTarget {
     Document,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum StorageTarget {
+    Local,
+    Session,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MediaQueryListState {
+    media: String,
+    matches: bool,
+}
+
+impl MediaQueryListState {
+    pub fn new(media: impl Into<String>, matches: bool) -> Self {
+        Self {
+            media: media.into(),
+            matches,
+        }
+    }
+
+    pub fn media(&self) -> &str {
+        &self.media
+    }
+
+    pub fn matches(&self) -> bool {
+        self.matches
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RadioNodeListTarget {
     FormElements {
@@ -312,6 +341,8 @@ pub enum ScriptValue {
     TemplateContent(ElementHandle),
     HtmlCollection(HtmlCollectionTarget),
     StyleSheetList(StyleSheetListTarget),
+    Storage(StorageTarget),
+    MediaQueryList(MediaQueryListState),
     StyleSheet(StyleSheetTarget),
     Node(NodeHandle),
     NodeList(NodeListTarget),
@@ -398,6 +429,10 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("document.body"))
     }
 
+    fn document_active_element(&mut self) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready("document.activeElement"))
+    }
+
     fn document_title(&mut self) -> Result<String> {
         Err(ScriptError::phase_not_ready("document.title"))
     }
@@ -430,12 +465,107 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("document.origin"))
     }
 
+    fn document_referrer(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("document.referrer"))
+    }
+
+    fn match_media(&mut self, _query: &str) -> Result<MediaQueryListState> {
+        Err(ScriptError::phase_not_ready("window.matchMedia"))
+    }
+
+    fn window_open(
+        &mut self,
+        _url: Option<&str>,
+        _target: Option<&str>,
+        _features: Option<&str>,
+    ) -> Result<()> {
+        Err(ScriptError::phase_not_ready("window.open"))
+    }
+
+    fn window_close(&mut self) -> Result<()> {
+        Err(ScriptError::phase_not_ready("window.close"))
+    }
+
+    fn window_print(&mut self) -> Result<()> {
+        Err(ScriptError::phase_not_ready("window.print"))
+    }
+
+    fn window_name(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("window.name"))
+    }
+
+    fn set_window_name(&mut self, _value: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready("window.name"))
+    }
+
+    fn storage_length(&mut self, target: StorageTarget) -> Result<usize> {
+        Err(ScriptError::phase_not_ready(match target {
+            StorageTarget::Local => "window.localStorage",
+            StorageTarget::Session => "window.sessionStorage",
+        }))
+    }
+
+    fn storage_get_item(&mut self, target: StorageTarget, _key: &str) -> Result<Option<String>> {
+        Err(ScriptError::phase_not_ready(match target {
+            StorageTarget::Local => "window.localStorage",
+            StorageTarget::Session => "window.sessionStorage",
+        }))
+    }
+
+    fn storage_set_item(&mut self, target: StorageTarget, _key: &str, _value: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready(match target {
+            StorageTarget::Local => "window.localStorage",
+            StorageTarget::Session => "window.sessionStorage",
+        }))
+    }
+
+    fn storage_remove_item(&mut self, target: StorageTarget, _key: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready(match target {
+            StorageTarget::Local => "window.localStorage",
+            StorageTarget::Session => "window.sessionStorage",
+        }))
+    }
+
+    fn storage_clear(&mut self, target: StorageTarget) -> Result<()> {
+        Err(ScriptError::phase_not_ready(match target {
+            StorageTarget::Local => "window.localStorage",
+            StorageTarget::Session => "window.sessionStorage",
+        }))
+    }
+
+    fn storage_key(&mut self, target: StorageTarget, _index: usize) -> Result<Option<String>> {
+        Err(ScriptError::phase_not_ready(match target {
+            StorageTarget::Local => "window.localStorage",
+            StorageTarget::Session => "window.sessionStorage",
+        }))
+    }
+
     fn document_current_script(&mut self) -> Result<Option<ElementHandle>> {
         Err(ScriptError::phase_not_ready("document.currentScript"))
     }
 
     fn document_ready_state(&mut self) -> Result<String> {
         Err(ScriptError::phase_not_ready("document.readyState"))
+    }
+
+    fn document_compat_mode(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("document.compatMode"))
+    }
+
+    fn document_character_set(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("document.characterSet"))
+    }
+
+    fn document_content_type(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("document.contentType"))
+    }
+
+    fn document_dir(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("document.dir"))
+    }
+
+    fn document_set_dir(&mut self, _value: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready("document.dir"))
     }
 
     fn document_query_selector(&mut self, _selector: &str) -> Result<Option<ElementHandle>> {
@@ -452,6 +582,12 @@ pub trait HostBindings {
 
     fn document_style_sheets_items(&mut self) -> Result<Vec<ElementHandle>> {
         Err(ScriptError::phase_not_ready("document.styleSheets"))
+    }
+
+    fn document_style_sheets_named_item(&mut self, _name: &str) -> Result<Option<ElementHandle>> {
+        Err(ScriptError::phase_not_ready(
+            "document.styleSheets.namedItem()",
+        ))
     }
 
     fn node_child_nodes_items(&mut self, _scope: HtmlCollectionScope) -> Result<Vec<NodeHandle>> {
@@ -576,6 +712,16 @@ pub trait HostBindings {
         _name: &str,
     ) -> Result<Vec<ElementHandle>> {
         Err(ScriptError::phase_not_ready("form.elements"))
+    }
+
+    fn radio_node_list_set_value(
+        &mut self,
+        _target: &RadioNodeListTarget,
+        _value: &str,
+    ) -> Result<()> {
+        Err(ScriptError::phase_not_ready(
+            "RadioNodeList.value assignment",
+        ))
     }
 
     fn html_collection_select_options_items(

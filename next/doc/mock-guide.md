@@ -8,12 +8,16 @@ Even in Phase 0, the workspace already reserves explicit families so runtime beh
 - `fetch`
 - `dialogs`
 - `clipboard`
+- `print`
+- `open`
+- `close`
 - `location`
 - `downloads`
 - `file_input`
+- `matchMedia`
 - `storage`
 
-They are exposed from the public facade through `Harness::mocks_mut()`.
+They are exposed from the public facade through `Harness::mocks_mut()`. `matchMedia` is configured through the builder seed API and the registry, then consumed from scripts via `window.matchMedia(...)`.
 
 ## Public Mock Actions
 
@@ -25,6 +29,9 @@ Phase 4 adds thin public actions on `Harness` for the mock families that need to
 - `prompt(message)`
 - `read_clipboard()`
 - `write_clipboard(text)`
+- `print()`
+- `open(url)`
+- `close()`
 - `navigate(url)`
 - `set_files(selector, files)`
 - `capture_download(file_name, bytes)`
@@ -32,6 +39,7 @@ Phase 4 adds thin public actions on `Harness` for the mock families that need to
 The typed registry is still the source of truth for seeds and capture.
 Use `Harness::mocks_mut()` to configure the family, then call the matching action on `Harness`.
 Download capture records `DownloadCapture` artifacts in the registry and exposes them through `downloads().artifacts()`.
+`matchMedia` is registry-backed and builder-seeded rather than a standalone `Harness` action.
 
 ## Minimal Example
 
@@ -55,6 +63,9 @@ fn main() -> browser_tester_next::Result<()> {
     assert!(harness.confirm("Continue?")?);
     assert_eq!(harness.read_clipboard()?, "copied text");
     harness.write_clipboard("copied text")?;
+    harness.print()?;
+    harness.open("https://app.local/popup")?;
+    harness.close()?;
     harness.set_files("#upload", ["report.csv"])?;
     harness.capture_download("report.csv", b"downloaded bytes".to_vec())?;
     harness.navigate("https://app.local/next")?;
@@ -63,6 +74,9 @@ fn main() -> browser_tester_next::Result<()> {
     assert_eq!(harness.mocks_mut().dialogs().alert_messages().len(), 1);
     assert_eq!(harness.mocks_mut().dialogs().confirm_messages().len(), 1);
     assert_eq!(harness.mocks_mut().clipboard().writes().len(), 1);
+    assert_eq!(harness.mocks_mut().print().calls().len(), 1);
+    assert_eq!(harness.mocks_mut().open().calls().len(), 1);
+    assert_eq!(harness.mocks_mut().close().calls().len(), 1);
     assert_eq!(harness.mocks_mut().location().navigations().len(), 1);
     assert_eq!(harness.mocks_mut().file_input().selections().len(), 1);
     {
@@ -70,6 +84,23 @@ fn main() -> browser_tester_next::Result<()> {
         assert_eq!(downloads.artifacts().len(), 1);
         assert_eq!(downloads.artifacts()[0].bytes, b"downloaded bytes".to_vec());
     }
+    Ok(())
+}
+```
+
+`matchMedia` is configured through the builder seed API and inspected through the registry:
+
+```rust
+use browser_tester_next::Harness;
+
+fn main() -> browser_tester_next::Result<()> {
+    let harness = Harness::builder()
+        .html("<main id='out'></main><script>const list = window.matchMedia('(prefers-color-scheme: dark)'); document.getElementById('out').textContent = String(list.matches) + ':' + list.media;</script>")
+        .match_media([("(prefers-color-scheme: dark)", true)])
+        .build()?;
+
+    assert_eq!(harness.mocks_mut().match_media().calls().len(), 1);
+    harness.assert_text("#out", "true:(prefers-color-scheme: dark)")?;
     Ok(())
 }
 ```
@@ -108,6 +139,35 @@ fn main() -> browser_tester_next::Result<()> {
         .to_string()
         .contains("capture_download() requires a non-empty file name"));
 
+    let print_error = Harness::builder()
+        .print_failure("print blocked")
+        .html("<script>window.print();</script>")
+        .build()
+        .expect_err("print failure should fail bootstrap when window.print runs");
+    assert!(print_error.to_string().contains("print blocked"));
+
+    let open_error = Harness::builder()
+        .open_failure("popup blocked")
+        .html("<script>window.open('https://app.local/popup');</script>")
+        .build()
+        .expect_err("open failure should fail bootstrap when window.open runs");
+    assert!(open_error.to_string().contains("popup blocked"));
+
+    let close_error = Harness::builder()
+        .close_failure("window closed")
+        .html("<script>window.close();</script>")
+        .build()
+        .expect_err("close failure should fail bootstrap when window.close runs");
+    assert!(close_error.to_string().contains("window closed"));
+
+    let match_media_error = Harness::builder()
+        .html("<script>window.matchMedia('(prefers-color-scheme: dark)').matches;</script>")
+        .build()
+        .expect_err("unseeded matchMedia should fail");
+    assert!(match_media_error
+        .to_string()
+        .contains("no matchMedia mock configured for `(prefers-color-scheme: dark)`"));
+
     Ok(())
 }
 ```
@@ -129,6 +189,10 @@ Examples:
 - `location`: current URL seed and navigation capture
 - `downloads`: artifact capture through the registry and `Harness::capture_download(...)`
 - `file_input`: file selection seed and capture
+- `print`: call capture through the registry and `Harness::print(...)`, plus optional builder-seeded bootstrap failure
+- `open`: call capture through the registry and `Harness::open(...)`, plus optional builder-seeded bootstrap failure for `window.open(...)`; the mock returns `undefined` rather than a popup `WindowProxy`
+- `close`: call capture through the registry and `Harness::close(...)`, plus optional builder-seeded bootstrap failure for `window.close(...)`
+- `matchMedia`: query seed state and call capture for `window.matchMedia(...)`
 
 ## Why the Registry Shape Matters
 

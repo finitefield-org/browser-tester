@@ -131,6 +131,19 @@ fn document_style_sheets_iterator_helpers_end_to_end() -> browser_tester_next::R
 }
 
 #[test]
+fn document_style_sheets_named_item_is_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><style id='first-style'>.primary { color: red; }</style><link id='first-link' rel='stylesheet' href='a.css'><link id='ignored-link' rel='preload' href='b.css'></main><div id='out'></div><script>const sheets = document.styleSheets; const before = sheets.length; const first = sheets.namedItem('first-style'); const second = sheets.namedItem('first-link'); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(sheets.length) + ':' + String(first) + ':' + String(second) + ':' + String(sheets.namedItem('missing'));</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "2:0:[object CSSStyleSheet]:[object CSSStyleSheet]:null",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn document_embeds_are_live_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><embed id='first-embed'><embed name='second-embed'></main><div id='out'></div><script>const embeds = document.embeds; const before = embeds.length; const first = embeds.namedItem('first-embed'); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(embeds.length) + ':' + String(first) + ':' + String(embeds.namedItem('missing'));</script>",
@@ -469,8 +482,8 @@ fn select_selected_options_are_live_end_to_end() -> browser_tester_next::Result<
 }
 
 #[test]
-fn select_options_collection_add_and_remove_are_live_end_to_end()
--> browser_tester_next::Result<()> {
+fn select_options_collection_add_and_remove_are_live_end_to_end() -> browser_tester_next::Result<()>
+{
     let harness = Harness::from_html(
         "<main id='root'><select id='mode'><option id='first' value='a'>A</option></select><option id='extra' value='b'>B</option><div id='out'></div><script>const select = document.getElementById('mode'); const extra = document.getElementById('extra'); const before = select.options.length; select.options.add(extra); const afterAdd = select.options.length; select.options.remove(0); document.getElementById('out').textContent = String(before) + ':' + String(afterAdd) + ':' + String(select.options.length) + ':' + select.options.item(0).getAttribute('id') + ':' + String(select.options.namedItem('first'));</script></main>",
     )?;
@@ -522,6 +535,19 @@ fn radio_node_list_is_live_end_to_end() -> browser_tester_next::Result<()> {
 
     harness.assert_text("#out", "2:3:a:b:c:[object RadioNodeList]")?;
     harness.assert_exists("#mode-c")?;
+    Ok(())
+}
+
+#[test]
+fn radio_node_list_value_setter_is_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><form id='signup'><input type='radio' name='mode' id='mode-a' value='a'><input type='radio' name='mode' id='mode-b' value='b'><input type='radio' name='mode' id='mode-c' value='c'></form><div id='out'></div><script>const named = document.getElementById('signup').elements.namedItem('mode'); named.value = 'b'; document.getElementById('out').textContent = named.value + ':' + String(document.getElementById('mode-a').checked) + ':' + String(document.getElementById('mode-b').checked) + ':' + String(document.getElementById('mode-c').checked);</script></main>",
+    )?;
+
+    harness.assert_text("#out", "b:false:true:false")?;
+    harness.assert_checked("#mode-a", false)?;
+    harness.assert_checked("#mode-b", true)?;
+    harness.assert_checked("#mode-c", false)?;
     Ok(())
 }
 
