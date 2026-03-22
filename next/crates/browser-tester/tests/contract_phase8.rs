@@ -98,6 +98,26 @@ fn collection_entries_update_live_script_views_end_to_end() -> browser_tester_ne
 }
 
 #[test]
+fn node_clone_node_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'></main><div id='out'></div><script>const root = document.getElementById('root'); const child = document.createTextNode('Hello'); root.appendChild(child); const clone = root.cloneNode(true); document.getElementById('out').textContent = String(clone) + ':' + String(clone.childNodes.length) + ':' + clone.childNodes.item(0).nodeName + ':' + String(clone.childNodes.item(0).nodeType) + ':' + clone.childNodes.item(0).textContent + ':' + String(root.childNodes.length);</script>",
+    )?;
+
+    harness.assert_text("#out", "[object Element]:1:#text:3:Hello:1")?;
+    Ok(())
+}
+
+#[test]
+fn node_same_node_and_equal_node_are_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><span id='child'>Child</span></main><template id='tpl'><span id='inner'>Inner</span></template><div id='out'></div><script>const root = document.getElementById('root'); const tpl = document.getElementById('tpl'); const clone = root.cloneNode(true); const fragment = tpl.content.cloneNode(true); document.getElementById('out').textContent = String(document.isSameNode(document)) + ':' + String(document.isSameNode(null)) + ':' + String(root.isSameNode(clone)) + ':' + String(root.isEqualNode(clone)) + ':' + String(tpl.content.isSameNode(fragment)) + ':' + String(tpl.content.isEqualNode(fragment));</script>",
+    )?;
+
+    harness.assert_text("#out", "true:false:false:true:false:true")?;
+    Ok(())
+}
+
+#[test]
 fn document_scripts_are_live_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><script id='first-script'></script></main><div id='out'></div><script>const out = document.getElementById('out'); const scripts = document.scripts; const before = scripts.length; const first = scripts.namedItem('first-script'); document.getElementById('root').textContent = 'gone'; out.textContent = String(before) + ':' + String(scripts.length) + ':' + String(first) + ':' + String(scripts.namedItem('missing'));</script>",
@@ -225,6 +245,96 @@ fn template_content_inner_html_is_live_end_to_end() -> browser_tester_next::Resu
 }
 
 #[test]
+fn template_content_text_content_is_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<template id='tpl'><span id='inner'>Inner</span></template><div id='out'></div><script>const content = document.getElementById('tpl').content; const before = content.textContent; content.textContent = 'Updated'; document.getElementById('out').textContent = before + ':' + content.textContent + ':' + content.innerHTML;</script>",
+    )?;
+
+    harness.assert_text("#out", "Inner:Updated:Updated")?;
+    Ok(())
+}
+
+#[test]
+fn template_content_fragment_reflection_is_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<template id='tpl'><span id='inner'>Inner</span></template><div id='out'></div><script>const content = document.getElementById('tpl').content; document.getElementById('out').textContent = String(content.nodeType) + ':' + content.nodeName + ':' + String(content.parentNode) + ':' + String(content.ownerDocument);</script>",
+    )?;
+
+    harness.assert_text("#out", "11:#document-fragment:null:[object Document]")?;
+    Ok(())
+}
+
+#[test]
+fn template_content_clone_node_is_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<template id='tpl'><span id='inner'>Inner</span></template><div id='out'></div><script>const content = document.getElementById('tpl').content; const deep = content.cloneNode(true); const shallow = content.cloneNode(); document.getElementById('out').textContent = String(deep) + ':' + String(deep.childNodes.length) + ':' + deep.childNodes.item(0).nodeName + ':' + deep.childNodes.item(0).textContent + ':' + String(shallow.childNodes.length);</script>",
+    )?;
+
+    harness.assert_text("#out", "[object DocumentFragment]:1:span:Inner:0")?;
+    Ok(())
+}
+
+#[test]
+fn template_content_append_child_is_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<template id='tpl'><span id='inner'>Inner</span></template><div id='out'></div><script>const content = document.getElementById('tpl').content; const clone = content.cloneNode(true); const child = clone.childNodes.item(0); content.appendChild(child); document.getElementById('out').textContent = String(content.childNodes.length) + ':' + content.childNodes.item(1).textContent + ':' + String(clone.childNodes.length);</script>",
+    )?;
+
+    harness.assert_text("#out", "2:Inner:0")?;
+    Ok(())
+}
+
+#[test]
+fn document_create_document_fragment_is_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'></main><div id='out'></div><script>const root = document.getElementById('root'); const frag = document.createDocumentFragment(); frag.appendChild(document.createTextNode('Hello')); const returned = root.appendChild(frag); document.getElementById('out').textContent = String(returned) + ':' + String(frag.childNodes.length) + ':' + root.textContent + ':' + String(root.childNodes.length);</script>",
+    )?;
+
+    harness.assert_text("#out", "[object DocumentFragment]:0:Hello:1")?;
+    Ok(())
+}
+
+#[test]
+fn document_import_node_is_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'></main><div id='out'></div><script>const root = document.getElementById('root'); const source = document.createDocumentFragment(); source.appendChild(document.createTextNode('Hello')); const imported = document.importNode(source, true); const returned = root.appendChild(imported); document.getElementById('out').textContent = String(returned) + ':' + String(imported.childNodes.length) + ':' + root.textContent + ':' + String(root.childNodes.length);</script>",
+    )?;
+
+    harness.assert_text("#out", "[object DocumentFragment]:0:Hello:1")?;
+    Ok(())
+}
+
+#[test]
+fn node_normalize_is_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'>First</main><div id='out'></div><script>const root = document.getElementById('root'); root.appendChild(document.createTextNode('Second')); root.appendChild(document.createTextNode('Third')); root.normalize(); document.getElementById('out').textContent = String(root.childNodes.length) + ':' + String(root.firstChild.nodeType) + ':' + root.textContent;</script>",
+    )?;
+
+    harness.assert_text("#out", "1:3:FirstSecondThird")?;
+    Ok(())
+}
+
+#[test]
+fn node_remove_is_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'></main><div id='out'></div><script>const root = document.getElementById('root'); const child = document.createTextNode('Hello'); root.appendChild(child); child.remove(); document.getElementById('out').textContent = String(child.parentNode) + ':' + String(root.childNodes.length);</script>",
+    )?;
+
+    harness.assert_text("#out", "null:0")?;
+    Ok(())
+}
+
+#[test]
+fn node_before_and_after_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'></main><div id='out'></div><script>const root = document.getElementById('root'); const child = document.createTextNode('Hello'); root.appendChild(child); child.before(document.createTextNode('Before')); child.after(document.createTextNode('After')); document.getElementById('out').textContent = String(root.childNodes.length) + ':' + root.textContent;</script>",
+    )?;
+
+    harness.assert_text("#out", "3:BeforeHelloAfter")?;
+    Ok(())
+}
+
+#[test]
 fn template_content_rejects_non_template_elements_end_to_end() {
     let error = Harness::from_html(
         "<div id='box'></div><script>document.getElementById('box').content;</script>",
@@ -344,6 +454,87 @@ fn tree_mutation_primitives_support_insert_and_replace_end_to_end()
 }
 
 #[test]
+fn tree_mutation_primitives_support_replace_with_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><span id='first'>First</span><span id='second'>Second</span></main><div id='out'></div><script>const first = document.getElementById('first'); first.replaceWith(document.createTextNode('Alpha'), document.createTextNode('Beta')); document.getElementById('out').textContent = String(document.getElementById('root').childNodes.length) + ':' + String(document.getElementById('root').childNodes.item(0).nodeType) + ':' + document.getElementById('root').childNodes.item(0).textContent + ':' + document.getElementById('root').childNodes.item(1).textContent + ':' + document.getElementById('root').childNodes.item(2).textContent;</script>",
+    )?;
+
+    harness.assert_text("#out", "3:3:Alpha:Beta:Second")?;
+    harness.assert_exists("#root > #second")?;
+    Ok(())
+}
+
+#[test]
+fn tree_reflection_contains_support_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><span id='child'>Child</span></main><div id='out'></div><script>const root = document.getElementById('root'); const child = document.getElementById('child'); const detached = document.createElement('div'); document.getElementById('out').textContent = String(document.contains(root)) + ':' + String(root.contains(child)) + ':' + String(child.contains(root)) + ':' + String(detached.contains(detached)) + ':' + String(detached.contains(root)) + ':' + String(root.contains(null));</script>",
+    )?;
+
+    harness.assert_text("#out", "true:true:false:true:false:false")?;
+    Ok(())
+}
+
+#[test]
+fn tree_reflection_compare_document_position_support_end_to_end() -> browser_tester_next::Result<()>
+{
+    let harness = Harness::from_html(
+        "<main id='root'><span id='a'><em id='c'>Child</em></span><span id='b'>Sibling</span></main><div id='out'></div><script>const a = document.getElementById('a'); const b = document.getElementById('b'); const c = document.getElementById('c'); const detached = document.createElement('p'); document.getElementById('out').textContent = String(document.compareDocumentPosition(a)) + ':' + String(a.compareDocumentPosition(document)) + ':' + String(a.compareDocumentPosition(b)) + ':' + String(b.compareDocumentPosition(a)) + ':' + String(a.compareDocumentPosition(c)) + ':' + String(c.compareDocumentPosition(a)) + ':' + String(a.compareDocumentPosition(detached)) + ':' + String(detached.compareDocumentPosition(a)) + ':' + String(document.compareDocumentPosition(document));</script>",
+    )?;
+
+    harness.assert_text("#out", "20:10:4:2:20:10:37:35:0")?;
+    Ok(())
+}
+
+#[test]
+fn tree_reflection_has_child_nodes_support_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><span id='child'>Child</span></main><template id='tpl'><span id='inner'>Inner</span></template><div id='out'></div><script>const root = document.getElementById('root'); const child = document.getElementById('child'); const tpl = document.getElementById('tpl'); document.getElementById('out').textContent = String(document.hasChildNodes()) + ':' + String(root.hasChildNodes()) + ':' + String(child.hasChildNodes()) + ':' + String(tpl.content.hasChildNodes());</script>",
+    )?;
+
+    harness.assert_text("#out", "true:true:true:true")?;
+    Ok(())
+}
+
+#[test]
+fn tree_reflection_first_and_last_child_support_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<!--pre--><html><head></head><body>Text<div id='out'></div><main id='root'><span id='child'>Child</span></main><template id='tpl'><span id='inner'>Inner</span><!--tail--></template><script>const html = document.documentElement; const body = document.body; const text = body.childNodes.item(0); const tpl = document.getElementById('tpl'); document.getElementById('out').textContent = String(document.firstChild) + ':' + String(document.lastChild) + ':' + String(html.firstChild) + ':' + String(html.lastChild) + ':' + String(body.firstChild) + ':' + String(body.lastChild) + ':' + String(text.firstChild) + ':' + String(text.lastChild) + ':' + String(tpl.content.firstChild) + ':' + String(tpl.content.lastChild);</script><!--body-tail--></body></html>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "[object Node]:[object Element]:[object Element]:[object Element]:[object Node]:[object Node]:null:null:[object Element]:[object Node]",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn tree_reflection_sibling_support_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<!--pre--><html><head></head><body>Text<div id='out'></div><main id='root'><span id='child'>Child</span></main><template id='tpl'><span id='inner'>Inner</span><!--tail--></template><script>const html = document.documentElement; const head = document.head; const body = document.body; const tpl = document.getElementById('tpl'); const content = tpl.content; const text = body.childNodes.item(0); const out = body.childNodes.item(1); document.getElementById('out').textContent = String(document.nextSibling) + ':' + String(document.previousSibling) + ':' + String(html.previousSibling) + ':' + String(head.nextSibling) + ':' + String(body.previousSibling) + ':' + String(body.nextSibling) + ':' + String(body.firstChild.nextSibling) + ':' + String(body.lastChild.previousSibling) + ':' + String(text.nextSibling) + ':' + String(out.previousSibling) + ':' + String(tpl.nextSibling) + ':' + String(tpl.previousSibling) + ':' + String(content.nextSibling) + ':' + String(content.previousSibling) + ':' + String(content.firstChild.nextSibling) + ':' + String(content.lastChild.previousSibling);</script></body></html>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "null:null:[object Node]:[object Element]:[object Element]:null:[object Element]:[object Element]:[object Element]:[object Node]:[object Element]:[object Element]:null:null:[object Node]:[object Element]",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn tree_reflection_element_sibling_support_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<!--pre--><html><head></head><body>Text<div id='out'></div><main id='root'><span id='child'>Child</span></main><script>const html = document.documentElement; const head = document.head; const body = document.body; const text = body.firstChild; const out = body.childNodes.item(1); const main = body.childNodes.item(2); const script = body.lastChild; document.getElementById('out').textContent = String(document.nextElementSibling) + ':' + String(document.previousElementSibling) + ':' + String(html.nextElementSibling) + ':' + String(html.previousElementSibling) + ':' + String(head.nextElementSibling) + ':' + String(head.previousElementSibling) + ':' + String(body.nextElementSibling) + ':' + String(body.previousElementSibling) + ':' + String(text.nextElementSibling) + ':' + String(text.previousElementSibling) + ':' + String(out.nextElementSibling) + ':' + String(out.previousElementSibling) + ':' + String(main.previousElementSibling) + ':' + String(main.nextElementSibling) + ':' + String(script.previousElementSibling) + ':' + String(script.nextElementSibling);</script></body></html>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "null:null:null:null:[object Element]:null:null:[object Element]:[object Element]:null:[object Element]:null:[object Element]:[object Element]:[object Element]:null",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn tree_mutation_primitives_reject_cycles_end_to_end() -> browser_tester_next::Result<()> {
     let error = Harness::from_html(
         "<main id='root'><section id='child'><span id='grandchild'>x</span></section></main><script>document.getElementById('child').appendChild(document.getElementById('root'));</script>",
@@ -407,6 +598,23 @@ fn html_serialization_surfaces_support_insert_adjacent_html_end_to_end()
 }
 
 #[test]
+fn html_serialization_surfaces_support_insert_adjacent_element_and_text_end_to_end()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><section id='target'><button id='old' class='primary'>Old</button></section></main><div id='out'></div><script>const target = document.getElementById('target'); const before = target.insertAdjacentElement('beforebegin', document.createElement('aside')); before.setAttribute('id', 'before'); before.textContent = 'Before'; target.insertAdjacentText('afterbegin', 'First'); const last = target.insertAdjacentElement('beforeend', document.createElement('span')); last.setAttribute('id', 'last'); last.textContent = 'Last'; const after = target.insertAdjacentElement('afterend', document.createElement('aside')); after.setAttribute('id', 'after'); after.textContent = 'After'; target.insertAdjacentText('beforeend', 'Tail'); document.getElementById('out').textContent = document.getElementById('root').innerHTML + '|' + target.innerHTML + '|' + String(before) + ':' + String(after);</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "<aside id=\"before\">Before</aside><section id=\"target\">First<button class=\"primary\" id=\"old\">Old</button><span id=\"last\">Last</span>Tail</section><aside id=\"after\">After</aside>|First<button class=\"primary\" id=\"old\">Old</button><span id=\"last\">Last</span>Tail|[object Element]:[object Element]",
+    )?;
+    harness.assert_exists("#before")?;
+    harness.assert_exists("#after")?;
+    harness.assert_exists("#target > #last")?;
+    Ok(())
+}
+
+#[test]
 fn html_serialization_surfaces_use_namespace_aware_names_end_to_end()
 -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
@@ -434,6 +642,38 @@ fn html_serialization_surfaces_reject_insert_adjacent_html_positions_end_to_end(
         error
             .to_string()
             .contains("unsupported insertAdjacentHTML position")
+    );
+    Ok(())
+}
+
+#[test]
+fn html_serialization_surfaces_reject_insert_adjacent_element_positions_end_to_end()
+-> browser_tester_next::Result<()> {
+    let error = Harness::from_html(
+        "<main id='root'><section id='target'></section></main><script>document.getElementById('target').insertAdjacentElement('middle', document.createElement('aside'));</script>",
+    )
+    .expect_err("invalid insertAdjacentElement positions should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported insertAdjacentElement position")
+    );
+    Ok(())
+}
+
+#[test]
+fn html_serialization_surfaces_reject_insert_adjacent_text_on_void_elements_end_to_end()
+-> browser_tester_next::Result<()> {
+    let error = Harness::from_html(
+        "<main id='root'><img id='image'></main><script>document.getElementById('image').insertAdjacentText('beforeend', 'Bad');</script>",
+    )
+    .expect_err("void elements should reject insertAdjacentText beforeend");
+
+    assert!(
+        error
+            .to_string()
+            .contains("insertAdjacentText is not supported on void elements")
     );
     Ok(())
 }

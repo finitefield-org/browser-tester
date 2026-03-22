@@ -124,6 +124,63 @@ impl MediaQueryListState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StringListState {
+    items: Vec<String>,
+}
+
+impl StringListState {
+    pub fn new(items: Vec<String>) -> Self {
+        Self { items }
+    }
+
+    pub fn length(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn item(&self, index: usize) -> Option<&str> {
+        self.items.get(index).map(String::as_str)
+    }
+
+    pub fn contains(&self, value: &str) -> bool {
+        self.items.iter().any(|item| item == value)
+    }
+
+    pub fn items(&self) -> &[String] {
+        &self.items
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MimeTypeArrayState {
+    items: Vec<String>,
+}
+
+impl MimeTypeArrayState {
+    pub fn new(items: Vec<String>) -> Self {
+        Self { items }
+    }
+
+    pub fn length(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn item(&self, index: usize) -> Option<&str> {
+        self.items.get(index).map(String::as_str)
+    }
+
+    pub fn named_item(&self, name: &str) -> Option<&str> {
+        self.items
+            .iter()
+            .find(|item| item.as_str() == name)
+            .map(String::as_str)
+    }
+
+    pub fn items(&self) -> &[String] {
+        &self.items
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScreenOrientationState {
     orientation_type: String,
     angle: i64,
@@ -367,6 +424,8 @@ pub enum ScriptValue {
     StyleSheetList(StyleSheetListTarget),
     Storage(StorageTarget),
     MediaQueryList(MediaQueryListState),
+    StringList(StringListState),
+    MimeTypeArray(MimeTypeArrayState),
     Navigator,
     History,
     Screen,
@@ -445,6 +504,78 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("document.getElementById"))
     }
 
+    fn document_create_element(&mut self, _tag_name: &str) -> Result<ElementHandle> {
+        Err(ScriptError::phase_not_ready("document.createElement"))
+    }
+
+    fn document_create_text_node(&mut self, _text: &str) -> Result<NodeHandle> {
+        Err(ScriptError::phase_not_ready("document.createTextNode"))
+    }
+
+    fn document_create_comment(&mut self, _text: &str) -> Result<NodeHandle> {
+        Err(ScriptError::phase_not_ready("document.createComment"))
+    }
+
+    fn document_normalize(&mut self) -> Result<()> {
+        Err(ScriptError::phase_not_ready("Document.normalize"))
+    }
+
+    fn node_clone(&mut self, _node: NodeHandle, _deep: bool) -> Result<NodeHandle> {
+        Err(ScriptError::phase_not_ready("Node.cloneNode"))
+    }
+
+    fn node_normalize(&mut self, _node: NodeHandle) -> Result<()> {
+        Err(ScriptError::phase_not_ready("Node.normalize"))
+    }
+
+    fn node_replace_with(&mut self, _node: NodeHandle, _children: Vec<NodeHandle>) -> Result<()> {
+        Err(ScriptError::phase_not_ready("Node.replaceWith"))
+    }
+
+    fn node_before(&mut self, _node: NodeHandle, _children: Vec<NodeHandle>) -> Result<()> {
+        Err(ScriptError::phase_not_ready("Node.before"))
+    }
+
+    fn node_after(&mut self, _node: NodeHandle, _children: Vec<NodeHandle>) -> Result<()> {
+        Err(ScriptError::phase_not_ready("Node.after"))
+    }
+
+    fn document_contains(&mut self, _node: NodeHandle) -> Result<bool> {
+        Err(ScriptError::phase_not_ready("document.contains"))
+    }
+
+    fn node_contains(&mut self, _node: NodeHandle, _other: NodeHandle) -> Result<bool> {
+        Err(ScriptError::phase_not_ready("Node.contains"))
+    }
+
+    fn node_compare_document_position(
+        &mut self,
+        _node: NodeHandle,
+        _other: NodeHandle,
+    ) -> Result<u16> {
+        Err(ScriptError::phase_not_ready("Node.compareDocumentPosition"))
+    }
+
+    fn node_is_equal_node(&mut self, _node: NodeHandle, _other: NodeHandle) -> Result<bool> {
+        Err(ScriptError::phase_not_ready("Node.isEqualNode"))
+    }
+
+    fn template_content_is_equal_node(
+        &mut self,
+        _fragment: ElementHandle,
+        _other: ElementHandle,
+    ) -> Result<bool> {
+        Err(ScriptError::phase_not_ready("template.content.isEqualNode"))
+    }
+
+    fn document_has_child_nodes(&mut self) -> Result<bool> {
+        Err(ScriptError::phase_not_ready("document.hasChildNodes"))
+    }
+
+    fn node_has_child_nodes(&mut self, _node: NodeHandle) -> Result<bool> {
+        Err(ScriptError::phase_not_ready("Node.hasChildNodes"))
+    }
+
     fn document_document_element(&mut self) -> Result<Option<ElementHandle>> {
         Err(ScriptError::phase_not_ready("document.documentElement"))
     }
@@ -491,6 +622,18 @@ pub trait HostBindings {
 
     fn document_set_location(&mut self, _value: &str) -> Result<()> {
         Err(ScriptError::phase_not_ready("document.location"))
+    }
+
+    fn document_location_assign(&mut self, _value: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready("document.location.assign"))
+    }
+
+    fn document_location_replace(&mut self, _value: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready("document.location.replace"))
+    }
+
+    fn document_location_reload(&mut self) -> Result<()> {
+        Err(ScriptError::phase_not_ready("document.location.reload"))
     }
 
     fn document_url(&mut self) -> Result<String> {
@@ -603,6 +746,36 @@ pub trait HostBindings {
 
     fn window_navigator_language(&mut self) -> Result<String> {
         Err(ScriptError::phase_not_ready("window.navigator.language"))
+    }
+
+    fn window_navigator_oscpu(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("window.navigator.oscpu"))
+    }
+
+    fn window_navigator_user_language(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready(
+            "window.navigator.userLanguage",
+        ))
+    }
+
+    fn window_navigator_browser_language(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready(
+            "window.navigator.browserLanguage",
+        ))
+    }
+
+    fn window_navigator_system_language(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready(
+            "window.navigator.systemLanguage",
+        ))
+    }
+
+    fn window_navigator_languages(&mut self) -> Result<Vec<String>> {
+        Err(ScriptError::phase_not_ready("window.navigator.languages"))
+    }
+
+    fn window_navigator_mime_types(&mut self) -> Result<Vec<String>> {
+        Err(ScriptError::phase_not_ready("window.navigator.mimeTypes"))
     }
 
     fn window_navigator_cookie_enabled(&mut self) -> Result<bool> {
@@ -871,6 +1044,14 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("document.contentType"))
     }
 
+    fn document_design_mode(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("document.designMode"))
+    }
+
+    fn document_set_design_mode(&mut self, _value: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready("document.designMode"))
+    }
+
     fn document_dir(&mut self) -> Result<String> {
         Err(ScriptError::phase_not_ready("document.dir"))
     }
@@ -905,6 +1086,10 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("Node.childNodes"))
     }
 
+    fn node_parent(&mut self, _node: NodeHandle) -> Result<Option<NodeHandle>> {
+        Err(ScriptError::phase_not_ready("Node.parentNode"))
+    }
+
     fn node_text_content(&mut self, _node: NodeHandle) -> Result<String> {
         Err(ScriptError::phase_not_ready("Node.textContent"))
     }
@@ -931,6 +1116,10 @@ pub trait HostBindings {
 
     fn element_origin(&mut self, _element: ElementHandle) -> Result<String> {
         Err(ScriptError::phase_not_ready("element.origin"))
+    }
+
+    fn element_is_content_editable(&mut self, _element: ElementHandle) -> Result<bool> {
+        Err(ScriptError::phase_not_ready("element.isContentEditable"))
     }
 
     fn element_labels(&mut self, _element: ElementHandle) -> Result<Vec<ElementHandle>> {
@@ -1259,19 +1448,15 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("element.toggleAttribute"))
     }
 
-    fn element_append_child(
-        &mut self,
-        _parent: ElementHandle,
-        _child: ElementHandle,
-    ) -> Result<()> {
+    fn element_append_child(&mut self, _parent: ElementHandle, _child: NodeHandle) -> Result<()> {
         Err(ScriptError::phase_not_ready("element.appendChild"))
     }
 
     fn element_insert_before(
         &mut self,
         _parent: ElementHandle,
-        _child: ElementHandle,
-        _reference: Option<ElementHandle>,
+        _child: NodeHandle,
+        _reference: Option<NodeHandle>,
     ) -> Result<()> {
         Err(ScriptError::phase_not_ready("element.insertBefore"))
     }
@@ -1279,8 +1464,8 @@ pub trait HostBindings {
     fn element_replace_child(
         &mut self,
         _parent: ElementHandle,
-        _new_child: ElementHandle,
-        _old_child: ElementHandle,
+        _new_child: NodeHandle,
+        _old_child: NodeHandle,
     ) -> Result<()> {
         Err(ScriptError::phase_not_ready("element.replaceChild"))
     }
@@ -1288,7 +1473,7 @@ pub trait HostBindings {
     fn element_replace_children(
         &mut self,
         _parent: ElementHandle,
-        _children: Vec<ElementHandle>,
+        _children: Vec<NodeHandle>,
     ) -> Result<()> {
         Err(ScriptError::phase_not_ready("element.replaceChildren"))
     }
@@ -1296,7 +1481,7 @@ pub trait HostBindings {
     fn element_append(
         &mut self,
         _element: ElementHandle,
-        _children: Vec<ElementHandle>,
+        _children: Vec<NodeHandle>,
     ) -> Result<()> {
         Err(ScriptError::phase_not_ready("element.append"))
     }
@@ -1304,7 +1489,7 @@ pub trait HostBindings {
     fn element_prepend(
         &mut self,
         _element: ElementHandle,
-        _children: Vec<ElementHandle>,
+        _children: Vec<NodeHandle>,
     ) -> Result<()> {
         Err(ScriptError::phase_not_ready("element.prepend"))
     }
@@ -1312,16 +1497,12 @@ pub trait HostBindings {
     fn element_before(
         &mut self,
         _element: ElementHandle,
-        _children: Vec<ElementHandle>,
+        _children: Vec<NodeHandle>,
     ) -> Result<()> {
         Err(ScriptError::phase_not_ready("element.before"))
     }
 
-    fn element_after(
-        &mut self,
-        _element: ElementHandle,
-        _children: Vec<ElementHandle>,
-    ) -> Result<()> {
+    fn element_after(&mut self, _element: ElementHandle, _children: Vec<NodeHandle>) -> Result<()> {
         Err(ScriptError::phase_not_ready("element.after"))
     }
 

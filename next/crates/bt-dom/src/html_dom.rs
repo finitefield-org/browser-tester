@@ -356,6 +356,81 @@ impl DomStore {
         Ok(())
     }
 
+    pub fn create_element(&mut self, tag_name: impl Into<String>) -> Result<NodeId, String> {
+        let tag_name = tag_name.into().trim().to_ascii_lowercase();
+        if tag_name.is_empty() || !tag_name.bytes().all(is_simple_name_byte) {
+            return Err(format!("invalid tag name: `{tag_name}`"));
+        }
+
+        let node_id = NodeId::new(self.nodes.len() as u32, 0);
+        self.nodes.push(NodeRecord {
+            id: node_id,
+            parent: None,
+            children: Vec::new(),
+            kind: NodeKind::Element(ElementData {
+                tag_name: tag_name.clone(),
+                local_name: tag_name,
+                namespace_uri: HTML_NAMESPACE_URI.to_string(),
+                attributes: BTreeMap::new(),
+            }),
+        });
+        Ok(node_id)
+    }
+
+    pub fn create_text_node(&mut self, value: impl Into<String>) -> Result<NodeId, String> {
+        let node_id = NodeId::new(self.nodes.len() as u32, 0);
+        self.nodes.push(NodeRecord {
+            id: node_id,
+            parent: None,
+            children: Vec::new(),
+            kind: NodeKind::Text(TextData {
+                value: value.into(),
+            }),
+        });
+        Ok(node_id)
+    }
+
+    pub fn create_comment(&mut self, value: impl Into<String>) -> Result<NodeId, String> {
+        let node_id = NodeId::new(self.nodes.len() as u32, 0);
+        self.nodes.push(NodeRecord {
+            id: node_id,
+            parent: None,
+            children: Vec::new(),
+            kind: NodeKind::Comment(value.into()),
+        });
+        Ok(node_id)
+    }
+
+    pub fn clone_node(&mut self, node_id: NodeId, deep: bool) -> Result<NodeId, String> {
+        let Some(source) = self.nodes.get(node_id.index() as usize).cloned() else {
+            return Err(format!("invalid node id: {:?}", node_id));
+        };
+
+        let cloned_kind = match &source.kind {
+            NodeKind::Document => NodeKind::Document,
+            NodeKind::Element(element) => NodeKind::Element(element.clone()),
+            NodeKind::Text(text) => NodeKind::Text(text.clone()),
+            NodeKind::Comment(comment) => NodeKind::Comment(comment.clone()),
+        };
+
+        let cloned_id = NodeId::new(self.nodes.len() as u32, 0);
+        self.nodes.push(NodeRecord {
+            id: cloned_id,
+            parent: None,
+            children: Vec::new(),
+            kind: cloned_kind,
+        });
+
+        if deep {
+            let snapshot = self.clone();
+            for (index, child) in source.children.iter().copied().enumerate() {
+                self.clone_subtree_at(&snapshot, child, cloned_id, index)?;
+            }
+        }
+
+        Ok(cloned_id)
+    }
+
     pub fn text_content_for_node(&self, node_id: NodeId) -> String {
         let Some(node) = self.nodes.get(node_id.index() as usize) else {
             return String::new();
@@ -427,6 +502,31 @@ impl DomStore {
         } else {
             None
         }
+    }
+
+    pub fn is_content_editable(&self, node_id: NodeId) -> bool {
+        let mut current = Some(node_id);
+
+        while let Some(current_id) = current {
+            let Some(node) = self.nodes.get(current_id.index() as usize) else {
+                return false;
+            };
+            let NodeKind::Element(element) = &node.kind else {
+                return false;
+            };
+
+            if let Some(value) = element.attributes.get("contenteditable") {
+                match value.trim().to_ascii_lowercase().as_str() {
+                    "" | "true" | "plaintext-only" => return true,
+                    "false" => return false,
+                    _ => current = node.parent,
+                }
+            } else {
+                current = node.parent;
+            }
+        }
+
+        false
     }
 
     pub fn set_form_control_value(
@@ -995,6 +1095,91 @@ impl DomStore {
         self.rebuild_indexes();
         self.rebuild_form_controls();
         self.document.title = self.document_title();
+        Ok(())
+    }
+
+    pub fn normalize_node(&mut self, node_id: NodeId) -> Result<(), String> {
+        let Some(node) = self.nodes.get(node_id.index() as usize).cloned() else {
+            return Err(format!("invalid node id: {:?}", node_id));
+        };
+
+        match node.kind {
+            NodeKind::Document | NodeKind::Element(_) => {}
+            _ => return Ok(()),
+        }
+
+        let children = node.children.clone();
+        for child in children {
+            self.normalize_node(child)?;
+        }
+
+        let mut index = 0;
+        let mut changed = false;
+        loop {
+            let Some(parent_node) = self.nodes.get(node_id.index() as usize) else {
+                return Err(format!("invalid node id: {:?}", node_id));
+            };
+            if index >= parent_node.children.len() {
+                break;
+            }
+
+            let child = parent_node.children[index];
+            let child_kind = self
+                .nodes
+                .get(child.index() as usize)
+                .map(|node| &node.kind);
+
+            let Some(NodeKind::Text(text)) = child_kind else {
+                index += 1;
+                continue;
+            };
+
+            if text.value.is_empty() {
+                self.remove_node(child)?;
+                changed = true;
+                continue;
+            }
+
+            loop {
+                let Some(parent_node) = self.nodes.get(node_id.index() as usize) else {
+                    return Err(format!("invalid node id: {:?}", node_id));
+                };
+                let Some(next_child) = parent_node.children.get(index + 1).copied() else {
+                    break;
+                };
+
+                let next_value = match self
+                    .nodes
+                    .get(next_child.index() as usize)
+                    .map(|node| &node.kind)
+                {
+                    Some(NodeKind::Text(text)) => text.value.clone(),
+                    _ => break,
+                };
+
+                if next_value.is_empty() {
+                    self.remove_node(next_child)?;
+                    changed = true;
+                    continue;
+                }
+
+                if let Some(node) = self.nodes.get_mut(child.index() as usize) {
+                    if let NodeKind::Text(text) = &mut node.kind {
+                        text.value.push_str(&next_value);
+                    }
+                }
+                self.remove_node(next_child)?;
+                changed = true;
+            }
+
+            index += 1;
+        }
+
+        if changed {
+            self.document.title = self.document_title();
+            self.rebuild_form_controls();
+        }
+
         Ok(())
     }
 
@@ -2842,7 +3027,7 @@ impl DomStore {
             return false;
         };
 
-        if is_content_editable_element(element) {
+        if self.is_content_editable(node_id) {
             return true;
         }
 
@@ -4900,15 +5085,4 @@ fn is_checkable_input_type(input_type: Option<&str>) -> bool {
 
 fn is_file_input_type(input_type: Option<&str>) -> bool {
     matches!(input_type.unwrap_or("text"), "file")
-}
-
-fn is_content_editable_element(element: &ElementData) -> bool {
-    let Some(value) = element.attributes.get("contenteditable") else {
-        return false;
-    };
-
-    matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "" | "true" | "plaintext-only"
-    )
 }

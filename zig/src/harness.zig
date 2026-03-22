@@ -16,6 +16,7 @@ pub const HarnessBuilder = struct {
     html_value: ?[]const u8 = null,
     local_storage: std.ArrayListUnmanaged(session.StorageSeed) = .{},
     session_storage: std.ArrayListUnmanaged(session.StorageSeed) = .{},
+    random_seed_value: ?u64 = null,
     open_failure_value: ?[]const u8 = null,
     close_failure_value: ?[]const u8 = null,
     print_failure_value: ?[]const u8 = null,
@@ -62,6 +63,11 @@ pub const HarnessBuilder = struct {
         });
     }
 
+    pub fn randomSeed(self: *HarnessBuilder, value: u64) *HarnessBuilder {
+        self.random_seed_value = value;
+        return self;
+    }
+
     pub fn openFailure(self: *HarnessBuilder, value: []const u8) *HarnessBuilder {
         self.open_failure_value = value;
         return self;
@@ -95,6 +101,7 @@ pub const HarnessBuilder = struct {
                 .html = self.html_value,
                 .local_storage = self.local_storage.items,
                 .session_storage = self.session_storage.items,
+                .random_seed = self.random_seed_value,
                 .open_failure = self.open_failure_value,
                 .close_failure = self.close_failure_value,
                 .print_failure = self.print_failure_value,
@@ -619,6 +626,21 @@ test "regression: phase 11 select.options resolves on the copied html snapshot" 
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: phase 41 form.length and select.length resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><form id='signup'><input name='first' value='Ada'><textarea name='bio'>Bio</textarea></form><select id='mode'><option id='first-option' value='a'>A</option><option id='second-option' value='b'>B</option></select></main><div id='out'></div><script>const form = document.getElementById('signup'); const select = document.getElementById('mode'); const beforeForm = form.length; const beforeSelect = select.length; form.innerHTML += '<input name=\"extra\" value=\"Grace\">'; select.innerHTML += '<option id=\"third-option\" value=\"c\">C</option>'; document.getElementById('out').textContent = String(beforeForm) + ':' + String(beforeSelect) + ':' + String(form.length) + ':' + String(select.length) + ':' + String(form.elements.length) + ':' + String(select.options.length);</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "2:2:3:3:3:3");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
 test "regression: phase 11 select.selectedOptions resolves on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<main id='root'><select id='mode'><option id='first' value='a' selected>A</option><option id='second' value='b'>B</option></select></main><div id='out'></div><script>const select = document.getElementById('mode'); const selected = select.selectedOptions; const before = selected.length; const first = selected.item(0); select.innerHTML = '<option id=\"third\" value=\"c\" selected>C</option><option id=\"fourth\" value=\"d\" selected>D</option>'; document.getElementById('out').textContent = String(before) + ':' + String(selected.length) + ':' + first.textContent + ':' + selected.item(0).textContent + ':' + selected.item(1).textContent + ':' + String(selected.namedItem('third')) + ':' + String(selected.namedItem('missing'));</script>";
@@ -764,6 +786,24 @@ test "regression: phase 17b document.styleSheets cssRules resolve on the copied 
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: phase 17b2 CSSStyleRule.style resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style>.primary { color: red; font-weight: bold; }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); const style = rule.style; out.textContent = String(rule) + ':' + String(style) + ':' + style.cssText + ':' + String(style.length) + ':' + style.item(0) + ':' + style.item(1) + ':' + style.getPropertyValue('color') + ':' + style.getPropertyValue('font-weight') + ':' + style.getPropertyPriority('color');</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSStyleRule]:color: red; font-weight: bold;:color: red; font-weight: bold;:2:color:font-weight:red:bold:",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
 test "regression: phase 17c StyleSheetList and RadioNodeList forEach resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<div id='root'><style>.primary { color: red; } .secondary { color: blue; }</style><link rel='stylesheet' href='a.css'><form id='signup'><input type='radio' name='mode' id='mode-a' value='a'><input type='radio' name='mode' id='mode-b' value='b'></form></div><div id='out'></div><script>const sheets = document.styleSheets; sheets.forEach((sheet, index, list) => { document.getElementById('out').textContent += String(index) + ':' + String(sheet) + ':' + String(list) + '|'; }); const rules = sheets.item(0).cssRules; rules.forEach((rule, index, list) => { document.getElementById('out').textContent += String(index) + ':' + rule.selectorText + ':' + String(list) + '|'; }); const named = document.getElementById('signup').elements.namedItem('mode'); named.forEach((control, index, list) => { document.getElementById('out').textContent += String(index) + ':' + control.getAttribute('id') + ':' + String(list) + '|'; }); document.getElementById('root').textContent = 'gone';</script>";
@@ -802,7 +842,7 @@ test "regression: phase 17d CSSStyleSheet insertRule and deleteRule resolve on t
 
 test "regression: phase 17e CSSMediaRule cssRules resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
-    const original = "<div id='root'><style>@media screen { .primary { color: red; } .secondary { color: blue; } }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const media = document.styleSheets.item(0).cssRules.item(0); const nested = media.cssRules; out.textContent = String(media) + ':' + media.conditionText + ':' + String(nested.length) + ':' + nested.item(0).selectorText + ':' + nested.item(1).selectorText + ':' + nested.item(0).cssText;</script>";
+    const original = "<div id='root'><style>@media screen { .primary { color: red; } .secondary { color: blue; } }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const media = document.styleSheets.item(0).cssRules.item(0); const nested = media.cssRules; const list = media.media; out.textContent = String(media) + ':' + media.conditionText + ':' + String(list) + ':' + String(list.length) + ':' + list.item(0) + ':' + String(nested.length) + ':' + nested.item(0).selectorText + ':' + nested.item(1).selectorText + ':' + nested.item(0).cssText;</script>";
     var html_bytes = try allocator.dupe(u8, original);
     defer allocator.free(html_bytes);
 
@@ -813,7 +853,25 @@ test "regression: phase 17e CSSMediaRule cssRules resolve on the copied html sna
 
     try subject.assertValue(
         "#out",
-        "[object CSSMediaRule]:screen:2:.primary:.secondary:.primary { color: red; }",
+        "[object CSSMediaRule]:screen:screen:1:screen:2:.primary:.secondary:.primary { color: red; }",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17q CSSMediaRule media resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='out'></div><style>@media screen and (min-width: 1px) { .primary { color: red; } }</style><script>const rule = document.styleSheets.item(0).cssRules.item(0); const list = rule.media; document.getElementById('out').textContent = String(rule) + ':' + rule.conditionText + ':' + String(list) + ':' + String(list.length) + ':' + list.item(0);</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSMediaRule]:screen and (min-width: 1px):screen and (min-width: 1px):1:screen and (min-width: 1px)",
     );
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
@@ -890,6 +948,96 @@ test "regression: phase 17i CSSFontFeatureValuesRule cssRules resolve on the cop
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: phase 17i2 CSSFontPaletteValuesRule cssRules resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style>@font-palette-values --palette { base-palette: light; override-colors: 0 red; }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); out.textContent = String(rule) + ':' + rule.name + ':' + rule.cssText;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSFontPaletteValuesRule]:--palette:@font-palette-values --palette { base-palette: light; override-colors: 0 red; }",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17i3 CSSColorProfileRule cssRules resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style>@color-profile --swopc { src: url(http://example.org/swop-coated.icc); rendering-intent: perceptual; components: cyan, magenta, yellow, black; }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); out.textContent = String(rule) + ':' + rule.name + ':' + rule.src + ':' + rule.renderingIntent + ':' + rule.components + ':' + rule.cssText;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSColorProfileRule]:--swopc:url(http://example.org/swop-coated.icc):perceptual:cyan, magenta, yellow, black:@color-profile --swopc { src: url(http://example.org/swop-coated.icc); rendering-intent: perceptual; components: cyan, magenta, yellow, black; }",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17i4 CSSRule.type resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style>.primary { color: red; } @color-profile --swopc { src: url(http://example.org/swop-coated.icc); rendering-intent: perceptual; components: cyan, magenta, yellow, black; }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rules = document.styleSheets.item(0).cssRules; const styleRule = rules.item(0); const profileRule = rules.item(1); out.textContent = String(styleRule.type) + ':' + String(profileRule.type) + ':' + String(styleRule) + ':' + String(profileRule);</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "1:0:[object CSSStyleRule]:[object CSSColorProfileRule]",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17i5 CSSRule.parentStyleSheet resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style>.primary { color: red; } @media screen { .secondary { color: blue; } }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rules = document.styleSheets.item(0).cssRules; const styleRule = rules.item(0); const mediaRule = rules.item(1); const nestedRule = mediaRule.cssRules.item(0); out.textContent = String(styleRule.parentStyleSheet) + ':' + String(mediaRule.parentStyleSheet) + ':' + String(nestedRule.parentStyleSheet);</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSStyleSheet]:[object CSSStyleSheet]:[object CSSStyleSheet]",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17i6 CSSRule.parentRule resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style>.primary { color: red; } @media screen { .secondary { color: blue; } }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rules = document.styleSheets.item(0).cssRules; const styleRule = rules.item(0); const mediaRule = rules.item(1); const nestedRule = mediaRule.cssRules.item(0); out.textContent = String(styleRule.parentRule) + ':' + String(mediaRule.parentRule) + ':' + String(nestedRule.parentRule);</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "null:null:[object CSSMediaRule]",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
 test "regression: phase 17j CSSContainerRule cssRules resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<div id='root'><style>@container card (min-width: 1px) { .primary { color: red; } .secondary { color: blue; } }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); const nested = rule.cssRules; out.textContent = String(rule) + ':' + rule.conditionText + ':' + String(nested.length) + ':' + nested.item(0).selectorText + ':' + nested.item(1).selectorText + ':' + nested.item(0).cssText + ':' + rule.cssText;</script>";
@@ -940,6 +1088,114 @@ test "regression: phase 17l CSSImportRule cssRules resolve on the copied html sn
     try subject.assertValue(
         "#out",
         "[object CSSImportRule]:x.css:screen and (min-width: 1px):@import url(x.css) screen and (min-width: 1px);",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17l1 CSSImportRule styleSheet resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style>@import url(x.css) screen and (min-width: 1px);</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); const sheet = document.styleSheets.item(0); out.textContent = String(rule.styleSheet) + ':' + String(sheet.ownerRule);</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "null:null",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17l2 CSSImportRule supports/layer metadata resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style>@import url(x.css) layer(foo) supports(display: grid) screen and (min-width: 1px);</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); out.textContent = rule.layerName + ':' + rule.supportsText + ':' + rule.mediaText;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "foo:display: grid:screen and (min-width: 1px)",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17l1 CSSCharsetRule cssRules resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style>@charset \"UTF-8\"; .primary { color: red; }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rules = document.styleSheets.item(0).cssRules; const charsetRule = rules.item(0); const styleRule = rules.item(1); out.textContent = String(charsetRule) + ':' + charsetRule.encoding + ':' + charsetRule.cssText + ':' + String(charsetRule.type) + ':' + String(styleRule.type);</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSCharsetRule]:UTF-8:@charset \"UTF-8\";:2:1",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17l2 CSSStyleSheet ownerNode resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style id='first-style'>.primary { color: red; }</style><link id='first-link' rel='stylesheet' href='a.css'></div><div id='out'></div><script>const out = document.getElementById('out'); const first = document.styleSheets.item(0); const second = document.styleSheets.item(1); out.textContent = String(first.ownerNode) + ':' + first.ownerNode.getAttribute('id') + ':' + String(second.ownerNode) + ':' + second.ownerNode.getAttribute('id');</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "[object Element]:first-style:[object Element]:first-link",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17l3 CSSStyleSheet href/title resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style id='first-style'>.primary { color: red; }</style><link id='first-link' rel='stylesheet' title='theme' href='a.css'></div><div id='out'></div><script>const out = document.getElementById('out'); const first = document.styleSheets.item(0); const second = document.styleSheets.item(1); out.textContent = String(first.href) + ':' + String(first.title) + ':' + String(second.href) + ':' + String(second.title);</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "null:null:a.css:theme",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17l4 CSSStyleSheet disabled resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style id='first-style' disabled>.primary { color: red; }</style><link id='first-link' rel='stylesheet' href='a.css' disabled title='theme'></div><div id='out'></div><script>const out = document.getElementById('out'); const first = document.styleSheets.item(0); const second = document.styleSheets.item(1); first.disabled = false; out.textContent = String(first.disabled) + ':' + String(second.disabled) + ':' + String(document.getElementById('first-style').hasAttribute('disabled'));</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "false:true:false",
     );
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
@@ -998,6 +1254,21 @@ test "regression: phase 17o CSSLayerBlockRule cssRules resolve on the copied htm
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: phase 17o1 CSSLayerStatementRule resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='out'></div><style>@layer base, theme;</style><script>const rule = document.styleSheets.item(0).cssRules.item(0); document.getElementById('out').textContent = String(rule) + ':' + rule.nameText + ':' + rule.cssText;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "[object CSSLayerStatementRule]:base, theme:@layer base, theme;");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
 test "regression: phase 17p CSSCounterStyleRule cssRules resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<div id='root'><style>@counter-style thumbs { system: cyclic; symbols: '*'; suffix: ' '; }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); out.textContent = String(rule) + ':' + rule.name + ':' + rule.cssText;</script>";
@@ -1016,6 +1287,24 @@ test "regression: phase 17p CSSCounterStyleRule cssRules resolve on the copied h
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: phase 17p2 CSSPropertyRule cssRules resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style>@property --accent { syntax: \"<color>\"; inherits: false; initial-value: red; }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); out.textContent = String(rule) + ':' + rule.name + ':' + rule.syntax + ':' + String(rule.inherits) + ':' + rule.initialValue + ':' + rule.cssText;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSPropertyRule]:--accent:\"<color>\":false:red:@property --accent { syntax: \"<color>\"; inherits: false; initial-value: red; }",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
 test "regression: phase 17q CSSScopeRule cssRules resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<div id='root'><style>@scope (.root) to (.leaf) { .primary { color: red; } .secondary { color: blue; } }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); const nested = rule.cssRules; out.textContent = String(rule) + ':' + rule.start + ':' + rule.end + ':' + String(nested.length) + ':' + nested.item(0).selectorText + ':' + nested.item(1).selectorText + ':' + nested.item(0).cssText + ':' + rule.cssText;</script>";
@@ -1030,6 +1319,75 @@ test "regression: phase 17q CSSScopeRule cssRules resolve on the copied html sna
     try subject.assertValue(
         "#out",
         "[object CSSScopeRule]:.root:.leaf:2:.primary:.secondary:.primary { color: red; }:@scope (.root) to (.leaf) { .primary { color: red; } .secondary { color: blue; } }",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17r CSSPositionTryRule cssRules resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style>@position-try card { .primary { color: red; } .secondary { color: blue; } }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); out.textContent = String(rule) + ':' + rule.name + ':' + rule.cssText;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSPositionTryRule]:card:@position-try card { .primary { color: red; } .secondary { color: blue; } }",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17s CSSStyleSheet media resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style id='first-style' media='print'>.primary { color: red; }</style><link id='first-link' rel='stylesheet' media='screen and (min-width: 1px), print' href='a.css'></div><div id='out'></div><script>const out = document.getElementById('out'); const sheets = document.styleSheets; const first = sheets.item(0).media; const second = sheets.item(1).media; out.textContent = String(first) + ':' + first.mediaText + ':' + String(first.length) + ':' + first.item(0) + ':' + String(second) + ':' + second.mediaText + ':' + String(second.length) + ':' + second.item(0) + ':' + second.item(1);</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "print:print:1:print:screen and (min-width: 1px), print:screen and (min-width: 1px), print:2:screen and (min-width: 1px):print",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17s1 CSSStyleSheet media mutation resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style id='first-style' media='print'>.primary { color: red; }</style></div><div id='out'></div><script>const style = document.getElementById('first-style'); const media = document.styleSheets.item(0).media; media.appendMedium('screen'); media.deleteMedium('print'); document.getElementById('out').textContent = String(media) + ':' + media.mediaText + ':' + String(media.length) + ':' + media.item(0) + ':' + style.getAttribute('media');</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "screen:screen:1:screen:screen");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17s1 CSSImportRule media resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style>@import url(x.css) screen and (min-width: 1px), print;</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); const media = rule.media; out.textContent = String(rule) + ':' + rule.href + ':' + rule.mediaText + ':' + String(media) + ':' + media.mediaText + ':' + String(media.length) + ':' + media.item(0) + ':' + media.item(1) + ':' + rule.cssText;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSImportRule]:x.css:screen and (min-width: 1px), print:screen and (min-width: 1px), print:screen and (min-width: 1px), print:2:screen and (min-width: 1px):print:@import url(x.css) screen and (min-width: 1px), print;",
     );
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
@@ -1337,6 +1695,178 @@ test "regression: phase 8 tree mutation primitives resolve on the copied html sn
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: phase 8 tree mutation replaceWith resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><section id='source'><button id='old'>Old</button><span id='tail'>Tail</span></section><button id='replacement'>Replacement</button><div id='out'></div><script>document.getElementById('old').replaceWith(document.getElementById('replacement')); document.getElementById('out').textContent = document.getElementById('source').textContent + ':' + String(document.querySelectorAll('#source > button').length) + ':' + document.querySelector('#source > #replacement').textContent + ':' + String(document.querySelector('#old'));</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "ReplacementTail:1:Replacement:null");
+    try subject.assertExists("#source > #replacement");
+    try subject.assertExists("#source > #tail");
+    try std.testing.expectError(error.AssertionFailed, subject.assertExists("#old"));
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 8 tree mutation cloneNode resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><section id='source' data-kind='orig'><button id='button'>One</button><span id='tail'>Tail</span></section><template id='tpl'><span id='inner'>Inner</span></template><div id='out'></div><script>const clone = document.getElementById('source').cloneNode(true); const fragment = document.getElementById('tpl').content.cloneNode(); document.getElementById('out').textContent = clone.getAttribute('id') + ':' + clone.getAttribute('data-kind') + ':' + String(clone.parentNode) + ':' + clone.textContent + ':' + String(clone.querySelectorAll('button').length) + ':' + String(document.querySelectorAll('#source').length) + '|' + String(fragment) + ':' + fragment.innerHTML + ':' + String(fragment.childNodes.length) + ':' + String(fragment.querySelector('#inner')) + ':' + document.getElementById('tpl').content.textContent;</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "source:orig:null:OneTail:1:1|[object DocumentFragment]::0:null:Inner");
+    try subject.assertExists("#source");
+    try subject.assertExists("#source > #button");
+    try subject.assertExists("#source > #tail");
+    try subject.assertExists("#tpl");
+    try subject.assertExists("#tpl > #inner");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 8 detached construction resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><section id='target'><span id='text-source'>Old</span><span id='comment-source'>Keep</span></section><div id='out'></div><script>const article = document.createElement('ARTICLE'); article.setAttribute('id', 'created'); article.textContent = 'Body'; const text = document.createTextNode('Replaced'); const comment = document.createComment('note'); const fragment = document.createDocumentFragment(); fragment.innerHTML = '<span id=\"fragment-child\">Fragment</span>'; const before = String(article.parentNode) + ':' + String(text.parentNode) + ':' + String(comment.parentNode) + ':' + String(fragment) + ':' + fragment.innerHTML + ':' + String(fragment.childNodes.length) + ':' + String(fragment.hasChildNodes()) + ':' + String(fragment.isConnected) + ':' + String(fragment.firstChild) + ':' + String(fragment.lastChild) + ':' + String(fragment.nextSibling) + ':' + String(fragment.previousSibling) + ':' + String(fragment.ownerDocument) + ':' + String(fragment.parentNode) + ':' + String(fragment.parentElement) + ':' + String(fragment.querySelector('#fragment-child')) + ':' + String(text) + ':' + String(comment) + ':' + text.textContent + ':' + comment.textContent; document.getElementById('target').appendChild(article); document.getElementById('text-source').childNodes.item(0).replaceWith(text); document.getElementById('comment-source').childNodes.item(0).replaceWith(comment); document.getElementById('out').textContent = before + '|' + document.getElementById('target').innerHTML + '|' + document.getElementById('text-source').innerHTML + '|' + document.getElementById('comment-source').innerHTML + '|' + String(document.querySelector('#created'));</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "null:null:null:[object DocumentFragment]:<span id=\"fragment-child\">Fragment</span>:1:true:false:[object Element]:[object Element]:null:null:[object Document]:null:null:[object Element]:[object Node]:[object Node]:Replaced:note|<span id=\"text-source\">Replaced</span><span id=\"comment-source\"><!--note--></span><article id=\"created\">Body</article>|Replaced|<!--note-->|[object Element]",
+    );
+    try subject.assertExists("#target > #text-source");
+    try subject.assertExists("#target > #comment-source");
+    try subject.assertExists("#target > #created");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 9 Node.nodeValue, data, and splitText resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><div id='host'>Hello</div><div id='out'></div><script>const element = document.getElementById('out'); const fragment = document.createDocumentFragment(); const text = document.createTextNode('Hello'); const comment = document.createComment('note'); element.nodeValue = 'ignored'; fragment.nodeValue = 'ignored'; document.nodeValue = 'ignored'; text.data = 'World'; comment.data = 'updated'; const split = document.getElementById('host').childNodes.item(0).splitText(2); document.getElementById('out').textContent = String(document.nodeValue) + ':' + String(element.nodeValue) + ':' + String(fragment.nodeValue) + ':' + text.data + ':' + comment.data + ':' + text.nodeValue + ':' + comment.nodeValue + ':' + text.textContent + ':' + comment.textContent + ':' + split.data + ':' + split.parentNode.textContent + ':' + String(split.parentNode.childNodes.length);</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "null:null:null:World:updated:World:updated:World:updated:llo:Hello:2");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 9 CharacterData methods resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><div id='host'>Hello</div><div id='note'><!--note--></div><div id='out'></div><script>const text = document.getElementById('host').childNodes.item(0); const comment = document.getElementById('note').childNodes.item(0); const substring = text.substringData(1, 3); text.appendData('!'); text.insertData(1, 'X'); text.deleteData(2, 2); text.replaceData(1, 2, 'Q'); comment.appendData('!'); comment.insertData(0, '['); comment.deleteData(1, 1); comment.replaceData(0, 1, '('); document.getElementById('out').textContent = substring + ':' + text.data + ':' + String(text.length) + ':' + comment.data + ':' + String(comment.length) + ':' + text.substringData(0, 2) + ':' + comment.substringData(0, 2);</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "ell:HQo!:4:(ote!:5:HQ:(o");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 8 tree mutation removeChild resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><section id='target'><button id='first'>First</button><button id='second'>Second</button></section><div id='out'></div><script>const target = document.getElementById('target'); const removed = target.removeChild(document.getElementById('second')); document.getElementById('out').textContent = String(removed) + ':' + removed.textContent + ':' + String(target.childNodes.length) + ':' + String(document.querySelector('#second'));</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "[object Element]:Second:1:null");
+    try subject.assertExists("#target > #first");
+    try std.testing.expectError(error.AssertionFailed, subject.assertExists("#second"));
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 8 normalize and importNode resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><div id='target'>a</div><template id='tpl'><span id='inner'>Inner</span></template><div id='out'></div><script>const text = document.getElementById('target').childNodes.item(0); text.replaceWith(document.createTextNode('a'), document.createTextNode(''), document.createTextNode('b')); document.getElementById('target').normalize(); const fragment = document.importNode(document.getElementById('tpl').content, true); document.getElementById('out').textContent = String(document.getElementById('target').childNodes.length) + ':' + document.getElementById('target').textContent + '|' + String(fragment) + ':' + fragment.innerHTML + ':' + String(fragment.childNodes.length) + ':' + String(fragment.querySelector('#inner'));</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "1:ab|[object DocumentFragment]:<span id=\"inner\">Inner</span>:1:[object Element]");
+    try subject.assertExists("#target");
+    try subject.assertExists("#tpl > #inner");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 9 Node.contains resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><section id='outer'><span id='inside'>Inside</span></section><template id='tpl'><span id='frag'>Frag</span></template><div id='out'></div><script>const outer = document.getElementById('outer'); const inside = document.getElementById('inside'); const fragment = document.getElementById('tpl').content; const fragmentChild = fragment.querySelector('#frag'); document.getElementById('out').textContent = String(document.contains(document)) + ':' + String(document.contains(outer)) + ':' + String(document.contains(inside)) + ':' + String(outer.contains(inside)) + ':' + String(inside.contains(outer)) + ':' + String(fragment.contains(fragmentChild)) + ':' + String(fragment.contains(document)) + ':' + String(document.contains(null)) + ':' + String(document.contains(fragmentChild));</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "true:true:true:true:false:true:false:false:false");
+    try subject.assertExists("#outer > #inside");
+    try subject.assertExists("#tpl > #frag");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 9 Node.compareDocumentPosition resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><section id='outer'><span id='inside'>Inside</span></section><template id='tpl'><span id='frag'>Frag</span></template><div id='out'></div><script>const outer = document.getElementById('outer'); const inside = document.getElementById('inside'); const fragment = document.getElementById('tpl').content; const fragmentChild = fragment.querySelector('#frag'); document.getElementById('out').textContent = String(document.compareDocumentPosition(outer)) + ':' + String(outer.compareDocumentPosition(document)) + ':' + String(outer.compareDocumentPosition(inside)) + ':' + String(inside.compareDocumentPosition(outer)) + ':' + String(outer.compareDocumentPosition(fragmentChild)) + ':' + String(fragmentChild.compareDocumentPosition(outer)) + ':' + String(fragment.compareDocumentPosition(fragmentChild)) + ':' + String(fragmentChild.compareDocumentPosition(fragment)) + ':' + String(document.compareDocumentPosition(document));</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "20:10:20:10:37:35:20:10:0");
+    try subject.assertExists("#outer > #inside");
+    try subject.assertExists("#tpl > #frag");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 9 Node.isSameNode and Node.isEqualNode resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>const left = document.createElement('div'); left.appendChild(document.createTextNode('Hello')); const right = document.createElement('div'); right.appendChild(document.createTextNode('Hello')); const fragLeft = document.createDocumentFragment(); fragLeft.appendChild(document.createTextNode('Hello')); const fragRight = document.createDocumentFragment(); fragRight.appendChild(document.createTextNode('Hello')); document.getElementById('out').textContent = String(document.isSameNode(document)) + ':' + String(document.isEqualNode(document)) + ':' + String(left.isSameNode(right)) + ':' + String(left.isEqualNode(right)) + ':' + String(fragLeft.isSameNode(fragRight)) + ':' + String(fragLeft.isEqualNode(fragRight));</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "true:true:false:true:false:true");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
 test "regression: phase 8 HTML serialization surfaces resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<main id='root'><section id='target'><button id='old' class='primary'>Old</button></section><div id='out'></div><script>document.getElementById('target').innerHTML = '<span id=\"first\">One</span><span id=\"second\">Two</span>'; document.getElementById('out').textContent = document.getElementById('target').innerHTML + '|' + document.getElementById('target').outerHTML + '|' + String(document.querySelector('#old'));</script></main>";
@@ -1396,6 +1926,26 @@ test "regression: phase 8 template.content surfaces resolve on the copied html s
     );
     try subject.assertExists("#second");
     try std.testing.expectError(error.AssertionFailed, subject.assertExists("#inner"));
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 8 template.content query methods resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<template id='tpl'><span id='inner'>Inner</span><span id='second' class='hit'>Second</span></template><div id='out'></div><script>const content = document.getElementById('tpl').content; document.getElementById('out').textContent = String(content) + ':' + String(content.getElementById('inner')) + ':' + String(content.querySelector('.hit')) + ':' + String(content.querySelectorAll('span').length) + ':' + content.querySelectorAll('span').item(1).textContent;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "[object DocumentFragment]:[object Element]:[object Element]:2:Second",
+    );
+    try subject.assertExists("#inner");
+    try subject.assertExists("#second");
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
@@ -1549,6 +2099,181 @@ test "regression: phase 28 Location href and navigation methods resolve on the c
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: phase 28b Location.hash getter and setter resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>const location = document.location; const before = location.hash; location.hash = '#copy'; const after = window.location.hash; document.getElementById('out').textContent = before + ':' + after + ':' + location.href;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtmlWithUrl(allocator, "https://example.test:8443/start?x#old", html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "#old:#copy:https://example.test:8443/start?x#copy");
+    try std.testing.expectEqualStrings("https://example.test:8443/start?x#copy", subject.mocksMut().location().currentUrl().?);
+    try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().location().navigations().len);
+    try std.testing.expectEqualStrings("https://example.test:8443/start?x#copy", subject.mocksMut().location().navigations()[0]);
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 28c hashchange listeners and onhashchange handlers resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>window.addEventListener('hashchange', () => { document.getElementById('out').textContent += 'listener:' + window.location.hash; }); window.onhashchange = () => { document.getElementById('out').textContent += '|property:' + window.location.hash; }; window.location.hash = 'copy';</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtmlWithUrl(allocator, "https://example.test:8443/start?x#old", html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "listener:#copy|property:#copy");
+    try std.testing.expectEqualStrings("https://example.test:8443/start?x#copy", subject.mocksMut().location().currentUrl().?);
+    try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().location().navigations().len);
+    try std.testing.expectEqualStrings("https://example.test:8443/start?x#copy", subject.mocksMut().location().navigations()[0]);
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 28c2 popstate listeners and onpopstate handlers resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>window.addEventListener('popstate', () => { document.getElementById('out').textContent += 'listener:' + window.history.state; }); window.onpopstate = () => { document.getElementById('out').textContent += '|property:' + window.history.state; }; window.history.pushState('seed', '', 'https://example.test:8443/seed'); window.history.pushState('next', '', 'https://example.test:8443/next'); window.history.back();</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtmlWithUrl(allocator, "https://example.test:8443/start?x#old", html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "listener:seed|property:seed");
+    try std.testing.expectEqualStrings("https://example.test:8443/seed", subject.mocksMut().location().currentUrl().?);
+    try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().location().navigations().len);
+    try std.testing.expectEqualStrings("https://example.test:8443/seed", subject.mocksMut().location().navigations()[0]);
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 28c3 focusin and focusout listeners resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><section id='panel'><input id='first'><input id='second'></section><script>const panel = document.getElementById('panel'); panel.addEventListener('focusin', (event) => { document.getElementById('out').textContent += 'focusin|'; }); panel.addEventListener('focusout', (event) => { document.getElementById('out').textContent += 'focusout|'; }); document.getElementById('first').addEventListener('focus', (event) => { document.getElementById('out').textContent += 'focus:first|'; }); document.getElementById('first').addEventListener('blur', (event) => { document.getElementById('out').textContent += 'blur:first|'; }); document.getElementById('second').addEventListener('focus', (event) => { document.getElementById('out').textContent += 'focus:second|'; }); document.getElementById('second').addEventListener('blur', (event) => { document.getElementById('out').textContent += 'blur:second'; });</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.focus("#first");
+    try subject.focus("#second");
+    try subject.assertValue(
+        "#out",
+        "focusin|focus:first|focusout|blur:first|focusin|focus:second|",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 28c4 window focus and blur listeners resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><section id='panel'><input id='first'><input id='second'></section><script>window.addEventListener('focus', () => { document.getElementById('out').textContent += 'focus|'; }); window.onfocus = () => { document.getElementById('out').textContent += 'property-focus|'; }; window.addEventListener('blur', () => { document.getElementById('out').textContent += 'blur|'; }); window.onblur = () => { document.getElementById('out').textContent += 'property-blur'; };</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.focus("#first");
+    try subject.blur("#first");
+    try subject.assertValue("#out", "focus|property-focus|blur|property-blur");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 28c5 window load listeners resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>window.addEventListener('load', () => { document.getElementById('out').textContent += 'load|'; }); window.onload = () => { document.getElementById('out').textContent += 'property-load'; };</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "load|property-load");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 28c6 storage listeners and onstorage handlers resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>window.addEventListener('storage', () => { document.getElementById('out').textContent += 'listener:' + window.localStorage.getItem('theme') + '|'; }); window.onstorage = () => { document.getElementById('out').textContent += 'property:' + window.localStorage.getItem('theme'); }; window.localStorage.setItem('theme', 'light');</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var builder = Harness.builder(allocator);
+    defer builder.deinit();
+    _ = builder.html(html_bytes);
+    try builder.addLocalStorage("theme", "dark");
+
+    var subject = try builder.build();
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "listener:light|property:light");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+    try std.testing.expectEqualStrings("light", subject.mocksMut().storage().local().get("theme").?);
+}
+
+test "regression: phase 28d Location component getters and setters resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>const before = window.location.protocol + '|' + window.location.host + '|' + window.location.hostname + '|' + window.location.port; document.location.protocol = 'http:'; document.location.host = 'example.test:8080'; document.location.hostname = 'example.test'; document.location.port = '8080'; const after = window.location.protocol + '|' + window.location.host + '|' + window.location.hostname + '|' + window.location.port; document.getElementById('out').textContent = before + ':' + after + ':' + document.location;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtmlWithUrl(allocator, "https://app.local:8443/start?x#old", html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "https:|app.local:8443|app.local|8443:http:|example.test:8080|example.test|8080:http://example.test:8080/start?x#old",
+    );
+    try std.testing.expectEqualStrings("http://example.test:8080/start?x#old", subject.mocksMut().location().currentUrl().?);
+    try std.testing.expectEqual(@as(usize, 4), subject.mocksMut().location().navigations().len);
+    try std.testing.expectEqualStrings("http://app.local:8443/start?x#old", subject.mocksMut().location().navigations()[0]);
+    try std.testing.expectEqualStrings("http://example.test:8080/start?x#old", subject.mocksMut().location().navigations()[1]);
+    try std.testing.expectEqualStrings("http://example.test:8080/start?x#old", subject.mocksMut().location().navigations()[2]);
+    try std.testing.expectEqualStrings("http://example.test:8080/start?x#old", subject.mocksMut().location().navigations()[3]);
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 28e Location username password pathname and search resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>const before = window.location.username + '|' + window.location.password + '|' + window.location.pathname + '|' + window.location.search; document.location.username = 'bob'; document.location.password = 'hunter2'; document.location.pathname = 'next'; document.location.search = '?copy'; const after = window.location.username + '|' + window.location.password + '|' + window.location.pathname + '|' + window.location.search; document.getElementById('out').textContent = before + ':' + after + ':' + document.location;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtmlWithUrl(allocator, "https://alice:secret@app.local:8443/start?x#old", html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "alice|secret|/start|?x:bob|hunter2|/next|?copy:https://bob:hunter2@app.local:8443/next?copy#old",
+    );
+    try std.testing.expectEqualStrings("https://bob:hunter2@app.local:8443/next?copy#old", subject.mocksMut().location().currentUrl().?);
+    try std.testing.expectEqual(@as(usize, 4), subject.mocksMut().location().navigations().len);
+    try std.testing.expectEqualStrings("https://bob:secret@app.local:8443/start?x#old", subject.mocksMut().location().navigations()[0]);
+    try std.testing.expectEqualStrings("https://bob:hunter2@app.local:8443/start?x#old", subject.mocksMut().location().navigations()[1]);
+    try std.testing.expectEqualStrings("https://bob:hunter2@app.local:8443/next?x#old", subject.mocksMut().location().navigations()[2]);
+    try std.testing.expectEqualStrings("https://bob:hunter2@app.local:8443/next?copy#old", subject.mocksMut().location().navigations()[3]);
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
 test "regression: phase 29 window.history navigation methods resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<main id='out'></main><script>const history = window.history; const beforeLength = history.length; history.replaceState(null, '', 'https://example.test:8443/replaced'); history.pushState(null, '', 'https://example.test:8443/pushed'); history.back(); history.forward(); history.go(-1); document.getElementById('out').textContent = String(beforeLength) + ':' + String(history.length) + ':' + String(history.state) + ':' + window.location.href;</script>";
@@ -1606,7 +2331,7 @@ test "regression: phase 31 window scroll aliases resolve on the copied html snap
 
 test "regression: phase 32 window.navigator aliases resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
-    const original = "<embed id='first-embed'><embed name='second-embed'><main id='out'></main><script>const navigator = window.navigator; document.getElementById('out').textContent = String(navigator) + ':' + navigator.userAgent + ':' + navigator.appCodeName + ':' + navigator.appName + ':' + navigator.appVersion + ':' + navigator.product + ':' + navigator.productSub + ':' + navigator.vendor + ':[' + navigator.vendorSub + ']:' + String(navigator.pdfViewerEnabled) + ':' + navigator.doNotTrack + ':' + String(navigator.javaEnabled()) + ':' + String(navigator.plugins.length) + ':' + navigator.platform + ':' + navigator.language + ':' + String(navigator.cookieEnabled) + ':' + String(navigator.onLine) + ':' + String(navigator.webdriver) + ':' + String(navigator.hardwareConcurrency) + ':' + String(navigator.maxTouchPoints);</script>";
+    const original = "<embed id='first-embed'><embed name='second-embed'><main id='out'></main><script>const navigator = window.navigator; document.getElementById('out').textContent = String(navigator) + ':' + navigator.userAgent + ':' + navigator.appCodeName + ':' + navigator.appName + ':' + navigator.appVersion + ':' + navigator.product + ':' + navigator.productSub + ':' + navigator.vendor + ':[' + navigator.vendorSub + ']:' + String(navigator.pdfViewerEnabled) + ':' + navigator.doNotTrack + ':' + String(navigator.javaEnabled()) + ':' + String(navigator.plugins) + ':' + String(navigator.plugins.length) + ':' + navigator.platform + ':' + navigator.language + ':' + String(navigator.cookieEnabled) + ':' + String(navigator.onLine) + ':' + String(navigator.webdriver) + ':' + String(navigator.hardwareConcurrency) + ':' + String(navigator.maxTouchPoints);</script>";
     var html_bytes = try allocator.dupe(u8, original);
     defer allocator.free(html_bytes);
 
@@ -1615,7 +2340,52 @@ test "regression: phase 32 window.navigator aliases resolve on the copied html s
 
     html_bytes[1] = 'Z';
 
-    try subject.assertValue("#out", "[object Navigator]:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:[]:false:unspecified:false:2:unknown:en-US:true:true:false:8:0");
+    try subject.assertValue("#out", "[object Navigator]:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:[]:false:unspecified:false:[object PluginArray]:2:unknown:en-US:true:true:false:8:0");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 32b window.navigator.plugins.refresh resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<embed id='first-embed'><embed name='second-embed'><main id='out'></main><script>const plugins = window.navigator.plugins; document.getElementById('out').textContent = String(plugins.refresh()) + ':' + String(plugins.length) + ':' + String(plugins);</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtmlWithUrl(allocator, "https://example.test:8443/start?x#old", html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "undefined:2:[object PluginArray]");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 41 window.navigator languages resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>const languages = window.navigator.languages; document.getElementById('out').textContent = window.navigator.userLanguage + ':' + window.navigator.browserLanguage + ':' + window.navigator.systemLanguage + ':' + window.navigator.oscpu + ':' + String(languages.length) + ':' + languages.item(0) + ':' + languages.toString() + ':' + String(languages.contains('en-US')) + ':' + String(languages.contains('fr-FR'));</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtmlWithUrl(allocator, "https://example.test:8443/start?x#old", html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "en-US:en-US:en-US:unknown:1:en-US:[object DOMStringList]:true:false");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 40 window.navigator.mimeTypes resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>const mimeTypes = window.navigator.mimeTypes; document.getElementById('out').textContent = String(mimeTypes) + ':' + mimeTypes.toString() + ':' + String(mimeTypes.length) + ':' + String(mimeTypes.item(0)) + ':' + String(mimeTypes.namedItem('text/plain'));</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtmlWithUrl(allocator, "https://example.test:8443/start?x#old", html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "[object MimeTypeArray]:[object MimeTypeArray]:0:null:null");
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
@@ -1631,6 +2401,21 @@ test "regression: phase 38 window identity aliases resolve on the copied html sn
     html_bytes[1] = 'Z';
 
     try subject.assertValue("#out", "[object Window]:[object Window]:[object Window]:[object Window]:[object Window]:null:false");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 39 document.scrollingElement, window.frames, window.length, and history.scrollRestoration resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>const history = window.history; const scrolling = document.scrollingElement; history.scrollRestoration = 'manual'; document.getElementById('out').textContent = String(scrolling) + ':' + String(window.frames) + ':' + String(window.length) + ':' + history.scrollRestoration;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtmlWithUrl(allocator, "https://example.test:8443/start?x#old", html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "[object Element]:[object Window]:0:manual");
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
@@ -1661,6 +2446,39 @@ test "regression: phase 27 document.domain and origin aliases resolve on the cop
     html_bytes[1] = 'Z';
 
     try subject.assertValue("#out", "example.test:https://example.test:8443:https://example.test:8443:https://example.test:8443:https://example.test:8443");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 27 location ancestorOrigins resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>const location = window.location; const origins = location.ancestorOrigins; document.getElementById('out').textContent = String(origins) + ':' + String(origins.length) + ':' + String(origins.item(0));</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtmlWithUrl(allocator, "https://example.test:8443/start?x#old", html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "[object DOMStringList]:0:null");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 27 node and element reflection helpers resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<!--pre--><main id='root'><span id='child'></span><!--tail--></main><div id='out'></div><script>const doc = document; const root = document.getElementById('root'); const child = document.getElementById('child'); const comment = document.childNodes.item(0); document.getElementById('out').textContent = String(doc.ownerDocument) + ':' + String(doc.parentNode) + ':' + String(doc.parentElement) + ':' + String(doc.firstElementChild) + ':' + String(doc.lastElementChild) + ':' + String(doc.childElementCount) + ':' + String(root.ownerDocument) + ':' + String(root.parentNode) + ':' + String(root.parentElement) + ':' + String(root.firstElementChild) + ':' + String(root.lastElementChild) + ':' + String(root.childElementCount) + ':' + String(child.ownerDocument) + ':' + String(child.parentNode) + ':' + String(child.parentElement) + ':' + String(comment.ownerDocument) + ':' + String(comment.parentNode) + ':' + String(comment.parentElement);</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "null:null:null:[object Element]:[object Element]:3:[object Document]:[object Document]:null:[object Element]:[object Element]:1:[object Document]:[object Element]:[object Element]:[object Document]:[object Document]:null",
+    );
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
@@ -1784,6 +2602,76 @@ test "regression: phase 37 screen aliases resolve on the copied html snapshot" {
     html_bytes[1] = 'Z';
 
     try subject.assertValue("#out", "0:0:0:0");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 37 screen orientation aliases resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>const orientation = window.screen.orientation; document.getElementById('out').textContent = orientation.type + ':' + String(orientation.angle) + ':' + String(orientation);</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "landscape-primary:0:[object ScreenOrientation]");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 40 Math constants and Math.random resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>document.getElementById('out').textContent = String(Math) + ':' + String(window.Math) + ':' + String(Math.PI) + ':' + String(window.Math.PI) + ':' + String(Math.random()) + ':' + String(window.Math.random());</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "[object Math]:[object Math]:3.141592653589793:3.141592653589793:0.114:0.363");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 40 Math.random respects HarnessBuilder.randomSeed on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>document.getElementById('out').textContent = String(Math.random()) + ':' + String(window.Math.random());</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var builder = Harness.builder(allocator);
+    defer builder.deinit();
+    _ = builder.randomSeed(0);
+    _ = builder.html(html_bytes);
+
+    var subject = try builder.build();
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "0.041:0.034");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 40 crypto.randomUUID respects HarnessBuilder.randomSeed on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><script>document.getElementById('out').textContent = String(window.crypto) + ':' + window.crypto.randomUUID();</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var builder = Harness.builder(allocator);
+    defer builder.deinit();
+    _ = builder.randomSeed(0);
+    _ = builder.html(html_bytes);
+
+    var subject = try builder.build();
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "[object Crypto]:29da53d4-9dee-4728-9182-3bfc0596ef50");
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
@@ -1931,6 +2819,84 @@ test "regression: matchMedia mock resolves on the copied html snapshot" {
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: matchMedia listeners on the copied html snapshot track reseeded state" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><button id='toggle'>Toggle</button><div id='out'></div><script>document.getElementById('toggle').addEventListener('click', () => { const mql = window.matchMedia('(max-width: 600px)'); mql.addListener(() => { document.getElementById('out').textContent = 'changed'; }); document.getElementById('out').textContent = String(mql.matches); });</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.mocksMut().matchMedia().seedMatch("(max-width: 600px)", false);
+    try subject.click("#toggle");
+    try subject.assertValue("#out", "false");
+
+    try subject.mocksMut().matchMedia().seedMatch("(max-width: 600px)", true);
+    try subject.flush();
+    try subject.assertValue("#out", "changed");
+    try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().matchMedia().calls().len);
+    try std.testing.expectEqualStrings(
+        "(max-width: 600px)",
+        subject.mocksMut().matchMedia().calls()[0].query,
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: matchMedia change event listeners on the copied html snapshot track reseeded state" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><button id='toggle'>Toggle</button><div id='out'></div><script>document.getElementById('toggle').addEventListener('click', () => { const mql = window.matchMedia('(max-width: 600px)'); mql.addEventListener('change', () => { document.getElementById('out').textContent = 'changed'; }); document.getElementById('out').textContent = String(mql.matches); });</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.mocksMut().matchMedia().seedMatch("(max-width: 600px)", false);
+    try subject.click("#toggle");
+    try subject.assertValue("#out", "false");
+
+    try subject.mocksMut().matchMedia().seedMatch("(max-width: 600px)", true);
+    try subject.flush();
+    try subject.assertValue("#out", "changed");
+    try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().matchMedia().calls().len);
+    try std.testing.expectEqualStrings(
+        "(max-width: 600px)",
+        subject.mocksMut().matchMedia().calls()[0].query,
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: matchMedia onchange callbacks on the copied html snapshot track reseeded state" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><button id='toggle'>Toggle</button><div id='out'></div><script>document.getElementById('toggle').addEventListener('click', () => { const mql = window.matchMedia('(max-width: 600px)'); mql.onchange = () => { document.getElementById('out').textContent = 'changed'; }; document.getElementById('out').textContent = String(mql.matches); });</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.mocksMut().matchMedia().seedMatch("(max-width: 600px)", false);
+    try subject.click("#toggle");
+    try subject.assertValue("#out", "false");
+
+    try subject.mocksMut().matchMedia().seedMatch("(max-width: 600px)", true);
+    try subject.flush();
+    try subject.assertValue("#out", "changed");
+    try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().matchMedia().calls().len);
+    try std.testing.expectEqualStrings(
+        "(max-width: 600px)",
+        subject.mocksMut().matchMedia().calls()[0].query,
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
 test "regression: open, close, and print mocks resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<main id='root'><div id='out'></div><script>window.open('https://example.test/popup', '_blank', 'noopener'); window.close(); window.print(); document.getElementById('out').textContent = 'done';</script></main>";
@@ -2060,5 +3026,24 @@ test "regression: phase 35 interval timer queue repeats on advanceTime for copie
     try subject.assertValue("#out", "bootx");
     try subject.advanceTime(5);
     try subject.assertValue("#out", "bootxx");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 36 requestAnimationFrame queue resolves on copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><div id='out'></div><script>document.getElementById('out').textContent = 'boot'; const cancelled = requestAnimationFrame(() => { document.getElementById('out').textContent = 'cancelled'; }); cancelAnimationFrame(cancelled); window.requestAnimationFrame(() => { document.getElementById('out').textContent = document.getElementById('out').textContent + ':raf'; });</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "boot");
+    try subject.advanceTime(15);
+    try subject.assertValue("#out", "boot");
+    try subject.advanceTime(1);
+    try subject.assertValue("#out", "boot:raf");
     try std.testing.expectEqualStrings(original, subject.html().?);
 }

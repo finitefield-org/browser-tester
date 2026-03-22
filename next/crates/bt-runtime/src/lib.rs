@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::fmt;
@@ -887,6 +888,7 @@ pub struct Session {
     focused_node: Option<NodeId>,
     current_script: Option<NodeId>,
     document_ready_state: DocumentReadyState,
+    document_design_mode: String,
     window_name: String,
     cookie_jar: BTreeMap<String, String>,
     history_entries: Vec<String>,
@@ -947,6 +949,7 @@ impl Session {
             focused_node: None,
             current_script: None,
             document_ready_state: DocumentReadyState::Loading,
+            document_design_mode: "off".to_string(),
             window_name: String::new(),
             cookie_jar: BTreeMap::new(),
             history_entries: vec![initial_url],
@@ -1734,6 +1737,155 @@ impl Session {
         NodeHandle::new(((node_id.generation() as u64) << 32) | node_id.index() as u64)
     }
 
+    fn node_contains_id(dom: &DomStore, container: NodeId, candidate: NodeId) -> bool {
+        let mut current = Some(candidate);
+        while let Some(node_id) = current {
+            if node_id == container {
+                return true;
+            }
+            current = dom
+                .nodes()
+                .get(node_id.index() as usize)
+                .and_then(|record| record.parent);
+        }
+        false
+    }
+
+    fn node_root_id(dom: &DomStore, node: NodeId) -> Option<NodeId> {
+        let mut current = Some(node);
+        while let Some(node_id) = current {
+            let Some(record) = dom.nodes().get(node_id.index() as usize) else {
+                return None;
+            };
+            current = record.parent;
+            if current.is_none() {
+                return Some(node_id);
+            }
+        }
+        None
+    }
+
+    fn node_preorder_index_id(dom: &DomStore, root: NodeId, target: NodeId) -> Option<usize> {
+        let mut index = 0usize;
+        let mut stack = vec![root];
+
+        while let Some(node_id) = stack.pop() {
+            if node_id == target {
+                return Some(index);
+            }
+
+            index += 1;
+            let Some(record) = dom.nodes().get(node_id.index() as usize) else {
+                continue;
+            };
+
+            for child in record.children.iter().rev() {
+                stack.push(*child);
+            }
+        }
+
+        None
+    }
+
+    fn node_compare_document_position_id(dom: &DomStore, node: NodeId, other: NodeId) -> u16 {
+        const DISCONNECTED: u16 = 0x01;
+        const PRECEDING: u16 = 0x02;
+        const FOLLOWING: u16 = 0x04;
+        const CONTAINS: u16 = 0x08;
+        const CONTAINED_BY: u16 = 0x10;
+        const IMPLEMENTATION_SPECIFIC: u16 = 0x20;
+
+        if node == other {
+            return 0;
+        }
+
+        let Some(node_root) = Self::node_root_id(dom, node) else {
+            return DISCONNECTED | IMPLEMENTATION_SPECIFIC | FOLLOWING;
+        };
+        let Some(other_root) = Self::node_root_id(dom, other) else {
+            return DISCONNECTED | IMPLEMENTATION_SPECIFIC | PRECEDING;
+        };
+
+        if node_root != other_root {
+            return match node_root.cmp(&other_root) {
+                Ordering::Less => DISCONNECTED | IMPLEMENTATION_SPECIFIC | FOLLOWING,
+                Ordering::Greater => DISCONNECTED | IMPLEMENTATION_SPECIFIC | PRECEDING,
+                Ordering::Equal => 0,
+            };
+        }
+
+        if Self::node_contains_id(dom, node, other) {
+            return CONTAINED_BY | FOLLOWING;
+        }
+
+        if Self::node_contains_id(dom, other, node) {
+            return CONTAINS | PRECEDING;
+        }
+
+        let node_index = Self::node_preorder_index_id(dom, node_root, node);
+        let other_index = Self::node_preorder_index_id(dom, node_root, other);
+        match (node_index, other_index) {
+            (Some(node_index), Some(other_index)) if node_index < other_index => FOLLOWING,
+            (Some(_), Some(_)) => PRECEDING,
+            _ => DISCONNECTED | IMPLEMENTATION_SPECIFIC | FOLLOWING,
+        }
+    }
+
+    fn node_has_child_nodes_id(dom: &DomStore, node: NodeId) -> bool {
+        dom.nodes()
+            .get(node.index() as usize)
+            .is_some_and(|record| !record.children.is_empty())
+    }
+
+    fn node_is_equal_node_id(dom: &DomStore, node: NodeId, other: NodeId) -> bool {
+        let Some(node_record) = dom.nodes().get(node.index() as usize) else {
+            return false;
+        };
+        let Some(other_record) = dom.nodes().get(other.index() as usize) else {
+            return false;
+        };
+
+        match (&node_record.kind, &other_record.kind) {
+            (NodeKind::Document, NodeKind::Document) => {
+                Self::node_children_equal_id(dom, &node_record.children, &other_record.children)
+            }
+            (NodeKind::Element(left), NodeKind::Element(right)) => {
+                left == right
+                    && Self::node_children_equal_id(
+                        dom,
+                        &node_record.children,
+                        &other_record.children,
+                    )
+            }
+            (NodeKind::Text(left), NodeKind::Text(right)) => left == right,
+            (NodeKind::Comment(left), NodeKind::Comment(right)) => left == right,
+            _ => false,
+        }
+    }
+
+    fn node_children_equal_id(dom: &DomStore, left: &[NodeId], right: &[NodeId]) -> bool {
+        left.len() == right.len()
+            && left
+                .iter()
+                .zip(right.iter())
+                .all(|(left_child, right_child)| {
+                    Self::node_is_equal_node_id(dom, *left_child, *right_child)
+                })
+    }
+
+    fn template_content_is_equal_node_id(dom: &DomStore, left: NodeId, right: NodeId) -> bool {
+        let Some(left_record) = dom.nodes().get(left.index() as usize) else {
+            return false;
+        };
+        let Some(right_record) = dom.nodes().get(right.index() as usize) else {
+            return false;
+        };
+
+        matches!(&left_record.kind, NodeKind::Element(_))
+            && matches!(&right_record.kind, NodeKind::Element(_))
+            && Self::node_children_equal_id(dom, &left_record.children, &right_record.children)
+    }
+
     fn fragment_identifier_from_url(url: &str) -> Option<String> {
         let fragment = url.split_once('#')?.1;
         if fragment.is_empty() {
@@ -2503,6 +2655,30 @@ impl Session {
         "en-US"
     }
 
+    pub fn window_navigator_oscpu(&self) -> &'static str {
+        "unknown"
+    }
+
+    fn window_navigator_user_language(&self) -> &'static str {
+        self.window_navigator_language()
+    }
+
+    fn window_navigator_browser_language(&self) -> &'static str {
+        self.window_navigator_language()
+    }
+
+    pub fn window_navigator_system_language(&self) -> &'static str {
+        self.window_navigator_language()
+    }
+
+    pub fn window_navigator_languages(&self) -> Vec<String> {
+        vec![self.window_navigator_language().to_string()]
+    }
+
+    pub fn window_navigator_mime_types(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     pub fn window_navigator_cookie_enabled(&self) -> bool {
         true
     }
@@ -2718,6 +2894,24 @@ impl Session {
         "text/html"
     }
 
+    pub fn document_design_mode(&self) -> &str {
+        &self.document_design_mode
+    }
+
+    pub fn set_document_design_mode(&mut self, value: &str) -> Result<(), SessionError> {
+        if value.eq_ignore_ascii_case("on") {
+            self.document_design_mode = "on".to_string();
+            Ok(())
+        } else if value.eq_ignore_ascii_case("off") {
+            self.document_design_mode = "off".to_string();
+            Ok(())
+        } else {
+            Err(SessionError::Mock(format!(
+                "unsupported document designMode value: {value}"
+            )))
+        }
+    }
+
     pub fn document_dir(&self) -> String {
         self.dom
             .document_element_id()
@@ -2810,7 +3004,34 @@ impl Session {
     }
 
     pub fn set_document_location(&mut self, value: &str) -> Result<(), SessionError> {
+        self.document_location_assign(value)
+    }
+
+    pub fn document_location_assign(&mut self, value: &str) -> Result<(), SessionError> {
         self.navigate(value)
+    }
+
+    pub fn document_location_replace(&mut self, value: &str) -> Result<(), SessionError> {
+        let url = value.trim();
+        if url.is_empty() {
+            return Err(SessionError::Mock(
+                "document.location.replace() requires a non-empty URL".to_string(),
+            ));
+        }
+
+        if self.history_entries.is_empty() {
+            return self.navigate(url);
+        }
+
+        self.history_entries[self.history_index] = url.to_string();
+        self.apply_history_navigation(url);
+        Ok(())
+    }
+
+    pub fn document_location_reload(&mut self) -> Result<(), SessionError> {
+        let url = Session::document_location(self);
+        self.apply_history_navigation(&url);
+        Ok(())
     }
 
     fn document_children(&self) -> Result<Vec<ElementHandle>, ScriptError> {
@@ -2876,10 +3097,7 @@ impl Session {
         Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
     }
 
-    fn window_frames_named_item(
-        &self,
-        name: &str,
-    ) -> Result<Option<ElementHandle>, ScriptError> {
+    fn window_frames_named_item(&self, name: &str) -> Result<Option<ElementHandle>, ScriptError> {
         let root = self.dom.document_id();
         let mut collected = Vec::new();
         self.collect_descendant_elements_matching(
@@ -3358,6 +3576,30 @@ impl HostBindings for Session {
         Ok(Some(Self::node_id_to_handle(node_id)))
     }
 
+    fn document_create_element(&mut self, tag_name: &str) -> bt_script::Result<ElementHandle> {
+        let node_id = self
+            .dom
+            .create_element(tag_name)
+            .map_err(ScriptError::new)?;
+        Ok(Self::node_id_to_handle(node_id))
+    }
+
+    fn document_create_text_node(&mut self, text: &str) -> bt_script::Result<NodeHandle> {
+        let node_id = self.dom.create_text_node(text).map_err(ScriptError::new)?;
+        Ok(Self::node_id_to_node_handle(node_id))
+    }
+
+    fn document_create_comment(&mut self, text: &str) -> bt_script::Result<NodeHandle> {
+        let node_id = self.dom.create_comment(text).map_err(ScriptError::new)?;
+        Ok(Self::node_id_to_node_handle(node_id))
+    }
+
+    fn document_normalize(&mut self) -> bt_script::Result<()> {
+        self.dom
+            .normalize_node(self.dom.document_id())
+            .map_err(ScriptError::new)
+    }
+
     fn document_document_element(&mut self) -> bt_script::Result<Option<ElementHandle>> {
         Session::document_document_element(self)
     }
@@ -3406,6 +3648,20 @@ impl HostBindings for Session {
     fn document_set_location(&mut self, value: &str) -> bt_script::Result<()> {
         Session::set_document_location(self, value)
             .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_location_assign(&mut self, value: &str) -> bt_script::Result<()> {
+        Session::document_location_assign(self, value)
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_location_replace(&mut self, value: &str) -> bt_script::Result<()> {
+        Session::document_location_replace(self, value)
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_location_reload(&mut self) -> bt_script::Result<()> {
+        Session::document_location_reload(self).map_err(|error| ScriptError::new(error.to_string()))
     }
 
     fn document_url(&mut self) -> bt_script::Result<String> {
@@ -3513,6 +3769,30 @@ impl HostBindings for Session {
 
     fn window_navigator_language(&mut self) -> bt_script::Result<String> {
         Ok(Session::window_navigator_language(self).to_string())
+    }
+
+    fn window_navigator_oscpu(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_oscpu(self).to_string())
+    }
+
+    fn window_navigator_user_language(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_user_language(self).to_string())
+    }
+
+    fn window_navigator_browser_language(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_browser_language(self).to_string())
+    }
+
+    fn window_navigator_system_language(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_system_language(self).to_string())
+    }
+
+    fn window_navigator_languages(&mut self) -> bt_script::Result<Vec<String>> {
+        Ok(Session::window_navigator_languages(self))
+    }
+
+    fn window_navigator_mime_types(&mut self) -> bt_script::Result<Vec<String>> {
+        Ok(Session::window_navigator_mime_types(self))
     }
 
     fn window_navigator_cookie_enabled(&mut self) -> bt_script::Result<bool> {
@@ -3767,6 +4047,15 @@ impl HostBindings for Session {
         Ok(Session::document_content_type(self).to_string())
     }
 
+    fn document_design_mode(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_design_mode(self).to_string())
+    }
+
+    fn document_set_design_mode(&mut self, value: &str) -> bt_script::Result<()> {
+        Session::set_document_design_mode(self, value)
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
     fn document_dir(&mut self) -> bt_script::Result<String> {
         Ok(Session::document_dir(self))
     }
@@ -3812,6 +4101,158 @@ impl HostBindings for Session {
         scope: HtmlCollectionScope,
     ) -> bt_script::Result<Vec<NodeHandle>> {
         self.node_child_nodes(scope)
+    }
+
+    fn node_clone(&mut self, node: NodeHandle, deep: bool) -> bt_script::Result<NodeHandle> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let cloned_id = self
+            .dom
+            .clone_node(node_id, deep)
+            .map_err(ScriptError::new)?;
+        Ok(Self::node_id_to_node_handle(cloned_id))
+    }
+
+    fn node_normalize(&mut self, node: NodeHandle) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        self.dom.normalize_node(node_id).map_err(ScriptError::new)
+    }
+
+    fn node_replace_with(
+        &mut self,
+        node: NodeHandle,
+        children: Vec<NodeHandle>,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let Some(parent_id) = self
+            .dom
+            .nodes()
+            .get(node_id.index() as usize)
+            .and_then(|record| record.parent)
+        else {
+            return Ok(());
+        };
+        let children = children
+            .into_iter()
+            .map(|child| self.node_id_for_node_handle(child))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.dom
+            .insert_children_before(parent_id, node_id, children)
+            .map_err(ScriptError::new)?;
+        self.dom.remove_node(node_id).map_err(ScriptError::new)
+    }
+
+    fn node_before(
+        &mut self,
+        node: NodeHandle,
+        children: Vec<NodeHandle>,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let Some(parent_id) = self
+            .dom
+            .nodes()
+            .get(node_id.index() as usize)
+            .and_then(|record| record.parent)
+        else {
+            return Ok(());
+        };
+        let children = children
+            .into_iter()
+            .map(|child| self.node_id_for_node_handle(child))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.dom
+            .insert_children_before(parent_id, node_id, children)
+            .map_err(ScriptError::new)
+    }
+
+    fn node_after(&mut self, node: NodeHandle, children: Vec<NodeHandle>) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let Some(parent_id) = self
+            .dom
+            .nodes()
+            .get(node_id.index() as usize)
+            .and_then(|record| record.parent)
+        else {
+            return Ok(());
+        };
+        let children = children
+            .into_iter()
+            .map(|child| self.node_id_for_node_handle(child))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.dom
+            .insert_children_after(parent_id, node_id, children)
+            .map_err(ScriptError::new)
+    }
+
+    fn document_contains(&mut self, node: NodeHandle) -> bt_script::Result<bool> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        Ok(Self::node_contains_id(
+            &self.dom,
+            self.dom.document_id(),
+            node_id,
+        ))
+    }
+
+    fn node_contains(&mut self, node: NodeHandle, other: NodeHandle) -> bt_script::Result<bool> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let other_id = self.node_id_for_node_handle(other)?;
+        Ok(Self::node_contains_id(&self.dom, node_id, other_id))
+    }
+
+    fn node_compare_document_position(
+        &mut self,
+        node: NodeHandle,
+        other: NodeHandle,
+    ) -> bt_script::Result<u16> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let other_id = self.node_id_for_node_handle(other)?;
+        Ok(Self::node_compare_document_position_id(
+            &self.dom, node_id, other_id,
+        ))
+    }
+
+    fn node_is_equal_node(
+        &mut self,
+        node: NodeHandle,
+        other: NodeHandle,
+    ) -> bt_script::Result<bool> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let other_id = self.node_id_for_node_handle(other)?;
+        Ok(Self::node_is_equal_node_id(&self.dom, node_id, other_id))
+    }
+
+    fn template_content_is_equal_node(
+        &mut self,
+        fragment: ElementHandle,
+        other: ElementHandle,
+    ) -> bt_script::Result<bool> {
+        let fragment_id = self.node_id_for_handle(fragment)?;
+        let other_id = self.node_id_for_handle(other)?;
+        Ok(Self::template_content_is_equal_node_id(
+            &self.dom,
+            fragment_id,
+            other_id,
+        ))
+    }
+
+    fn document_has_child_nodes(&mut self) -> bt_script::Result<bool> {
+        Ok(Self::node_has_child_nodes_id(
+            &self.dom,
+            self.dom.document_id(),
+        ))
+    }
+
+    fn node_has_child_nodes(&mut self, node: NodeHandle) -> bt_script::Result<bool> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        Ok(Self::node_has_child_nodes_id(&self.dom, node_id))
+    }
+
+    fn node_parent(&mut self, node: NodeHandle) -> bt_script::Result<Option<NodeHandle>> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let Some(record) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid node handle"));
+        };
+
+        Ok(record.parent.map(Self::node_id_to_node_handle))
     }
 
     fn node_text_content(&mut self, node: NodeHandle) -> bt_script::Result<String> {
@@ -4380,6 +4821,11 @@ impl HostBindings for Session {
         Ok(Session::document_origin(self))
     }
 
+    fn element_is_content_editable(&mut self, element: ElementHandle) -> bt_script::Result<bool> {
+        let node_id = self.node_id_for_handle(element)?;
+        Ok(self.dom.is_content_editable(node_id))
+    }
+
     fn element_labels(&mut self, element: ElementHandle) -> bt_script::Result<Vec<ElementHandle>> {
         Session::element_labels(self, element)
     }
@@ -4501,10 +4947,10 @@ impl HostBindings for Session {
     fn element_append_child(
         &mut self,
         parent: ElementHandle,
-        child: ElementHandle,
+        child: NodeHandle,
     ) -> bt_script::Result<()> {
         let parent_id = self.node_id_for_handle(parent)?;
-        let child_id = self.node_id_for_handle(child)?;
+        let child_id = self.node_id_for_node_handle(child)?;
         self.dom
             .append_child(parent_id, child_id)
             .map_err(ScriptError::new)
@@ -4513,14 +4959,14 @@ impl HostBindings for Session {
     fn element_insert_before(
         &mut self,
         parent: ElementHandle,
-        child: ElementHandle,
-        reference: Option<ElementHandle>,
+        child: NodeHandle,
+        reference: Option<NodeHandle>,
     ) -> bt_script::Result<()> {
         let parent_id = self.node_id_for_handle(parent)?;
-        let child_id = self.node_id_for_handle(child)?;
+        let child_id = self.node_id_for_node_handle(child)?;
         match reference {
             Some(reference) => {
-                let reference_id = self.node_id_for_handle(reference)?;
+                let reference_id = self.node_id_for_node_handle(reference)?;
                 self.dom
                     .insert_before(parent_id, child_id, reference_id)
                     .map_err(ScriptError::new)
@@ -4535,12 +4981,12 @@ impl HostBindings for Session {
     fn element_replace_child(
         &mut self,
         parent: ElementHandle,
-        new_child: ElementHandle,
-        old_child: ElementHandle,
+        new_child: NodeHandle,
+        old_child: NodeHandle,
     ) -> bt_script::Result<()> {
         let parent_id = self.node_id_for_handle(parent)?;
-        let new_child_id = self.node_id_for_handle(new_child)?;
-        let old_child_id = self.node_id_for_handle(old_child)?;
+        let new_child_id = self.node_id_for_node_handle(new_child)?;
+        let old_child_id = self.node_id_for_node_handle(old_child)?;
         self.dom
             .replace_child(parent_id, new_child_id, old_child_id)
             .map_err(ScriptError::new)
@@ -4549,12 +4995,12 @@ impl HostBindings for Session {
     fn element_replace_children(
         &mut self,
         parent: ElementHandle,
-        children: Vec<ElementHandle>,
+        children: Vec<NodeHandle>,
     ) -> bt_script::Result<()> {
         let parent_id = self.node_id_for_handle(parent)?;
         let children = children
             .into_iter()
-            .map(|child| self.node_id_for_handle(child))
+            .map(|child| self.node_id_for_node_handle(child))
             .collect::<Result<Vec<_>, _>>()?;
         self.dom
             .replace_children(parent_id, children)
@@ -4564,12 +5010,12 @@ impl HostBindings for Session {
     fn element_append(
         &mut self,
         element: ElementHandle,
-        children: Vec<ElementHandle>,
+        children: Vec<NodeHandle>,
     ) -> bt_script::Result<()> {
         let parent_id = self.node_id_for_handle(element)?;
         let children = children
             .into_iter()
-            .map(|child| self.node_id_for_handle(child))
+            .map(|child| self.node_id_for_node_handle(child))
             .collect::<Result<Vec<_>, _>>()?;
         self.dom
             .append_children(parent_id, children)
@@ -4579,12 +5025,12 @@ impl HostBindings for Session {
     fn element_prepend(
         &mut self,
         element: ElementHandle,
-        children: Vec<ElementHandle>,
+        children: Vec<NodeHandle>,
     ) -> bt_script::Result<()> {
         let parent_id = self.node_id_for_handle(element)?;
         let children = children
             .into_iter()
-            .map(|child| self.node_id_for_handle(child))
+            .map(|child| self.node_id_for_node_handle(child))
             .collect::<Result<Vec<_>, _>>()?;
         self.dom
             .prepend_children(parent_id, children)
@@ -4594,7 +5040,7 @@ impl HostBindings for Session {
     fn element_before(
         &mut self,
         element: ElementHandle,
-        children: Vec<ElementHandle>,
+        children: Vec<NodeHandle>,
     ) -> bt_script::Result<()> {
         let node_id = self.node_id_for_handle(element)?;
         let Some(parent_id) = self
@@ -4607,7 +5053,7 @@ impl HostBindings for Session {
         };
         let children = children
             .into_iter()
-            .map(|child| self.node_id_for_handle(child))
+            .map(|child| self.node_id_for_node_handle(child))
             .collect::<Result<Vec<_>, _>>()?;
         self.dom
             .insert_children_before(parent_id, node_id, children)
@@ -4617,7 +5063,7 @@ impl HostBindings for Session {
     fn element_after(
         &mut self,
         element: ElementHandle,
-        children: Vec<ElementHandle>,
+        children: Vec<NodeHandle>,
     ) -> bt_script::Result<()> {
         let node_id = self.node_id_for_handle(element)?;
         let Some(parent_id) = self
@@ -4630,7 +5076,7 @@ impl HostBindings for Session {
         };
         let children = children
             .into_iter()
-            .map(|child| self.node_id_for_handle(child))
+            .map(|child| self.node_id_for_node_handle(child))
             .collect::<Result<Vec<_>, _>>()?;
         self.dom
             .insert_children_after(parent_id, node_id, children)

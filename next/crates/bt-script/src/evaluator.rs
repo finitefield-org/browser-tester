@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 
 use crate::syntax::{AssignTarget, Expr, Program, Statement};
 use crate::{
-    CollectionEntryHandle, CollectionIteratorHandle, HostBindings, HtmlCollectionNamedItem,
-    HtmlCollectionScope, HtmlCollectionTarget, ListenerTarget, NodeHandle, NodeListTarget,
-    RadioNodeListTarget, Result, ScriptError, ScriptValue as Value, StorageTarget,
-    StyleSheetListTarget, StyleSheetTarget,
+    CollectionEntryHandle, CollectionIteratorHandle, ElementHandle, HostBindings,
+    HtmlCollectionNamedItem, HtmlCollectionScope, HtmlCollectionTarget, ListenerTarget,
+    MimeTypeArrayState, NodeHandle, NodeListTarget, RadioNodeListTarget, Result, ScriptError,
+    ScriptValue as Value, StorageTarget, StringListState, StyleSheetListTarget, StyleSheetTarget,
 };
 
 pub(crate) fn eval_program<H: HostBindings>(program: &Program, host: &mut H) -> Result<()> {
@@ -49,6 +49,8 @@ fn as_string(value: &Value) -> String {
         Value::RadioNodeList(_) => "[object RadioNodeList]".to_string(),
         Value::Storage(_) => "[object Storage]".to_string(),
         Value::MediaQueryList(_) => "[object MediaQueryList]".to_string(),
+        Value::StringList(_) => "[object DOMStringList]".to_string(),
+        Value::MimeTypeArray(_) => "[object MimeTypeArray]".to_string(),
         Value::Navigator => "[object Navigator]".to_string(),
         Value::History => "[object History]".to_string(),
         Value::Screen => "[object Screen]".to_string(),
@@ -63,12 +65,518 @@ fn as_string(value: &Value) -> String {
     }
 }
 
+fn content_editable_reflection(value: Option<&str>) -> &'static str {
+    match value.map(|value| value.trim().to_ascii_lowercase()) {
+        Some(value) if value.is_empty() || value == "true" => "true",
+        Some(value) if value == "false" => "false",
+        Some(value) if value == "plaintext-only" => "plaintext-only",
+        _ => "inherit",
+    }
+}
+
 fn value_for_listener_target(target: ListenerTarget) -> Value {
     match target {
         ListenerTarget::Window => Value::Window,
         ListenerTarget::Document => Value::Document,
         ListenerTarget::Element(element) => Value::Element(element),
     }
+}
+
+fn value_for_parent_node<H: HostBindings>(node: NodeHandle, host: &mut H) -> Result<Value> {
+    let Some(parent) = host.node_parent(node)? else {
+        return Ok(Value::Null);
+    };
+
+    Ok(match host.node_type(parent)? {
+        9 => Value::Document,
+        1 => Value::Element(ElementHandle::new(parent.raw())),
+        _ => Value::Node(parent),
+    })
+}
+
+fn value_for_parent_element<H: HostBindings>(node: NodeHandle, host: &mut H) -> Result<Value> {
+    let Some(parent) = host.node_parent(node)? else {
+        return Ok(Value::Null);
+    };
+
+    Ok(match host.node_type(parent)? {
+        1 => Value::Element(ElementHandle::new(parent.raw())),
+        _ => Value::Null,
+    })
+}
+
+fn value_for_is_connected<H: HostBindings>(node: NodeHandle, host: &mut H) -> Result<Value> {
+    let mut current = node;
+
+    loop {
+        let Some(parent) = host.node_parent(current)? else {
+            return Ok(Value::Boolean(false));
+        };
+
+        if host.node_type(parent)? == 9 {
+            return Ok(Value::Boolean(true));
+        }
+
+        current = parent;
+    }
+}
+
+fn value_for_first_element_child(children: Vec<ElementHandle>) -> Value {
+    children
+        .into_iter()
+        .next()
+        .map(Value::Element)
+        .unwrap_or(Value::Null)
+}
+
+fn value_for_last_element_child(children: Vec<ElementHandle>) -> Value {
+    children
+        .into_iter()
+        .last()
+        .map(Value::Element)
+        .unwrap_or(Value::Null)
+}
+
+fn value_for_first_child<H: HostBindings>(
+    scope: HtmlCollectionScope,
+    host: &mut H,
+) -> Result<Value> {
+    Ok(
+        match host.node_child_nodes_items(scope)?.into_iter().next() {
+            Some(node) => value_for_node_handle(node, host)?,
+            None => Value::Null,
+        },
+    )
+}
+
+fn value_for_last_child<H: HostBindings>(
+    scope: HtmlCollectionScope,
+    host: &mut H,
+) -> Result<Value> {
+    Ok(
+        match host.node_child_nodes_items(scope)?.into_iter().last() {
+            Some(node) => value_for_node_handle(node, host)?,
+            None => Value::Null,
+        },
+    )
+}
+
+fn value_for_adjacent_sibling<H: HostBindings>(
+    node: NodeHandle,
+    next: bool,
+    host: &mut H,
+) -> Result<Value> {
+    let Some(parent) = host.node_parent(node)? else {
+        return Ok(Value::Null);
+    };
+
+    let scope = match host.node_type(parent)? {
+        9 => HtmlCollectionScope::Document,
+        1 => HtmlCollectionScope::Element(ElementHandle::new(parent.raw())),
+        _ => HtmlCollectionScope::Node(parent),
+    };
+    let children = host.node_child_nodes_items(scope)?;
+    let Some(index) = children
+        .iter()
+        .position(|candidate| candidate.raw() == node.raw())
+    else {
+        return Ok(Value::Null);
+    };
+    let sibling = if next {
+        children.get(index + 1).copied()
+    } else {
+        index
+            .checked_sub(1)
+            .and_then(|index| children.get(index).copied())
+    };
+
+    Ok(match sibling {
+        Some(node) => value_for_node_handle(node, host)?,
+        None => Value::Null,
+    })
+}
+
+fn value_for_adjacent_element_sibling<H: HostBindings>(
+    node: NodeHandle,
+    next: bool,
+    host: &mut H,
+) -> Result<Value> {
+    let Some(parent) = host.node_parent(node)? else {
+        return Ok(Value::Null);
+    };
+
+    let scope = match host.node_type(parent)? {
+        9 => HtmlCollectionScope::Document,
+        1 => HtmlCollectionScope::Element(ElementHandle::new(parent.raw())),
+        _ => HtmlCollectionScope::Node(parent),
+    };
+    let children = host.node_child_nodes_items(scope)?;
+    let Some(index) = children
+        .iter()
+        .position(|candidate| candidate.raw() == node.raw())
+    else {
+        return Ok(Value::Null);
+    };
+
+    if next {
+        for candidate in children.iter().skip(index + 1) {
+            if host.node_type(*candidate)? == 1 {
+                return value_for_node_handle(*candidate, host);
+            }
+        }
+    } else {
+        for candidate in children.iter().take(index).rev() {
+            if host.node_type(*candidate)? == 1 {
+                return value_for_node_handle(*candidate, host);
+            }
+        }
+    }
+
+    Ok(Value::Null)
+}
+
+fn value_for_child_element_count(children: Vec<ElementHandle>) -> Value {
+    Value::Number(children.len() as f64)
+}
+
+fn value_for_node_handle<H: HostBindings>(node: NodeHandle, host: &mut H) -> Result<Value> {
+    Ok(match host.node_type(node)? {
+        9 => Value::Document,
+        1 => Value::Element(ElementHandle::new(node.raw())),
+        _ => Value::Node(node),
+    })
+}
+
+fn node_clone<H: HostBindings>(
+    node: NodeHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.len() > 1 {
+        return Err(ScriptError::new("cloneNode() expects at most one argument"));
+    }
+
+    let deep = match args.first() {
+        Some(expr) => is_truthy(&eval_expr(expr, env, host)?),
+        None => false,
+    };
+    let cloned = host.node_clone(node, deep)?;
+    value_for_node_handle(cloned, host)
+}
+
+fn document_import_node<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(ScriptError::new(
+            "document.importNode() expects one or two arguments",
+        ));
+    }
+
+    let node = eval_expr(&args[0], env, host)?;
+    let deep = match args.get(1) {
+        Some(expr) => is_truthy(&eval_expr(expr, env, host)?),
+        None => false,
+    };
+
+    match node {
+        Value::Element(element) => {
+            let cloned = host.node_clone(NodeHandle::new(element.raw()), deep)?;
+            value_for_node_handle(cloned, host)
+        }
+        Value::Node(node) => {
+            let cloned = host.node_clone(node, deep)?;
+            value_for_node_handle(cloned, host)
+        }
+        Value::TemplateContent(element) => {
+            let cloned = host.node_clone(NodeHandle::new(element.raw()), deep)?;
+            if host.node_type(cloned)? != 1 {
+                return Err(ScriptError::new(
+                    "document.importNode() expected a cloned <template> element",
+                ));
+            }
+            Ok(Value::TemplateContent(ElementHandle::new(cloned.raw())))
+        }
+        _ => Err(ScriptError::new(
+            "document.importNode() expects a node or DocumentFragment argument",
+        )),
+    }
+}
+
+fn node_replace_with<H: HostBindings>(
+    node: NodeHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let children = eval_mutation_children(args, env, host, "replaceWith")?;
+    host.node_replace_with(node, children)?;
+    Ok(Value::Undefined)
+}
+
+fn node_remove<H: HostBindings>(
+    node: NodeHandle,
+    args: &[Expr],
+    _env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new("remove() expects no arguments"));
+    }
+
+    host.node_replace_with(node, Vec::new())?;
+    Ok(Value::Undefined)
+}
+
+fn node_before<H: HostBindings>(
+    node: NodeHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let children = eval_mutation_children(args, env, host, "before")?;
+    host.node_before(node, children)?;
+    Ok(Value::Undefined)
+}
+
+fn node_after<H: HostBindings>(
+    node: NodeHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let children = eval_mutation_children(args, env, host, "after")?;
+    host.node_after(node, children)?;
+    Ok(Value::Undefined)
+}
+
+fn node_normalize<H: HostBindings>(
+    node: NodeHandle,
+    args: &[Expr],
+    _env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new("normalize() expects no arguments"));
+    }
+
+    host.node_normalize(node)?;
+    Ok(Value::Undefined)
+}
+
+fn document_contains<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [node_expr] = args else {
+        return Err(ScriptError::new("contains() expects exactly one argument"));
+    };
+    let node = eval_expr(node_expr, env, host)?;
+    Ok(Value::Boolean(match node {
+        Value::Null | Value::Undefined => false,
+        Value::Document => true,
+        Value::Element(element) => host.document_contains(NodeHandle::new(element.raw()))?,
+        Value::Node(node) => host.document_contains(node)?,
+        Value::TemplateContent(_) => false,
+        _ => {
+            return Err(ScriptError::new(
+                "contains() expects a node or null reference",
+            ));
+        }
+    }))
+}
+
+fn node_contains<H: HostBindings>(
+    node: NodeHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [other_expr] = args else {
+        return Err(ScriptError::new("contains() expects exactly one argument"));
+    };
+    let other = eval_expr(other_expr, env, host)?;
+    Ok(Value::Boolean(match other {
+        Value::Null | Value::Undefined => false,
+        Value::Element(element) => host.node_contains(node, NodeHandle::new(element.raw()))?,
+        Value::Node(other) => host.node_contains(node, other)?,
+        Value::Document | Value::TemplateContent(_) => false,
+        _ => {
+            return Err(ScriptError::new(
+                "contains() expects a node or null reference",
+            ));
+        }
+    }))
+}
+
+fn compare_document_position<H: HostBindings>(
+    node: NodeHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [other_expr] = args else {
+        return Err(ScriptError::new(
+            "compareDocumentPosition() expects exactly one argument",
+        ));
+    };
+    let other = eval_expr(other_expr, env, host)?;
+    let other = match other {
+        Value::Document => NodeHandle::new(0),
+        Value::Element(element) => NodeHandle::new(element.raw()),
+        Value::Node(other) => other,
+        _ => {
+            return Err(ScriptError::new(
+                "compareDocumentPosition() expects a node argument",
+            ));
+        }
+    };
+    Ok(Value::Number(
+        host.node_compare_document_position(node, other)? as f64,
+    ))
+}
+
+fn same_node<H: HostBindings>(
+    object: Value,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [other_expr] = args else {
+        return Err(ScriptError::new(
+            "isSameNode() expects exactly one argument",
+        ));
+    };
+    let other = eval_expr(other_expr, env, host)?;
+    Ok(Value::Boolean(match object {
+        Value::Document => match other {
+            Value::Null | Value::Undefined => false,
+            Value::Document => true,
+            Value::Element(_) | Value::Node(_) | Value::TemplateContent(_) => false,
+            _ => {
+                return Err(ScriptError::new(
+                    "isSameNode() expects a node or null reference",
+                ));
+            }
+        },
+        Value::Element(element) => match other {
+            Value::Null | Value::Undefined => false,
+            Value::Document => false,
+            Value::Element(other) => element.raw() == other.raw(),
+            Value::Node(other) => NodeHandle::new(element.raw()) == other,
+            Value::TemplateContent(_) => false,
+            _ => {
+                return Err(ScriptError::new(
+                    "isSameNode() expects a node or null reference",
+                ));
+            }
+        },
+        Value::Node(node) => match other {
+            Value::Null | Value::Undefined => false,
+            Value::Document => false,
+            Value::Element(other) => node == NodeHandle::new(other.raw()),
+            Value::Node(other) => node == other,
+            Value::TemplateContent(_) => false,
+            _ => {
+                return Err(ScriptError::new(
+                    "isSameNode() expects a node or null reference",
+                ));
+            }
+        },
+        Value::TemplateContent(fragment) => match other {
+            Value::Null | Value::Undefined => false,
+            Value::Document | Value::Element(_) | Value::Node(_) => false,
+            Value::TemplateContent(other) => fragment.raw() == other.raw(),
+            _ => {
+                return Err(ScriptError::new(
+                    "isSameNode() expects a node or null reference",
+                ));
+            }
+        },
+        _ => {
+            return Err(ScriptError::new(
+                "isSameNode() can only be called on node values",
+            ));
+        }
+    }))
+}
+
+fn equal_node<H: HostBindings>(
+    object: Value,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [other_expr] = args else {
+        return Err(ScriptError::new(
+            "isEqualNode() expects exactly one argument",
+        ));
+    };
+    let other = eval_expr(other_expr, env, host)?;
+    Ok(Value::Boolean(match object {
+        Value::Document => match other {
+            Value::Null | Value::Undefined => false,
+            Value::Document => true,
+            Value::Element(element) => {
+                host.node_is_equal_node(NodeHandle::new(0), NodeHandle::new(element.raw()))?
+            }
+            Value::Node(node) => host.node_is_equal_node(NodeHandle::new(0), node)?,
+            Value::TemplateContent(_) => false,
+            _ => {
+                return Err(ScriptError::new(
+                    "isEqualNode() expects a node or null reference",
+                ));
+            }
+        },
+        Value::Element(element) => match other {
+            Value::Null | Value::Undefined => false,
+            Value::Document => {
+                host.node_is_equal_node(NodeHandle::new(element.raw()), NodeHandle::new(0))?
+            }
+            Value::Element(other) => host
+                .node_is_equal_node(NodeHandle::new(element.raw()), NodeHandle::new(other.raw()))?,
+            Value::Node(other) => host.node_is_equal_node(NodeHandle::new(element.raw()), other)?,
+            Value::TemplateContent(_) => false,
+            _ => {
+                return Err(ScriptError::new(
+                    "isEqualNode() expects a node or null reference",
+                ));
+            }
+        },
+        Value::Node(node) => match other {
+            Value::Null | Value::Undefined => false,
+            Value::Document => host.node_is_equal_node(node, NodeHandle::new(0))?,
+            Value::Element(other) => host.node_is_equal_node(node, NodeHandle::new(other.raw()))?,
+            Value::Node(other) => host.node_is_equal_node(node, other)?,
+            Value::TemplateContent(_) => false,
+            _ => {
+                return Err(ScriptError::new(
+                    "isEqualNode() expects a node or null reference",
+                ));
+            }
+        },
+        Value::TemplateContent(fragment) => match other {
+            Value::Null | Value::Undefined => false,
+            Value::TemplateContent(other) => {
+                host.template_content_is_equal_node(fragment, other)?
+            }
+            Value::Document | Value::Element(_) | Value::Node(_) => false,
+            _ => {
+                return Err(ScriptError::new(
+                    "isEqualNode() expects a node or null reference",
+                ));
+            }
+        },
+        _ => {
+            return Err(ScriptError::new(
+                "isEqualNode() can only be called on node values",
+            ));
+        }
+    }))
 }
 
 fn eval_statement<H: HostBindings>(
@@ -101,6 +609,11 @@ fn eval_assignment<H: HostBindings>(
 ) -> Result<()> {
     match target {
         AssignTarget::Property { object, property } => {
+            if let Some(result) =
+                try_eval_location_url_assignment(object, property, &value, env, host)?
+            {
+                return result;
+            }
             let object = eval_expr(object, env, host)?;
             match (object, property.as_str()) {
                 (Value::Element(element), "textContent") => {
@@ -118,6 +631,9 @@ fn eval_assignment<H: HostBindings>(
                 (Value::TemplateContent(element), "innerHTML") => {
                     host.element_set_inner_html(element, &as_string(&value))
                 }
+                (Value::TemplateContent(element), "textContent") => {
+                    host.element_set_text_content(element, &as_string(&value))
+                }
                 (Value::Element(element), "value") => {
                     host.element_set_value(element, &as_string(&value))
                 }
@@ -126,6 +642,24 @@ fn eval_assignment<H: HostBindings>(
                 }
                 (Value::Element(element), "className") => {
                     host.element_set_attribute(element, "class", &as_string(&value))
+                }
+                (Value::Element(element), "contentEditable") => {
+                    let value = as_string(&value);
+                    let normalized = value.trim().to_ascii_lowercase();
+                    match normalized.as_str() {
+                        "inherit" => {
+                            host.element_remove_attribute(element, "contenteditable")?;
+                            Ok(())
+                        }
+                        "true" => host.element_set_attribute(element, "contenteditable", "true"),
+                        "false" => host.element_set_attribute(element, "contenteditable", "false"),
+                        "plaintext-only" => {
+                            host.element_set_attribute(element, "contenteditable", "plaintext-only")
+                        }
+                        _ => Err(ScriptError::new(format!(
+                            "unsupported contentEditable value: {value}"
+                        ))),
+                    }
                 }
                 (Value::Dataset(element), property) => {
                     let attribute_name = dataset_attribute_name(property)?;
@@ -181,6 +715,10 @@ fn eval_assignment<H: HostBindings>(
                     host.document_set_title(&as_string(&value))?;
                     Ok(())
                 }
+                (Value::Document, "designMode") => {
+                    host.document_set_design_mode(&as_string(&value))?;
+                    Ok(())
+                }
                 (Value::Document, "dir") => {
                     host.document_set_dir(&as_string(&value))?;
                     Ok(())
@@ -205,11 +743,23 @@ fn eval_assignment<H: HostBindings>(
                     host.document_set_location(&as_string(&value))?;
                     Ok(())
                 }
-                (Value::Storage(_), property) => Err(ScriptError::new(format!(
-                    "cannot assign to `{property}` on storage value"
-                ))),
+                (Value::Storage(target), property) if storage_property_is_reserved(property) => {
+                    Err(ScriptError::new(format!(
+                        "cannot assign to `{property}` on storage value"
+                    )))
+                }
+                (Value::Storage(target), property) => {
+                    host.storage_set_item(target.clone(), property, &as_string(&value))?;
+                    Ok(())
+                }
                 (Value::MediaQueryList(_), property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on media query list value"
+                ))),
+                (Value::StringList(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on string list value"
+                ))),
+                (Value::MimeTypeArray(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on mime type array value"
                 ))),
                 (Value::Navigator, property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on navigator value"
@@ -304,6 +854,9 @@ fn eval_member<H: HostBindings>(
     env: &mut BTreeMap<String, Value>,
     host: &mut H,
 ) -> Result<Value> {
+    if let Some(value) = try_eval_location_url_access(object, property, env, host)? {
+        return Ok(value);
+    }
     let object = eval_expr(object, env, host)?;
     match object {
         Value::Document if property == "forms" => {
@@ -339,6 +892,9 @@ fn eval_member<H: HostBindings>(
                 None => Value::Null,
             })
         }
+        Value::Document if property == "isConnected" => Ok(Value::Boolean(true)),
+        Value::Document if property == "ownerDocument" => Ok(Value::Null),
+        Value::Document if property == "parentNode" => Ok(Value::Null),
         Value::Document if property == "title" => Ok(Value::String(host.document_title()?)),
         Value::Document if property == "location" => Ok(Value::String(host.document_location()?)),
         Value::Document if property == "URL" => Ok(Value::String(host.document_url()?)),
@@ -367,6 +923,9 @@ fn eval_member<H: HostBindings>(
         Value::Document if property == "contentType" => {
             Ok(Value::String(host.document_content_type()?))
         }
+        Value::Document if property == "designMode" => {
+            Ok(Value::String(host.document_design_mode()?))
+        }
         Value::Document if property == "dir" => Ok(Value::String(host.document_dir()?)),
         Value::Document if property == "head" => Ok(match host.document_head()? {
             Some(element) => Value::Element(element),
@@ -382,6 +941,20 @@ fn eval_member<H: HostBindings>(
                 None => Value::Null,
             })
         }
+        Value::Document if property == "firstChild" => {
+            value_for_first_child(HtmlCollectionScope::Document, host)
+        }
+        Value::Document if property == "lastChild" => {
+            value_for_last_child(HtmlCollectionScope::Document, host)
+        }
+        Value::Document if property == "nextSibling" || property == "previousSibling" => {
+            Ok(Value::Null)
+        }
+        Value::Document
+            if property == "nextElementSibling" || property == "previousElementSibling" =>
+        {
+            Ok(Value::Null)
+        }
         Value::Document if property == "activeElement" => {
             Ok(match host.document_active_element()? {
                 Some(element) => Value::Element(element),
@@ -390,6 +963,15 @@ fn eval_member<H: HostBindings>(
         }
         Value::Document if property == "childNodes" => Ok(Value::NodeList(
             NodeListTarget::ChildNodes(HtmlCollectionScope::Document),
+        )),
+        Value::Document if property == "firstElementChild" => Ok(value_for_first_element_child(
+            host.html_collection_document_children_items()?,
+        )),
+        Value::Document if property == "lastElementChild" => Ok(value_for_last_element_child(
+            host.html_collection_document_children_items()?,
+        )),
+        Value::Document if property == "childElementCount" => Ok(value_for_child_element_count(
+            host.html_collection_document_children_items()?,
         )),
         Value::Document if property == "links" => {
             Ok(Value::HtmlCollection(HtmlCollectionTarget::DocumentLinks))
@@ -426,9 +1008,9 @@ fn eval_member<H: HostBindings>(
         Value::Window if property == "closed" => Ok(Value::Boolean(false)),
         Value::Window if property == "frameElement" => Ok(Value::Null),
         Value::Window if property == "opener" => Ok(Value::Null),
-        Value::Window if property == "frames" => Ok(Value::HtmlCollection(
-            HtmlCollectionTarget::WindowFrames,
-        )),
+        Value::Window if property == "frames" => {
+            Ok(Value::HtmlCollection(HtmlCollectionTarget::WindowFrames))
+        }
         Value::Window if property == "length" => Ok(Value::Number(
             host.html_collection_window_frames_items()?.len() as f64,
         )),
@@ -505,9 +1087,9 @@ fn eval_member<H: HostBindings>(
         Value::Screen if property == "pixelDepth" => {
             Ok(Value::Number(host.window_screen_pixel_depth()? as f64))
         }
-        Value::Screen if property == "orientation" => Ok(Value::ScreenOrientation(
-            host.window_screen_orientation()?,
-        )),
+        Value::Screen if property == "orientation" => {
+            Ok(Value::ScreenOrientation(host.window_screen_orientation()?))
+        }
         Value::ScreenOrientation(orientation) if property == "type" => {
             Ok(Value::String(orientation.orientation_type().to_string()))
         }
@@ -542,6 +1124,24 @@ fn eval_member<H: HostBindings>(
         Value::Navigator if property == "language" => {
             Ok(Value::String(host.window_navigator_language()?))
         }
+        Value::Navigator if property == "oscpu" => {
+            Ok(Value::String(host.window_navigator_oscpu()?))
+        }
+        Value::Navigator if property == "userLanguage" => {
+            Ok(Value::String(host.window_navigator_user_language()?))
+        }
+        Value::Navigator if property == "browserLanguage" => {
+            Ok(Value::String(host.window_navigator_browser_language()?))
+        }
+        Value::Navigator if property == "systemLanguage" => {
+            Ok(Value::String(host.window_navigator_system_language()?))
+        }
+        Value::Navigator if property == "languages" => Ok(Value::StringList(StringListState::new(
+            host.window_navigator_languages()?,
+        ))),
+        Value::Navigator if property == "mimeTypes" => Ok(Value::MimeTypeArray(
+            MimeTypeArrayState::new(host.window_navigator_mime_types()?),
+        )),
         Value::Navigator if property == "cookieEnabled" => {
             Ok(Value::Boolean(host.window_navigator_cookie_enabled()?))
         }
@@ -597,6 +1197,7 @@ fn eval_member<H: HostBindings>(
         Value::Element(element) if property == "outerHTML" => {
             Ok(Value::String(host.element_outer_html(element)?))
         }
+        Value::Element(_) if property == "ownerDocument" => Ok(Value::Document),
         Value::Element(element) if property == "baseURI" => {
             Ok(Value::String(host.element_base_uri(element)?))
         }
@@ -622,6 +1223,19 @@ fn eval_member<H: HostBindings>(
             host.element_get_attribute(element, "class")?
                 .unwrap_or_default(),
         )),
+        Value::Element(element) if property == "contentEditable" => {
+            let value = host.element_get_attribute(element, "contenteditable")?;
+            Ok(Value::String(
+                content_editable_reflection(value.as_deref()).to_string(),
+            ))
+        }
+        Value::Element(element) if property == "isConnected" => {
+            value_for_is_connected(NodeHandle::new(element.raw()), host)
+        }
+        Value::Element(element) if property == "isContentEditable" => {
+            let value = host.element_is_content_editable(element)?;
+            Ok(Value::Boolean(value))
+        }
         Value::Element(element) if property == "content" => {
             if host.element_tag_name(element)? == "template" {
                 Ok(Value::TemplateContent(element))
@@ -636,11 +1250,44 @@ fn eval_member<H: HostBindings>(
         Value::Element(element) if property == "children" => Ok(Value::HtmlCollection(
             HtmlCollectionTarget::Children(element),
         )),
+        Value::Element(element) if property == "firstElementChild" => Ok(
+            value_for_first_element_child(host.element_children(element)?),
+        ),
+        Value::Element(element) if property == "lastElementChild" => Ok(
+            value_for_last_element_child(host.element_children(element)?),
+        ),
+        Value::Element(element) if property == "childElementCount" => Ok(
+            value_for_child_element_count(host.element_children(element)?),
+        ),
         Value::Element(element) if property == "childNodes" => Ok(Value::NodeList(
             NodeListTarget::ChildNodes(HtmlCollectionScope::Element(element)),
         )),
+        Value::Element(element) if property == "firstChild" => {
+            value_for_first_child(HtmlCollectionScope::Element(element), host)
+        }
+        Value::Element(element) if property == "lastChild" => {
+            value_for_last_child(HtmlCollectionScope::Element(element), host)
+        }
+        Value::Element(element) if property == "nextSibling" => {
+            value_for_adjacent_sibling(NodeHandle::new(element.raw()), true, host)
+        }
+        Value::Element(element) if property == "previousSibling" => {
+            value_for_adjacent_sibling(NodeHandle::new(element.raw()), false, host)
+        }
+        Value::Element(element) if property == "nextElementSibling" => {
+            value_for_adjacent_element_sibling(NodeHandle::new(element.raw()), true, host)
+        }
+        Value::Element(element) if property == "previousElementSibling" => {
+            value_for_adjacent_element_sibling(NodeHandle::new(element.raw()), false, host)
+        }
         Value::Element(element) if property == "labels" => {
             Ok(Value::NodeList(NodeListTarget::Labels(element)))
+        }
+        Value::Element(element) if property == "parentNode" => {
+            value_for_parent_node(NodeHandle::new(element.raw()), host)
+        }
+        Value::Element(element) if property == "parentElement" => {
+            value_for_parent_element(NodeHandle::new(element.raw()), host)
         }
         Value::Element(element) if property == "rows" => Ok(Value::HtmlCollection(
             HtmlCollectionTarget::TableRows(element),
@@ -682,9 +1329,31 @@ fn eval_member<H: HostBindings>(
         Value::Node(node) if property == "childNodes" => Ok(Value::NodeList(
             NodeListTarget::ChildNodes(HtmlCollectionScope::Node(node)),
         )),
+        Value::Node(node) if property == "firstChild" => {
+            value_for_first_child(HtmlCollectionScope::Node(node), host)
+        }
+        Value::Node(node) if property == "lastChild" => {
+            value_for_last_child(HtmlCollectionScope::Node(node), host)
+        }
+        Value::Node(node) if property == "nextSibling" => {
+            value_for_adjacent_sibling(node, true, host)
+        }
+        Value::Node(node) if property == "previousSibling" => {
+            value_for_adjacent_sibling(node, false, host)
+        }
+        Value::Node(node) if property == "nextElementSibling" => {
+            value_for_adjacent_element_sibling(node, true, host)
+        }
+        Value::Node(node) if property == "previousElementSibling" => {
+            value_for_adjacent_element_sibling(node, false, host)
+        }
         Value::Node(node) if property == "textContent" => {
             Ok(Value::String(host.node_text_content(node)?))
         }
+        Value::Node(node) if property == "isConnected" => value_for_is_connected(node, host),
+        Value::Node(node) if property == "parentNode" => value_for_parent_node(node, host),
+        Value::Node(node) if property == "parentElement" => value_for_parent_element(node, host),
+        Value::Node(_) if property == "ownerDocument" => Ok(Value::Document),
         Value::Node(node) if property == "nodeType" => {
             Ok(Value::Number(host.node_type(node)? as f64))
         }
@@ -693,6 +1362,18 @@ fn eval_member<H: HostBindings>(
             let length = html_collection_items(&collection, host)?.len();
             Ok(Value::Number(length as f64))
         }
+        Value::HtmlCollection(_collection) if html_collection_property_is_reserved(property) => {
+            Err(unsupported_member_access(property, "html collection"))
+        }
+        Value::HtmlCollection(collection) => Ok(
+            match html_collection_named_item_handle(&collection, property, host)? {
+                Some(HtmlCollectionNamedItem::Element(handle)) => Value::Element(handle),
+                Some(HtmlCollectionNamedItem::RadioNodeList(target)) => {
+                    Value::RadioNodeList(target)
+                }
+                None => Value::Undefined,
+            },
+        ),
         Value::StyleSheetList(target) if property == "length" => {
             let length = style_sheet_list_items(&target, host)?.len();
             Ok(Value::Number(length as f64))
@@ -720,6 +1401,10 @@ fn eval_member<H: HostBindings>(
         Value::RadioNodeList(target) if property == "value" => {
             Ok(Value::String(radio_node_list_value(&target, host)?))
         }
+        Value::StringList(list) if property == "length" => Ok(Value::Number(list.length() as f64)),
+        Value::MimeTypeArray(list) if property == "length" => {
+            Ok(Value::Number(list.length() as f64))
+        }
         Value::Navigator => Err(unsupported_member_access(property, "navigator")),
         Value::History => Err(unsupported_member_access(property, "history")),
         Value::Screen => Err(unsupported_member_access(property, "screen")),
@@ -740,9 +1425,38 @@ fn eval_member<H: HostBindings>(
         Value::TemplateContent(element) if property == "children" => Ok(Value::HtmlCollection(
             HtmlCollectionTarget::Children(element),
         )),
+        Value::TemplateContent(_) if property == "isConnected" => Ok(Value::Boolean(false)),
+        Value::TemplateContent(_) if property == "nodeType" => Ok(Value::Number(11.0)),
+        Value::TemplateContent(_) if property == "nodeName" => {
+            Ok(Value::String("#document-fragment".to_string()))
+        }
+        Value::TemplateContent(_) if property == "parentNode" => Ok(Value::Null),
+        Value::TemplateContent(_) if property == "nextSibling" => Ok(Value::Null),
+        Value::TemplateContent(_) if property == "previousSibling" => Ok(Value::Null),
+        Value::TemplateContent(_) if property == "nextElementSibling" => Ok(Value::Null),
+        Value::TemplateContent(_) if property == "previousElementSibling" => Ok(Value::Null),
+        Value::TemplateContent(element) if property == "firstChild" => {
+            value_for_first_child(HtmlCollectionScope::Element(element), host)
+        }
+        Value::TemplateContent(element) if property == "lastChild" => {
+            value_for_last_child(HtmlCollectionScope::Element(element), host)
+        }
+        Value::TemplateContent(element) if property == "firstElementChild" => Ok(
+            value_for_first_element_child(host.element_children(element)?),
+        ),
+        Value::TemplateContent(element) if property == "lastElementChild" => Ok(
+            value_for_last_element_child(host.element_children(element)?),
+        ),
+        Value::TemplateContent(element) if property == "childElementCount" => Ok(
+            value_for_child_element_count(host.element_children(element)?),
+        ),
+        Value::TemplateContent(element) if property == "textContent" => {
+            Ok(Value::String(host.element_text_content(element)?))
+        }
         Value::TemplateContent(element) if property == "innerHTML" => {
             Ok(Value::String(host.element_inner_html(element)?))
         }
+        Value::TemplateContent(_) if property == "ownerDocument" => Ok(Value::Document),
         Value::Document => Err(unsupported_member_access(property, "document")),
         Value::Window => Err(unsupported_member_access(property, "window")),
         Value::String(_) => Err(unsupported_member_access(property, "string")),
@@ -750,20 +1464,27 @@ fn eval_member<H: HostBindings>(
         Value::Boolean(_) => Err(unsupported_member_access(property, "boolean")),
         Value::Null | Value::Undefined => Err(unsupported_member_access(property, "nullish")),
         Value::Event(_) => Err(unsupported_member_access(property, "event")),
-        Value::HtmlCollection(_) => Err(unsupported_member_access(property, "html collection")),
         Value::StyleSheetList(_) => Err(unsupported_member_access(property, "style sheet list")),
         Value::StyleSheet(_) => Err(unsupported_member_access(property, "style sheet")),
         Value::Node(_) => Err(unsupported_member_access(property, "node")),
         Value::NodeList(_) => Err(unsupported_member_access(property, "node list")),
         Value::RadioNodeList(_) => Err(unsupported_member_access(property, "radio node list")),
         Value::MediaQueryList(_) => Err(unsupported_member_access(property, "media query list")),
+        Value::StringList(_) => Err(unsupported_member_access(property, "string list")),
+        Value::MimeTypeArray(_) => Err(unsupported_member_access(property, "mime type array")),
         Value::ScreenOrientation(_) => {
             Err(unsupported_member_access(property, "screen orientation"))
         }
         Value::Storage(target) if property == "length" => {
             Ok(Value::Number(host.storage_length(target)? as f64))
         }
-        Value::Storage(_) => Err(unsupported_member_access(property, "storage")),
+        Value::Storage(target) if storage_property_is_reserved(property) => {
+            Err(unsupported_member_access(property, "storage"))
+        }
+        Value::Storage(target) => Ok(match host.storage_get_item(target.clone(), property)? {
+            Some(value) => Value::String(value),
+            None => Value::Undefined,
+        }),
         Value::CollectionIterator(_) => Err(unsupported_member_access(property, "iterator")),
         Value::IteratorResult(_) => Err(unsupported_member_access(property, "iterator result")),
         Value::CollectionEntry(_) => Err(unsupported_member_access(property, "iterator entry")),
@@ -797,6 +1518,9 @@ fn eval_call<H: HostBindings>(
         }
         Expr::Identifier(_) => Err(ScriptError::new("invalid call target")),
         Expr::Member { object, property } => {
+            if let Some(value) = try_eval_location_method_call(object, property, args, env, host)? {
+                return Ok(value);
+            }
             let object_value = eval_expr(object, env, host)?;
             eval_method_call(object_value, property, args, env, host)
         }
@@ -811,6 +1535,623 @@ fn eval_call<H: HostBindings>(
             Err(ScriptError::new("invalid nested call target"))
         }
     }
+}
+
+fn try_eval_location_method_call<H: HostBindings>(
+    object: &Expr,
+    method: &str,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Option<Value>> {
+    let Expr::Member {
+        object: location_owner,
+        property: location_property,
+    } = object
+    else {
+        return Ok(None);
+    };
+
+    if location_property != "location" {
+        return Ok(None);
+    }
+
+    let location_owner = eval_expr(location_owner, env, host)?;
+    if !matches!(location_owner, Value::Document | Value::Window) {
+        return Ok(None);
+    }
+
+    match method {
+        "toString" => {
+            if !args.is_empty() {
+                return Err(ScriptError::new("location.toString() expects no arguments"));
+            }
+            Ok(Some(Value::String(host.document_location()?)))
+        }
+        "valueOf" => {
+            if !args.is_empty() {
+                return Err(ScriptError::new("location.valueOf() expects no arguments"));
+            }
+            Ok(Some(Value::String(host.document_location()?)))
+        }
+        "assign" => {
+            if args.len() != 1 {
+                return Err(ScriptError::new(
+                    "location.assign() expects exactly one argument",
+                ));
+            }
+            let url = as_string(&eval_expr(&args[0], env, host)?);
+            host.document_location_assign(&url)?;
+            Ok(Some(Value::Undefined))
+        }
+        "replace" => {
+            if args.len() != 1 {
+                return Err(ScriptError::new(
+                    "location.replace() expects exactly one argument",
+                ));
+            }
+            let url = as_string(&eval_expr(&args[0], env, host)?);
+            host.document_location_replace(&url)?;
+            Ok(Some(Value::Undefined))
+        }
+        "reload" => {
+            if args.len() > 1 {
+                return Err(ScriptError::new(
+                    "location.reload() expects at most one argument",
+                ));
+            }
+            if let Some(expr) = args.first() {
+                let _ = eval_expr(expr, env, host)?;
+            }
+            host.document_location_reload()?;
+            Ok(Some(Value::Undefined))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn try_eval_location_url_access<H: HostBindings>(
+    object: &Expr,
+    property: &str,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Option<Value>> {
+    if property != "href"
+        && property != "hash"
+        && property != "pathname"
+        && property != "search"
+        && property != "origin"
+        && property != "protocol"
+        && property != "host"
+        && property != "hostname"
+        && property != "port"
+        && property != "username"
+        && property != "password"
+    {
+        return Ok(None);
+    }
+
+    let Expr::Member {
+        object: location_owner,
+        property: location_property,
+    } = object
+    else {
+        return Ok(None);
+    };
+
+    if location_property != "location" {
+        return Ok(None);
+    }
+
+    let location_owner = eval_expr(location_owner, env, host)?;
+    if !matches!(location_owner, Value::Document | Value::Window) {
+        return Ok(None);
+    }
+
+    let location = host.document_location()?;
+    Ok(Some(Value::String(match property {
+        "href" => location,
+        "protocol" => location_protocol(&location),
+        "host" => location_host(&location),
+        "hostname" => location_hostname(&location),
+        "port" => location_port(&location),
+        "username" => location_username(&location),
+        "password" => location_password(&location),
+        "hash" => location
+            .split_once('#')
+            .map(|(_, fragment)| format!("#{fragment}"))
+            .unwrap_or_default(),
+        "pathname" => location_pathname(&location),
+        "search" => location_search(&location),
+        "origin" => host.document_origin()?,
+        _ => unreachable!(),
+    })))
+}
+
+fn try_eval_location_url_assignment<H: HostBindings>(
+    object: &Expr,
+    property: &str,
+    value: &Value,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Option<Result<()>>> {
+    if property != "href"
+        && property != "hash"
+        && property != "pathname"
+        && property != "search"
+        && property != "protocol"
+        && property != "host"
+        && property != "hostname"
+        && property != "port"
+        && property != "username"
+        && property != "password"
+    {
+        return Ok(None);
+    }
+
+    let Expr::Member {
+        object: location_owner,
+        property: location_property,
+    } = object
+    else {
+        return Ok(None);
+    };
+
+    if location_property != "location" {
+        return Ok(None);
+    }
+
+    let location_owner = eval_expr(location_owner, env, host)?;
+    if !matches!(location_owner, Value::Document | Value::Window) {
+        return Ok(None);
+    }
+
+    let current_url = host.document_location()?;
+    let next_url = match property {
+        "href" => as_string(value),
+        "hash" => location_with_hash(&current_url, &as_string(value)),
+        "pathname" => location_with_pathname(&current_url, &as_string(value)),
+        "search" => location_with_search(&current_url, &as_string(value)),
+        "protocol" => location_with_protocol(&current_url, &as_string(value))?,
+        "host" => location_with_host(&current_url, &as_string(value))?,
+        "hostname" => location_with_hostname(&current_url, &as_string(value))?,
+        "port" => location_with_port(&current_url, &as_string(value))?,
+        "username" => location_with_username(&current_url, &as_string(value))?,
+        "password" => location_with_password(&current_url, &as_string(value))?,
+        _ => unreachable!(),
+    };
+    host.document_set_location(&next_url)?;
+    Ok(Some(Ok(())))
+}
+
+fn location_pathname(current_url: &str) -> String {
+    let Some((path_start, path_end)) = location_path_bounds(current_url) else {
+        return "/".to_string();
+    };
+
+    let path = &current_url[path_start..path_end];
+    if path.is_empty() {
+        "/".to_string()
+    } else {
+        path.to_string()
+    }
+}
+
+fn location_protocol(current_url: &str) -> String {
+    current_url
+        .split_once(':')
+        .map(|(scheme, _)| format!("{}:", scheme.to_ascii_lowercase()))
+        .unwrap_or_default()
+}
+
+fn location_authority_bounds(url: &str) -> Option<(usize, usize)> {
+    let (_, rest) = url.split_once(':')?;
+    let after_slashes = rest.strip_prefix("//")?;
+    let authority_end = after_slashes
+        .find(['/', '?', '#'])
+        .unwrap_or(after_slashes.len());
+    let authority_start = url.len() - after_slashes.len();
+    Some((authority_start, authority_start + authority_end))
+}
+
+fn location_authority(url: &str) -> Option<&str> {
+    let (authority_start, authority_end) = location_authority_bounds(url)?;
+    Some(&url[authority_start..authority_end])
+}
+
+#[derive(Clone, Debug)]
+struct LocationAuthorityParts {
+    username: String,
+    password: String,
+    host: String,
+    hostname: String,
+    port: String,
+}
+
+fn location_authority_parts(authority: &str) -> Option<LocationAuthorityParts> {
+    let (userinfo, authority) = authority
+        .rsplit_once('@')
+        .map_or((None, authority), |(userinfo, host)| (Some(userinfo), host));
+    let (username, password) = userinfo
+        .map(|userinfo| userinfo.split_once(':').unwrap_or((userinfo, "")))
+        .unwrap_or(("", ""));
+
+    if let Some(rest) = authority.strip_prefix('[') {
+        let end_bracket = rest.find(']')?;
+        let hostname = rest[..end_bracket].to_ascii_lowercase();
+        let port = rest[end_bracket + 1..].strip_prefix(':').unwrap_or("");
+        let host = if port.is_empty() {
+            format!("[{hostname}]")
+        } else {
+            format!("[{hostname}]:{port}")
+        };
+        return Some(LocationAuthorityParts {
+            username: username.to_string(),
+            password: password.to_string(),
+            host,
+            hostname,
+            port: port.to_string(),
+        });
+    }
+
+    let (hostname, port) = authority.split_once(':').unwrap_or((authority, ""));
+    let hostname = hostname.to_ascii_lowercase();
+    let host = if port.is_empty() {
+        hostname.clone()
+    } else {
+        format!("{hostname}:{port}")
+    };
+    Some(LocationAuthorityParts {
+        username: username.to_string(),
+        password: password.to_string(),
+        host,
+        hostname,
+        port: port.to_string(),
+    })
+}
+
+fn location_authority_string(username: &str, password: &str, host: &str, port: &str) -> String {
+    let mut authority = String::new();
+    if !username.is_empty() || !password.is_empty() {
+        authority.push_str(username);
+        if !password.is_empty() || username.is_empty() {
+            authority.push(':');
+            authority.push_str(password);
+        }
+        authority.push('@');
+    }
+
+    authority.push_str(host);
+    if !port.is_empty() {
+        authority.push(':');
+        authority.push_str(port);
+    }
+    authority
+}
+
+fn location_host(current_url: &str) -> String {
+    location_authority(current_url)
+        .and_then(location_authority_parts)
+        .map(|parts| parts.host)
+        .unwrap_or_default()
+}
+
+fn location_hostname(current_url: &str) -> String {
+    location_authority(current_url)
+        .and_then(location_authority_parts)
+        .map(|parts| parts.hostname)
+        .unwrap_or_default()
+}
+
+fn location_port(current_url: &str) -> String {
+    location_authority(current_url)
+        .and_then(location_authority_parts)
+        .map(|parts| parts.port)
+        .unwrap_or_default()
+}
+
+fn location_username(current_url: &str) -> String {
+    location_authority(current_url)
+        .and_then(location_authority_parts)
+        .map(|parts| parts.username)
+        .unwrap_or_default()
+}
+
+fn location_password(current_url: &str) -> String {
+    location_authority(current_url)
+        .and_then(location_authority_parts)
+        .map(|parts| parts.password)
+        .unwrap_or_default()
+}
+
+fn location_with_hash(current_url: &str, hash: &str) -> String {
+    let (_path_start, path_end) =
+        location_path_bounds(current_url).unwrap_or((current_url.len(), current_url.len()));
+    let mut next_url = String::with_capacity(current_url.len() + hash.len());
+    next_url.push_str(&current_url[..path_end]);
+
+    let normalized = hash.trim();
+    if normalized.is_empty() {
+        next_url.truncate(path_end);
+        return next_url;
+    }
+
+    next_url.push('#');
+    if let Some(fragment) = normalized.strip_prefix('#') {
+        next_url.push_str(fragment);
+    } else {
+        next_url.push_str(normalized);
+    }
+
+    next_url
+}
+
+fn normalize_location_hostname_for_authority(hostname: &str) -> String {
+    let trimmed = hostname.trim();
+    let inner = trimmed
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(trimmed)
+        .to_ascii_lowercase();
+    if trimmed.starts_with('[') && trimmed.ends_with(']') || inner.contains(':') {
+        format!("[{inner}]")
+    } else {
+        inner
+    }
+}
+
+fn location_with_protocol(current_url: &str, protocol: &str) -> Result<String> {
+    let normalized = protocol.trim().trim_end_matches(':');
+    if normalized.is_empty() {
+        return Err(ScriptError::new(format!(
+            "unsupported location.protocol value: {protocol}"
+        )));
+    }
+
+    let Some((_scheme, rest)) = current_url.split_once(':') else {
+        return Err(ScriptError::new(format!(
+            "unsupported location.protocol value: {protocol}"
+        )));
+    };
+
+    let mut next_url = String::with_capacity(normalized.len() + 1 + rest.len());
+    next_url.push_str(normalized);
+    next_url.push(':');
+    next_url.push_str(rest);
+    Ok(next_url)
+}
+
+fn location_with_authority(current_url: &str, authority: &str, property: &str) -> Result<String> {
+    let normalized = authority.trim();
+    if normalized.is_empty() {
+        return Err(ScriptError::new(format!(
+            "unsupported location.{property} value: {authority}"
+        )));
+    }
+
+    let Some((authority_start, authority_end)) = location_authority_bounds(current_url) else {
+        return Err(ScriptError::new(format!(
+            "unsupported location.{property} value: {authority}"
+        )));
+    };
+
+    let mut next_url = String::with_capacity(
+        current_url.len() - (authority_end - authority_start) + normalized.len(),
+    );
+    next_url.push_str(&current_url[..authority_start]);
+    next_url.push_str(normalized);
+    next_url.push_str(&current_url[authority_end..]);
+    Ok(next_url)
+}
+
+fn location_with_host(current_url: &str, host: &str) -> Result<String> {
+    let normalized = host.trim();
+    if normalized.is_empty() {
+        return Err(ScriptError::new(format!(
+            "unsupported location.host value: {host}"
+        )));
+    }
+
+    let Some(current_authority) = location_authority(current_url) else {
+        return Err(ScriptError::new(format!(
+            "unsupported location.host value: {host}"
+        )));
+    };
+    let Some(current_parts) = location_authority_parts(current_authority) else {
+        return Err(ScriptError::new(format!(
+            "unsupported location.host value: {host}"
+        )));
+    };
+    let Some(next_parts) = location_authority_parts(normalized) else {
+        return Err(ScriptError::new(format!(
+            "unsupported location.host value: {host}"
+        )));
+    };
+
+    let next_authority = location_authority_string(
+        &current_parts.username,
+        &current_parts.password,
+        &next_parts.host,
+        "",
+    );
+    location_with_authority(current_url, &next_authority, "host")
+}
+
+fn location_with_hostname(current_url: &str, hostname: &str) -> Result<String> {
+    let normalized = normalize_location_hostname_for_authority(hostname);
+    if normalized.is_empty() {
+        return Err(ScriptError::new(format!(
+            "unsupported location.hostname value: {hostname}"
+        )));
+    }
+
+    let Some(authority) = location_authority(current_url) else {
+        return Err(ScriptError::new(format!(
+            "unsupported location.hostname value: {hostname}"
+        )));
+    };
+    let Some(parts) = location_authority_parts(authority) else {
+        return Err(ScriptError::new(format!(
+            "unsupported location.hostname value: {hostname}"
+        )));
+    };
+
+    let next_authority =
+        location_authority_string(&parts.username, &parts.password, &normalized, &parts.port);
+    location_with_authority(current_url, &next_authority, "hostname")
+}
+
+fn location_with_port(current_url: &str, port: &str) -> Result<String> {
+    let normalized = port.trim();
+    if !normalized.is_empty() && !normalized.chars().all(|ch| ch.is_ascii_digit()) {
+        return Err(ScriptError::new(format!(
+            "unsupported location.port value: {port}"
+        )));
+    }
+
+    let Some(authority) = location_authority(current_url) else {
+        return Err(ScriptError::new(format!(
+            "unsupported location.port value: {port}"
+        )));
+    };
+    let Some(parts) = location_authority_parts(authority) else {
+        return Err(ScriptError::new(format!(
+            "unsupported location.port value: {port}"
+        )));
+    };
+
+    let host = normalize_location_hostname_for_authority(&parts.hostname);
+    let next_authority =
+        location_authority_string(&parts.username, &parts.password, &host, normalized);
+    location_with_authority(current_url, &next_authority, "port")
+}
+
+fn location_with_username(current_url: &str, username: &str) -> Result<String> {
+    let normalized = username.trim();
+    let Some(authority) = location_authority(current_url) else {
+        return Err(ScriptError::new(format!(
+            "unsupported location.username value: {username}"
+        )));
+    };
+    let Some(parts) = location_authority_parts(authority) else {
+        return Err(ScriptError::new(format!(
+            "unsupported location.username value: {username}"
+        )));
+    };
+
+    let next_authority = location_authority_string(normalized, &parts.password, &parts.host, "");
+    location_with_authority(current_url, &next_authority, "username")
+}
+
+fn location_with_password(current_url: &str, password: &str) -> Result<String> {
+    let normalized = password.trim();
+    let Some(authority) = location_authority(current_url) else {
+        return Err(ScriptError::new(format!(
+            "unsupported location.password value: {password}"
+        )));
+    };
+    let Some(parts) = location_authority_parts(authority) else {
+        return Err(ScriptError::new(format!(
+            "unsupported location.password value: {password}"
+        )));
+    };
+
+    let next_authority = location_authority_string(&parts.username, normalized, &parts.host, "");
+    location_with_authority(current_url, &next_authority, "password")
+}
+
+fn location_search_bounds(url: &str) -> Option<(usize, usize)> {
+    let (_, path_end) = location_path_bounds(url)?;
+    if !url[path_end..].starts_with('?') {
+        return None;
+    }
+
+    let search_start = path_end + 1;
+    let search_end = url[search_start..]
+        .find('#')
+        .map(|offset| search_start + offset)
+        .unwrap_or(url.len());
+
+    Some((search_start, search_end))
+}
+
+fn location_search(current_url: &str) -> String {
+    let Some((search_start, search_end)) = location_search_bounds(current_url) else {
+        return String::new();
+    };
+
+    let search = &current_url[search_start..search_end];
+    if search.is_empty() {
+        "?".to_string()
+    } else {
+        format!("?{search}")
+    }
+}
+
+fn location_with_pathname(current_url: &str, pathname: &str) -> String {
+    let (path_start, path_end) =
+        location_path_bounds(current_url).unwrap_or((current_url.len(), current_url.len()));
+    let mut next_url = String::with_capacity(current_url.len() + pathname.len() + 1);
+    next_url.push_str(&current_url[..path_start]);
+
+    if pathname.is_empty() {
+        next_url.push('/');
+    } else if pathname.starts_with('/') {
+        next_url.push_str(pathname);
+    } else {
+        next_url.push('/');
+        next_url.push_str(pathname);
+    }
+
+    next_url.push_str(&current_url[path_end..]);
+    next_url
+}
+
+fn location_with_search(current_url: &str, search: &str) -> String {
+    let (_path_start, path_end) =
+        location_path_bounds(current_url).unwrap_or((current_url.len(), current_url.len()));
+    let hash_start = current_url[path_end..]
+        .find('#')
+        .map(|offset| path_end + offset)
+        .unwrap_or(current_url.len());
+    let mut next_url = String::with_capacity(current_url.len() + search.len() + 1);
+    next_url.push_str(&current_url[..path_end]);
+
+    let normalized = search.trim();
+    if normalized.is_empty() {
+        next_url.push_str(&current_url[hash_start..]);
+        return next_url;
+    }
+
+    next_url.push('?');
+    if let Some(fragment) = normalized.strip_prefix('?') {
+        next_url.push_str(fragment);
+    } else {
+        next_url.push_str(normalized);
+    }
+
+    next_url.push_str(&current_url[hash_start..]);
+    next_url
+}
+
+fn location_path_bounds(url: &str) -> Option<(usize, usize)> {
+    let scheme_end = url.find(':')?;
+    let mut path_start = scheme_end + 1;
+
+    if url[path_start..].starts_with("//") {
+        path_start += 2;
+        let authority_end = url[path_start..]
+            .find(['/', '?', '#'])
+            .unwrap_or_else(|| url.len().saturating_sub(path_start));
+        path_start += authority_end;
+    }
+
+    let path_end = url[path_start..]
+        .find(['?', '#'])
+        .map(|offset| path_start + offset)
+        .unwrap_or(url.len());
+
+    Some((path_start, path_end))
 }
 
 fn eval_method_call<H: HostBindings>(
@@ -835,6 +2176,63 @@ fn eval_method_call<H: HostBindings>(
                     )));
                 };
                 Ok(Value::Element(element))
+            }
+            "createElement" => {
+                let [tag_expr] = args else {
+                    return Err(ScriptError::new(
+                        "document.createElement() expects exactly one argument",
+                    ));
+                };
+                let tag_name = as_string(&eval_expr(tag_expr, env, host)?);
+                Ok(Value::Element(host.document_create_element(&tag_name)?))
+            }
+            "createTextNode" => {
+                let [text_expr] = args else {
+                    return Err(ScriptError::new(
+                        "document.createTextNode() expects exactly one argument",
+                    ));
+                };
+                let text = as_string(&eval_expr(text_expr, env, host)?);
+                Ok(Value::Node(host.document_create_text_node(&text)?))
+            }
+            "createComment" => {
+                let [text_expr] = args else {
+                    return Err(ScriptError::new(
+                        "document.createComment() expects exactly one argument",
+                    ));
+                };
+                let text = as_string(&eval_expr(text_expr, env, host)?);
+                Ok(Value::Node(host.document_create_comment(&text)?))
+            }
+            "createDocumentFragment" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new(
+                        "document.createDocumentFragment() expects no arguments",
+                    ));
+                }
+                Ok(Value::TemplateContent(
+                    host.document_create_element("template")?,
+                ))
+            }
+            "importNode" => document_import_node(args, env, host),
+            "normalize" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("normalize() expects no arguments"));
+                }
+                host.document_normalize()?;
+                Ok(Value::Undefined)
+            }
+            "contains" => document_contains(args, env, host),
+            "isSameNode" => same_node(Value::Document, args, env, host),
+            "isEqualNode" => equal_node(Value::Document, args, env, host),
+            "compareDocumentPosition" => {
+                compare_document_position(NodeHandle::new(0), args, env, host)
+            }
+            "hasChildNodes" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("hasChildNodes() expects no arguments"));
+                }
+                Ok(Value::Boolean(host.document_has_child_nodes()?))
             }
             "hasFocus" => {
                 if !args.is_empty() {
@@ -962,6 +2360,23 @@ fn eval_method_call<H: HostBindings>(
             "removeAttribute" => element_remove_attribute(element, args, env, host),
             "hasAttribute" => element_has_attribute(element, args, env, host),
             "toggleAttribute" => element_toggle_attribute(element, args, env, host),
+            "isSameNode" => same_node(Value::Element(element), args, env, host),
+            "isEqualNode" => equal_node(Value::Element(element), args, env, host),
+            "compareDocumentPosition" => {
+                compare_document_position(NodeHandle::new(element.raw()), args, env, host)
+            }
+            "cloneNode" => node_clone(NodeHandle::new(element.raw()), args, env, host),
+            "replaceWith" => node_replace_with(NodeHandle::new(element.raw()), args, env, host),
+            "contains" => node_contains(NodeHandle::new(element.raw()), args, env, host),
+            "normalize" => node_normalize(NodeHandle::new(element.raw()), args, env, host),
+            "hasChildNodes" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("hasChildNodes() expects no arguments"));
+                }
+                Ok(Value::Boolean(
+                    host.node_has_child_nodes(NodeHandle::new(element.raw()))?,
+                ))
+            }
             "appendChild" => element_append_child(element, args, env, host),
             "insertBefore" => element_insert_before(element, args, env, host),
             "replaceChild" => element_replace_child(element, args, env, host),
@@ -971,6 +2386,8 @@ fn eval_method_call<H: HostBindings>(
             "before" => element_before(element, args, env, host),
             "after" => element_after(element, args, env, host),
             "insertAdjacentHTML" => element_insert_adjacent_html(element, args, env, host),
+            "insertAdjacentElement" => element_insert_adjacent_element(element, args, env, host),
+            "insertAdjacentText" => element_insert_adjacent_text(element, args, env, host),
             "remove" => element_remove(element, args, env, host),
             "querySelector" => {
                 query_selector(QuerySelectorTarget::Element(element), args, env, host)
@@ -994,6 +2411,93 @@ fn eval_method_call<H: HostBindings>(
             }
             other => Err(ScriptError::new(format!(
                 "unsupported Element method: {other}"
+            ))),
+        },
+        Value::Node(node) => match method {
+            "isSameNode" => same_node(Value::Node(node), args, env, host),
+            "isEqualNode" => equal_node(Value::Node(node), args, env, host),
+            "cloneNode" => node_clone(node, args, env, host),
+            "compareDocumentPosition" => compare_document_position(node, args, env, host),
+            "before" => node_before(node, args, env, host),
+            "after" => node_after(node, args, env, host),
+            "replaceWith" => node_replace_with(node, args, env, host),
+            "remove" => node_remove(node, args, env, host),
+            "normalize" => node_normalize(node, args, env, host),
+            "contains" => node_contains(node, args, env, host),
+            "hasChildNodes" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("hasChildNodes() expects no arguments"));
+                }
+                Ok(Value::Boolean(host.node_has_child_nodes(node)?))
+            }
+            other => Err(ScriptError::new(format!(
+                "unsupported Node method: {other}"
+            ))),
+        },
+        Value::TemplateContent(element) => match method {
+            "isSameNode" => same_node(Value::TemplateContent(element), args, env, host),
+            "isEqualNode" => equal_node(Value::TemplateContent(element), args, env, host),
+            "cloneNode" => {
+                if args.len() > 1 {
+                    return Err(ScriptError::new("cloneNode() expects at most one argument"));
+                }
+
+                let deep = match args.first() {
+                    Some(expr) => is_truthy(&eval_expr(expr, env, host)?),
+                    None => false,
+                };
+                let cloned = host.node_clone(NodeHandle::new(element.raw()), deep)?;
+                if host.node_type(cloned)? != 1 {
+                    return Err(ScriptError::new(
+                        "template.content.cloneNode() expected a cloned <template> element",
+                    ));
+                }
+                Ok(Value::TemplateContent(ElementHandle::new(cloned.raw())))
+            }
+            "contains" => node_contains(NodeHandle::new(element.raw()), args, env, host),
+            "remove" => node_remove(NodeHandle::new(element.raw()), args, env, host),
+            "normalize" => node_normalize(NodeHandle::new(element.raw()), args, env, host),
+            "hasChildNodes" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("hasChildNodes() expects no arguments"));
+                }
+                Ok(Value::Boolean(
+                    host.node_has_child_nodes(NodeHandle::new(element.raw()))?,
+                ))
+            }
+            "appendChild" => element_append_child(element, args, env, host),
+            "insertBefore" => element_insert_before(element, args, env, host),
+            "replaceChild" => element_replace_child(element, args, env, host),
+            "replaceChildren" => element_replace_children(element, args, env, host),
+            "append" => element_append(element, args, env, host),
+            "prepend" => element_prepend(element, args, env, host),
+            "getElementById" => {
+                let [id_expr] = args else {
+                    return Err(ScriptError::new(
+                        "getElementById() expects exactly one argument",
+                    ));
+                };
+                let id = as_string(&eval_expr(id_expr, env, host)?);
+                let selector = format!("#{}", css_escape_ident(&id));
+                Ok(match host.element_query_selector(element, &selector)? {
+                    Some(element) => Value::Element(element),
+                    None => Value::Null,
+                })
+            }
+            "querySelector" => query_selector(
+                QuerySelectorTarget::TemplateContent(element),
+                args,
+                env,
+                host,
+            ),
+            "querySelectorAll" => query_selector_all(
+                QuerySelectorTarget::TemplateContent(element),
+                args,
+                env,
+                host,
+            ),
+            other => Err(ScriptError::new(format!(
+                "unsupported DocumentFragment method: {other}"
             ))),
         },
         Value::Event(event) => match method {
@@ -1025,6 +2529,7 @@ fn eval_method_call<H: HostBindings>(
             "entries" => html_collection_entries(&collection, host),
             "add" => html_collection_select_options_add(&collection, args, env, host),
             "remove" => html_collection_select_options_remove(&collection, args, env, host),
+            "toString" => collection_to_string("HTMLCollection", args),
             other => Err(ScriptError::new(format!(
                 "unsupported HTMLCollection method: {other}"
             ))),
@@ -1035,6 +2540,7 @@ fn eval_method_call<H: HostBindings>(
             "keys" => style_sheet_list_keys(&target, host),
             "values" => style_sheet_list_values(&target, host),
             "entries" => style_sheet_list_entries(&target, host),
+            "toString" => collection_to_string("StyleSheetList", args),
             other => Err(ScriptError::new(format!(
                 "unsupported StyleSheetList method: {other}"
             ))),
@@ -1122,9 +2628,6 @@ fn eval_method_call<H: HostBindings>(
         Value::Screen => Err(ScriptError::new(format!(
             "cannot call `{method}` on a screen value"
         ))),
-        Value::Node(_) => Err(ScriptError::new(format!(
-            "cannot call `{method}` on a node value"
-        ))),
         Value::ClassList(element) => match method {
             "contains" => class_list_contains(element, args, env, host),
             "add" => class_list_add(element, args, env, host),
@@ -1137,15 +2640,13 @@ fn eval_method_call<H: HostBindings>(
         Value::Dataset(_) => Err(ScriptError::new(format!(
             "cannot call `{method}` on a dataset value"
         ))),
-        Value::TemplateContent(_) => Err(ScriptError::new(format!(
-            "cannot call `{method}` on a template content value"
-        ))),
         Value::NodeList(target) => match method {
             "item" => node_list_item(&target, args, env, host),
             "forEach" => node_list_for_each(&target, args, env, host),
             "keys" => node_list_keys(&target, host),
             "values" => node_list_values(&target, host),
             "entries" => node_list_entries(&target, host),
+            "toString" => collection_to_string("NodeList", args),
             other => Err(ScriptError::new(format!(
                 "unsupported NodeList method: {other}"
             ))),
@@ -1156,6 +2657,7 @@ fn eval_method_call<H: HostBindings>(
             "keys" => radio_node_list_keys(&target, host),
             "values" => radio_node_list_values(&target, host),
             "entries" => radio_node_list_entries(&target, host),
+            "toString" => collection_to_string("RadioNodeList", args),
             other => Err(ScriptError::new(format!(
                 "unsupported RadioNodeList method: {other}"
             ))),
@@ -1173,6 +2675,28 @@ fn eval_method_call<H: HostBindings>(
         Value::MediaQueryList(_) => Err(ScriptError::new(format!(
             "cannot call `{method}` on a media query list value"
         ))),
+        Value::StringList(list) => match method {
+            "item" => string_list_item(&list, args, env, host),
+            "contains" => string_list_contains(&list, args, env, host),
+            "keys" => Ok(string_list_keys(&list)),
+            "values" => Ok(string_list_values(&list)),
+            "entries" => Ok(string_list_entries(&list)),
+            "toString" => string_list_to_string(args),
+            other => Err(ScriptError::new(format!(
+                "unsupported string list method: {other}"
+            ))),
+        },
+        Value::MimeTypeArray(list) => match method {
+            "item" => mime_type_array_item(&list, args, env, host),
+            "namedItem" => mime_type_array_named_item(&list, args, env, host),
+            "keys" => Ok(mime_type_array_keys(&list)),
+            "values" => Ok(mime_type_array_values(&list)),
+            "entries" => Ok(mime_type_array_entries(&list)),
+            "toString" => collection_to_string("MimeTypeArray", args),
+            other => Err(ScriptError::new(format!(
+                "unsupported mime type array method: {other}"
+            ))),
+        },
         Value::CollectionIterator(iterator) => match method {
             "next" => collection_iterator_next(&iterator),
             other => Err(ScriptError::new(format!(
@@ -1207,6 +2731,13 @@ fn eval_method_call<H: HostBindings>(
 enum QuerySelectorTarget {
     Document,
     Element(crate::ElementHandle),
+    TemplateContent(crate::ElementHandle),
+}
+
+#[derive(Clone, Copy, Debug)]
+enum MutationArgument {
+    Node(NodeHandle),
+    Fragment(crate::ElementHandle),
 }
 
 fn register_listener<H: HostBindings>(
@@ -1254,6 +2785,9 @@ fn query_selector<H: HostBindings>(
     let match_handle = match target {
         QuerySelectorTarget::Document => host.document_query_selector(&selector)?,
         QuerySelectorTarget::Element(element) => host.element_query_selector(element, &selector)?,
+        QuerySelectorTarget::TemplateContent(element) => {
+            host.element_query_selector(element, &selector)?
+        }
     };
 
     Ok(match_handle.map(Value::Element).unwrap_or(Value::Null))
@@ -1277,9 +2811,46 @@ fn query_selector_all<H: HostBindings>(
         QuerySelectorTarget::Element(element) => {
             host.element_query_selector_all(element, &selector)?
         }
+        QuerySelectorTarget::TemplateContent(element) => {
+            host.element_query_selector_all(element, &selector)?
+        }
     };
 
     Ok(Value::NodeList(NodeListTarget::Snapshot(matches)))
+}
+
+fn css_escape_ident(value: &str) -> String {
+    let mut output = String::new();
+    let mut chars = value.chars().peekable();
+    let mut index = 0;
+
+    while let Some(ch) = chars.next() {
+        let safe = ch.is_ascii_alphanumeric()
+            || ch == '_'
+            || ch == '-'
+            || (!ch.is_ascii() && !ch.is_whitespace() && !ch.is_control());
+        let needs_escape = if index == 0 {
+            ch.is_ascii_digit()
+                || (ch == '-'
+                    && chars
+                        .peek()
+                        .copied()
+                        .is_some_and(|next| next.is_ascii_digit()))
+        } else {
+            !safe
+        };
+
+        if needs_escape {
+            output.push('\\');
+            output.push_str(&format!("{:x} ", ch as u32));
+        } else {
+            output.push(ch);
+        }
+
+        index += 1;
+    }
+
+    output
 }
 
 fn element_get_attribute<H: HostBindings>(
@@ -1388,9 +2959,17 @@ fn element_append_child<H: HostBindings>(
         ));
     };
 
-    let child = eval_element_handle(child_expr, env, host, "appendChild")?;
-    host.element_append_child(element, child)?;
-    Ok(Value::Element(child))
+    match eval_mutation_argument(child_expr, env, host, "appendChild")? {
+        MutationArgument::Node(child) => {
+            host.element_append_child(element, child)?;
+            value_for_node_handle(child, host)
+        }
+        MutationArgument::Fragment(fragment) => {
+            let children = fragment_child_nodes(fragment, host)?;
+            host.element_append(element, children)?;
+            Ok(Value::TemplateContent(fragment))
+        }
+    }
 }
 
 fn element_insert_before<H: HostBindings>(
@@ -1405,10 +2984,38 @@ fn element_insert_before<H: HostBindings>(
         ));
     };
 
-    let child = eval_element_handle(child_expr, env, host, "insertBefore")?;
-    let reference = eval_optional_element_handle(reference_expr, env, host, "insertBefore")?;
-    host.element_insert_before(element, child, reference)?;
-    Ok(Value::Element(child))
+    let child = eval_mutation_argument(child_expr, env, host, "insertBefore")?;
+    let reference = eval_optional_node_handle(reference_expr, env, host, "insertBefore")?;
+    match child {
+        MutationArgument::Node(child) => {
+            host.element_insert_before(element, child, reference)?;
+            value_for_node_handle(child, host)
+        }
+        MutationArgument::Fragment(fragment) => {
+            let children = fragment_child_nodes(fragment, host)?;
+            if let Some(reference) = reference {
+                let parent = NodeHandle::new(element.raw());
+                if host.node_parent(reference)? != Some(parent) {
+                    return Err(ScriptError::new(
+                        "insertBefore() expects the reference node to belong to the parent",
+                    ));
+                }
+                for child in &children {
+                    if host.node_contains(*child, parent)? {
+                        return Err(ScriptError::new(
+                            "insertBefore() cannot insert a node into its descendant",
+                        ));
+                    }
+                }
+                for child in children {
+                    host.element_insert_before(element, child, Some(reference))?;
+                }
+            } else {
+                host.element_append(element, children)?;
+            }
+            Ok(Value::TemplateContent(fragment))
+        }
+    }
 }
 
 fn element_replace_child<H: HostBindings>(
@@ -1423,10 +3030,25 @@ fn element_replace_child<H: HostBindings>(
         ));
     };
 
-    let new_child = eval_element_handle(new_child_expr, env, host, "replaceChild")?;
-    let old_child = eval_element_handle(old_child_expr, env, host, "replaceChild")?;
-    host.element_replace_child(element, new_child, old_child)?;
-    Ok(Value::Element(old_child))
+    let new_child = eval_mutation_argument(new_child_expr, env, host, "replaceChild")?;
+    let old_child = eval_node_handle(old_child_expr, env, host, "replaceChild")?;
+    match new_child {
+        MutationArgument::Node(new_child) => {
+            host.element_replace_child(element, new_child, old_child)?;
+            value_for_node_handle(old_child, host)
+        }
+        MutationArgument::Fragment(fragment) => {
+            let parent = NodeHandle::new(element.raw());
+            if host.node_parent(old_child)? != Some(parent) {
+                return Err(ScriptError::new(
+                    "replaceChild() expects the old child to belong to the parent",
+                ));
+            }
+            let children = fragment_child_nodes(fragment, host)?;
+            host.node_replace_with(old_child, children)?;
+            value_for_node_handle(old_child, host)
+        }
+    }
 }
 
 fn element_replace_children<H: HostBindings>(
@@ -1435,7 +3057,7 @@ fn element_replace_children<H: HostBindings>(
     env: &mut BTreeMap<String, Value>,
     host: &mut H,
 ) -> Result<Value> {
-    let children = eval_element_arguments(args, env, host, "replaceChildren")?;
+    let children = eval_mutation_children(args, env, host, "replaceChildren")?;
     host.element_replace_children(element, children)?;
     Ok(Value::Undefined)
 }
@@ -1446,7 +3068,7 @@ fn element_append<H: HostBindings>(
     env: &mut BTreeMap<String, Value>,
     host: &mut H,
 ) -> Result<Value> {
-    let children = eval_element_arguments(args, env, host, "append")?;
+    let children = eval_mutation_children(args, env, host, "append")?;
     host.element_append(element, children)?;
     Ok(Value::Undefined)
 }
@@ -1457,7 +3079,7 @@ fn element_prepend<H: HostBindings>(
     env: &mut BTreeMap<String, Value>,
     host: &mut H,
 ) -> Result<Value> {
-    let children = eval_element_arguments(args, env, host, "prepend")?;
+    let children = eval_mutation_children(args, env, host, "prepend")?;
     host.element_prepend(element, children)?;
     Ok(Value::Undefined)
 }
@@ -1468,7 +3090,7 @@ fn element_before<H: HostBindings>(
     env: &mut BTreeMap<String, Value>,
     host: &mut H,
 ) -> Result<Value> {
-    let children = eval_element_arguments(args, env, host, "before")?;
+    let children = eval_mutation_children(args, env, host, "before")?;
     host.element_before(element, children)?;
     Ok(Value::Undefined)
 }
@@ -1479,7 +3101,7 @@ fn element_after<H: HostBindings>(
     env: &mut BTreeMap<String, Value>,
     host: &mut H,
 ) -> Result<Value> {
-    let children = eval_element_arguments(args, env, host, "after")?;
+    let children = eval_mutation_children(args, env, host, "after")?;
     host.element_after(element, children)?;
     Ok(Value::Undefined)
 }
@@ -1502,6 +3124,158 @@ fn element_insert_adjacent_html<H: HostBindings>(
     Ok(Value::Undefined)
 }
 
+fn insert_adjacent_node<H: HostBindings>(
+    element: crate::ElementHandle,
+    position: &str,
+    child: NodeHandle,
+    method: &str,
+    host: &mut H,
+) -> Result<()> {
+    match position {
+        "beforebegin" => {
+            let Some(_parent) = host.node_parent(NodeHandle::new(element.raw()))? else {
+                return Err(ScriptError::new(format!(
+                    "node {:?} has no parent for {method}(beforebegin)",
+                    NodeHandle::new(element.raw())
+                )));
+            };
+            host.element_before(element, vec![child])?;
+        }
+        "afterbegin" => {
+            let tag_name = host.element_tag_name(element)?;
+            if is_void_element(tag_name.as_str()) {
+                return Err(ScriptError::new(format!(
+                    "{method} is not supported on void elements like <{}>",
+                    tag_name
+                )));
+            }
+            host.element_prepend(element, vec![child])?;
+        }
+        "beforeend" => {
+            let tag_name = host.element_tag_name(element)?;
+            if is_void_element(tag_name.as_str()) {
+                return Err(ScriptError::new(format!(
+                    "{method} is not supported on void elements like <{}>",
+                    tag_name
+                )));
+            }
+            host.element_append(element, vec![child])?;
+        }
+        "afterend" => {
+            let Some(_parent) = host.node_parent(NodeHandle::new(element.raw()))? else {
+                return Err(ScriptError::new(format!(
+                    "node {:?} has no parent for {method}(afterend)",
+                    NodeHandle::new(element.raw())
+                )));
+            };
+            host.element_after(element, vec![child])?;
+        }
+        _ => {
+            return Err(ScriptError::new(format!(
+                "unsupported {method} position `{position}`"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn is_void_element(tag_name: &str) -> bool {
+    matches!(
+        tag_name,
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
+    )
+}
+
+fn element_insert_adjacent_element<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [position_expr, element_expr] = args else {
+        return Err(ScriptError::new(
+            "insertAdjacentElement() expects exactly two arguments",
+        ));
+    };
+
+    let position = as_string(&eval_expr(position_expr, env, host)?);
+    let inserted = eval_element_handle(element_expr, env, host, "insertAdjacentElement")?;
+    insert_adjacent_node(
+        element,
+        &position,
+        NodeHandle::new(inserted.raw()),
+        "insertAdjacentElement",
+        host,
+    )?;
+    Ok(Value::Element(inserted))
+}
+
+fn element_insert_adjacent_text<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [position_expr, text_expr] = args else {
+        return Err(ScriptError::new(
+            "insertAdjacentText() expects exactly two arguments",
+        ));
+    };
+
+    let position = as_string(&eval_expr(position_expr, env, host)?);
+    let text = as_string(&eval_expr(text_expr, env, host)?);
+    match position.as_str() {
+        "beforebegin" => {
+            if host.node_parent(NodeHandle::new(element.raw()))?.is_none() {
+                return Err(ScriptError::new(format!(
+                    "node {:?} has no parent for insertAdjacentText(beforebegin)",
+                    NodeHandle::new(element.raw())
+                )));
+            }
+        }
+        "afterbegin" | "beforeend" => {
+            let tag_name = host.element_tag_name(element)?;
+            if is_void_element(tag_name.as_str()) {
+                return Err(ScriptError::new(format!(
+                    "insertAdjacentText is not supported on void elements like <{}>",
+                    tag_name
+                )));
+            }
+        }
+        "afterend" => {
+            if host.node_parent(NodeHandle::new(element.raw()))?.is_none() {
+                return Err(ScriptError::new(format!(
+                    "node {:?} has no parent for insertAdjacentText(afterend)",
+                    NodeHandle::new(element.raw())
+                )));
+            }
+        }
+        _ => {
+            return Err(ScriptError::new(format!(
+                "unsupported insertAdjacentText position `{position}`"
+            )));
+        }
+    }
+
+    let child = host.document_create_text_node(&text)?;
+    insert_adjacent_node(element, &position, child, "insertAdjacentText", host)?;
+    Ok(Value::Undefined)
+}
+
 fn element_remove<H: HostBindings>(
     element: crate::ElementHandle,
     args: &[Expr],
@@ -1516,12 +3290,45 @@ fn element_remove<H: HostBindings>(
     Ok(Value::Undefined)
 }
 
+fn eval_node_handle<H: HostBindings>(
+    expr: &Expr,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+    method: &str,
+) -> Result<NodeHandle> {
+    match eval_expr(expr, env, host)? {
+        Value::Element(element) => Ok(NodeHandle::new(element.raw())),
+        Value::Node(node) => Ok(node),
+        _ => Err(ScriptError::new(format!(
+            "{method}() expects node arguments"
+        ))),
+    }
+}
+
+fn eval_mutation_argument<H: HostBindings>(
+    expr: &Expr,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+    method: &str,
+) -> Result<MutationArgument> {
+    Ok(match eval_expr(expr, env, host)? {
+        Value::Element(element) => MutationArgument::Node(NodeHandle::new(element.raw())),
+        Value::Node(node) => MutationArgument::Node(node),
+        Value::TemplateContent(element) => MutationArgument::Fragment(element),
+        _ => {
+            return Err(ScriptError::new(format!(
+                "{method}() expects node or DocumentFragment arguments"
+            )));
+        }
+    })
+}
+
 fn eval_element_handle<H: HostBindings>(
     expr: &Expr,
     env: &mut BTreeMap<String, Value>,
     host: &mut H,
     method: &str,
-) -> Result<crate::ElementHandle> {
+) -> Result<ElementHandle> {
     match eval_expr(expr, env, host)? {
         Value::Element(element) => Ok(element),
         _ => Err(ScriptError::new(format!(
@@ -1530,32 +3337,47 @@ fn eval_element_handle<H: HostBindings>(
     }
 }
 
-fn eval_optional_element_handle<H: HostBindings>(
+fn eval_optional_node_handle<H: HostBindings>(
     expr: &Expr,
     env: &mut BTreeMap<String, Value>,
     host: &mut H,
     method: &str,
-) -> Result<Option<crate::ElementHandle>> {
+) -> Result<Option<NodeHandle>> {
     let value = eval_expr(expr, env, host)?;
     match value {
-        Value::Element(element) => Ok(Some(element)),
+        Value::Element(element) => Ok(Some(NodeHandle::new(element.raw()))),
+        Value::Node(node) => Ok(Some(node)),
         Value::Null | Value::Undefined => Ok(None),
         _ => Err(ScriptError::new(format!(
-            "{method}() expects an element or null reference"
+            "{method}() expects a node or null reference"
         ))),
     }
 }
 
-fn eval_element_arguments<H: HostBindings>(
+fn fragment_child_nodes<H: HostBindings>(
+    fragment: crate::ElementHandle,
+    host: &mut H,
+) -> Result<Vec<NodeHandle>> {
+    host.node_child_nodes_items(HtmlCollectionScope::Element(fragment))
+}
+
+fn eval_mutation_children<H: HostBindings>(
     args: &[Expr],
     env: &mut BTreeMap<String, Value>,
     host: &mut H,
     method: &str,
-) -> Result<Vec<crate::ElementHandle>> {
+) -> Result<Vec<NodeHandle>> {
     let mut children = Vec::new();
+
     for expr in args {
-        children.push(eval_element_handle(expr, env, host, method)?);
+        match eval_mutation_argument(expr, env, host, method)? {
+            MutationArgument::Node(node) => children.push(node),
+            MutationArgument::Fragment(fragment) => {
+                children.extend(fragment_child_nodes(fragment, host)?);
+            }
+        }
     }
+
     Ok(children)
 }
 
@@ -2224,6 +4046,139 @@ fn radio_node_list_entries<H: HostBindings>(
     ))
 }
 
+fn string_list_item<H: HostBindings>(
+    list: &StringListState,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [index_expr] = args else {
+        return Err(ScriptError::new(
+            "navigator.languages.item() expects exactly one argument",
+        ));
+    };
+
+    let index_value = eval_expr(index_expr, env, host)?;
+    let Some(index) = index_from_value(&index_value) else {
+        return Ok(Value::Null);
+    };
+
+    Ok(list
+        .item(index)
+        .map(|value| Value::String(value.to_string()))
+        .unwrap_or(Value::Null))
+}
+
+fn string_list_contains<H: HostBindings>(
+    list: &StringListState,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [value_expr] = args else {
+        return Err(ScriptError::new(
+            "navigator.languages.contains() expects exactly one argument",
+        ));
+    };
+
+    let value = as_string(&eval_expr(value_expr, env, host)?);
+    Ok(Value::Boolean(list.contains(&value)))
+}
+
+fn string_list_to_string(args: &[Expr]) -> Result<Value> {
+    let [] = args else {
+        return Err(ScriptError::new(
+            "navigator.languages.toString() expects no arguments",
+        ));
+    };
+
+    Ok(Value::String("[object DOMStringList]".to_string()))
+}
+
+fn string_list_keys(list: &StringListState) -> Value {
+    collection_iterator(
+        (0..list.length())
+            .map(|index| Value::Number(index as f64))
+            .collect(),
+    )
+}
+
+fn string_list_values(list: &StringListState) -> Value {
+    collection_iterator(list.items().iter().cloned().map(Value::String).collect())
+}
+
+fn string_list_entries(list: &StringListState) -> Value {
+    collection_entries(list.items().iter().cloned().map(Value::String).collect())
+}
+
+fn collection_to_string(tag: &'static str, args: &[Expr]) -> Result<Value> {
+    let [] = args else {
+        return Err(ScriptError::new(format!(
+            "{tag}.toString() expects no arguments"
+        )));
+    };
+
+    Ok(Value::String(format!("[object {tag}]")))
+}
+
+fn mime_type_array_item<H: HostBindings>(
+    list: &MimeTypeArrayState,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [index_expr] = args else {
+        return Err(ScriptError::new(
+            "navigator.mimeTypes.item() expects exactly one argument",
+        ));
+    };
+
+    let index_value = eval_expr(index_expr, env, host)?;
+    let Some(index) = index_from_value(&index_value) else {
+        return Ok(Value::Null);
+    };
+
+    Ok(list
+        .item(index)
+        .map(|value| Value::String(value.to_string()))
+        .unwrap_or(Value::Null))
+}
+
+fn mime_type_array_named_item<H: HostBindings>(
+    list: &MimeTypeArrayState,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [name_expr] = args else {
+        return Err(ScriptError::new(
+            "navigator.mimeTypes.namedItem() expects exactly one argument",
+        ));
+    };
+
+    let name = as_string(&eval_expr(name_expr, env, host)?);
+    Ok(list
+        .named_item(&name)
+        .map(|value| Value::String(value.to_string()))
+        .unwrap_or(Value::Null))
+}
+
+fn mime_type_array_keys(list: &MimeTypeArrayState) -> Value {
+    collection_iterator(
+        (0..list.length())
+            .map(|index| Value::Number(index as f64))
+            .collect(),
+    )
+}
+
+fn mime_type_array_values(list: &MimeTypeArrayState) -> Value {
+    collection_iterator(list.items().iter().cloned().map(Value::String).collect())
+}
+
+fn mime_type_array_entries(list: &MimeTypeArrayState) -> Value {
+    collection_entries(list.items().iter().cloned().map(Value::String).collect())
+}
+
 fn node_list_items<H: HostBindings>(
     target: &NodeListTarget,
     host: &mut H,
@@ -2402,6 +4357,20 @@ fn storage_key<H: HostBindings>(
     })
 }
 
+fn storage_property_is_reserved(property: &str) -> bool {
+    matches!(
+        property,
+        "length" | "getItem" | "setItem" | "removeItem" | "clear" | "key"
+    )
+}
+
+fn html_collection_property_is_reserved(property: &str) -> bool {
+    matches!(
+        property,
+        "item" | "namedItem" | "forEach" | "keys" | "values" | "entries" | "toString"
+    )
+}
+
 fn window_scroll_to<H: HostBindings>(
     args: &[Expr],
     env: &mut BTreeMap<String, Value>,
@@ -2476,16 +4445,18 @@ fn is_truthy(value: &Value) -> bool {
         | Value::RadioNodeList(_)
         | Value::Storage(_)
         | Value::MediaQueryList(_)
+        | Value::StringList(_)
+        | Value::MimeTypeArray(_)
         | Value::TemplateContent(_)
         | Value::Screen
         | Value::CollectionIterator(_)
         | Value::IteratorResult(_)
-            | Value::CollectionEntry(_)
-            | Value::Document
-            | Value::Window
-            | Value::Function(_)
-            | Value::Event(_)
-            | Value::ScreenOrientation(_) => true,
+        | Value::CollectionEntry(_)
+        | Value::Document
+        | Value::Window
+        | Value::Function(_)
+        | Value::Event(_)
+        | Value::ScreenOrientation(_) => true,
     }
 }
 

@@ -15,6 +15,7 @@ pub const SessionConfig = struct {
     html: ?[]const u8 = null,
     local_storage: []const StorageSeed = &.{},
     session_storage: []const StorageSeed = &.{},
+    random_seed: ?u64 = null,
     open_failure: ?[]const u8 = null,
     close_failure: ?[]const u8 = null,
     print_failure: ?[]const u8 = null,
@@ -32,7 +33,14 @@ const ScheduledTimer = struct {
     id: u64,
     at_ms: i64,
     interval_ms: ?i64 = null,
+    kind: TimerKind = .timeout,
     handler: script.ScriptFunction,
+};
+
+const TimerKind = enum {
+    timeout,
+    interval,
+    animation_frame,
 };
 
 const HistoryModel = struct {
@@ -135,6 +143,8 @@ pub const Session = struct {
     dom_store: dom.DomStore,
     script_runtime: script.ScriptRuntime,
     script_event_listeners: std.ArrayListUnmanaged(script.ScriptListenerRecord) = .{},
+    match_media_listeners: std.ArrayListUnmanaged(script.MatchMediaListenerRecord) = .{},
+    match_media_onchange_listeners: std.ArrayListUnmanaged(script.MatchMediaListenerRecord) = .{},
     queued_microtasks: std.ArrayListUnmanaged(script.ScriptFunction) = .{},
     timers: std.ArrayListUnmanaged(ScheduledTimer) = .{},
     next_timer_id: u64 = 1,
@@ -142,10 +152,19 @@ pub const Session = struct {
     active_timer_cancelled: bool = false,
     mock_registry: mocks.MockRegistry,
     history: HistoryModel,
+    history_scroll_restoration: []const u8 = "auto",
+    math_random_state: u64 = 1,
+    crypto_random_state: u64 = 1,
     clock_ms: i64 = 0,
     scroll_x: i64 = 0,
     scroll_y: i64 = 0,
     window_name: []const u8 = "",
+    window_load_handler: ?script.ScriptFunction = null,
+    window_focus_handler: ?script.ScriptFunction = null,
+    window_blur_handler: ?script.ScriptFunction = null,
+    window_hashchange_handler: ?script.ScriptFunction = null,
+    window_popstate_handler: ?script.ScriptFunction = null,
+    window_storage_handler: ?script.ScriptFunction = null,
     cookie_jar: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
 
     pub fn init(allocator: std.mem.Allocator, config: SessionConfig) errors.Result(Session) {
@@ -183,6 +202,10 @@ pub const Session = struct {
         errdefer dom_store.deinit();
         var script_event_listeners: std.ArrayListUnmanaged(script.ScriptListenerRecord) = .{};
         errdefer script_event_listeners.deinit(arena.allocator());
+        var match_media_listeners: std.ArrayListUnmanaged(script.MatchMediaListenerRecord) = .{};
+        errdefer match_media_listeners.deinit(arena.allocator());
+        var match_media_onchange_listeners: std.ArrayListUnmanaged(script.MatchMediaListenerRecord) = .{};
+        errdefer match_media_onchange_listeners.deinit(arena.allocator());
         var queued_microtasks: std.ArrayListUnmanaged(script.ScriptFunction) = .{};
         errdefer queued_microtasks.deinit(arena.allocator());
         var timers: std.ArrayListUnmanaged(ScheduledTimer) = .{};
@@ -218,40 +241,68 @@ pub const Session = struct {
         try mock_registry.location().setCurrent(url_copy);
         var history = try HistoryModel.init(arena_alloc, url_copy);
         errdefer history.deinit();
+        var history_scroll_restoration: []const u8 = "auto";
+        var math_random_state: u64 = config.random_seed orelse 1;
+        var crypto_random_state: u64 = config.random_seed orelse 1;
         var window_name: []const u8 = "";
+        var window_hashchange_handler: ?script.ScriptFunction = null;
         var scroll_x: i64 = 0;
         var scroll_y: i64 = 0;
         var next_timer_id: u64 = 1;
+        var window_load_handler: ?script.ScriptFunction = null;
+        var window_focus_handler: ?script.ScriptFunction = null;
+        var window_blur_handler: ?script.ScriptFunction = null;
+        var window_popstate_handler: ?script.ScriptFunction = null;
+        var window_storage_handler: ?script.ScriptFunction = null;
+        var bootstrap_host = BootstrapHost{
+            .dom_store = &dom_store,
+            .listeners = &script_event_listeners,
+            .match_media_listeners = &match_media_listeners,
+            .match_media_onchange_listeners = &match_media_onchange_listeners,
+            .location = mock_registry.location(),
+            .match_media = mock_registry.matchMedia(),
+            .open_mocks = mock_registry.open(),
+            .close_mocks = mock_registry.close(),
+            .print_mocks = mock_registry.print(),
+            .scroll_mocks = mock_registry.scroll(),
+            .history = &history,
+            .allocator = arena.allocator(),
+            .window_name = &window_name,
+            .window_load_handler = &window_load_handler,
+            .window_focus_handler = &window_focus_handler,
+            .window_blur_handler = &window_blur_handler,
+            .window_hashchange_handler = &window_hashchange_handler,
+            .window_popstate_handler = &window_popstate_handler,
+            .window_storage_handler = &window_storage_handler,
+            .history_scroll_restoration = &history_scroll_restoration,
+            .math_random_state = &math_random_state,
+            .crypto_random_state = &crypto_random_state,
+            .cookie_jar = &cookie_jar,
+            .scroll_x = &scroll_x,
+            .scroll_y = &scroll_y,
+            .queued_microtasks = &queued_microtasks,
+            .timers = &timers,
+            .next_timer_id = &next_timer_id,
+            .storage = mock_registry.storage(),
+        };
         if (html_copy) |html_source| {
             try dom_store.bootstrapHtml(html_source);
         }
         try dom_store.setTargetFragment(fragmentIdentifierFromUrl(url_copy));
         if (html_copy) |html_source| {
             _ = html_source;
-            var bootstrap_host = BootstrapHost{
-                .dom_store = &dom_store,
-                .listeners = &script_event_listeners,
-                .location = mock_registry.location(),
-                .match_media = mock_registry.matchMedia(),
-                .open_mocks = mock_registry.open(),
-                .close_mocks = mock_registry.close(),
-                .print_mocks = mock_registry.print(),
-                .scroll_mocks = mock_registry.scroll(),
-                .history = &history,
-                .allocator = arena.allocator(),
-                .window_name = &window_name,
-                .cookie_jar = &cookie_jar,
-                .scroll_x = &scroll_x,
-                .scroll_y = &scroll_y,
-                .queued_microtasks = &queued_microtasks,
-                .timers = &timers,
-                .next_timer_id = &next_timer_id,
-                .storage = mock_registry.storage(),
-            };
             try script_runtime.bootstrapInlineScripts(allocator, &bootstrap_host);
             var bootstrap_steps: usize = 0;
             try drainQueuedMicrotasks(allocator, &script_runtime, &bootstrap_host, &queued_microtasks, &bootstrap_steps);
         }
+        try script_runtime.dispatchWindowEvent(
+            std.heap.page_allocator,
+            &bootstrap_host,
+            "load",
+            script_event_listeners.items,
+            bootstrap_host.windowLoad(),
+            "onload",
+        );
 
         return .{
             .arena_owner = allocator,
@@ -261,19 +312,31 @@ pub const Session = struct {
                 .html = html_copy,
                 .local_storage = storage_copy,
                 .session_storage = session_storage_copy,
+                .random_seed = config.random_seed,
             },
             .dom_store = dom_store,
             .script_runtime = script_runtime,
             .script_event_listeners = script_event_listeners,
+            .match_media_listeners = match_media_listeners,
+            .match_media_onchange_listeners = match_media_onchange_listeners,
             .queued_microtasks = queued_microtasks,
             .timers = timers,
             .next_timer_id = next_timer_id,
             .mock_registry = mock_registry,
             .history = history,
+            .history_scroll_restoration = history_scroll_restoration,
+            .math_random_state = math_random_state,
+            .crypto_random_state = crypto_random_state,
             .clock_ms = 0,
             .scroll_x = scroll_x,
             .scroll_y = scroll_y,
             .window_name = window_name,
+            .window_load_handler = window_load_handler,
+            .window_focus_handler = window_focus_handler,
+            .window_blur_handler = window_blur_handler,
+            .window_hashchange_handler = window_hashchange_handler,
+            .window_popstate_handler = window_popstate_handler,
+            .window_storage_handler = window_storage_handler,
             .cookie_jar = cookie_jar,
         };
     }
@@ -283,6 +346,8 @@ pub const Session = struct {
         self.history.deinit();
         self.cookie_jar.deinit(self.arena.allocator());
         self.script_event_listeners.deinit(self.arena.allocator());
+        self.match_media_listeners.deinit(self.arena.allocator());
+        self.match_media_onchange_listeners.deinit(self.arena.allocator());
         self.queued_microtasks.deinit(self.arena.allocator());
         self.timers.deinit(self.arena.allocator());
         self.script_runtime.deinit();
@@ -334,6 +399,78 @@ pub const Session = struct {
             &step_count,
         );
         try runDueTimers(self, allocator, &step_count);
+        try self.runMatchMediaListeners(allocator);
+        try self.runMatchMediaOnChangeListeners(allocator);
+        try drainQueuedMicrotasks(
+            allocator,
+            &self.script_runtime,
+            self,
+            &self.queued_microtasks,
+            &step_count,
+        );
+    }
+
+    fn runMatchMediaListeners(self: *Session, allocator: std.mem.Allocator) errors.Result(void) {
+        var listeners: std.ArrayList(script.MatchMediaListenerRecord) = .empty;
+        defer listeners.deinit(allocator);
+
+        try listeners.appendSlice(allocator, self.match_media_listeners.items);
+        for (listeners.items, 0..) |listener, index| {
+            const current = self.matchMediaCurrent(listener.query);
+            if (current == listener.last_matches) continue;
+
+            var updated = false;
+            for (self.match_media_listeners.items, 0..) |*stored_listener, stored_index| {
+                if (stored_index != index) continue;
+                if (!std.mem.eql(u8, stored_listener.query, listener.query)) continue;
+                if (!scriptFunctionEquals(stored_listener.handler, listener.handler)) continue;
+                stored_listener.last_matches = current;
+                updated = true;
+                break;
+            }
+            if (!updated) continue;
+
+            const source_name = try std.fmt.allocPrint(allocator, "matchmedia:{s}:{d}", .{ listener.query, index });
+            defer allocator.free(source_name);
+            try self.script_runtime.evalScriptSourceWithBindings(
+                allocator,
+                self,
+                listener.handler.body_source,
+                source_name,
+                &.{},
+            );
+        }
+    }
+
+    fn runMatchMediaOnChangeListeners(self: *Session, allocator: std.mem.Allocator) errors.Result(void) {
+        var listeners: std.ArrayList(script.MatchMediaListenerRecord) = .empty;
+        defer listeners.deinit(allocator);
+
+        try listeners.appendSlice(allocator, self.match_media_onchange_listeners.items);
+        for (listeners.items, 0..) |listener, index| {
+            const current = self.matchMediaCurrent(listener.query);
+            if (current == listener.last_matches) continue;
+
+            var updated = false;
+            for (self.match_media_onchange_listeners.items, 0..) |*stored_listener, stored_index| {
+                if (stored_index != index) continue;
+                if (!std.mem.eql(u8, stored_listener.query, listener.query)) continue;
+                stored_listener.last_matches = current;
+                updated = true;
+                break;
+            }
+            if (!updated) continue;
+
+            const source_name = try std.fmt.allocPrint(allocator, "matchmedia:onchange:{s}:{d}", .{ listener.query, index });
+            defer allocator.free(source_name);
+            try self.script_runtime.evalScriptSourceWithBindings(
+                allocator,
+                self,
+                listener.handler.body_source,
+                source_name,
+                &.{},
+            );
+        }
     }
 
     pub fn mocksMut(self: *Session) *mocks.MockRegistry {
@@ -348,6 +485,10 @@ pub const Session = struct {
         return &self.dom_store;
     }
 
+    pub fn scriptEventListeners(self: *const Session) []const script.ScriptListenerRecord {
+        return self.script_event_listeners.items;
+    }
+
     pub fn currentLocationUrl(self: *const Session) []const u8 {
         return @constCast(&self.mock_registry).location().currentUrl() orelse self.config.url;
     }
@@ -356,9 +497,11 @@ pub const Session = struct {
         const trimmed = std.mem.trim(u8, url_source, " \t\r\n");
         if (trimmed.len == 0) return error.MockError;
 
+        const before_url = self.currentLocationUrl();
         const target = try self.history.push(null, trimmed);
         try syncLocationState(self.mock_registry.location(), &self.dom_store, target, true);
         self.resetScrollPosition();
+        try self.script_runtime.dispatchHashChangeIfNeeded(std.heap.page_allocator, self, before_url, target);
         return;
     }
 
@@ -366,9 +509,11 @@ pub const Session = struct {
         const trimmed = std.mem.trim(u8, url_source, " \t\r\n");
         if (trimmed.len == 0) return error.MockError;
 
+        const before_url = self.currentLocationUrl();
         const target = try self.history.replace(null, trimmed);
         try syncLocationState(self.mock_registry.location(), &self.dom_store, target, true);
         self.resetScrollPosition();
+        try self.script_runtime.dispatchHashChangeIfNeeded(std.heap.page_allocator, self, before_url, target);
         return;
     }
 
@@ -376,6 +521,16 @@ pub const Session = struct {
         const target = self.history.current();
         try syncLocationState(self.mock_registry.location(), &self.dom_store, target, true);
         self.resetScrollPosition();
+        return;
+    }
+
+    pub fn locationHash(self: *const Session, allocator: std.mem.Allocator) errors.Result([]const u8) {
+        return try locationHashFromUrl(allocator, self.currentLocationUrl());
+    }
+
+    pub fn setLocationHash(self: *Session, value: []const u8) errors.Result(void) {
+        const target = try locationUrlWithHash(self.arena.allocator(), self.currentLocationUrl(), value);
+        try self.assignLocation(target);
         return;
     }
 
@@ -405,6 +560,19 @@ pub const Session = struct {
         return self.history.currentState();
     }
 
+    pub fn historyScrollRestoration(self: *const Session) []const u8 {
+        return self.history_scroll_restoration;
+    }
+
+    pub fn setHistoryScrollRestoration(self: *Session, value: []const u8) errors.Result(void) {
+        if (!std.mem.eql(u8, value, "auto") and !std.mem.eql(u8, value, "manual")) {
+            return error.ScriptRuntime;
+        }
+
+        self.history_scroll_restoration = value;
+        return;
+    }
+
     pub fn historyBack(self: *Session) errors.Result(void) {
         return self.historyGo(-1);
     }
@@ -414,6 +582,7 @@ pub const Session = struct {
     }
 
     pub fn historyGo(self: *Session, delta: isize) errors.Result(void) {
+        const before_url = self.currentLocationUrl();
         if (delta == 0) {
             try self.reloadLocation();
             return;
@@ -421,6 +590,15 @@ pub const Session = struct {
 
         if (self.history.go(delta)) |target| {
             try syncLocationState(self.mock_registry.location(), &self.dom_store, target, true);
+            try self.script_runtime.dispatchWindowEvent(
+                std.heap.page_allocator,
+                self,
+                "popstate",
+                self.scriptEventListeners(),
+                self.windowPopState(),
+                "onpopstate",
+            );
+            try self.script_runtime.dispatchHashChangeIfNeeded(std.heap.page_allocator, self, before_url, target);
         }
         return;
     }
@@ -435,6 +613,10 @@ pub const Session = struct {
 
     pub fn documentBody(self: *const Session) ?dom.NodeId {
         return self.dom_store.documentBody();
+    }
+
+    pub fn documentScrollingElement(self: *const Session) ?dom.NodeId {
+        return self.dom_store.documentElement() orelse self.dom_store.documentBody();
     }
 
     pub fn documentTitle(self: *const Session) []const u8 {
@@ -493,8 +675,86 @@ pub const Session = struct {
         return self.window_name;
     }
 
+    pub fn windowLoad(self: *const Session) ?script.ScriptFunction {
+        return self.window_load_handler;
+    }
+
+    pub fn setWindowLoad(self: *Session, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_load_handler = try duplicateScriptFunction(self.arena.allocator(), function);
+            return;
+        }
+        self.window_load_handler = null;
+        return;
+    }
+
+    pub fn windowFocus(self: *const Session) ?script.ScriptFunction {
+        return self.window_focus_handler;
+    }
+
+    pub fn windowHashChange(self: *const Session) ?script.ScriptFunction {
+        return self.window_hashchange_handler;
+    }
+
     pub fn setWindowName(self: *Session, value: []const u8) errors.Result(void) {
         self.window_name = try self.arena.allocator().dupe(u8, value);
+        return;
+    }
+
+    pub fn setWindowFocus(self: *Session, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_focus_handler = try duplicateScriptFunction(self.arena.allocator(), function);
+            return;
+        }
+        self.window_focus_handler = null;
+        return;
+    }
+
+    pub fn setWindowHashChange(self: *Session, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_hashchange_handler = try duplicateScriptFunction(self.arena.allocator(), function);
+            return;
+        }
+        self.window_hashchange_handler = null;
+        return;
+    }
+
+    pub fn windowBlur(self: *const Session) ?script.ScriptFunction {
+        return self.window_blur_handler;
+    }
+
+    pub fn setWindowBlur(self: *Session, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_blur_handler = try duplicateScriptFunction(self.arena.allocator(), function);
+            return;
+        }
+        self.window_blur_handler = null;
+        return;
+    }
+
+    pub fn windowPopState(self: *const Session) ?script.ScriptFunction {
+        return self.window_popstate_handler;
+    }
+
+    pub fn setWindowPopState(self: *Session, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_popstate_handler = try duplicateScriptFunction(self.arena.allocator(), function);
+            return;
+        }
+        self.window_popstate_handler = null;
+        return;
+    }
+
+    pub fn windowStorage(self: *const Session) ?script.ScriptFunction {
+        return self.window_storage_handler;
+    }
+
+    pub fn setWindowStorage(self: *Session, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_storage_handler = try duplicateScriptFunction(self.arena.allocator(), function);
+            return;
+        }
+        self.window_storage_handler = null;
         return;
     }
 
@@ -572,6 +832,31 @@ pub const Session = struct {
     pub fn windowNavigatorLanguage(self: *const Session) []const u8 {
         _ = self;
         return "en-US";
+    }
+
+    pub fn windowNavigatorUserLanguage(self: *const Session) []const u8 {
+        _ = self;
+        return "en-US";
+    }
+
+    pub fn windowNavigatorBrowserLanguage(self: *const Session) []const u8 {
+        _ = self;
+        return "en-US";
+    }
+
+    pub fn windowNavigatorSystemLanguage(self: *const Session) []const u8 {
+        _ = self;
+        return "en-US";
+    }
+
+    pub fn windowNavigatorOscpu(self: *const Session) []const u8 {
+        _ = self;
+        return "unknown";
+    }
+
+    pub fn windowNavigatorLanguages(self: *const Session) []const []const u8 {
+        _ = self;
+        return &.{"en-US"};
     }
 
     pub fn windowNavigatorJavaEnabled(self: *const Session) bool {
@@ -669,6 +954,16 @@ pub const Session = struct {
         return 24;
     }
 
+    pub fn windowScreenOrientationType(self: *const Session) []const u8 {
+        _ = self;
+        return "landscape-primary";
+    }
+
+    pub fn windowScreenOrientationAngle(self: *const Session) i64 {
+        _ = self;
+        return 0;
+    }
+
     pub fn windowScreenX(self: *const Session) i64 {
         _ = self;
         return 0;
@@ -687,6 +982,15 @@ pub const Session = struct {
     pub fn windowScreenTop(self: *const Session) i64 {
         _ = self;
         return 0;
+    }
+
+    pub fn mathRandom(self: *Session) f64 {
+        self.math_random_state = self.math_random_state *% 73 +% 41;
+        return @as(f64, @floatFromInt(self.math_random_state % 1000)) / 1000.0;
+    }
+
+    pub fn cryptoRandomUUID(self: *Session, allocator: std.mem.Allocator) errors.Result([]const u8) {
+        return try cryptoRandomUuidFromState(allocator, &self.crypto_random_state);
     }
 
     fn resetScrollPosition(self: *Session) void {
@@ -722,23 +1026,34 @@ pub const Session = struct {
     ) errors.Result(void) {
         const storage = self.storageMapMut(target);
         if (storage.getPtr(key)) |value_ptr| {
+            if (std.mem.eql(u8, value_ptr.*, value)) {
+                return;
+            }
             value_ptr.* = try self.arena.allocator().dupe(u8, value);
+            try self.dispatchStorageEvent();
             return;
         }
 
         const key_copy = try self.arena.allocator().dupe(u8, key);
         const value_copy = try self.arena.allocator().dupe(u8, value);
         try storage.put(self.arena.allocator(), key_copy, value_copy);
+        try self.dispatchStorageEvent();
         return;
     }
 
     pub fn storageRemoveItem(self: *Session, target: script.StorageTarget, key: []const u8) errors.Result(void) {
-        _ = self.storageMapMut(target).orderedRemove(key);
+        if (self.storageMapMut(target).contains(key)) {
+            _ = self.storageMapMut(target).orderedRemove(key);
+            try self.dispatchStorageEvent();
+        }
         return;
     }
 
     pub fn storageClear(self: *Session, target: script.StorageTarget) errors.Result(void) {
-        self.storageMapMut(target).clearRetainingCapacity();
+        if (self.storageMapMut(target).count() > 0) {
+            self.storageMapMut(target).clearRetainingCapacity();
+            try self.dispatchStorageEvent();
+        }
         return;
     }
 
@@ -771,6 +1086,18 @@ pub const Session = struct {
     pub fn currentScript(self: *const Session) ?dom.NodeId {
         _ = self;
         return null;
+    }
+
+    fn dispatchStorageEvent(self: *Session) errors.Result(void) {
+        try self.script_runtime.dispatchWindowEvent(
+            std.heap.page_allocator,
+            self,
+            "storage",
+            self.scriptEventListeners(),
+            self.windowStorage(),
+            "onstorage",
+        );
+        return;
     }
 
     pub fn setDocumentTitle(self: *Session, value: []const u8) errors.Result(void) {
@@ -883,6 +1210,57 @@ pub const Session = struct {
         return matchMediaQuery(self.mock_registry.matchMedia(), query_source);
     }
 
+    pub fn matchMediaCurrent(self: *const Session, query_source: []const u8) bool {
+        return @constCast(&self.mock_registry).matchMedia().currentMatch(query_source) orelse false;
+    }
+
+    pub fn matchMediaOnChange(self: *const Session, query_source: []const u8) ?script.ScriptFunction {
+        return findMatchMediaOnChange(&self.match_media_onchange_listeners, query_source);
+    }
+
+    pub fn setMatchMediaOnChange(
+        self: *Session,
+        query_source: []const u8,
+        handler: ?script.ScriptFunction,
+    ) errors.Result(void) {
+        if (handler) |function| {
+            try upsertMatchMediaOnChange(
+                self.arena.allocator(),
+                &self.match_media_onchange_listeners,
+                query_source,
+                function,
+                self.matchMediaCurrent(query_source),
+            );
+            return;
+        }
+        removeMatchMediaOnChange(&self.match_media_onchange_listeners, query_source);
+        return;
+    }
+
+    pub fn registerMatchMediaListener(
+        self: *Session,
+        query_source: []const u8,
+        handler: script.ScriptFunction,
+    ) errors.Result(void) {
+        try appendMatchMediaListener(
+            self.arena.allocator(),
+            &self.match_media_listeners,
+            query_source,
+            handler,
+            self.matchMediaCurrent(query_source),
+        );
+        return;
+    }
+
+    pub fn unregisterMatchMediaListener(
+        self: *Session,
+        query_source: []const u8,
+        handler: script.ScriptFunction,
+    ) errors.Result(void) {
+        removeMatchMediaListener(&self.match_media_listeners, query_source, handler);
+        return;
+    }
+
     pub fn setFilesNode(
         self: *Session,
         node_id: dom.NodeId,
@@ -932,6 +1310,7 @@ pub const Session = struct {
             &self.timers,
             at_ms,
             null,
+            .timeout,
             handler,
         );
     }
@@ -948,6 +1327,23 @@ pub const Session = struct {
             &self.timers,
             at_ms,
             delay_ms,
+            .interval,
+            handler,
+        );
+    }
+
+    pub fn scheduleAnimationFrame(
+        self: *Session,
+        handler: script.ScriptFunction,
+    ) errors.Result(u64) {
+        const at_ms = try nextAnimationFrameTime(self.clock_ms);
+        return try appendScheduledTimer(
+            self.arena.allocator(),
+            &self.next_timer_id,
+            &self.timers,
+            at_ms,
+            null,
+            .animation_frame,
             handler,
         );
     }
@@ -1008,6 +1404,7 @@ pub const Session = struct {
 
     pub fn focusNode(self: *Session, node_id: dom.NodeId) errors.Result(void) {
         try self.ensureElementNode(node_id);
+        const had_focus = self.dom_store.focusedNode() != null;
         if (self.dom_store.focusedNode()) |focused| {
             if (std.meta.eql(focused, node_id)) {
                 return;
@@ -1016,17 +1413,30 @@ pub const Session = struct {
 
         if (self.dom_store.focusedNode()) |previous| {
             self.dom_store.setFocusedNode(null);
+            _ = try self.dispatchDomEvent(previous, "focusout", true, false);
             _ = try self.dispatchDomEvent(previous, "blur", false, false);
         }
 
         self.dom_store.setFocusedNode(node_id);
+        _ = try self.dispatchDomEvent(node_id, "focusin", true, false);
         _ = try self.dispatchDomEvent(node_id, "focus", false, false);
+        if (!had_focus) {
+            try self.script_runtime.dispatchWindowEvent(
+                std.heap.page_allocator,
+                self,
+                "focus",
+                self.scriptEventListeners(),
+                self.windowFocus(),
+                "onfocus",
+            );
+        }
         try self.flush();
         return;
     }
 
     pub fn blurNode(self: *Session, node_id: dom.NodeId) errors.Result(void) {
         try self.ensureElementNode(node_id);
+        const had_focus = self.dom_store.focusedNode() != null;
         if (self.dom_store.focusedNode()) |focused| {
             if (!std.meta.eql(focused, node_id)) {
                 return;
@@ -1036,7 +1446,18 @@ pub const Session = struct {
         }
 
         self.dom_store.setFocusedNode(null);
+        _ = try self.dispatchDomEvent(node_id, "focusout", true, false);
         _ = try self.dispatchDomEvent(node_id, "blur", false, false);
+        if (had_focus) {
+            try self.script_runtime.dispatchWindowEvent(
+                std.heap.page_allocator,
+                self,
+                "blur",
+                self.scriptEventListeners(),
+                self.windowBlur(),
+                "onblur",
+            );
+        }
         try self.flush();
         return;
     }
@@ -1278,6 +1699,8 @@ pub const Session = struct {
 const BootstrapHost = struct {
     dom_store: *dom.DomStore,
     listeners: *std.ArrayListUnmanaged(script.ScriptListenerRecord),
+    match_media_listeners: *std.ArrayListUnmanaged(script.MatchMediaListenerRecord),
+    match_media_onchange_listeners: *std.ArrayListUnmanaged(script.MatchMediaListenerRecord),
     queued_microtasks: *std.ArrayListUnmanaged(script.ScriptFunction),
     timers: *std.ArrayListUnmanaged(ScheduledTimer),
     next_timer_id: *u64,
@@ -1290,9 +1713,18 @@ const BootstrapHost = struct {
     history: *HistoryModel,
     allocator: std.mem.Allocator,
     window_name: *[]const u8,
+    window_load_handler: *?script.ScriptFunction,
+    window_focus_handler: *?script.ScriptFunction,
+    window_blur_handler: *?script.ScriptFunction,
     cookie_jar: *std.StringArrayHashMapUnmanaged([]const u8),
     scroll_x: *i64,
     scroll_y: *i64,
+    history_scroll_restoration: *[]const u8,
+    math_random_state: *u64,
+    crypto_random_state: *u64,
+    window_hashchange_handler: *?script.ScriptFunction,
+    window_popstate_handler: *?script.ScriptFunction,
+    window_storage_handler: *?script.ScriptFunction,
     storage: *mocks.StorageSeeds,
     current_script: ?dom.NodeId = null,
 
@@ -1302,6 +1734,10 @@ const BootstrapHost = struct {
 
     pub fn domStoreMut(self: *BootstrapHost) *dom.DomStore {
         return self.dom_store;
+    }
+
+    pub fn scriptEventListeners(self: *const BootstrapHost) []const script.ScriptListenerRecord {
+        return self.listeners.items;
     }
 
     pub fn currentLocationUrl(self: *const BootstrapHost) []const u8 {
@@ -1318,6 +1754,10 @@ const BootstrapHost = struct {
 
     pub fn documentBody(self: *const BootstrapHost) ?dom.NodeId {
         return self.dom_store.documentBody();
+    }
+
+    pub fn documentScrollingElement(self: *const BootstrapHost) ?dom.NodeId {
+        return self.dom_store.documentElement() orelse self.dom_store.documentBody();
     }
 
     pub fn documentTitle(self: *const BootstrapHost) []const u8 {
@@ -1371,8 +1811,86 @@ const BootstrapHost = struct {
         return self.window_name.*;
     }
 
+    pub fn windowLoad(self: *const BootstrapHost) ?script.ScriptFunction {
+        return self.window_load_handler.*;
+    }
+
+    pub fn setWindowLoad(self: *BootstrapHost, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_load_handler.* = try duplicateScriptFunction(self.allocator, function);
+            return;
+        }
+        self.window_load_handler.* = null;
+        return;
+    }
+
+    pub fn windowFocus(self: *const BootstrapHost) ?script.ScriptFunction {
+        return self.window_focus_handler.*;
+    }
+
     pub fn setWindowName(self: *BootstrapHost, value: []const u8) errors.Result(void) {
         self.window_name.* = try self.allocator.dupe(u8, value);
+        return;
+    }
+
+    pub fn setWindowFocus(self: *BootstrapHost, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_focus_handler.* = try duplicateScriptFunction(self.allocator, function);
+            return;
+        }
+        self.window_focus_handler.* = null;
+        return;
+    }
+
+    pub fn windowHashChange(self: *const BootstrapHost) ?script.ScriptFunction {
+        return self.window_hashchange_handler.*;
+    }
+
+    pub fn setWindowHashChange(self: *BootstrapHost, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_hashchange_handler.* = try duplicateScriptFunction(self.allocator, function);
+            return;
+        }
+        self.window_hashchange_handler.* = null;
+        return;
+    }
+
+    pub fn windowBlur(self: *const BootstrapHost) ?script.ScriptFunction {
+        return self.window_blur_handler.*;
+    }
+
+    pub fn setWindowBlur(self: *BootstrapHost, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_blur_handler.* = try duplicateScriptFunction(self.allocator, function);
+            return;
+        }
+        self.window_blur_handler.* = null;
+        return;
+    }
+
+    pub fn windowPopState(self: *const BootstrapHost) ?script.ScriptFunction {
+        return self.window_popstate_handler.*;
+    }
+
+    pub fn setWindowPopState(self: *BootstrapHost, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_popstate_handler.* = try duplicateScriptFunction(self.allocator, function);
+            return;
+        }
+        self.window_popstate_handler.* = null;
+        return;
+    }
+
+    pub fn windowStorage(self: *const BootstrapHost) ?script.ScriptFunction {
+        return self.window_storage_handler.*;
+    }
+
+    pub fn setWindowStorage(self: *BootstrapHost, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_storage_handler.* = try duplicateScriptFunction(self.allocator, function);
+            return;
+        }
+        self.window_storage_handler.* = null;
         return;
     }
 
@@ -1455,6 +1973,31 @@ const BootstrapHost = struct {
     pub fn windowNavigatorLanguage(self: *const BootstrapHost) []const u8 {
         _ = self;
         return "en-US";
+    }
+
+    pub fn windowNavigatorUserLanguage(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "en-US";
+    }
+
+    pub fn windowNavigatorBrowserLanguage(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "en-US";
+    }
+
+    pub fn windowNavigatorSystemLanguage(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "en-US";
+    }
+
+    pub fn windowNavigatorOscpu(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "unknown";
+    }
+
+    pub fn windowNavigatorLanguages(self: *const BootstrapHost) []const []const u8 {
+        _ = self;
+        return &.{"en-US"};
     }
 
     pub fn windowNavigatorJavaEnabled(self: *const BootstrapHost) bool {
@@ -1552,6 +2095,16 @@ const BootstrapHost = struct {
         return 24;
     }
 
+    pub fn windowScreenOrientationType(self: *const BootstrapHost) []const u8 {
+        _ = self;
+        return "landscape-primary";
+    }
+
+    pub fn windowScreenOrientationAngle(self: *const BootstrapHost) i64 {
+        _ = self;
+        return 0;
+    }
+
     pub fn windowScreenX(self: *const BootstrapHost) i64 {
         _ = self;
         return 0;
@@ -1570,6 +2123,15 @@ const BootstrapHost = struct {
     pub fn windowScreenTop(self: *const BootstrapHost) i64 {
         _ = self;
         return 0;
+    }
+
+    pub fn mathRandom(self: *BootstrapHost) f64 {
+        self.math_random_state.* = self.math_random_state.* *% 73 +% 41;
+        return @as(f64, @floatFromInt(self.math_random_state.* % 1000)) / 1000.0;
+    }
+
+    pub fn cryptoRandomUUID(self: *BootstrapHost, allocator: std.mem.Allocator) errors.Result([]const u8) {
+        return try cryptoRandomUuidFromState(allocator, self.crypto_random_state);
     }
 
     fn resetScrollPosition(self: *BootstrapHost) void {
@@ -1604,23 +2166,34 @@ const BootstrapHost = struct {
     ) errors.Result(void) {
         const storage = self.storageMapMut(target);
         if (storage.getPtr(key)) |value_ptr| {
+            if (std.mem.eql(u8, value_ptr.*, value)) {
+                return;
+            }
             value_ptr.* = try self.allocator.dupe(u8, value);
+            try self.dispatchStorageEvent();
             return;
         }
 
         const key_copy = try self.allocator.dupe(u8, key);
         const value_copy = try self.allocator.dupe(u8, value);
         try storage.put(self.allocator, key_copy, value_copy);
+        try self.dispatchStorageEvent();
         return;
     }
 
     pub fn storageRemoveItem(self: *BootstrapHost, target: script.StorageTarget, key: []const u8) errors.Result(void) {
-        _ = self.storageMapMut(target).orderedRemove(key);
+        if (self.storageMapMut(target).contains(key)) {
+            _ = self.storageMapMut(target).orderedRemove(key);
+            try self.dispatchStorageEvent();
+        }
         return;
     }
 
     pub fn storageClear(self: *BootstrapHost, target: script.StorageTarget) errors.Result(void) {
-        self.storageMapMut(target).clearRetainingCapacity();
+        if (self.storageMapMut(target).count() > 0) {
+            self.storageMapMut(target).clearRetainingCapacity();
+            try self.dispatchStorageEvent();
+        }
         return;
     }
 
@@ -1638,6 +2211,19 @@ const BootstrapHost = struct {
     pub fn setDocumentDir(self: *BootstrapHost, value: []const u8) errors.Result(void) {
         const document_element = self.dom_store.documentElement() orelse return;
         try self.dom_store.setAttribute(document_element, "dir", value);
+        return;
+    }
+
+    fn dispatchStorageEvent(self: *BootstrapHost) errors.Result(void) {
+        var runtime = script.ScriptRuntime{};
+        try runtime.dispatchWindowEvent(
+            self.allocator,
+            self,
+            "storage",
+            self.listeners.items,
+            self.windowStorage(),
+            "onstorage",
+        );
         return;
     }
 
@@ -1695,12 +2281,35 @@ const BootstrapHost = struct {
         return;
     }
 
+    pub fn locationHash(self: *const BootstrapHost, allocator: std.mem.Allocator) errors.Result([]const u8) {
+        return try locationHashFromUrl(allocator, self.currentLocationUrl());
+    }
+
+    pub fn setLocationHash(self: *BootstrapHost, value: []const u8) errors.Result(void) {
+        const target = try locationUrlWithHash(self.allocator, self.currentLocationUrl(), value);
+        try self.assignLocation(target);
+        return;
+    }
+
     pub fn historyLength(self: *const BootstrapHost) usize {
         return self.history.length();
     }
 
     pub fn historyState(self: *const BootstrapHost) ?[]const u8 {
         return self.history.currentState();
+    }
+
+    pub fn historyScrollRestoration(self: *const BootstrapHost) []const u8 {
+        return self.history_scroll_restoration.*;
+    }
+
+    pub fn setHistoryScrollRestoration(self: *BootstrapHost, value: []const u8) errors.Result(void) {
+        if (!std.mem.eql(u8, value, "auto") and !std.mem.eql(u8, value, "manual")) {
+            return error.ScriptRuntime;
+        }
+
+        self.history_scroll_restoration.* = value;
+        return;
     }
 
     pub fn historyBack(self: *BootstrapHost) errors.Result(void) {
@@ -1719,6 +2328,15 @@ const BootstrapHost = struct {
 
         if (self.history.go(delta)) |target| {
             try syncLocationState(self.location, self.dom_store, target, true);
+            var runtime = script.ScriptRuntime{};
+            try runtime.dispatchWindowEvent(
+                self.allocator,
+                self,
+                "popstate",
+                self.listeners.items,
+                self.windowPopState(),
+                "onpopstate",
+            );
         }
         return;
     }
@@ -1747,6 +2365,57 @@ const BootstrapHost = struct {
 
     pub fn matchMedia(self: *BootstrapHost, query_source: []const u8) errors.Result(bool) {
         return matchMediaQuery(self.match_media, query_source);
+    }
+
+    pub fn matchMediaCurrent(self: *const BootstrapHost, query_source: []const u8) bool {
+        return self.match_media.currentMatch(query_source) orelse false;
+    }
+
+    pub fn matchMediaOnChange(self: *const BootstrapHost, query_source: []const u8) ?script.ScriptFunction {
+        return findMatchMediaOnChange(self.match_media_onchange_listeners, query_source);
+    }
+
+    pub fn setMatchMediaOnChange(
+        self: *BootstrapHost,
+        query_source: []const u8,
+        handler: ?script.ScriptFunction,
+    ) errors.Result(void) {
+        if (handler) |function| {
+            try upsertMatchMediaOnChange(
+                self.allocator,
+                self.match_media_onchange_listeners,
+                query_source,
+                function,
+                self.matchMediaCurrent(query_source),
+            );
+            return;
+        }
+        removeMatchMediaOnChange(self.match_media_onchange_listeners, query_source);
+        return;
+    }
+
+    pub fn registerMatchMediaListener(
+        self: *BootstrapHost,
+        query_source: []const u8,
+        handler: script.ScriptFunction,
+    ) errors.Result(void) {
+        try appendMatchMediaListener(
+            self.allocator,
+            self.match_media_listeners,
+            query_source,
+            handler,
+            self.matchMediaCurrent(query_source),
+        );
+        return;
+    }
+
+    pub fn unregisterMatchMediaListener(
+        self: *BootstrapHost,
+        query_source: []const u8,
+        handler: script.ScriptFunction,
+    ) errors.Result(void) {
+        removeMatchMediaListener(self.match_media_listeners, query_source, handler);
+        return;
     }
 
     pub fn open(
@@ -1817,6 +2486,7 @@ const BootstrapHost = struct {
             self.timers,
             delay_ms,
             null,
+            .timeout,
             handler,
         );
     }
@@ -1832,6 +2502,22 @@ const BootstrapHost = struct {
             self.timers,
             delay_ms,
             delay_ms,
+            .interval,
+            handler,
+        );
+    }
+
+    pub fn scheduleAnimationFrame(
+        self: *BootstrapHost,
+        handler: script.ScriptFunction,
+    ) errors.Result(u64) {
+        return try appendScheduledTimer(
+            self.allocator,
+            self.next_timer_id,
+            self.timers,
+            try nextAnimationFrameTime(0),
+            null,
+            .animation_frame,
             handler,
         );
     }
@@ -1864,6 +2550,91 @@ fn appendScriptListener(
     return;
 }
 
+fn appendMatchMediaListener(
+    allocator: std.mem.Allocator,
+    listeners: *std.ArrayListUnmanaged(script.MatchMediaListenerRecord),
+    query_source: []const u8,
+    handler: script.ScriptFunction,
+    current_matches: bool,
+) errors.Result(void) {
+    try listeners.append(allocator, .{
+        .query = try allocator.dupe(u8, query_source),
+        .handler = try duplicateScriptFunction(allocator, handler),
+        .last_matches = current_matches,
+    });
+    return;
+}
+
+fn findMatchMediaOnChange(
+    listeners: *const std.ArrayListUnmanaged(script.MatchMediaListenerRecord),
+    query_source: []const u8,
+) ?script.ScriptFunction {
+    for (listeners.items) |record| {
+        if (std.mem.eql(u8, record.query, query_source)) {
+            return record.handler;
+        }
+    }
+    return null;
+}
+
+fn upsertMatchMediaOnChange(
+    allocator: std.mem.Allocator,
+    listeners: *std.ArrayListUnmanaged(script.MatchMediaListenerRecord),
+    query_source: []const u8,
+    handler: script.ScriptFunction,
+    current_matches: bool,
+) errors.Result(void) {
+    for (listeners.items) |*record| {
+        if (!std.mem.eql(u8, record.query, query_source)) continue;
+        record.handler = try duplicateScriptFunction(allocator, handler);
+        record.last_matches = current_matches;
+        return;
+    }
+
+    try listeners.append(allocator, .{
+        .query = try allocator.dupe(u8, query_source),
+        .handler = try duplicateScriptFunction(allocator, handler),
+        .last_matches = current_matches,
+    });
+    return;
+}
+
+fn removeMatchMediaOnChange(
+    listeners: *std.ArrayListUnmanaged(script.MatchMediaListenerRecord),
+    query_source: []const u8,
+) void {
+    var index: usize = 0;
+    while (index < listeners.items.len) {
+        const record = listeners.items[index];
+        if (!std.mem.eql(u8, record.query, query_source)) {
+            index += 1;
+            continue;
+        }
+        _ = listeners.orderedRemove(index);
+        break;
+    }
+}
+
+fn removeMatchMediaListener(
+    listeners: *std.ArrayListUnmanaged(script.MatchMediaListenerRecord),
+    query_source: []const u8,
+    handler: script.ScriptFunction,
+) void {
+    var index: usize = 0;
+    while (index < listeners.items.len) {
+        const record = listeners.items[index];
+        if (!std.mem.eql(u8, record.query, query_source)) {
+            index += 1;
+            continue;
+        }
+        if (!scriptFunctionEquals(record.handler, handler)) {
+            index += 1;
+            continue;
+        }
+        _ = listeners.orderedRemove(index);
+    }
+}
+
 fn appendQueuedMicrotask(
     allocator: std.mem.Allocator,
     queued_microtasks: *std.ArrayListUnmanaged(script.ScriptFunction),
@@ -1880,6 +2651,7 @@ fn appendScheduledTimer(
     timers: *std.ArrayListUnmanaged(ScheduledTimer),
     at_ms: i64,
     interval_ms: ?i64,
+    kind: TimerKind,
     handler: script.ScriptFunction,
 ) errors.Result(u64) {
     const handler_copy = try duplicateScriptFunction(allocator, handler);
@@ -1889,6 +2661,7 @@ fn appendScheduledTimer(
         .id = timer_id,
         .at_ms = at_ms,
         .interval_ms = interval_ms,
+        .kind = kind,
         .handler = handler_copy,
     });
     bubbleScheduledTimerUp(timers.items);
@@ -1928,6 +2701,32 @@ fn bubbleScheduledTimerUp(timers: []ScheduledTimer) void {
 
 fn scheduledTimerPrecedes(lhs: ScheduledTimer, rhs: ScheduledTimer) bool {
     return lhs.at_ms < rhs.at_ms or (lhs.at_ms == rhs.at_ms and lhs.id < rhs.id);
+}
+
+fn nextAnimationFrameTime(current_ms: i64) errors.Result(i64) {
+    const frame_ms: i64 = 16;
+    const remainder = @mod(current_ms, frame_ms);
+    const delta = if (remainder == 0) frame_ms else frame_ms - remainder;
+    const next_ms = std.math.add(i64, current_ms, delta) catch return error.TimerError;
+    return next_ms;
+}
+
+fn animationFrameBindings(
+    allocator: std.mem.Allocator,
+    function: script.ScriptFunction,
+    timestamp_ms: i64,
+) errors.Result(std.ArrayList(script.Binding)) {
+    var bindings_out: std.ArrayList(script.Binding) = .empty;
+    errdefer bindings_out.deinit(allocator);
+
+    if (function.params.len > 0) {
+        try bindings_out.append(allocator, .{
+            .name = function.params[0],
+            .value = .{ .number = @floatFromInt(timestamp_ms) },
+        });
+    }
+
+    return bindings_out;
 }
 
 fn drainQueuedMicrotasks(
@@ -1978,7 +2777,10 @@ fn runDueTimers(
             self.active_timer_cancelled = false;
         }
 
-        var bindings = try script.functionBindings(allocator, timer.handler, &.{});
+        var bindings = switch (timer.kind) {
+            .animation_frame => try animationFrameBindings(allocator, timer.handler, timer.at_ms),
+            else => try script.functionBindings(allocator, timer.handler, &.{}),
+        };
         defer bindings.deinit(allocator);
 
         const source_name = try std.fmt.allocPrint(allocator, "timer:{d}", .{timer.id});
@@ -2056,6 +2858,15 @@ fn duplicateScriptFunction(
     };
 }
 
+fn scriptFunctionEquals(lhs: script.ScriptFunction, rhs: script.ScriptFunction) bool {
+    if (!std.mem.eql(u8, lhs.body_source, rhs.body_source)) return false;
+    if (lhs.params.len != rhs.params.len) return false;
+    for (lhs.params, rhs.params) |lhs_param, rhs_param| {
+        if (!std.mem.eql(u8, lhs_param, rhs_param)) return false;
+    }
+    return true;
+}
+
 fn elementAttributeValue(element: dom.ElementData, name: []const u8) ?[]const u8 {
     for (element.attributes.items) |attribute| {
         if (std.mem.eql(u8, attribute.name, name)) return attribute.value;
@@ -2103,6 +2914,31 @@ fn fragmentIdentifierFromUrl(url: []const u8) ?[]const u8 {
     const fragment_index = std.mem.indexOfScalar(u8, url, '#') orelse return null;
     if (fragment_index + 1 >= url.len) return null;
     return url[fragment_index + 1 ..];
+}
+
+fn locationHashFromUrl(allocator: std.mem.Allocator, url: []const u8) errors.Result([]const u8) {
+    const fragment = fragmentIdentifierFromUrl(url) orelse return allocator.dupe(u8, "");
+    if (fragment.len == 0) return allocator.dupe(u8, "");
+    return try std.fmt.allocPrint(allocator, "#{s}", .{fragment});
+}
+
+fn locationUrlWithHash(
+    allocator: std.mem.Allocator,
+    current_url: []const u8,
+    hash_source: []const u8,
+) errors.Result([]const u8) {
+    const fragment = if (hash_source.len > 0 and hash_source[0] == '#')
+        hash_source[1..]
+    else
+        hash_source;
+
+    const base_end = std.mem.indexOfScalar(u8, current_url, '#') orelse current_url.len;
+    const base = current_url[0..base_end];
+    if (fragment.len == 0) {
+        return allocator.dupe(u8, base);
+    }
+
+    return try std.fmt.allocPrint(allocator, "{s}#{s}", .{ base, fragment });
 }
 
 fn cookieJarText(
@@ -2173,6 +3009,33 @@ fn cookieJarSet(
     errdefer allocator.free(value_copy);
     try cookie_jar.put(allocator, key_copy, value_copy);
     return;
+}
+
+fn cryptoRandomUuidFromState(allocator: std.mem.Allocator, state: *u64) errors.Result([]const u8) {
+    var bytes: [16]u8 = undefined;
+    for (bytes[0..]) |*byte| {
+        state.* = state.* *% 73 +% 41;
+        byte.* = @truncate(state.*);
+    }
+
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+    const hex = "0123456789abcdef";
+    var out: [36]u8 = undefined;
+    var out_index: usize = 0;
+    for (bytes[0..], 0..) |byte, index| {
+        if (index == 4 or index == 6 or index == 8 or index == 10) {
+            out[out_index] = '-';
+            out_index += 1;
+        }
+        out[out_index] = hex[byte >> 4];
+        out_index += 1;
+        out[out_index] = hex[byte & 0x0f];
+        out_index += 1;
+    }
+
+    return try allocator.dupe(u8, out[0..]);
 }
 
 fn domainFromUrl(allocator: std.mem.Allocator, url: []const u8) errors.Result([]const u8) {

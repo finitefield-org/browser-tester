@@ -1,6 +1,6 @@
 # Mock Guide
 
-`Harness.mocksMut()` returns the typed test-only `MockRegistry`. Use it when a test needs deterministic network, dialogs, clipboard, location, open/close/print/scroll, matchMedia, download, file-input, or storage behavior, including seeding `window.localStorage`, `window.sessionStorage`, `window.open()`, `window.close()`, `window.print()`, `window.scrollTo()`, and `window.scrollBy()` before inline scripts run.
+`Harness.mocksMut()` returns the typed test-only `MockRegistry`. Use it when a test needs deterministic network, dialogs, clipboard, location, open/close/print/scroll, matchMedia, download, file-input, or storage behavior, including seeding `window.localStorage`, `window.sessionStorage`, `window.open()`, `window.close()`, `window.print()`, `window.scrollTo()`, and `window.scrollBy()` before inline scripts run; storage mutations also dispatch deterministic `storage` events through `window.addEventListener('storage', ...)` and `window.onstorage`.
 
 The registry is intentionally narrow:
 
@@ -67,6 +67,75 @@ pub fn main() !void {
     try harness.click("#toggle");
     try harness.assertValue("#out", "[object MediaQueryList]:true");
     try std.testing.expectEqual(@as(usize, 1), harness.mocksMut().matchMedia().calls().len);
+}
+```
+
+## MatchMedia Listener Example
+
+```zig
+const std = @import("std");
+const bt = @import("browser_tester_zig");
+
+pub fn main() !void {
+    var harness = try bt.Harness.fromHtml(
+        std.heap.page_allocator,
+        "<button id='toggle'>Toggle</button><div id='out'></div><script>document.getElementById('toggle').addEventListener('click', () => { const mql = window.matchMedia('(max-width: 600px)'); mql.addListener(() => { document.getElementById('out').textContent = 'changed'; }); document.getElementById('out').textContent = String(mql.matches); });</script>",
+    );
+    defer harness.deinit();
+
+    try harness.mocksMut().matchMedia().seedMatch("(max-width: 600px)", false);
+    try harness.click("#toggle");
+    try harness.assertValue("#out", "false");
+
+    try harness.mocksMut().matchMedia().seedMatch("(max-width: 600px)", true);
+    try harness.flush();
+    try harness.assertValue("#out", "changed");
+}
+```
+
+## MatchMedia Change Event Example
+
+```zig
+const std = @import("std");
+const bt = @import("browser_tester_zig");
+
+pub fn main() !void {
+    var harness = try bt.Harness.fromHtml(
+        std.heap.page_allocator,
+        "<button id='toggle'>Toggle</button><div id='out'></div><script>document.getElementById('toggle').addEventListener('click', () => { const mql = window.matchMedia('(max-width: 600px)'); mql.addEventListener('change', () => { document.getElementById('out').textContent = 'changed'; }); document.getElementById('out').textContent = String(mql.matches); });</script>",
+    );
+    defer harness.deinit();
+
+    try harness.mocksMut().matchMedia().seedMatch("(max-width: 600px)", false);
+    try harness.click("#toggle");
+    try harness.assertValue("#out", "false");
+
+    try harness.mocksMut().matchMedia().seedMatch("(max-width: 600px)", true);
+    try harness.flush();
+    try harness.assertValue("#out", "changed");
+}
+```
+
+## MatchMedia OnChange Example
+
+```zig
+const std = @import("std");
+const bt = @import("browser_tester_zig");
+
+pub fn main() !void {
+    var harness = try bt.Harness.fromHtml(
+        std.heap.page_allocator,
+        "<button id='toggle'>Toggle</button><div id='out'></div><script>document.getElementById('toggle').addEventListener('click', () => { const mql = window.matchMedia('(max-width: 600px)'); mql.onchange = () => { document.getElementById('out').textContent = 'changed'; }; document.getElementById('out').textContent = String(mql.matches); });</script>",
+    );
+    defer harness.deinit();
+
+    try harness.mocksMut().matchMedia().seedMatch("(max-width: 600px)", false);
+    try harness.click("#toggle");
+    try harness.assertValue("#out", "false");
+
+    try harness.mocksMut().matchMedia().seedMatch("(max-width: 600px)", true);
+    try harness.flush();
+    try harness.assertValue("#out", "changed");
 }
 ```
 
@@ -245,7 +314,7 @@ Artifact capture records the side effects a test needs to inspect:
 - `fetch.fail(...)` injects a deterministic failure
 - `clipboard.writes()` records written clipboard values and keeps the latest value available for subsequent reads
 - `downloads.artifacts()` records captured file names and bytes
-- `storage.local()` and `storage.session()` hold seeded key/value pairs for deterministic reads and reflect `setItem(...)`, `removeItem(...)`, and `clear()` mutations made through the script-side storage objects
+- `storage.local()` and `storage.session()` hold seeded key/value pairs for deterministic reads and reflect `setItem(...)`, `removeItem(...)`, and `clear()` mutations made through the script-side storage objects; those mutations also dispatch `storage` events to the window
 
 The same capture model is what keeps the mock families predictable without exposing browser internals.
 
@@ -254,6 +323,10 @@ The same capture model is what keeps the mock families predictable without expos
 - `matchMedia.seedMatch(query, matches)` injects the query result
 - `matchMedia.fail(query)` injects an explicit failure for the query
 - `matchMedia.calls()` records requested queries in order
+- existing `MediaQueryList.matches` reads the current seeded state when it is read again later in the same harness
+- `MediaQueryList.addListener(callback)` and `MediaQueryList.removeListener(callback)` are available for legacy change observation on seeded queries
+- `MediaQueryList.addEventListener('change', callback)` and `MediaQueryList.removeEventListener('change', callback)` are available for event-target style change observation on seeded queries
+- assigning `MediaQueryList.onchange = callback` installs a single change handler for that query; assigning `null` clears it
 
 ## Failure Semantics
 
@@ -267,6 +340,7 @@ The public mock API fails explicitly when the test has not seeded the required s
 - `Harness.scrollTo()` / `Harness.scrollBy()` return `error.MockError` when the corresponding mock family was seeded to fail
 - `window.open()` / `window.close()` / `window.print()` / `window.scrollTo()` / `window.scrollBy()` return `error.MockError` during bootstrap when `HarnessBuilder.openFailure(...)` / `HarnessBuilder.closeFailure(...)` / `HarnessBuilder.printFailure(...)` / `HarnessBuilder.scrollFailure(...)` were used
 - `window.matchMedia()` returns `error.MockError` when no matching rule exists or a failure rule was seeded
+- `MediaQueryList.addListener(...)`, `MediaQueryList.removeListener(...)`, `MediaQueryList.addEventListener(...)`, `MediaQueryList.removeEventListener(...)`, and `MediaQueryList.onchange = ...` return `error.ScriptRuntime` on wrong arity or non-callable arguments
 - `window.localStorage.setItem(...)`, `window.localStorage.removeItem(...)`, `window.localStorage.clear()`, `window.sessionStorage.setItem(...)`, `window.sessionStorage.removeItem(...)`, and `window.sessionStorage.clear()` return `error.ScriptRuntime` when called with the wrong arity or on unsupported members
 - `window.localStorage.key(index)` and `window.sessionStorage.key(index)` return `null` when the index is out of range
 - `Harness.advanceTime(-1)` returns `error.TimerError`

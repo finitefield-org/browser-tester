@@ -9,12 +9,18 @@ use bt_script::{
 #[derive(Default)]
 struct NoopHost {
     microtasks: usize,
+    navigator_mime_types_calls: usize,
 }
 
 impl HostBindings for NoopHost {
     fn on_microtask_checkpoint(&mut self) -> bt_script::Result<()> {
         self.microtasks += 1;
         Ok(())
+    }
+
+    fn window_navigator_mime_types(&mut self) -> bt_script::Result<Vec<String>> {
+        self.navigator_mime_types_calls += 1;
+        Ok(Vec::new())
     }
 }
 
@@ -106,6 +112,7 @@ struct RecordingHost {
     document_children_items_results: Vec<ElementHandle>,
     window_frames_items_results: Vec<ElementHandle>,
     node_child_nodes_items_results: BTreeMap<HtmlCollectionScope, Vec<NodeHandle>>,
+    node_parent_results: BTreeMap<NodeHandle, Option<NodeHandle>>,
     node_text_content_results: BTreeMap<NodeHandle, String>,
     node_type_results: BTreeMap<NodeHandle, u8>,
     node_name_results: BTreeMap<NodeHandle, String>,
@@ -144,6 +151,8 @@ struct RecordingHost {
     document_body_result: Option<ElementHandle>,
     document_scrolling_element_result: Option<ElementHandle>,
     document_active_element_result: Option<ElementHandle>,
+    document_has_child_nodes_result: bool,
+    document_has_child_nodes_calls: usize,
     document_has_focus_result: bool,
     document_visibility_state_result: String,
     document_hidden_result: bool,
@@ -152,6 +161,7 @@ struct RecordingHost {
     document_compat_mode_result: String,
     document_character_set_result: String,
     document_content_type_result: String,
+    document_design_mode_result: String,
     document_dir_result: String,
     document_base_uri_calls: usize,
     document_origin_calls: usize,
@@ -186,6 +196,8 @@ struct RecordingHost {
     navigator_user_agent: String,
     navigator_platform: String,
     navigator_language: String,
+    navigator_languages_calls: usize,
+    navigator_mime_types_calls: usize,
     navigator_cookie_enabled: bool,
     navigator_on_line: bool,
     window_scroll_calls: Vec<(String, i64, i64)>,
@@ -203,6 +215,7 @@ struct RecordingHost {
     document_dir_calls: usize,
     element_base_uri_calls: Vec<ElementHandle>,
     element_origin_calls: Vec<ElementHandle>,
+    element_is_content_editable_calls: Vec<ElementHandle>,
     element_query_selector_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
     element_query_selector_all_results: BTreeMap<(ElementHandle, String), Vec<ElementHandle>>,
     element_closest_results: BTreeMap<(ElementHandle, String), Option<ElementHandle>>,
@@ -227,6 +240,15 @@ struct RecordingHost {
     document_children_items_calls: usize,
     window_frames_items_calls: usize,
     node_child_nodes_items_calls: Vec<HtmlCollectionScope>,
+    document_contains_calls: Vec<NodeHandle>,
+    node_contains_calls: Vec<(NodeHandle, NodeHandle)>,
+    node_is_equal_node_results: BTreeMap<(NodeHandle, NodeHandle), bool>,
+    node_is_equal_node_calls: Vec<(NodeHandle, NodeHandle)>,
+    template_content_is_equal_node_results: BTreeMap<(ElementHandle, ElementHandle), bool>,
+    template_content_is_equal_node_calls: Vec<(ElementHandle, ElementHandle)>,
+    node_has_child_nodes_results: BTreeMap<NodeHandle, bool>,
+    node_has_child_nodes_calls: Vec<NodeHandle>,
+    node_replace_with_calls: Vec<(NodeHandle, Vec<NodeHandle>)>,
     node_text_content_calls: Vec<NodeHandle>,
     node_type_calls: Vec<NodeHandle>,
     node_name_calls: Vec<NodeHandle>,
@@ -261,8 +283,13 @@ struct RecordingHost {
     document_hidden_calls: usize,
     document_title_calls: usize,
     document_set_title_calls: Vec<String>,
+    document_design_mode_calls: usize,
+    document_set_design_mode_calls: Vec<String>,
     document_location_calls: usize,
     document_set_location_calls: Vec<String>,
+    document_location_assign_calls: Vec<String>,
+    document_location_replace_calls: Vec<String>,
+    document_location_reload_calls: Vec<String>,
     document_set_dir_calls: Vec<String>,
     window_history_length_calls: usize,
     window_history_state_calls: usize,
@@ -433,6 +460,10 @@ impl RecordingHost {
 
     fn seed_node_child_nodes_items(&mut self, scope: HtmlCollectionScope, result: Vec<NodeHandle>) {
         self.node_child_nodes_items_results.insert(scope, result);
+    }
+
+    fn seed_node_parent(&mut self, node: NodeHandle, result: Option<NodeHandle>) {
+        self.node_parent_results.insert(node, result);
     }
 
     fn seed_node_text_content(&mut self, node: NodeHandle, result: impl Into<String>) {
@@ -717,6 +748,10 @@ impl RecordingHost {
 
     fn seed_document_content_type(&mut self, result: impl Into<String>) {
         self.document_content_type_result = result.into();
+    }
+
+    fn seed_document_design_mode(&mut self, result: impl Into<String>) {
+        self.document_design_mode_result = result.into();
     }
 
     fn seed_document_dir(&mut self, result: impl Into<String>) {
@@ -1030,6 +1065,32 @@ impl HostBindings for RecordingHost {
 
     fn window_navigator_language(&mut self) -> bt_script::Result<String> {
         Ok(self.navigator_language.clone())
+    }
+
+    fn window_navigator_oscpu(&mut self) -> bt_script::Result<String> {
+        Ok("unknown".to_string())
+    }
+
+    fn window_navigator_user_language(&mut self) -> bt_script::Result<String> {
+        Ok(self.navigator_language.clone())
+    }
+
+    fn window_navigator_browser_language(&mut self) -> bt_script::Result<String> {
+        Ok(self.navigator_language.clone())
+    }
+
+    fn window_navigator_system_language(&mut self) -> bt_script::Result<String> {
+        Ok(self.navigator_language.clone())
+    }
+
+    fn window_navigator_languages(&mut self) -> bt_script::Result<Vec<String>> {
+        self.navigator_languages_calls += 1;
+        Ok(vec![self.navigator_language.clone()])
+    }
+
+    fn window_navigator_mime_types(&mut self) -> bt_script::Result<Vec<String>> {
+        self.navigator_mime_types_calls += 1;
+        Ok(Vec::new())
     }
 
     fn window_navigator_cookie_enabled(&mut self) -> bt_script::Result<bool> {
@@ -1356,6 +1417,26 @@ impl HostBindings for RecordingHost {
         Ok(self.document_content_type_result.clone())
     }
 
+    fn document_design_mode(&mut self) -> bt_script::Result<String> {
+        self.document_design_mode_calls += 1;
+        Ok(self.document_design_mode_result.clone())
+    }
+
+    fn document_set_design_mode(&mut self, value: &str) -> bt_script::Result<()> {
+        self.document_set_design_mode_calls.push(value.to_string());
+        if value.eq_ignore_ascii_case("on") {
+            self.document_design_mode_result = "on".to_string();
+            Ok(())
+        } else if value.eq_ignore_ascii_case("off") {
+            self.document_design_mode_result = "off".to_string();
+            Ok(())
+        } else {
+            Err(bt_script::ScriptError::new(format!(
+                "unsupported document designMode value: {value}"
+            )))
+        }
+    }
+
     fn document_dir(&mut self) -> bt_script::Result<String> {
         self.document_dir_calls += 1;
         Ok(self.document_dir_result.clone())
@@ -1364,6 +1445,24 @@ impl HostBindings for RecordingHost {
     fn document_set_location(&mut self, value: &str) -> bt_script::Result<()> {
         self.document_set_location_calls.push(value.to_string());
         self.document_location_result = value.to_string();
+        Ok(())
+    }
+
+    fn document_location_assign(&mut self, value: &str) -> bt_script::Result<()> {
+        self.document_location_assign_calls.push(value.to_string());
+        self.document_location_result = value.to_string();
+        Ok(())
+    }
+
+    fn document_location_replace(&mut self, value: &str) -> bt_script::Result<()> {
+        self.document_location_replace_calls.push(value.to_string());
+        self.document_location_result = value.to_string();
+        Ok(())
+    }
+
+    fn document_location_reload(&mut self) -> bt_script::Result<()> {
+        self.document_location_reload_calls
+            .push(self.document_location_result.clone());
         Ok(())
     }
 
@@ -1406,6 +1505,17 @@ impl HostBindings for RecordingHost {
     fn element_origin(&mut self, element: ElementHandle) -> bt_script::Result<String> {
         self.element_origin_calls.push(element);
         Ok(origin_from_url(&self.document_location_result))
+    }
+
+    fn element_is_content_editable(&mut self, element: ElementHandle) -> bt_script::Result<bool> {
+        self.element_is_content_editable_calls.push(element);
+        let value = self
+            .attributes
+            .get(&(element, "contenteditable".to_string()));
+        Ok(matches!(
+            value.map(|value| value.trim().to_ascii_lowercase()),
+            Some(value) if value.is_empty() || value == "true" || value == "plaintext-only"
+        ))
     }
 
     fn element_labels(&mut self, element: ElementHandle) -> bt_script::Result<Vec<ElementHandle>> {
@@ -1995,6 +2105,72 @@ impl HostBindings for RecordingHost {
             .unwrap_or_default())
     }
 
+    fn node_replace_with(
+        &mut self,
+        node: NodeHandle,
+        children: Vec<NodeHandle>,
+    ) -> bt_script::Result<()> {
+        self.node_replace_with_calls.push((node, children));
+        Ok(())
+    }
+
+    fn document_contains(&mut self, node: NodeHandle) -> bt_script::Result<bool> {
+        self.document_contains_calls.push(node);
+        Ok(true)
+    }
+
+    fn node_contains(&mut self, node: NodeHandle, other: NodeHandle) -> bt_script::Result<bool> {
+        self.node_contains_calls.push((node, other));
+        Ok(true)
+    }
+
+    fn node_is_equal_node(
+        &mut self,
+        node: NodeHandle,
+        other: NodeHandle,
+    ) -> bt_script::Result<bool> {
+        self.node_is_equal_node_calls.push((node, other));
+        Ok(self
+            .node_is_equal_node_results
+            .get(&(node, other))
+            .copied()
+            .unwrap_or(false))
+    }
+
+    fn template_content_is_equal_node(
+        &mut self,
+        fragment: ElementHandle,
+        other: ElementHandle,
+    ) -> bt_script::Result<bool> {
+        self.template_content_is_equal_node_calls
+            .push((fragment, other));
+        Ok(self
+            .template_content_is_equal_node_results
+            .get(&(fragment, other))
+            .copied()
+            .unwrap_or(false))
+    }
+
+    fn document_has_child_nodes(&mut self) -> bt_script::Result<bool> {
+        self.document_has_child_nodes_calls += 1;
+        Ok(self.document_has_child_nodes_result)
+    }
+
+    fn node_has_child_nodes(&mut self, node: NodeHandle) -> bt_script::Result<bool> {
+        self.node_has_child_nodes_calls.push(node);
+        Ok(*self
+            .node_has_child_nodes_results
+            .get(&node)
+            .unwrap_or(&false))
+    }
+
+    fn node_parent(&mut self, node: NodeHandle) -> bt_script::Result<Option<NodeHandle>> {
+        self.node_parent_results
+            .get(&node)
+            .copied()
+            .ok_or_else(|| bt_script::ScriptError::phase_not_ready("Node.parentNode"))
+    }
+
     fn node_text_content(&mut self, node: NodeHandle) -> bt_script::Result<String> {
         self.node_text_content_calls.push(node);
         Ok(self
@@ -2338,6 +2514,230 @@ fn runtime_resolves_document_root_head_and_body_access() {
             .map(String::as_str),
         Some("html:head:body:html")
     );
+}
+
+#[test]
+fn runtime_resolves_owner_document_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("body", ElementHandle::new(3), "");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_document_body(Some(ElementHandle::new(3)));
+
+    runtime
+        .eval_program(
+            "const body = document.body; document.getElementById('out').textContent = String(body.ownerDocument) + ':' + String(body.ownerDocument.defaultView) + ':' + String(document.ownerDocument);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("ownerDocument should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("[object Document]:[object Window]:null")
+    );
+}
+
+#[test]
+fn runtime_rejects_owner_document_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("body", ElementHandle::new(3), "");
+    host.seed_document_body(Some(ElementHandle::new(3)));
+
+    let error = runtime
+        .eval_program(
+            "document.body.ownerDocument = null;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("ownerDocument should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("ownerDocument"));
+    assert!(error.to_string().contains("element"));
+}
+
+#[test]
+fn runtime_resolves_parent_node_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("html", ElementHandle::new(1), "");
+    host.seed_element("body", ElementHandle::new(3), "Text");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_document_document_element(Some(ElementHandle::new(1)));
+    host.seed_document_body(Some(ElementHandle::new(3)));
+    host.seed_node_child_nodes_items(
+        HtmlCollectionScope::Element(ElementHandle::new(3)),
+        vec![NodeHandle::new(10)],
+    );
+    host.seed_node_parent(NodeHandle::new(1), Some(NodeHandle::new(0)));
+    host.seed_node_parent(NodeHandle::new(3), Some(NodeHandle::new(1)));
+    host.seed_node_parent(NodeHandle::new(10), Some(NodeHandle::new(3)));
+    host.seed_node_type(NodeHandle::new(0), 9);
+    host.seed_node_type(NodeHandle::new(1), 1);
+    host.seed_node_type(NodeHandle::new(3), 1);
+    host.seed_node_type(NodeHandle::new(10), 3);
+
+    runtime
+        .eval_program(
+            "const body = document.body; const text = body.childNodes.item(0); document.getElementById('out').textContent = String(document.parentNode) + ':' + String(document.documentElement.parentNode) + ':' + String(document.documentElement.parentElement) + ':' + String(body.parentNode) + ':' + String(body.parentElement) + ':' + String(text.parentNode) + ':' + String(text.parentElement);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("parentNode should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some(
+            "null:[object Document]:null:[object Element]:[object Element]:[object Element]:[object Element]"
+        )
+    );
+}
+
+#[test]
+fn runtime_rejects_parent_node_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("body", ElementHandle::new(3), "");
+    host.seed_document_body(Some(ElementHandle::new(3)));
+
+    let error = runtime
+        .eval_program(
+            "document.body.parentNode = null;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("parentNode should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("parentNode"));
+}
+
+#[test]
+fn runtime_resolves_is_connected_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("html", ElementHandle::new(1), "");
+    host.seed_element("body", ElementHandle::new(3), "");
+    host.seed_element("ghost", ElementHandle::new(4), "");
+    host.seed_element("out", ElementHandle::new(5), "");
+    host.seed_document_document_element(Some(ElementHandle::new(1)));
+    host.seed_document_body(Some(ElementHandle::new(3)));
+    host.seed_node_parent(NodeHandle::new(1), Some(NodeHandle::new(0)));
+    host.seed_node_parent(NodeHandle::new(3), Some(NodeHandle::new(1)));
+    host.seed_node_parent(NodeHandle::new(4), None);
+    host.seed_node_type(NodeHandle::new(0), 9);
+    host.seed_node_type(NodeHandle::new(1), 1);
+    host.seed_node_type(NodeHandle::new(3), 1);
+
+    runtime
+        .eval_program(
+            "const body = document.body; const ghost = document.getElementById('ghost'); document.getElementById('out').textContent = String(document.isConnected) + ':' + String(body.isConnected) + ':' + String(ghost.isConnected);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("isConnected should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(5))
+            .map(String::as_str),
+        Some("true:true:false")
+    );
+}
+
+#[test]
+fn runtime_rejects_is_connected_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("body", ElementHandle::new(3), "");
+    host.seed_document_body(Some(ElementHandle::new(3)));
+
+    let error = runtime
+        .eval_program(
+            "document.body.isConnected = false;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("isConnected should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("isConnected"));
+}
+
+#[test]
+fn runtime_resolves_first_and_last_element_child_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("html", ElementHandle::new(1), "");
+    host.seed_element("head", ElementHandle::new(2), "");
+    host.seed_element("body", ElementHandle::new(3), "");
+    host.seed_element("wrapper", ElementHandle::new(4), "");
+    host.seed_element("tmpl", ElementHandle::new(5), "");
+    host.seed_element("first", ElementHandle::new(6), "");
+    host.seed_element("last", ElementHandle::new(7), "");
+    host.seed_element("tmpl-first", ElementHandle::new(8), "");
+    host.seed_element("tmpl-last", ElementHandle::new(9), "");
+    host.seed_element("out", ElementHandle::new(10), "");
+    host.seed_element_tag_name(ElementHandle::new(5), "template");
+    host.seed_attribute(ElementHandle::new(5), "id", "tmpl");
+    host.seed_attribute(ElementHandle::new(10), "id", "out");
+    host.seed_document_document_element(Some(ElementHandle::new(1)));
+    host.seed_document_body(Some(ElementHandle::new(3)));
+    host.seed_document_children_items(vec![ElementHandle::new(1)]);
+    host.seed_element_children(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2), ElementHandle::new(3)],
+    );
+    host.seed_element_children(
+        ElementHandle::new(3),
+        vec![ElementHandle::new(4), ElementHandle::new(5)],
+    );
+    host.seed_element_children(
+        ElementHandle::new(5),
+        vec![ElementHandle::new(8), ElementHandle::new(9)],
+    );
+
+    runtime
+        .eval_program(
+            "const html = document.documentElement; const body = document.body; const template = document.getElementById('tmpl').content; document.getElementById('out').textContent = String(document.childElementCount) + ':' + String(document.firstElementChild) + ':' + String(document.lastElementChild) + ':' + String(html.childElementCount) + ':' + String(html.firstElementChild) + ':' + String(html.lastElementChild) + ':' + String(body.childElementCount) + ':' + String(body.firstElementChild) + ':' + String(body.lastElementChild) + ':' + String(template.childElementCount) + ':' + String(template.firstElementChild) + ':' + String(template.lastElementChild);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element child reflection should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(10))
+            .map(String::as_str),
+        Some(
+            "1:[object Element]:[object Element]:2:[object Element]:[object Element]:2:[object Element]:[object Element]:2:[object Element]:[object Element]"
+        )
+    );
+}
+
+#[test]
+fn runtime_rejects_first_element_child_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("body", ElementHandle::new(3), "");
+    host.seed_document_body(Some(ElementHandle::new(3)));
+
+    let error = runtime
+        .eval_program(
+            "document.body.firstElementChild = null;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("firstElementChild should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("firstElementChild"));
 }
 
 #[test]
@@ -2768,6 +3168,101 @@ fn runtime_resolves_document_content_type_access() {
 }
 
 #[test]
+fn runtime_resolves_document_design_mode_access_and_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_document_design_mode("off");
+
+    runtime
+        .eval_program(
+            "const before = document.designMode; document.designMode = 'on'; document.getElementById('out').textContent = before + ':' + document.designMode;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.designMode should resolve through host bindings");
+
+    assert_eq!(host.document_design_mode_calls, 2);
+    assert_eq!(host.document_set_design_mode_calls, vec!["on".to_string()]);
+    assert_eq!(host.document_design_mode_result, "on");
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("off:on")
+    );
+}
+
+#[test]
+fn runtime_rejects_document_design_mode_invalid_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("document.designMode = 'maybe';", "inline-script", &mut host)
+        .expect_err("document.designMode should reject unsupported values");
+
+    assert!(error.message().contains("designMode"));
+    assert!(error.message().contains("unsupported"));
+    assert_eq!(
+        host.document_set_design_mode_calls,
+        vec!["maybe".to_string()]
+    );
+}
+
+#[test]
+fn runtime_resolves_element_content_editable_access_and_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_element("editable", ElementHandle::new(2), "Edit");
+    host.seed_attribute(ElementHandle::new(2), "contenteditable", "TRUE");
+
+    runtime
+        .eval_program(
+            "const editable = document.getElementById('editable'); const before = editable.contentEditable; const beforeState = editable.isContentEditable; editable.contentEditable = 'inherit'; const after = editable.contentEditable; const afterState = editable.isContentEditable; document.getElementById('out').textContent = before + ':' + String(beforeState) + ':' + after + ':' + String(afterState);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element.contentEditable should resolve through host bindings");
+
+    assert_eq!(
+        host.element_is_content_editable_calls,
+        vec![ElementHandle::new(2), ElementHandle::new(2)]
+    );
+    assert!(
+        !host
+            .attributes
+            .contains_key(&(ElementHandle::new(2), "contenteditable".to_string()))
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("true:true:inherit:false")
+    );
+}
+
+#[test]
+fn runtime_rejects_element_content_editable_invalid_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("editable", ElementHandle::new(1), "Edit");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('editable').contentEditable = 'maybe';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("element.contentEditable should reject unsupported values");
+
+    assert!(error.message().contains("contentEditable"));
+    assert!(error.message().contains("unsupported"));
+    assert!(host.element_is_content_editable_calls.is_empty());
+}
+
+#[test]
 fn runtime_resolves_document_referrer_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -3085,10 +3580,7 @@ fn runtime_routes_window_dialogs_through_host_bindings() {
         .expect("window dialogs should resolve through host bindings");
 
     assert_eq!(host.dialog_alert_messages, vec!["Notice".to_string()]);
-    assert_eq!(
-        host.dialog_confirm_messages,
-        vec!["Continue?".to_string()]
-    );
+    assert_eq!(host.dialog_confirm_messages, vec!["Continue?".to_string()]);
     assert_eq!(host.dialog_prompt_messages, vec!["Name?".to_string()]);
     assert_eq!(
         host.text_content
@@ -3104,16 +3596,14 @@ fn runtime_rejects_window_confirm_without_queued_response() {
     let mut host = RecordingHost::default();
 
     let error = runtime
-        .eval_program(
-            "window.confirm('Continue?');",
-            "inline-script",
-            &mut host,
-        )
+        .eval_program("window.confirm('Continue?');", "inline-script", &mut host)
         .expect_err("window.confirm should require a queued response");
 
-    assert!(error
-        .to_string()
-        .contains("confirm() requires a queued response"));
+    assert!(
+        error
+            .to_string()
+            .contains("confirm() requires a queued response")
+    );
 }
 
 #[test]
@@ -3125,9 +3615,11 @@ fn runtime_rejects_window_prompt_without_queued_response() {
         .eval_program("window.prompt('Name?');", "inline-script", &mut host)
         .expect_err("window.prompt should require a queued response");
 
-    assert!(error
-        .to_string()
-        .contains("prompt() requires a queued response"));
+    assert!(
+        error
+            .to_string()
+            .contains("prompt() requires a queued response")
+    );
 }
 
 #[test]
@@ -3529,6 +4021,170 @@ fn runtime_rejects_window_navigator_do_not_track_assignment() {
 }
 
 #[test]
+fn runtime_rejects_window_navigator_languages_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.languages = null;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.navigator.languages should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `languages` on navigator value")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_navigator_languages_to_string_arguments() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.languages.toString(1);",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.navigator.languages.toString should reject arguments");
+
+    assert!(
+        error
+            .to_string()
+            .contains("navigator.languages.toString() expects no arguments")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_navigator_user_language_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.userLanguage = 'fr-FR';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.navigator.userLanguage should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `userLanguage` on navigator value")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_navigator_system_language_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.systemLanguage = 'fr-FR';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.navigator.systemLanguage should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `systemLanguage` on navigator value")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_navigator_oscpu_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.navigator.oscpu = 'x';", "inline-script", &mut host)
+        .expect_err("window.navigator.oscpu should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `oscpu` on navigator value")
+    );
+}
+
+#[test]
+fn runtime_resolves_window_navigator_languages_contains_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_navigator("browser-tester-next", "unknown", "en-US", true, true);
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "const languages = window.navigator.languages; document.getElementById('out').textContent = String(languages.contains('en-US')) + ':' + String(languages.contains('fr-FR'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.navigator.languages.contains should resolve through host bindings");
+
+    assert_eq!(host.navigator_languages_calls, 1);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("true:false")
+    );
+}
+
+#[test]
+fn runtime_resolves_window_navigator_languages_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_navigator("browser-tester-next", "unknown", "en-US", true, true);
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "const languages = window.navigator.languages; const keys = languages.keys(); const values = languages.values(); const entries = languages.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); const secondKey = keys.next(); const secondValue = values.next(); const secondEntry = entries.next(); document.getElementById('out').textContent = String(firstKey.value) + ':' + String(firstValue.value) + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value + ':' + String(secondKey.done) + ':' + String(secondValue.done) + ':' + String(secondEntry.done);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.navigator.languages iterator helpers should resolve through host bindings");
+
+    assert_eq!(host.navigator_languages_calls, 1);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("0:en-US:0:en-US:true:true:true")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_navigator_mime_types_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.mimeTypes = null;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.navigator.mimeTypes should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `mimeTypes` on navigator value")
+    );
+}
+
+#[test]
 fn runtime_rejects_window_navigator_plugins_assignment() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -3545,6 +4201,61 @@ fn runtime_rejects_window_navigator_plugins_assignment() {
         error
             .to_string()
             .contains("cannot assign to `plugins` on navigator value")
+    );
+}
+
+#[test]
+fn runtime_resolves_window_navigator_mime_types_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost::default();
+
+    runtime
+        .eval_program(
+            "window.navigator.mimeTypes.length;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.navigator.mimeTypes should resolve through host bindings");
+
+    assert_eq!(host.navigator_mime_types_calls, 1);
+}
+
+#[test]
+fn runtime_resolves_window_navigator_mime_types_named_item_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost::default();
+
+    runtime
+        .eval_program(
+            "window.navigator.mimeTypes.namedItem('missing');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.navigator.mimeTypes.namedItem should resolve through host bindings");
+
+    assert_eq!(host.navigator_mime_types_calls, 1);
+}
+
+#[test]
+fn runtime_resolves_window_navigator_mime_types_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "const mimeTypes = window.navigator.mimeTypes; const keys = mimeTypes.keys(); const values = mimeTypes.values(); const entries = mimeTypes.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); document.getElementById('out').textContent = String(firstKey.done) + ':' + String(firstValue.done) + ':' + String(firstEntry.done);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.navigator.mimeTypes iterator helpers should resolve through host bindings");
+
+    assert_eq!(host.navigator_mime_types_calls, 1);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("true:true:true")
     );
 }
 
@@ -3604,6 +4315,56 @@ fn runtime_resolves_window_navigator_plugins_access() {
         host.html_collection_tag_name_items_calls,
         vec![plugins_collection]
     );
+    assert_eq!(
+        host.html_collection_tag_name_named_item_calls,
+        Vec::<(HtmlCollectionTarget, String)>::new()
+    );
+}
+
+#[test]
+fn runtime_resolves_window_navigator_plugins_named_item_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("first-embed", ElementHandle::new(1), "");
+    host.seed_element("second-embed", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    let plugins_collection = HtmlCollectionTarget::ByTagName {
+        scope: HtmlCollectionScope::Document,
+        tag_name: "embed".to_string(),
+    };
+    host.seed_html_collection_tag_name_items(
+        plugins_collection.clone(),
+        vec![ElementHandle::new(1), ElementHandle::new(2)],
+    );
+    host.seed_html_collection_tag_name_named_item(
+        plugins_collection.clone(),
+        "first-embed",
+        Some(ElementHandle::new(1)),
+    );
+    host.seed_html_collection_tag_name_named_item(plugins_collection.clone(), "missing", None);
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = String(window.navigator.plugins.namedItem('first-embed'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.navigator.plugins.namedItem should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("[object Element]")
+    );
+    assert_eq!(
+        host.html_collection_tag_name_items_calls,
+        Vec::<HtmlCollectionTarget>::new()
+    );
+    assert_eq!(
+        host.html_collection_tag_name_named_item_calls,
+        vec![(plugins_collection, "first-embed".to_string())]
+    );
 }
 
 #[test]
@@ -3615,7 +4376,7 @@ fn runtime_resolves_window_navigator_access() {
 
     runtime
             .eval_program(
-            "document.getElementById('out').textContent = window.navigator.userAgent + ':' + window.navigator.appCodeName + ':' + window.navigator.appName + ':' + window.navigator.appVersion + ':' + window.navigator.product + ':' + window.navigator.productSub + ':' + window.navigator.vendor + ':' + window.navigator.vendorSub + ':' + String(window.navigator.pdfViewerEnabled) + ':' + window.navigator.doNotTrack + ':' + String(window.navigator.javaEnabled()) + ':' + String(window.navigator.plugins.length) + ':' + window.navigator.platform + ':' + window.navigator.language + ':' + String(window.navigator.cookieEnabled) + ':' + String(window.navigator.onLine) + ':' + String(window.navigator.webdriver) + ':' + String(window.navigator.hardwareConcurrency) + ':' + String(window.navigator.maxTouchPoints);",
+            "document.getElementById('out').textContent = window.navigator.userAgent + ':' + window.navigator.appCodeName + ':' + window.navigator.appName + ':' + window.navigator.appVersion + ':' + window.navigator.product + ':' + window.navigator.productSub + ':' + window.navigator.vendor + ':' + window.navigator.vendorSub + ':' + String(window.navigator.pdfViewerEnabled) + ':' + window.navigator.doNotTrack + ':' + String(window.navigator.javaEnabled()) + ':' + String(window.navigator.plugins.length) + ':' + window.navigator.platform + ':' + window.navigator.language + ':' + window.navigator.oscpu + ':' + window.navigator.userLanguage + ':' + window.navigator.browserLanguage + ':' + window.navigator.systemLanguage + ':' + String(window.navigator.languages.length) + ':' + window.navigator.languages.item(0) + ':' + window.navigator.languages.toString() + ':' + String(window.navigator.cookieEnabled) + ':' + String(window.navigator.onLine) + ':' + String(window.navigator.webdriver) + ':' + String(window.navigator.hardwareConcurrency) + ':' + String(window.navigator.maxTouchPoints);",
             "inline-script",
             &mut host,
         )
@@ -3626,7 +4387,7 @@ fn runtime_resolves_window_navigator_access() {
             .get(&ElementHandle::new(1))
             .map(String::as_str),
         Some(
-            "browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:false:unspecified:false:0:unknown:en-US:true:true:false:8:0"
+            "browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:false:unspecified:false:0:unknown:en-US:unknown:en-US:en-US:en-US:1:en-US:[object DOMStringList]:true:true:false:8:0"
         )
     );
 }
@@ -3840,6 +4601,344 @@ fn runtime_resolves_document_location_getter_setter_and_window_alias() {
             .map(String::as_str),
         Some("https://example.test/start:https://example.test/next")
     );
+}
+
+#[test]
+fn runtime_resolves_location_href_getter_and_setter() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_document_location("https://example.test/start");
+
+    runtime
+        .eval_program(
+            "const before = window.location.href; document.location.href = 'https://example.test/next'; const after = document.location.href; document.getElementById('out').textContent = before + ':' + after;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("location.href should resolve through host bindings");
+
+    assert_eq!(host.document_location_calls, 3);
+    assert_eq!(
+        host.document_set_location_calls,
+        vec!["https://example.test/next".to_string()]
+    );
+    assert_eq!(host.document_location_result, "https://example.test/next");
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("https://example.test/start:https://example.test/next")
+    );
+}
+
+#[test]
+fn runtime_resolves_location_hash_getter_and_setter() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_document_location("https://example.test/start#old");
+
+    runtime
+        .eval_program(
+            "const before = window.location.hash; document.location.hash = '#next'; const after = document.location.hash; document.getElementById('out').textContent = before + ':' + document.location + ':' + after;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("location.hash should resolve through host bindings");
+
+    assert_eq!(host.document_location_calls, 4);
+    assert_eq!(
+        host.document_set_location_calls,
+        vec!["https://example.test/start#next".to_string()]
+    );
+    assert_eq!(
+        host.document_location_result,
+        "https://example.test/start#next"
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("#old:https://example.test/start#next:#next")
+    );
+}
+
+#[test]
+fn runtime_resolves_location_pathname_getter_and_setter() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_document_location("https://example.test/start?x#old");
+
+    runtime
+        .eval_program(
+            "const before = window.location.pathname; document.location.pathname = 'next'; const after = document.location.pathname; document.getElementById('out').textContent = before + ':' + document.location + ':' + after;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("location.pathname should resolve through host bindings");
+
+    assert_eq!(host.document_location_calls, 4);
+    assert_eq!(
+        host.document_set_location_calls,
+        vec!["https://example.test/next?x#old".to_string()]
+    );
+    assert_eq!(
+        host.document_location_result,
+        "https://example.test/next?x#old"
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("/start:https://example.test/next?x#old:/next")
+    );
+}
+
+#[test]
+fn runtime_resolves_location_search_getter_and_setter() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_document_location("https://example.test/start?x#old");
+
+    runtime
+        .eval_program(
+            "const before = window.location.search; document.location.search = '?next'; const after = document.location.search; document.getElementById('out').textContent = before + ':' + document.location + ':' + after;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("location.search should resolve through host bindings");
+
+    assert_eq!(host.document_location_calls, 4);
+    assert_eq!(
+        host.document_set_location_calls,
+        vec!["https://example.test/start?next#old".to_string()]
+    );
+    assert_eq!(
+        host.document_location_result,
+        "https://example.test/start?next#old"
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("?x:https://example.test/start?next#old:?next")
+    );
+}
+
+#[test]
+fn runtime_resolves_location_origin_getter() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_document_location("https://example.test:8443/start?x#old");
+
+    runtime
+        .eval_program(
+            "const before = window.location.origin; document.location.pathname = 'next'; const after = document.location.origin; document.getElementById('out').textContent = before + ':' + after + ':' + document.location;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("location.origin should resolve through host bindings");
+
+    assert_eq!(host.document_origin_calls, 2);
+    assert_eq!(
+        host.document_set_location_calls,
+        vec!["https://example.test:8443/next?x#old".to_string()]
+    );
+    assert_eq!(
+        host.document_location_result,
+        "https://example.test:8443/next?x#old"
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some(
+            "https://example.test:8443:https://example.test:8443:https://example.test:8443/next?x#old"
+        )
+    );
+}
+
+#[test]
+fn runtime_resolves_location_stringification_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_document_location("https://example.test:8443/start?x#old");
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = document.location.toString() + ':' + window.location.valueOf();",
+            "inline-script",
+            &mut host,
+        )
+        .expect("location stringification should resolve through host bindings");
+
+    assert_eq!(host.document_location_calls, 2);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("https://example.test:8443/start?x#old:https://example.test:8443/start?x#old")
+    );
+}
+
+#[test]
+fn runtime_resolves_location_protocol_host_hostname_and_port_getters_and_setters() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_document_location("https://app.local:8443/start?x#old");
+
+    runtime
+        .eval_program(
+            "const before = window.location.protocol + '|' + window.location.host + '|' + window.location.hostname + '|' + window.location.port; document.location.protocol = 'http:'; document.location.host = 'example.test:8080'; document.location.hostname = 'example.test'; document.location.port = '8080'; const after = window.location.protocol + '|' + window.location.host + '|' + window.location.hostname + '|' + window.location.port; document.getElementById('out').textContent = before + ':' + after + ':' + document.location;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("location protocol/host/hostname/port should resolve through host bindings");
+
+    assert_eq!(
+        host.document_set_location_calls,
+        vec![
+            "http://app.local:8443/start?x#old".to_string(),
+            "http://example.test:8080/start?x#old".to_string(),
+            "http://example.test:8080/start?x#old".to_string(),
+            "http://example.test:8080/start?x#old".to_string(),
+        ]
+    );
+    assert_eq!(
+        host.document_location_result,
+        "http://example.test:8080/start?x#old"
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some(
+            "https:|app.local:8443|app.local|8443:http:|example.test:8080|example.test|8080:http://example.test:8080/start?x#old"
+        )
+    );
+}
+
+#[test]
+fn runtime_resolves_location_username_and_password_getters_and_setters() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_document_location("https://alice:secret@example.test:8443/start?x#old");
+
+    runtime
+        .eval_program(
+            "const before = window.location.username + '|' + window.location.password; document.location.username = 'bob'; document.location.password = 'hunter2'; document.location.port = '9444'; const after = window.location.username + '|' + window.location.password + '|' + window.location.port; document.getElementById('out').textContent = before + ':' + after + ':' + document.location;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("location username/password should resolve through host bindings");
+
+    assert_eq!(
+        host.document_set_location_calls,
+        vec![
+            "https://bob:secret@example.test:8443/start?x#old".to_string(),
+            "https://bob:hunter2@example.test:8443/start?x#old".to_string(),
+            "https://bob:hunter2@example.test:9444/start?x#old".to_string(),
+        ]
+    );
+    assert_eq!(
+        host.document_location_result,
+        "https://bob:hunter2@example.test:9444/start?x#old"
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("alice|secret:bob|hunter2|9444:https://bob:hunter2@example.test:9444/start?x#old")
+    );
+}
+
+#[test]
+fn runtime_rejects_location_port_with_non_numeric_value() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_document_location("https://example.test:8443/start?x#old");
+
+    let error = runtime
+        .eval_program(
+            "document.location.port = 'abc';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("location.port should reject non-numeric values");
+
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported location.port value: abc")
+    );
+    assert!(host.document_set_location_calls.is_empty());
+    assert_eq!(
+        host.document_location_result,
+        "https://example.test:8443/start?x#old"
+    );
+}
+
+#[test]
+fn runtime_resolves_location_assign_replace_and_reload_calls() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_document_location("https://example.test/start");
+
+    runtime
+        .eval_program(
+            "const before = document.location; window.location.assign('https://example.test/assign'); document.location.replace('https://example.test/replace'); window.location.reload(); document.getElementById('out').textContent = before + ':' + document.location;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("location methods should resolve through host bindings");
+
+    assert_eq!(
+        host.document_location_assign_calls,
+        vec!["https://example.test/assign".to_string()]
+    );
+    assert_eq!(
+        host.document_location_replace_calls,
+        vec!["https://example.test/replace".to_string()]
+    );
+    assert_eq!(
+        host.document_location_reload_calls,
+        vec!["https://example.test/replace".to_string()]
+    );
+    assert_eq!(
+        host.document_location_result,
+        "https://example.test/replace"
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("https://example.test/start:https://example.test/replace")
+    );
+}
+
+#[test]
+fn runtime_rejects_location_assign_without_url() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("window.location.assign();", "inline-script", &mut host)
+        .expect_err("location.assign should require a URL");
+
+    assert!(
+        error
+            .to_string()
+            .contains("location.assign() expects exactly one argument")
+    );
+    assert!(host.document_location_assign_calls.is_empty());
 }
 
 #[test]
@@ -4133,6 +5232,213 @@ fn runtime_dispatches_insert_adjacent_html() {
             "beforeend".to_string(),
             "<span id=\"child\">Child</span>".to_string(),
         )]
+    );
+}
+
+#[test]
+fn runtime_dispatches_insert_adjacent_element_and_text() {
+    struct AdjacentHost {
+        create_element_calls: Vec<String>,
+        create_text_node_calls: Vec<String>,
+        node_parent_results: BTreeMap<NodeHandle, Option<NodeHandle>>,
+        element_tag_name_results: BTreeMap<ElementHandle, String>,
+        element_before_calls: Vec<(ElementHandle, Vec<NodeHandle>)>,
+        element_after_calls: Vec<(ElementHandle, Vec<NodeHandle>)>,
+        element_prepend_calls: Vec<(ElementHandle, Vec<NodeHandle>)>,
+        element_append_calls: Vec<(ElementHandle, Vec<NodeHandle>)>,
+    }
+
+    impl HostBindings for AdjacentHost {
+        fn document_get_element_by_id(
+            &mut self,
+            id: &str,
+        ) -> bt_script::Result<Option<ElementHandle>> {
+            Ok(match id {
+                "target" => Some(ElementHandle::new(11)),
+                _ => None,
+            })
+        }
+
+        fn document_create_element(&mut self, tag_name: &str) -> bt_script::Result<ElementHandle> {
+            self.create_element_calls.push(tag_name.to_string());
+            Ok(match self.create_element_calls.len() {
+                1 => ElementHandle::new(21),
+                2 => ElementHandle::new(22),
+                _ => ElementHandle::new(99),
+            })
+        }
+
+        fn document_create_text_node(&mut self, text: &str) -> bt_script::Result<NodeHandle> {
+            self.create_text_node_calls.push(text.to_string());
+            Ok(match self.create_text_node_calls.len() {
+                1 => NodeHandle::new(31),
+                2 => NodeHandle::new(32),
+                _ => NodeHandle::new(99),
+            })
+        }
+
+        fn node_parent(&mut self, node: NodeHandle) -> bt_script::Result<Option<NodeHandle>> {
+            Ok(self.node_parent_results.get(&node).copied().unwrap_or(None))
+        }
+
+        fn element_tag_name(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+            Ok(self
+                .element_tag_name_results
+                .get(&element)
+                .cloned()
+                .unwrap_or_else(|| "section".to_string()))
+        }
+
+        fn element_before(
+            &mut self,
+            element: ElementHandle,
+            children: Vec<NodeHandle>,
+        ) -> bt_script::Result<()> {
+            self.element_before_calls.push((element, children));
+            Ok(())
+        }
+
+        fn element_after(
+            &mut self,
+            element: ElementHandle,
+            children: Vec<NodeHandle>,
+        ) -> bt_script::Result<()> {
+            self.element_after_calls.push((element, children));
+            Ok(())
+        }
+
+        fn element_prepend(
+            &mut self,
+            element: ElementHandle,
+            children: Vec<NodeHandle>,
+        ) -> bt_script::Result<()> {
+            self.element_prepend_calls.push((element, children));
+            Ok(())
+        }
+
+        fn element_append(
+            &mut self,
+            element: ElementHandle,
+            children: Vec<NodeHandle>,
+        ) -> bt_script::Result<()> {
+            self.element_append_calls.push((element, children));
+            Ok(())
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = AdjacentHost {
+        create_element_calls: Vec::new(),
+        create_text_node_calls: Vec::new(),
+        node_parent_results: BTreeMap::from([(NodeHandle::new(11), Some(NodeHandle::new(10)))]),
+        element_tag_name_results: BTreeMap::from([(ElementHandle::new(11), "section".to_string())]),
+        element_before_calls: Vec::new(),
+        element_after_calls: Vec::new(),
+        element_prepend_calls: Vec::new(),
+        element_append_calls: Vec::new(),
+    };
+
+    runtime
+        .eval_program(
+            "const target = document.getElementById('target'); target.insertAdjacentElement('beforebegin', document.createElement('aside')); target.insertAdjacentElement('afterend', document.createElement('article')); target.insertAdjacentText('afterbegin', 'Hello'); target.insertAdjacentText('beforeend', 'Tail');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("insertAdjacentElement and insertAdjacentText should resolve through host bindings");
+
+    assert_eq!(host.create_element_calls, vec!["aside", "article"]);
+    assert_eq!(host.create_text_node_calls, vec!["Hello", "Tail"]);
+    assert_eq!(
+        host.element_before_calls,
+        vec![(ElementHandle::new(11), vec![NodeHandle::new(21)])]
+    );
+    assert_eq!(
+        host.element_after_calls,
+        vec![(ElementHandle::new(11), vec![NodeHandle::new(22)])]
+    );
+    assert_eq!(
+        host.element_prepend_calls,
+        vec![(ElementHandle::new(11), vec![NodeHandle::new(31)])]
+    );
+    assert_eq!(
+        host.element_append_calls,
+        vec![(ElementHandle::new(11), vec![NodeHandle::new(32)])]
+    );
+}
+
+#[test]
+fn runtime_rejects_insert_adjacent_element_invalid_position() {
+    struct InvalidPositionHost;
+
+    impl HostBindings for InvalidPositionHost {
+        fn document_get_element_by_id(
+            &mut self,
+            id: &str,
+        ) -> bt_script::Result<Option<ElementHandle>> {
+            Ok(match id {
+                "target" => Some(ElementHandle::new(11)),
+                "child" => Some(ElementHandle::new(12)),
+                _ => None,
+            })
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = InvalidPositionHost;
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('target').insertAdjacentElement('middle', document.getElementById('child'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("insertAdjacentElement should validate positions");
+
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported insertAdjacentElement position")
+    );
+}
+
+#[test]
+fn runtime_rejects_insert_adjacent_text_on_void_element() {
+    struct VoidElementHost;
+
+    impl HostBindings for VoidElementHost {
+        fn document_get_element_by_id(
+            &mut self,
+            id: &str,
+        ) -> bt_script::Result<Option<ElementHandle>> {
+            Ok(match id {
+                "image" => Some(ElementHandle::new(11)),
+                _ => None,
+            })
+        }
+
+        fn element_tag_name(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+            Ok(match element.raw() {
+                11 => "img".to_string(),
+                _ => "div".to_string(),
+            })
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = VoidElementHost;
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('image').insertAdjacentText('beforeend', 'Bad');",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("insertAdjacentText should reject void elements");
+
+    assert!(
+        error
+            .to_string()
+            .contains("insertAdjacentText is not supported on void elements")
     );
 }
 
@@ -5074,9 +6380,7 @@ fn runtime_rejects_window_frame_element_assignment() {
         .eval_program("window.frameElement = 2;", "inline-script", &mut host)
         .expect_err("window.frameElement should be read-only");
 
-    assert!(error
-        .to_string()
-        .contains("unsupported assignment target"));
+    assert!(error.to_string().contains("unsupported assignment target"));
 }
 
 #[test]
@@ -5110,9 +6414,7 @@ fn runtime_rejects_window_opener_assignment() {
         .eval_program("window.opener = 2;", "inline-script", &mut host)
         .expect_err("window.opener should be read-only");
 
-    assert!(error
-        .to_string()
-        .contains("unsupported assignment target"));
+    assert!(error.to_string().contains("unsupported assignment target"));
 }
 
 #[test]
@@ -5156,7 +6458,11 @@ fn runtime_rejects_form_length_assignment() {
     host.seed_element("signup", ElementHandle::new(1), "");
 
     let error = runtime
-        .eval_program("document.getElementById('signup').length = 2;", "inline-script", &mut host)
+        .eval_program(
+            "document.getElementById('signup').length = 2;",
+            "inline-script",
+            &mut host,
+        )
         .expect_err("form.length should be read-only");
 
     assert!(error.to_string().contains("unsupported assignment target"));
@@ -5209,9 +6515,11 @@ fn runtime_rejects_window_frames_length_assignment() {
         .eval_program("window.frames.length = 2;", "inline-script", &mut host)
         .expect_err("window.frames.length should be read-only");
 
-    assert!(error
-        .to_string()
-        .contains("cannot assign to `length` on html collection value"));
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `length` on html collection value")
+    );
 }
 
 #[test]
@@ -5508,6 +6816,343 @@ fn runtime_resolves_template_content_child_nodes_and_children_access() {
 }
 
 #[test]
+fn runtime_resolves_template_content_get_element_by_id_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("tpl", ElementHandle::new(3), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(3), "template");
+    host.seed_element("foo,bar", ElementHandle::new(40), "First");
+    host.seed_element_query_selector(
+        ElementHandle::new(3),
+        r"#foo\2c bar",
+        Some(ElementHandle::new(40)),
+    );
+
+    runtime
+        .eval_program(
+            "const tpl = document.getElementById('tpl'); const content = tpl.content; const hit = content.getElementById('foo,bar'); document.getElementById('out').textContent = String(hit) + ':' + hit.textContent;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("template content getElementById should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("[object Element]:First")
+    );
+    assert_eq!(
+        host.element_query_selector_calls,
+        vec![(ElementHandle::new(3), r"#foo\2c bar".to_string())]
+    );
+}
+
+#[test]
+fn runtime_rejects_template_content_get_element_by_id_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("tpl", ElementHandle::new(3), "");
+    host.seed_element_tag_name(ElementHandle::new(3), "template");
+
+    let error = runtime
+        .eval_program(
+            "const tpl = document.getElementById('tpl'); tpl.content.getElementById();",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("template content getElementById should reject missing arguments");
+
+    assert!(
+        error
+            .message()
+            .contains("getElementById() expects exactly one argument")
+    );
+}
+
+#[test]
+fn runtime_resolves_template_content_query_selector_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("tpl", ElementHandle::new(3), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(3), "template");
+    host.seed_element("first", ElementHandle::new(40), "First");
+    host.seed_element("second", ElementHandle::new(41), "Second");
+    host.seed_element_query_selector(
+        ElementHandle::new(3),
+        ".primary",
+        Some(ElementHandle::new(40)),
+    );
+    host.seed_element_query_selector_all(
+        ElementHandle::new(3),
+        ".primary",
+        vec![ElementHandle::new(40), ElementHandle::new(41)],
+    );
+
+    runtime
+        .eval_program(
+            "const tpl = document.getElementById('tpl'); const content = tpl.content; const first = content.querySelector('.primary'); const all = content.querySelectorAll('.primary'); document.getElementById('out').textContent = String(content) + ':' + first.textContent + ':' + String(all.length) + ':' + all.item(0).textContent + ':' + all.item(1).textContent + ':' + String(all.item(2));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("template content query selectors should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("[object DocumentFragment]:First:2:First:Second:null")
+    );
+    assert_eq!(
+        host.element_query_selector_calls,
+        vec![(ElementHandle::new(3), ".primary".to_string())]
+    );
+    assert_eq!(
+        host.element_query_selector_all_calls,
+        vec![(ElementHandle::new(3), ".primary".to_string())]
+    );
+}
+
+#[test]
+fn runtime_rejects_template_content_query_selector_all_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("tpl", ElementHandle::new(3), "");
+    host.seed_element_tag_name(ElementHandle::new(3), "template");
+
+    let error = runtime
+        .eval_program(
+            "const tpl = document.getElementById('tpl'); tpl.content.querySelectorAll();",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("template content querySelectorAll should reject missing arguments");
+
+    assert!(
+        error
+            .message()
+            .contains("querySelectorAll() expects exactly one argument")
+    );
+}
+
+#[test]
+fn runtime_resolves_template_content_clone_node_access() {
+    struct CloneHost {
+        clone_called: bool,
+    }
+
+    impl HostBindings for CloneHost {
+        fn document_get_element_by_id(
+            &mut self,
+            id: &str,
+        ) -> bt_script::Result<Option<ElementHandle>> {
+            Ok(match id {
+                "tpl" => Some(ElementHandle::new(3)),
+                _ => None,
+            })
+        }
+
+        fn element_tag_name(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+            Ok(match element.raw() {
+                3 | 4 => "template".to_string(),
+                _ => "div".to_string(),
+            })
+        }
+
+        fn node_clone(&mut self, node: NodeHandle, _deep: bool) -> bt_script::Result<NodeHandle> {
+            self.clone_called = true;
+            Ok(NodeHandle::new(node.raw() + 1))
+        }
+
+        fn node_type(&mut self, node: NodeHandle) -> bt_script::Result<u8> {
+            Ok(match node.raw() {
+                3 | 4 => 1,
+                _ => 0,
+            })
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = CloneHost {
+        clone_called: false,
+    };
+
+    runtime
+        .eval_program(
+            "const tpl = document.getElementById('tpl'); tpl.content.cloneNode(true);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("template content cloneNode should resolve");
+
+    assert!(host.clone_called);
+}
+
+#[test]
+fn runtime_rejects_template_content_clone_node_wrong_arity() {
+    struct CloneHost;
+
+    impl HostBindings for CloneHost {
+        fn document_get_element_by_id(
+            &mut self,
+            id: &str,
+        ) -> bt_script::Result<Option<ElementHandle>> {
+            Ok(match id {
+                "tpl" => Some(ElementHandle::new(3)),
+                _ => None,
+            })
+        }
+
+        fn element_tag_name(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+            Ok(match element.raw() {
+                3 => "template".to_string(),
+                _ => "div".to_string(),
+            })
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = CloneHost;
+
+    let error = runtime
+        .eval_program(
+            "const tpl = document.getElementById('tpl'); tpl.content.cloneNode(true, false);",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("template content cloneNode should validate arity");
+
+    assert!(
+        error
+            .message()
+            .contains("cloneNode() expects at most one argument")
+    );
+}
+
+#[test]
+fn runtime_resolves_template_content_append_child_access() {
+    struct MutationHost {
+        clone_called: bool,
+        append_child_calls: Vec<(ElementHandle, NodeHandle)>,
+    }
+
+    impl HostBindings for MutationHost {
+        fn document_get_element_by_id(
+            &mut self,
+            id: &str,
+        ) -> bt_script::Result<Option<ElementHandle>> {
+            Ok(match id {
+                "tpl" => Some(ElementHandle::new(3)),
+                _ => None,
+            })
+        }
+
+        fn element_tag_name(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+            Ok(match element.raw() {
+                3 | 4 => "template".to_string(),
+                _ => "div".to_string(),
+            })
+        }
+
+        fn node_clone(&mut self, node: NodeHandle, _deep: bool) -> bt_script::Result<NodeHandle> {
+            self.clone_called = true;
+            Ok(NodeHandle::new(node.raw() + 1))
+        }
+
+        fn node_child_nodes_items(
+            &mut self,
+            scope: HtmlCollectionScope,
+        ) -> bt_script::Result<Vec<NodeHandle>> {
+            Ok(match scope {
+                HtmlCollectionScope::Element(element) if element.raw() == 4 => {
+                    vec![NodeHandle::new(10)]
+                }
+                _ => Vec::new(),
+            })
+        }
+
+        fn node_type(&mut self, node: NodeHandle) -> bt_script::Result<u8> {
+            Ok(match node.raw() {
+                3 | 4 | 10 => 1,
+                _ => 0,
+            })
+        }
+
+        fn element_append_child(
+            &mut self,
+            parent: ElementHandle,
+            child: NodeHandle,
+        ) -> bt_script::Result<()> {
+            self.append_child_calls.push((parent, child));
+            Ok(())
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = MutationHost {
+        clone_called: false,
+        append_child_calls: Vec::new(),
+    };
+
+    runtime
+        .eval_program(
+            "const tpl = document.getElementById('tpl'); const clone = tpl.content.cloneNode(true); const child = clone.childNodes.item(0); tpl.content.appendChild(child);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("template content appendChild should resolve");
+
+    assert!(host.clone_called);
+    assert_eq!(
+        host.append_child_calls,
+        vec![(ElementHandle::new(3), NodeHandle::new(10))]
+    );
+}
+
+#[test]
+fn runtime_rejects_template_content_append_child_wrong_arity() {
+    struct MutationHost;
+
+    impl HostBindings for MutationHost {
+        fn document_get_element_by_id(
+            &mut self,
+            id: &str,
+        ) -> bt_script::Result<Option<ElementHandle>> {
+            Ok(match id {
+                "tpl" => Some(ElementHandle::new(3)),
+                _ => None,
+            })
+        }
+
+        fn element_tag_name(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+            Ok(match element.raw() {
+                3 => "template".to_string(),
+                _ => "div".to_string(),
+            })
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = MutationHost;
+
+    let error = runtime
+        .eval_program(
+            "const tpl = document.getElementById('tpl'); tpl.content.appendChild();",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("template content appendChild should validate arity");
+
+    assert!(
+        error
+            .message()
+            .contains("appendChild() expects exactly one argument")
+    );
+}
+
+#[test]
 fn runtime_resolves_template_content_inner_html_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -5542,6 +7187,62 @@ fn runtime_resolves_template_content_inner_html_access() {
         )]
     );
     assert_eq!(host.element_tag_name_calls, vec![ElementHandle::new(3)]);
+}
+
+#[test]
+fn runtime_resolves_template_content_text_content_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("tpl", ElementHandle::new(3), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(3), "template");
+    host.text_content
+        .insert(ElementHandle::new(3), "Inner".to_string());
+
+    runtime
+        .eval_program(
+            "const tpl = document.getElementById('tpl'); const content = tpl.content; const before = content.textContent; content.textContent = 'Updated'; document.getElementById('out').textContent = before + ':' + content.textContent;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("template content textContent should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("Inner:Updated")
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("Updated")
+    );
+}
+
+#[test]
+fn runtime_resolves_template_content_fragment_reflection_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("tpl", ElementHandle::new(3), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(3), "template");
+
+    runtime
+        .eval_program(
+            "const content = document.getElementById('tpl').content; document.getElementById('out').textContent = String(content.nodeType) + ':' + content.nodeName + ':' + String(content.parentNode) + ':' + String(content.ownerDocument);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("template content fragment reflection should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("11:#document-fragment:null:[object Document]")
+    );
 }
 
 #[test]
@@ -5882,6 +7583,83 @@ fn runtime_resolves_html_collection_named_item_access() {
 }
 
 #[test]
+fn runtime_resolves_html_collection_named_property_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "");
+    host.seed_element("first", ElementHandle::new(2), "First");
+    host.seed_element("signup", ElementHandle::new(3), "");
+    host.seed_element("mode-a", ElementHandle::new(4), "a");
+    host.seed_element("mode-b", ElementHandle::new(5), "b");
+    host.seed_element("out", ElementHandle::new(6), "");
+    host.seed_html_collection_named_item(
+        ElementHandle::new(1),
+        "first",
+        Some(ElementHandle::new(2)),
+    );
+    host.seed_html_collection_named_item(ElementHandle::new(1), "missing", None);
+    host.seed_html_collection_form_elements_items(
+        ElementHandle::new(3),
+        vec![ElementHandle::new(4), ElementHandle::new(5)],
+    );
+    host.seed_html_collection_form_elements_named_items(
+        ElementHandle::new(3),
+        "mode",
+        vec![ElementHandle::new(4), ElementHandle::new(5)],
+    );
+
+    runtime
+        .eval_program(
+            "const children = document.getElementById('root').children; const mode = document.getElementById('signup').elements.mode; document.getElementById('out').textContent = children.first.textContent + ':' + String(children.missing) + ':' + String(mode.length) + ':' + mode.item(0).value + ':' + mode.item(1).value + ':' + String(mode);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("HTMLCollection legacy named property access should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(6))
+            .map(String::as_str),
+        Some("First:undefined:2:a:b:[object RadioNodeList]")
+    );
+    assert_eq!(
+        host.html_collection_named_item_calls,
+        vec![
+            (ElementHandle::new(1), "first".to_string()),
+            (ElementHandle::new(1), "missing".to_string()),
+        ]
+    );
+    assert_eq!(
+        host.html_collection_form_elements_named_items_calls,
+        vec![
+            (ElementHandle::new(3), "mode".to_string()),
+            (ElementHandle::new(3), "mode".to_string()),
+            (ElementHandle::new(3), "mode".to_string()),
+            (ElementHandle::new(3), "mode".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn runtime_rejects_html_collection_reserved_named_property_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('root').children.item;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("reserved HTMLCollection named property access should fail");
+
+    assert!(error.to_string().contains("unsupported member access"));
+    assert!(error.to_string().contains("`item`"));
+    assert!(error.to_string().contains("html collection value"));
+}
+
+#[test]
 fn runtime_resolves_document_get_elements_by_name_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -6196,6 +7974,49 @@ fn runtime_supports_collection_entries_helpers() {
 }
 
 #[test]
+fn runtime_supports_collection_to_string_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = document.childNodes.toString() + ':' + window.navigator.plugins.toString();",
+            "inline-script",
+            &mut host,
+        )
+        .expect("collection toString helpers should dispatch through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("[object NodeList]:[object HTMLCollection]")
+    );
+}
+
+#[test]
+fn runtime_rejects_collection_to_string_arguments() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    let error = runtime
+        .eval_program(
+            "document.childNodes.toString(1);",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("collection toString helpers should reject arguments");
+
+    assert!(
+        error
+            .to_string()
+            .contains("NodeList.toString() expects no arguments")
+    );
+}
+
+#[test]
 fn runtime_supports_storage_accessors_and_methods() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -6205,7 +8026,7 @@ fn runtime_supports_storage_accessors_and_methods() {
 
     runtime
         .eval_program(
-            "const local = window.localStorage; const session = document.defaultView.sessionStorage; const before = String(local) + ':' + String(session) + ':' + String(local.length) + ':' + String(session.length); const token = local.getItem('token'); local.setItem('theme', 'dark'); local.removeItem('token'); session.setItem('scratch', 'xyz'); const sessionKey = session.key(0); session.clear(); document.getElementById('out').textContent = before + '|' + token + ':' + local.getItem('theme') + ':' + String(local.length) + ':' + String(local.key(0)) + ':' + String(session.length) + ':' + String(sessionKey);",
+            "const local = window.localStorage; const session = document.defaultView.sessionStorage; const before = String(local) + ':' + String(session) + ':' + String(local.length) + ':' + String(session.length); const token = local.token; local.theme = 'dark'; local.removeItem('token'); session.scratch = 'xyz'; const sessionNamed = session.scratch; const sessionKey = session.key(0); session.clear(); document.getElementById('out').textContent = before + '|' + token + ':' + local.theme + ':' + sessionNamed + ':' + String(local.length) + ':' + String(local.key(0)) + ':' + String(session.length) + ':' + String(sessionKey);",
             "inline-script",
             &mut host,
         )
@@ -6215,7 +8036,7 @@ fn runtime_supports_storage_accessors_and_methods() {
         host.text_content
             .get(&ElementHandle::new(1))
             .map(String::as_str),
-        Some("[object Storage]:[object Storage]:1:1|abc:dark:1:theme:0:scratch")
+        Some("[object Storage]:[object Storage]:1:1|abc:dark:xyz:1:theme:0:scratch")
     );
     assert_eq!(host.local_storage.get("token").map(String::as_str), None);
     assert_eq!(
@@ -6223,6 +8044,26 @@ fn runtime_supports_storage_accessors_and_methods() {
         Some("dark")
     );
     assert!(host.session_storage.is_empty());
+}
+
+#[test]
+fn runtime_rejects_storage_reserved_property_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.localStorage.length = '2';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("storage length should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `length` on storage value")
+    );
 }
 
 #[test]
@@ -6242,5 +8083,1265 @@ fn runtime_rejects_storage_method_wrong_arity() {
         error
             .to_string()
             .contains("setItem() expects exactly two arguments")
+    );
+}
+
+#[test]
+fn runtime_rejects_document_create_element_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost::default();
+
+    let error = runtime
+        .eval_program("document.createElement();", "inline-script", &mut host)
+        .expect_err("createElement should validate arity");
+
+    assert!(
+        error
+            .to_string()
+            .contains("document.createElement() expects exactly one argument")
+    );
+}
+
+#[test]
+fn runtime_rejects_document_create_text_node_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost::default();
+
+    let error = runtime
+        .eval_program("document.createTextNode();", "inline-script", &mut host)
+        .expect_err("createTextNode should validate arity");
+
+    assert!(
+        error
+            .to_string()
+            .contains("document.createTextNode() expects exactly one argument")
+    );
+}
+
+#[test]
+fn runtime_rejects_document_create_comment_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost::default();
+
+    let error = runtime
+        .eval_program("document.createComment();", "inline-script", &mut host)
+        .expect_err("createComment should validate arity");
+
+    assert!(
+        error
+            .to_string()
+            .contains("document.createComment() expects exactly one argument")
+    );
+}
+
+#[test]
+fn runtime_rejects_document_create_document_fragment_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost::default();
+
+    let error = runtime
+        .eval_program(
+            "document.createDocumentFragment('unexpected');",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("createDocumentFragment should validate arity");
+
+    assert!(
+        error
+            .to_string()
+            .contains("document.createDocumentFragment() expects no arguments")
+    );
+}
+
+#[test]
+fn runtime_resolves_document_create_document_fragment_access() {
+    struct FragmentHost {
+        create_element_calls: Vec<String>,
+        create_text_node_calls: Vec<String>,
+        fragment_children: Vec<NodeHandle>,
+        append_child_calls: Vec<(ElementHandle, NodeHandle)>,
+        append_calls: Vec<(ElementHandle, Vec<NodeHandle>)>,
+    }
+
+    impl HostBindings for FragmentHost {
+        fn document_create_element(&mut self, tag_name: &str) -> bt_script::Result<ElementHandle> {
+            self.create_element_calls.push(tag_name.to_string());
+            Ok(match tag_name {
+                "div" => ElementHandle::new(3),
+                "template" => ElementHandle::new(4),
+                _ => ElementHandle::new(99),
+            })
+        }
+
+        fn document_create_text_node(&mut self, text: &str) -> bt_script::Result<NodeHandle> {
+            self.create_text_node_calls.push(text.to_string());
+            Ok(NodeHandle::new(10))
+        }
+
+        fn node_child_nodes_items(
+            &mut self,
+            scope: HtmlCollectionScope,
+        ) -> bt_script::Result<Vec<NodeHandle>> {
+            Ok(match scope {
+                HtmlCollectionScope::Element(element) if element.raw() == 4 => {
+                    self.fragment_children.clone()
+                }
+                _ => Vec::new(),
+            })
+        }
+
+        fn node_type(&mut self, node: NodeHandle) -> bt_script::Result<u8> {
+            Ok(match node.raw() {
+                10 => 3,
+                _ => 1,
+            })
+        }
+
+        fn element_append_child(
+            &mut self,
+            parent: ElementHandle,
+            child: NodeHandle,
+        ) -> bt_script::Result<()> {
+            self.append_child_calls.push((parent, child));
+            if parent.raw() == 4 {
+                self.fragment_children.push(child);
+            }
+            Ok(())
+        }
+
+        fn element_append(
+            &mut self,
+            element: ElementHandle,
+            children: Vec<NodeHandle>,
+        ) -> bt_script::Result<()> {
+            self.append_calls.push((element, children));
+            Ok(())
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = FragmentHost {
+        create_element_calls: Vec::new(),
+        create_text_node_calls: Vec::new(),
+        fragment_children: Vec::new(),
+        append_child_calls: Vec::new(),
+        append_calls: Vec::new(),
+    };
+
+    runtime
+        .eval_program(
+            "const root = document.createElement('div'); const frag = document.createDocumentFragment(); frag.appendChild(document.createTextNode('Hello')); root.appendChild(frag);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.createDocumentFragment should resolve");
+
+    assert_eq!(host.create_element_calls, vec!["div", "template"]);
+    assert_eq!(host.create_text_node_calls, vec!["Hello"]);
+    assert_eq!(
+        host.append_child_calls,
+        vec![(ElementHandle::new(4), NodeHandle::new(10))]
+    );
+    assert_eq!(
+        host.append_calls,
+        vec![(ElementHandle::new(3), vec![NodeHandle::new(10)])]
+    );
+}
+
+#[test]
+fn runtime_rejects_document_import_node_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost::default();
+
+    let error = runtime
+        .eval_program("document.importNode();", "inline-script", &mut host)
+        .expect_err("importNode should validate arity");
+
+    assert!(
+        error
+            .to_string()
+            .contains("document.importNode() expects one or two arguments")
+    );
+}
+
+#[test]
+fn runtime_rejects_document_import_node_invalid_argument() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost::default();
+
+    let error = runtime
+        .eval_program("document.importNode(document);", "inline-script", &mut host)
+        .expect_err("importNode should reject non-node arguments");
+
+    assert!(
+        error
+            .to_string()
+            .contains("document.importNode() expects a node or DocumentFragment argument")
+    );
+}
+
+#[test]
+fn runtime_resolves_document_import_node_access() {
+    struct ImportHost {
+        create_element_calls: Vec<String>,
+        create_text_node_calls: Vec<String>,
+        fragment_children: BTreeMap<u64, Vec<NodeHandle>>,
+        clone_calls: Vec<(NodeHandle, bool)>,
+        append_calls: Vec<(ElementHandle, Vec<NodeHandle>)>,
+    }
+
+    impl HostBindings for ImportHost {
+        fn document_create_element(&mut self, tag_name: &str) -> bt_script::Result<ElementHandle> {
+            self.create_element_calls.push(tag_name.to_string());
+            Ok(match tag_name {
+                "div" => ElementHandle::new(3),
+                "template" => ElementHandle::new(4),
+                _ => ElementHandle::new(99),
+            })
+        }
+
+        fn document_create_text_node(&mut self, text: &str) -> bt_script::Result<NodeHandle> {
+            self.create_text_node_calls.push(text.to_string());
+            Ok(NodeHandle::new(10))
+        }
+
+        fn node_child_nodes_items(
+            &mut self,
+            scope: HtmlCollectionScope,
+        ) -> bt_script::Result<Vec<NodeHandle>> {
+            Ok(match scope {
+                HtmlCollectionScope::Element(element) => self
+                    .fragment_children
+                    .get(&element.raw())
+                    .cloned()
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            })
+        }
+
+        fn node_clone(&mut self, node: NodeHandle, deep: bool) -> bt_script::Result<NodeHandle> {
+            self.clone_calls.push((node, deep));
+            if node.raw() == 4 {
+                let cloned = NodeHandle::new(40);
+                let children = if deep {
+                    self.fragment_children
+                        .get(&node.raw())
+                        .cloned()
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                self.fragment_children.insert(cloned.raw(), children);
+                Ok(cloned)
+            } else {
+                Ok(NodeHandle::new(node.raw() + 1))
+            }
+        }
+
+        fn node_type(&mut self, node: NodeHandle) -> bt_script::Result<u8> {
+            Ok(match node.raw() {
+                10 => 3,
+                4 | 40 => 1,
+                _ => 1,
+            })
+        }
+
+        fn element_append_child(
+            &mut self,
+            parent: ElementHandle,
+            child: NodeHandle,
+        ) -> bt_script::Result<()> {
+            if parent.raw() == 4 {
+                self.fragment_children
+                    .entry(parent.raw())
+                    .or_default()
+                    .push(child);
+            }
+            Ok(())
+        }
+
+        fn element_append(
+            &mut self,
+            element: ElementHandle,
+            children: Vec<NodeHandle>,
+        ) -> bt_script::Result<()> {
+            self.append_calls.push((element, children));
+            Ok(())
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = ImportHost {
+        create_element_calls: Vec::new(),
+        create_text_node_calls: Vec::new(),
+        fragment_children: BTreeMap::new(),
+        clone_calls: Vec::new(),
+        append_calls: Vec::new(),
+    };
+
+    runtime
+        .eval_program(
+            "const source = document.createDocumentFragment(); source.appendChild(document.createTextNode('Hello')); const imported = document.importNode(source, true); const root = document.createElement('div'); root.appendChild(imported);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.importNode should resolve");
+
+    assert_eq!(host.create_element_calls, vec!["template", "div"]);
+    assert_eq!(host.create_text_node_calls, vec!["Hello"]);
+    assert_eq!(host.clone_calls, vec![(NodeHandle::new(4), true)]);
+    assert_eq!(
+        host.append_calls,
+        vec![(ElementHandle::new(3), vec![NodeHandle::new(10)])]
+    );
+}
+
+#[test]
+fn runtime_rejects_document_normalize_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost::default();
+
+    let error = runtime
+        .eval_program(
+            "document.normalize('unexpected');",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("Document.normalize should validate arity");
+
+    assert!(
+        error
+            .to_string()
+            .contains("normalize() expects no arguments")
+    );
+}
+
+#[test]
+fn runtime_resolves_document_normalize_access() {
+    struct NormalizeHost {
+        document_normalize_calls: usize,
+    }
+
+    impl HostBindings for NormalizeHost {
+        fn document_normalize(&mut self) -> bt_script::Result<()> {
+            self.document_normalize_calls += 1;
+            Ok(())
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NormalizeHost {
+        document_normalize_calls: 0,
+    };
+
+    runtime
+        .eval_program("document.normalize();", "inline-script", &mut host)
+        .expect("Document.normalize should resolve through the script runtime");
+
+    assert_eq!(host.document_normalize_calls, 1);
+}
+
+#[test]
+fn runtime_resolves_node_normalize_access() {
+    struct NormalizeHost {
+        element: ElementHandle,
+        node_normalize_calls: Vec<NodeHandle>,
+    }
+
+    impl HostBindings for NormalizeHost {
+        fn document_get_element_by_id(
+            &mut self,
+            id: &str,
+        ) -> bt_script::Result<Option<ElementHandle>> {
+            Ok(match id {
+                "root" => Some(self.element),
+                _ => None,
+            })
+        }
+
+        fn node_normalize(&mut self, node: NodeHandle) -> bt_script::Result<()> {
+            self.node_normalize_calls.push(node);
+            Ok(())
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NormalizeHost {
+        element: ElementHandle::new(11),
+        node_normalize_calls: Vec::new(),
+    };
+
+    runtime
+        .eval_program(
+            "document.getElementById('root').normalize();",
+            "inline-script",
+            &mut host,
+        )
+        .expect("Node.normalize should resolve through the script runtime");
+
+    assert_eq!(host.node_normalize_calls, vec![NodeHandle::new(11)]);
+}
+
+#[test]
+fn runtime_rejects_node_before_non_node_argument() {
+    struct BeforeHost;
+
+    impl HostBindings for BeforeHost {
+        fn document_get_element_by_id(
+            &mut self,
+            id: &str,
+        ) -> bt_script::Result<Option<ElementHandle>> {
+            Ok(match id {
+                "root" => Some(ElementHandle::new(11)),
+                _ => None,
+            })
+        }
+
+        fn document_create_text_node(&mut self, _text: &str) -> bt_script::Result<NodeHandle> {
+            Ok(NodeHandle::new(12))
+        }
+
+        fn element_append_child(
+            &mut self,
+            _parent: ElementHandle,
+            _child: NodeHandle,
+        ) -> bt_script::Result<()> {
+            Ok(())
+        }
+
+        fn node_parent(&mut self, _node: NodeHandle) -> bt_script::Result<Option<NodeHandle>> {
+            Ok(Some(NodeHandle::new(11)))
+        }
+
+        fn node_type(&mut self, node: NodeHandle) -> bt_script::Result<u8> {
+            Ok(match node.raw() {
+                11 => 1,
+                _ => 3,
+            })
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = BeforeHost;
+
+    let error = runtime
+        .eval_program(
+            "const root = document.getElementById('root'); const child = document.createTextNode('Hello'); root.appendChild(child); child.before('unexpected');",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("Node.before should validate its mutation arguments");
+
+    assert!(
+        error
+            .to_string()
+            .contains("before() expects node or DocumentFragment arguments")
+    );
+}
+
+#[test]
+fn runtime_resolves_node_before_and_after_access() {
+    struct BeforeAfterHost {
+        next_node_handle: u64,
+        node_parent_results: BTreeMap<NodeHandle, Option<NodeHandle>>,
+        node_before_calls: Vec<(NodeHandle, Vec<NodeHandle>)>,
+        node_after_calls: Vec<(NodeHandle, Vec<NodeHandle>)>,
+    }
+
+    impl HostBindings for BeforeAfterHost {
+        fn document_get_element_by_id(
+            &mut self,
+            id: &str,
+        ) -> bt_script::Result<Option<ElementHandle>> {
+            Ok(match id {
+                "root" => Some(ElementHandle::new(11)),
+                _ => None,
+            })
+        }
+
+        fn document_create_text_node(&mut self, _text: &str) -> bt_script::Result<NodeHandle> {
+            let handle = NodeHandle::new(self.next_node_handle);
+            self.next_node_handle += 1;
+            Ok(handle)
+        }
+
+        fn element_append_child(
+            &mut self,
+            parent: ElementHandle,
+            child: NodeHandle,
+        ) -> bt_script::Result<()> {
+            self.node_parent_results
+                .insert(child, Some(NodeHandle::new(parent.raw())));
+            Ok(())
+        }
+
+        fn node_before(
+            &mut self,
+            node: NodeHandle,
+            children: Vec<NodeHandle>,
+        ) -> bt_script::Result<()> {
+            self.node_before_calls.push((node, children));
+            Ok(())
+        }
+
+        fn node_after(
+            &mut self,
+            node: NodeHandle,
+            children: Vec<NodeHandle>,
+        ) -> bt_script::Result<()> {
+            self.node_after_calls.push((node, children));
+            Ok(())
+        }
+
+        fn node_parent(&mut self, node: NodeHandle) -> bt_script::Result<Option<NodeHandle>> {
+            Ok(self.node_parent_results.get(&node).copied().unwrap_or(None))
+        }
+
+        fn node_type(&mut self, node: NodeHandle) -> bt_script::Result<u8> {
+            Ok(match node.raw() {
+                11 => 1,
+                _ => 3,
+            })
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = BeforeAfterHost {
+        next_node_handle: 12,
+        node_parent_results: BTreeMap::new(),
+        node_before_calls: Vec::new(),
+        node_after_calls: Vec::new(),
+    };
+
+    runtime
+        .eval_program(
+            "const root = document.getElementById('root'); const child = document.createTextNode('Hello'); root.appendChild(child); child.before(document.createTextNode('Before')); child.after(document.createTextNode('After'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("Node.before and Node.after should resolve through the script runtime");
+
+    assert_eq!(
+        host.node_before_calls,
+        vec![(NodeHandle::new(12), vec![NodeHandle::new(13)])]
+    );
+    assert_eq!(
+        host.node_after_calls,
+        vec![(NodeHandle::new(12), vec![NodeHandle::new(14)])]
+    );
+}
+
+#[test]
+fn runtime_rejects_compare_document_position_non_node_argument() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost::default();
+
+    let error = runtime
+        .eval_program(
+            "document.compareDocumentPosition('unexpected');",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("compareDocumentPosition should validate its argument");
+
+    assert!(
+        error
+            .to_string()
+            .contains("compareDocumentPosition() expects a node argument")
+    );
+}
+
+#[test]
+fn runtime_resolves_compare_document_position_access() {
+    struct CompareHost {
+        compare_calls: Vec<(NodeHandle, NodeHandle)>,
+    }
+
+    impl HostBindings for CompareHost {
+        fn document_get_element_by_id(
+            &mut self,
+            id: &str,
+        ) -> bt_script::Result<Option<ElementHandle>> {
+            Ok(match id {
+                "root" => Some(ElementHandle::new(11)),
+                _ => None,
+            })
+        }
+
+        fn node_compare_document_position(
+            &mut self,
+            node: NodeHandle,
+            other: NodeHandle,
+        ) -> bt_script::Result<u16> {
+            self.compare_calls.push((node, other));
+            Ok(match (node.raw(), other.raw()) {
+                (0, 11) => 20,
+                (11, 0) => 10,
+                _ => 0,
+            })
+        }
+
+        fn node_type(&mut self, node: NodeHandle) -> bt_script::Result<u8> {
+            Ok(match node.raw() {
+                11 => 1,
+                _ => 3,
+            })
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = CompareHost {
+        compare_calls: Vec::new(),
+    };
+
+    runtime
+        .eval_program(
+            "const root = document.getElementById('root'); document.compareDocumentPosition(root); root.compareDocumentPosition(document);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("compareDocumentPosition should resolve through the script runtime");
+
+    assert_eq!(
+        host.compare_calls,
+        vec![
+            (NodeHandle::new(0), NodeHandle::new(11)),
+            (NodeHandle::new(11), NodeHandle::new(0))
+        ]
+    );
+}
+
+#[test]
+fn runtime_rejects_is_same_node_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost::default();
+
+    let error = runtime
+        .eval_program("document.isSameNode();", "inline-script", &mut host)
+        .expect_err("isSameNode should validate arity");
+
+    assert!(
+        error
+            .message()
+            .contains("isSameNode() expects exactly one argument")
+    );
+}
+
+#[test]
+fn runtime_resolves_is_same_node_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(0), "");
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = String(document.isSameNode(document)) + ':' + String(document.isSameNode(null));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("isSameNode should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(0))
+            .map(String::as_str),
+        Some("true:false")
+    );
+}
+
+#[test]
+fn runtime_rejects_is_equal_node_non_node_argument() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost::default();
+
+    let error = runtime
+        .eval_program(
+            "document.isEqualNode('unexpected');",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("isEqualNode should reject non-node arguments");
+
+    assert!(
+        error
+            .message()
+            .contains("isEqualNode() expects a node or null reference")
+    );
+}
+
+#[test]
+fn runtime_resolves_is_equal_node_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(11), "Root");
+    host.seed_element("mirror", ElementHandle::new(12), "Mirror");
+    host.seed_element("tpl", ElementHandle::new(21), "");
+    host.seed_element("other", ElementHandle::new(22), "");
+    host.seed_element("out", ElementHandle::new(0), "");
+    host.element_tag_name_results
+        .insert(ElementHandle::new(21), "template".to_string());
+    host.element_tag_name_results
+        .insert(ElementHandle::new(22), "template".to_string());
+    host.node_is_equal_node_results
+        .insert((NodeHandle::new(11), NodeHandle::new(12)), true);
+    host.template_content_is_equal_node_results
+        .insert((ElementHandle::new(21), ElementHandle::new(22)), true);
+
+    runtime
+        .eval_program(
+            "const root = document.getElementById('root'); const mirror = document.getElementById('mirror'); const tpl = document.getElementById('tpl'); const other = document.getElementById('other'); document.getElementById('out').textContent = String(root.isSameNode(root)) + ':' + String(root.isSameNode(mirror)) + ':' + String(root.isEqualNode(mirror)) + ':' + String(tpl.content.isSameNode(other.content)) + ':' + String(tpl.content.isEqualNode(other.content)) + ':' + String(root.isEqualNode(null));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("isEqualNode should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(0))
+            .map(String::as_str),
+        Some("true:false:true:false:true:false")
+    );
+    assert_eq!(
+        host.node_is_equal_node_calls,
+        vec![(NodeHandle::new(11), NodeHandle::new(12))]
+    );
+    assert_eq!(
+        host.template_content_is_equal_node_calls,
+        vec![(ElementHandle::new(21), ElementHandle::new(22))]
+    );
+}
+
+#[test]
+fn runtime_rejects_node_remove_wrong_arity() {
+    struct RemoveHost;
+
+    impl HostBindings for RemoveHost {
+        fn document_create_text_node(&mut self, _text: &str) -> bt_script::Result<NodeHandle> {
+            Ok(NodeHandle::new(12))
+        }
+
+        fn node_type(&mut self, node: NodeHandle) -> bt_script::Result<u8> {
+            Ok(match node.raw() {
+                12 => 3,
+                _ => 1,
+            })
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RemoveHost;
+
+    let error = runtime
+        .eval_program(
+            "document.createTextNode('Hello').remove('unexpected');",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("Node.remove should validate arity");
+
+    assert!(error.to_string().contains("remove() expects no arguments"));
+}
+
+#[test]
+fn runtime_resolves_node_remove_access() {
+    struct RemoveHost {
+        node_parent_results: BTreeMap<NodeHandle, Option<NodeHandle>>,
+        node_replace_with_calls: Vec<(NodeHandle, Vec<NodeHandle>)>,
+    }
+
+    impl HostBindings for RemoveHost {
+        fn document_get_element_by_id(
+            &mut self,
+            id: &str,
+        ) -> bt_script::Result<Option<ElementHandle>> {
+            Ok(match id {
+                "root" => Some(ElementHandle::new(11)),
+                _ => None,
+            })
+        }
+
+        fn document_create_element(&mut self, _tag_name: &str) -> bt_script::Result<ElementHandle> {
+            Ok(ElementHandle::new(11))
+        }
+
+        fn document_create_text_node(&mut self, _text: &str) -> bt_script::Result<NodeHandle> {
+            Ok(NodeHandle::new(12))
+        }
+
+        fn element_append_child(
+            &mut self,
+            _parent: ElementHandle,
+            _child: NodeHandle,
+        ) -> bt_script::Result<()> {
+            Ok(())
+        }
+
+        fn node_parent(&mut self, node: NodeHandle) -> bt_script::Result<Option<NodeHandle>> {
+            Ok(self.node_parent_results.get(&node).copied().unwrap_or(None))
+        }
+
+        fn node_replace_with(
+            &mut self,
+            node: NodeHandle,
+            children: Vec<NodeHandle>,
+        ) -> bt_script::Result<()> {
+            self.node_replace_with_calls.push((node, children));
+            self.node_parent_results.insert(node, None);
+            Ok(())
+        }
+
+        fn node_type(&mut self, node: NodeHandle) -> bt_script::Result<u8> {
+            Ok(match node.raw() {
+                12 => 3,
+                _ => 1,
+            })
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RemoveHost {
+        node_parent_results: BTreeMap::from([(NodeHandle::new(12), Some(NodeHandle::new(11)))]),
+        node_replace_with_calls: Vec::new(),
+    };
+
+    runtime
+        .eval_program(
+            "const root = document.getElementById('root'); const child = document.createTextNode('Hello'); root.appendChild(child); child.remove();",
+            "inline-script",
+            &mut host,
+        )
+        .expect("Node.remove should resolve through the script runtime");
+
+    assert_eq!(
+        host.node_replace_with_calls,
+        vec![(NodeHandle::new(12), Vec::new())]
+    );
+}
+
+#[test]
+fn runtime_rejects_clone_node_wrong_arity() {
+    struct CloneHost;
+
+    impl HostBindings for CloneHost {
+        fn document_create_element(&mut self, _tag_name: &str) -> bt_script::Result<ElementHandle> {
+            Ok(ElementHandle::new(1))
+        }
+
+        fn node_type(&mut self, _node: NodeHandle) -> bt_script::Result<u8> {
+            Ok(1)
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = CloneHost;
+
+    let error = runtime
+        .eval_program(
+            "const root = document.createElement('div'); root.cloneNode(true, false);",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("cloneNode should validate arity");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cloneNode() expects at most one argument")
+    );
+}
+
+#[test]
+fn runtime_resolves_node_replace_with_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("first", ElementHandle::new(11), "First");
+    host.seed_element("second", ElementHandle::new(12), "Second");
+
+    runtime
+        .eval_program(
+            "document.getElementById('first').replaceWith(document.getElementById('second'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("Element.replaceWith should resolve through the script runtime");
+
+    assert_eq!(
+        host.node_replace_with_calls,
+        vec![(NodeHandle::new(11), vec![NodeHandle::new(12)])]
+    );
+}
+
+#[test]
+fn runtime_resolves_node_contains_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(11), "Root");
+    host.seed_element("child", ElementHandle::new(12), "Child");
+
+    runtime
+        .eval_program(
+            "document.getElementById('root').contains(document.getElementById('child')); document.contains(document.getElementById('child'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("contains should resolve through the script runtime");
+
+    assert_eq!(
+        host.node_contains_calls,
+        vec![(NodeHandle::new(11), NodeHandle::new(12))]
+    );
+    assert_eq!(host.document_contains_calls, vec![NodeHandle::new(12)]);
+}
+
+#[test]
+fn runtime_resolves_node_has_child_nodes_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(0), "");
+    host.seed_element("root", ElementHandle::new(21), "Root");
+    host.seed_element("child", ElementHandle::new(22), "Child");
+    host.document_has_child_nodes_result = true;
+    host.node_has_child_nodes_results
+        .insert(NodeHandle::new(21), true);
+    host.node_has_child_nodes_results
+        .insert(NodeHandle::new(22), false);
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = String(document.hasChildNodes()) + ':' + String(document.getElementById('root').hasChildNodes()) + ':' + String(document.getElementById('child').hasChildNodes());",
+            "inline-script",
+            &mut host,
+        )
+        .expect("hasChildNodes should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(0))
+            .map(String::as_str),
+        Some("true:true:false")
+    );
+    assert_eq!(host.document_has_child_nodes_calls, 1);
+    assert_eq!(
+        host.node_has_child_nodes_calls,
+        vec![NodeHandle::new(21), NodeHandle::new(22)]
+    );
+}
+
+#[test]
+fn runtime_resolves_first_and_last_child_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(0), "");
+    host.seed_element("tpl", ElementHandle::new(6), "");
+    host.seed_element_tag_name(ElementHandle::new(6), "template");
+    host.seed_document_document_element(Some(ElementHandle::new(1)));
+    host.seed_document_body(Some(ElementHandle::new(3)));
+    host.seed_node_child_nodes_items(
+        HtmlCollectionScope::Document,
+        vec![NodeHandle::new(9), NodeHandle::new(1)],
+    );
+    host.seed_node_child_nodes_items(
+        HtmlCollectionScope::Element(ElementHandle::new(1)),
+        vec![NodeHandle::new(2), NodeHandle::new(3)],
+    );
+    host.seed_node_child_nodes_items(
+        HtmlCollectionScope::Element(ElementHandle::new(3)),
+        vec![NodeHandle::new(4), NodeHandle::new(5)],
+    );
+    host.seed_node_child_nodes_items(HtmlCollectionScope::Node(NodeHandle::new(4)), vec![]);
+    host.seed_node_child_nodes_items(
+        HtmlCollectionScope::Element(ElementHandle::new(6)),
+        vec![NodeHandle::new(7), NodeHandle::new(8)],
+    );
+    host.seed_node_type(NodeHandle::new(9), 8);
+    host.seed_node_type(NodeHandle::new(1), 1);
+    host.seed_node_type(NodeHandle::new(2), 1);
+    host.seed_node_type(NodeHandle::new(3), 1);
+    host.seed_node_type(NodeHandle::new(4), 3);
+    host.seed_node_type(NodeHandle::new(5), 8);
+    host.seed_node_type(NodeHandle::new(7), 1);
+    host.seed_node_type(NodeHandle::new(8), 8);
+
+    runtime
+        .eval_program(
+            "const html = document.documentElement; const body = document.body; const tpl = document.getElementById('tpl').content; const text = body.childNodes.item(0); document.getElementById('out').textContent = String(document.firstChild) + ':' + String(document.lastChild) + ':' + String(html.firstChild) + ':' + String(html.lastChild) + ':' + String(body.firstChild) + ':' + String(body.lastChild) + ':' + String(text.firstChild) + ':' + String(text.lastChild) + ':' + String(tpl.firstChild) + ':' + String(tpl.lastChild);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("firstChild and lastChild should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(0))
+            .map(String::as_str),
+        Some(
+            "[object Node]:[object Element]:[object Element]:[object Element]:[object Node]:[object Node]:null:null:[object Element]:[object Node]"
+        )
+    );
+    assert_eq!(
+        host.node_child_nodes_items_calls,
+        vec![
+            HtmlCollectionScope::Element(ElementHandle::new(3)),
+            HtmlCollectionScope::Document,
+            HtmlCollectionScope::Document,
+            HtmlCollectionScope::Element(ElementHandle::new(1)),
+            HtmlCollectionScope::Element(ElementHandle::new(1)),
+            HtmlCollectionScope::Element(ElementHandle::new(3)),
+            HtmlCollectionScope::Element(ElementHandle::new(3)),
+            HtmlCollectionScope::Node(NodeHandle::new(4)),
+            HtmlCollectionScope::Node(NodeHandle::new(4)),
+            HtmlCollectionScope::Element(ElementHandle::new(6)),
+            HtmlCollectionScope::Element(ElementHandle::new(6)),
+        ]
+    );
+}
+
+#[test]
+fn runtime_resolves_sibling_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(5), "");
+    host.seed_element("tpl", ElementHandle::new(7), "");
+    host.seed_element_tag_name(ElementHandle::new(7), "template");
+    host.seed_document_document_element(Some(ElementHandle::new(1)));
+    host.seed_document_head(Some(ElementHandle::new(2)));
+    host.seed_document_body(Some(ElementHandle::new(3)));
+    host.seed_node_child_nodes_items(
+        HtmlCollectionScope::Document,
+        vec![NodeHandle::new(11), NodeHandle::new(1)],
+    );
+    host.seed_node_child_nodes_items(
+        HtmlCollectionScope::Element(ElementHandle::new(1)),
+        vec![NodeHandle::new(2), NodeHandle::new(3)],
+    );
+    host.seed_node_child_nodes_items(
+        HtmlCollectionScope::Element(ElementHandle::new(3)),
+        vec![
+            NodeHandle::new(4),
+            NodeHandle::new(5),
+            NodeHandle::new(6),
+            NodeHandle::new(7),
+            NodeHandle::new(8),
+        ],
+    );
+    host.seed_node_child_nodes_items(
+        HtmlCollectionScope::Element(ElementHandle::new(7)),
+        vec![NodeHandle::new(9), NodeHandle::new(10)],
+    );
+    host.seed_node_parent(NodeHandle::new(11), Some(NodeHandle::new(0)));
+    host.seed_node_parent(NodeHandle::new(1), Some(NodeHandle::new(0)));
+    host.seed_node_parent(NodeHandle::new(2), Some(NodeHandle::new(1)));
+    host.seed_node_parent(NodeHandle::new(3), Some(NodeHandle::new(1)));
+    host.seed_node_parent(NodeHandle::new(4), Some(NodeHandle::new(3)));
+    host.seed_node_parent(NodeHandle::new(5), Some(NodeHandle::new(3)));
+    host.seed_node_parent(NodeHandle::new(6), Some(NodeHandle::new(3)));
+    host.seed_node_parent(NodeHandle::new(7), Some(NodeHandle::new(3)));
+    host.seed_node_parent(NodeHandle::new(8), Some(NodeHandle::new(3)));
+    host.seed_node_parent(NodeHandle::new(9), Some(NodeHandle::new(7)));
+    host.seed_node_parent(NodeHandle::new(10), Some(NodeHandle::new(7)));
+    host.seed_node_type(NodeHandle::new(0), 9);
+    host.seed_node_type(NodeHandle::new(1), 1);
+    host.seed_node_type(NodeHandle::new(2), 1);
+    host.seed_node_type(NodeHandle::new(3), 1);
+    host.seed_node_type(NodeHandle::new(4), 3);
+    host.seed_node_type(NodeHandle::new(5), 1);
+    host.seed_node_type(NodeHandle::new(6), 1);
+    host.seed_node_type(NodeHandle::new(7), 1);
+    host.seed_node_type(NodeHandle::new(8), 1);
+    host.seed_node_type(NodeHandle::new(9), 1);
+    host.seed_node_type(NodeHandle::new(10), 8);
+    host.seed_node_type(NodeHandle::new(11), 8);
+
+    runtime
+        .eval_program(
+            "const html = document.documentElement; const head = document.head; const body = document.body; const tpl = document.getElementById('tpl'); const content = tpl.content; const text = body.childNodes.item(0); const out = body.childNodes.item(1); document.getElementById('out').textContent = String(document.nextSibling) + ':' + String(document.previousSibling) + ':' + String(html.previousSibling) + ':' + String(head.nextSibling) + ':' + String(body.previousSibling) + ':' + String(body.nextSibling) + ':' + String(body.firstChild.nextSibling) + ':' + String(body.lastChild.previousSibling) + ':' + String(text.nextSibling) + ':' + String(out.previousSibling) + ':' + String(tpl.nextSibling) + ':' + String(tpl.previousSibling) + ':' + String(content.nextSibling) + ':' + String(content.previousSibling) + ':' + String(content.firstChild.nextSibling) + ':' + String(content.lastChild.previousSibling);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("sibling reflection should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(5))
+            .map(String::as_str),
+        Some(
+            "null:null:[object Node]:[object Element]:[object Element]:null:[object Element]:[object Element]:[object Element]:[object Node]:[object Element]:[object Element]:null:null:[object Node]:[object Element]"
+        )
+    );
+    assert_eq!(
+        host.node_child_nodes_items_calls,
+        vec![
+            HtmlCollectionScope::Element(ElementHandle::new(3)),
+            HtmlCollectionScope::Element(ElementHandle::new(3)),
+            HtmlCollectionScope::Document,
+            HtmlCollectionScope::Element(ElementHandle::new(1)),
+            HtmlCollectionScope::Element(ElementHandle::new(1)),
+            HtmlCollectionScope::Element(ElementHandle::new(1)),
+            HtmlCollectionScope::Element(ElementHandle::new(3)),
+            HtmlCollectionScope::Element(ElementHandle::new(3)),
+            HtmlCollectionScope::Element(ElementHandle::new(3)),
+            HtmlCollectionScope::Element(ElementHandle::new(3)),
+            HtmlCollectionScope::Element(ElementHandle::new(3)),
+            HtmlCollectionScope::Element(ElementHandle::new(3)),
+            HtmlCollectionScope::Element(ElementHandle::new(3)),
+            HtmlCollectionScope::Element(ElementHandle::new(3)),
+            HtmlCollectionScope::Element(ElementHandle::new(7)),
+            HtmlCollectionScope::Element(ElementHandle::new(7)),
+            HtmlCollectionScope::Element(ElementHandle::new(7)),
+            HtmlCollectionScope::Element(ElementHandle::new(7)),
+        ]
+    );
+}
+
+#[test]
+fn runtime_resolves_element_sibling_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(5), "");
+    host.seed_document_document_element(Some(ElementHandle::new(1)));
+    host.seed_document_head(Some(ElementHandle::new(2)));
+    host.seed_document_body(Some(ElementHandle::new(3)));
+    host.seed_node_child_nodes_items(
+        HtmlCollectionScope::Document,
+        vec![NodeHandle::new(11), NodeHandle::new(1)],
+    );
+    host.seed_node_child_nodes_items(
+        HtmlCollectionScope::Element(ElementHandle::new(1)),
+        vec![NodeHandle::new(2), NodeHandle::new(3)],
+    );
+    host.seed_node_child_nodes_items(
+        HtmlCollectionScope::Element(ElementHandle::new(3)),
+        vec![
+            NodeHandle::new(4),
+            NodeHandle::new(5),
+            NodeHandle::new(6),
+            NodeHandle::new(7),
+        ],
+    );
+    host.seed_node_parent(NodeHandle::new(11), Some(NodeHandle::new(0)));
+    host.seed_node_parent(NodeHandle::new(1), Some(NodeHandle::new(0)));
+    host.seed_node_parent(NodeHandle::new(2), Some(NodeHandle::new(1)));
+    host.seed_node_parent(NodeHandle::new(3), Some(NodeHandle::new(1)));
+    host.seed_node_parent(NodeHandle::new(4), Some(NodeHandle::new(3)));
+    host.seed_node_parent(NodeHandle::new(5), Some(NodeHandle::new(3)));
+    host.seed_node_parent(NodeHandle::new(6), Some(NodeHandle::new(3)));
+    host.seed_node_parent(NodeHandle::new(7), Some(NodeHandle::new(3)));
+    host.seed_node_type(NodeHandle::new(0), 9);
+    host.seed_node_type(NodeHandle::new(1), 1);
+    host.seed_node_type(NodeHandle::new(2), 1);
+    host.seed_node_type(NodeHandle::new(3), 1);
+    host.seed_node_type(NodeHandle::new(4), 3);
+    host.seed_node_type(NodeHandle::new(5), 1);
+    host.seed_node_type(NodeHandle::new(6), 1);
+    host.seed_node_type(NodeHandle::new(7), 1);
+    host.seed_node_type(NodeHandle::new(11), 8);
+
+    runtime
+        .eval_program(
+            "const html = document.documentElement; const head = document.head; const body = document.body; const text = body.firstChild; const out = body.childNodes.item(1); const main = body.childNodes.item(2); const script = body.lastChild; document.getElementById('out').textContent = String(document.nextElementSibling) + ':' + String(document.previousElementSibling) + ':' + String(html.nextElementSibling) + ':' + String(html.previousElementSibling) + ':' + String(head.nextElementSibling) + ':' + String(head.previousElementSibling) + ':' + String(body.nextElementSibling) + ':' + String(body.previousElementSibling) + ':' + String(text.nextElementSibling) + ':' + String(text.previousElementSibling) + ':' + String(out.nextElementSibling) + ':' + String(out.previousElementSibling) + ':' + String(main.previousElementSibling) + ':' + String(main.nextElementSibling) + ':' + String(script.previousElementSibling) + ':' + String(script.nextElementSibling);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element sibling reflection should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(5))
+            .map(String::as_str),
+        Some(
+            "null:null:null:null:[object Element]:null:null:[object Element]:[object Element]:null:[object Element]:null:[object Element]:[object Element]:[object Element]:null"
+        )
+    );
+}
+
+#[test]
+fn runtime_rejects_sibling_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("body", ElementHandle::new(3), "");
+    host.seed_document_body(Some(ElementHandle::new(3)));
+    host.seed_node_child_nodes_items(
+        HtmlCollectionScope::Element(ElementHandle::new(3)),
+        vec![NodeHandle::new(4), NodeHandle::new(5)],
+    );
+    host.seed_node_parent(NodeHandle::new(4), Some(NodeHandle::new(3)));
+    host.seed_node_parent(NodeHandle::new(5), Some(NodeHandle::new(3)));
+    host.seed_node_type(NodeHandle::new(3), 1);
+    host.seed_node_type(NodeHandle::new(4), 3);
+    host.seed_node_type(NodeHandle::new(5), 1);
+
+    let error = runtime
+        .eval_program(
+            "document.body.nextSibling = null;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("nextSibling should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("nextSibling"));
+}
+
+#[test]
+fn runtime_rejects_element_sibling_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("body", ElementHandle::new(3), "");
+    host.seed_document_body(Some(ElementHandle::new(3)));
+    host.seed_node_child_nodes_items(
+        HtmlCollectionScope::Element(ElementHandle::new(3)),
+        vec![NodeHandle::new(4), NodeHandle::new(5), NodeHandle::new(6)],
+    );
+    host.seed_node_parent(NodeHandle::new(4), Some(NodeHandle::new(3)));
+    host.seed_node_parent(NodeHandle::new(5), Some(NodeHandle::new(3)));
+    host.seed_node_parent(NodeHandle::new(6), Some(NodeHandle::new(3)));
+    host.seed_node_type(NodeHandle::new(3), 1);
+    host.seed_node_type(NodeHandle::new(4), 3);
+    host.seed_node_type(NodeHandle::new(5), 1);
+    host.seed_node_type(NodeHandle::new(6), 1);
+
+    let error = runtime
+        .eval_program(
+            "document.body.nextElementSibling = null;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("nextElementSibling should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("on element"));
+    assert!(error.to_string().contains("nextElementSibling"));
+}
+
+#[test]
+fn runtime_rejects_has_child_nodes_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("document.hasChildNodes(true);", "inline-script", &mut host)
+        .expect_err("hasChildNodes should validate arity");
+
+    assert!(
+        error
+            .to_string()
+            .contains("hasChildNodes() expects no arguments")
+    );
+}
+
+#[test]
+fn runtime_rejects_contains_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("document.contains();", "inline-script", &mut host)
+        .expect_err("contains should validate arity");
+
+    assert!(
+        error
+            .to_string()
+            .contains("contains() expects exactly one argument")
     );
 }

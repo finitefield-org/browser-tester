@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use bt_script::ScriptRuntime;
 use bt_runtime::{MockRegistry, Session, SessionConfig};
+use bt_script::ScriptRuntime;
 
 #[test]
 fn reset_all_clears_every_mock_family() {
@@ -88,12 +88,18 @@ fn session_rejects_unseeded_window_confirm_through_script_runtime() {
     let mut runtime = ScriptRuntime::new();
 
     let error = runtime
-        .eval_program("window.confirm('Continue?');", "inline-script", &mut session)
+        .eval_program(
+            "window.confirm('Continue?');",
+            "inline-script",
+            &mut session,
+        )
         .expect_err("window.confirm should require a queued response");
 
-    assert!(error
-        .to_string()
-        .contains("confirm() requires a queued response"));
+    assert!(
+        error
+            .to_string()
+            .contains("confirm() requires a queued response")
+    );
 }
 
 #[test]
@@ -105,9 +111,103 @@ fn session_rejects_unseeded_window_prompt_through_script_runtime() {
         .eval_program("window.prompt('Name?');", "inline-script", &mut session)
         .expect_err("window.prompt should require a queued response");
 
-    assert!(error
-        .to_string()
-        .contains("prompt() requires a queued response"));
+    assert!(
+        error
+            .to_string()
+            .contains("prompt() requires a queued response")
+    );
+}
+
+#[test]
+fn session_rejects_window_navigator_mime_types_assignment_through_script_runtime() {
+    let mut session = Session::new(SessionConfig::default()).expect("session should build");
+    let mut runtime = ScriptRuntime::new();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.mimeTypes = null;",
+            "inline-script",
+            &mut session,
+        )
+        .expect_err("window.navigator.mimeTypes should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `mimeTypes` on navigator value")
+    );
+}
+
+#[test]
+fn session_resolves_window_navigator_mime_types_iterator_helpers_through_script_runtime() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<div id='out'></div>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should build");
+    let mut runtime = ScriptRuntime::new();
+    let mut session = session;
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = String(window.navigator.mimeTypes.keys().next().done) + ':' + String(window.navigator.mimeTypes.values().next().done) + ':' + String(window.navigator.mimeTypes.entries().next().done);",
+            "inline-script",
+            &mut session,
+        )
+        .expect("navigator.mimeTypes iterator helpers should resolve through Session");
+
+    assert_eq!(
+        session
+            .dom()
+            .text_content_for_node(session.dom().select("#out").unwrap()[0]),
+        "true:true:true"
+    );
+}
+
+#[test]
+fn session_resolves_window_navigator_mime_types_named_item_through_script_runtime() {
+    let mut session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<div id='out'></div>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should build");
+    let mut runtime = ScriptRuntime::new();
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = String(window.navigator.mimeTypes.namedItem('missing'));",
+            "inline-script",
+            &mut session,
+        )
+        .expect("window.navigator.mimeTypes.namedItem should resolve through Session");
+
+    assert_eq!(
+        session
+            .dom()
+            .text_content_for_node(session.dom().select("#out").unwrap()[0]),
+        "null"
+    );
+}
+
+#[test]
+fn session_resolves_window_navigator_languages_iterator_helpers_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='out'></div><script>const languages = window.navigator.languages; const keys = languages.keys(); const values = languages.values(); const entries = languages.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); const secondKey = keys.next(); const secondValue = values.next(); const secondEntry = entries.next(); document.getElementById('out').textContent = String(firstKey.value) + ':' + String(firstValue.value) + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value + ':' + String(secondKey.done) + ':' + String(secondValue.done) + ':' + String(secondEntry.done);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("navigator.languages iterator helpers should be wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:en-US:0:en-US:true:true:true"
+    );
 }
 
 #[test]
@@ -278,6 +378,297 @@ fn session_resolves_document_location_without_special_handling_regression() {
 }
 
 #[test]
+fn session_resolves_location_assign_replace_and_reload_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>const before = document.location; window.location.assign('https://example.test/assign'); document.location.replace('https://example.test/replace'); window.location.reload(); document.getElementById('out').textContent = before + ':' + document.location + ':' + String(window.history.length);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("location methods should remain available through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "https://example.test/app:https://example.test/replace:2"
+    );
+    assert_eq!(session.document_location(), "https://example.test/replace");
+    assert_eq!(
+        session.mocks().location().navigations(),
+        &[
+            "https://example.test/assign".to_string(),
+            "https://example.test/replace".to_string(),
+            "https://example.test/replace".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn session_resolves_location_href_getter_and_setter_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>const before = window.location.href; document.location.href = 'https://example.test/next'; const after = document.location.href; document.getElementById('out').textContent = before + ':' + after;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("location.href should remain available through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "https://example.test/app:https://example.test/next"
+    );
+    assert_eq!(session.document_location(), "https://example.test/next");
+    assert_eq!(
+        session.mocks().location().navigations(),
+        &["https://example.test/next".to_string()]
+    );
+}
+
+#[test]
+fn session_resolves_location_stringification_without_special_handling_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test:8443/start?x#old".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.getElementById('out').textContent = document.location.toString() + ':' + window.location.valueOf();</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("location stringification should remain available through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "https://example.test:8443/start?x#old:https://example.test:8443/start?x#old"
+    );
+}
+
+#[test]
+fn session_resolves_location_hash_getter_and_setter_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>const before = window.location.hash; document.location.hash = '#next'; const after = document.location.hash; document.getElementById('out').textContent = before + ':' + document.location + ':' + after;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("location.hash should remain available through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        ":https://example.test/app#next:#next"
+    );
+    assert_eq!(session.document_location(), "https://example.test/app#next");
+    assert_eq!(
+        session.mocks().location().navigations(),
+        &["https://example.test/app#next".to_string()]
+    );
+}
+
+#[test]
+fn session_resolves_location_pathname_getter_and_setter_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/start?x#old".to_string(),
+        html: Some(
+            "<main id='out'></main><script>const before = window.location.pathname; document.location.pathname = 'next'; const after = document.location.pathname; document.getElementById('out').textContent = before + ':' + document.location + ':' + after;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("location.pathname should remain available through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "/start:https://example.test/next?x#old:/next"
+    );
+    assert_eq!(
+        session.document_location(),
+        "https://example.test/next?x#old"
+    );
+    assert_eq!(
+        session.mocks().location().navigations(),
+        &["https://example.test/next?x#old".to_string()]
+    );
+}
+
+#[test]
+fn session_resolves_location_search_getter_and_setter_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/start?x#old".to_string(),
+        html: Some(
+            "<main id='out'></main><script>const before = window.location.search; document.location.search = '?next'; const after = document.location.search; document.getElementById('out').textContent = before + ':' + document.location + ':' + after;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("location.search should remain available through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "?x:https://example.test/start?next#old:?next"
+    );
+    assert_eq!(
+        session.mocks().location().current_url(),
+        Some("https://example.test/start?next#old")
+    );
+    assert_eq!(
+        session.mocks().location().navigations(),
+        &["https://example.test/start?next#old".to_string()]
+    );
+    assert_eq!(
+        session.document_location(),
+        "https://example.test/start?next#old"
+    );
+}
+
+#[test]
+fn session_resolves_location_origin_getter_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test:8443/start?x#old".to_string(),
+        html: Some(
+            "<main id='out'></main><script>const before = window.location.origin; document.location.pathname = 'next'; const after = document.location.origin; document.getElementById('out').textContent = before + ':' + after + ':' + document.location;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("location.origin should remain available through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "https://example.test:8443:https://example.test:8443:https://example.test:8443/next?x#old"
+    );
+    assert_eq!(
+        session.mocks().location().current_url(),
+        Some("https://example.test:8443/next?x#old")
+    );
+    assert_eq!(
+        session.mocks().location().navigations(),
+        &["https://example.test:8443/next?x#old".to_string()]
+    );
+}
+
+#[test]
+fn session_resolves_location_protocol_host_hostname_and_port_getters_and_setters_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://app.local:8443/start?x#old".to_string(),
+        html: Some(
+            "<main id='out'></main><script>const before = window.location.protocol + '|' + window.location.host + '|' + window.location.hostname + '|' + window.location.port; document.location.protocol = 'http:'; document.location.host = 'example.test:8080'; document.location.hostname = 'example.test'; document.location.port = '8080'; const after = window.location.protocol + '|' + window.location.host + '|' + window.location.hostname + '|' + window.location.port; document.getElementById('out').textContent = before + ':' + after + ':' + document.location;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("location protocol/host/hostname/port should remain available through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "https:|app.local:8443|app.local|8443:http:|example.test:8080|example.test|8080:http://example.test:8080/start?x#old"
+    );
+    assert_eq!(
+        session.document_location(),
+        "http://example.test:8080/start?x#old"
+    );
+    assert_eq!(
+        session.mocks().location().navigations(),
+        &[
+            "http://app.local:8443/start?x#old".to_string(),
+            "http://example.test:8080/start?x#old".to_string(),
+            "http://example.test:8080/start?x#old".to_string(),
+            "http://example.test:8080/start?x#old".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn session_resolves_location_username_and_password_getters_and_setters_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://alice:secret@example.test:8443/start?x#old".to_string(),
+        html: Some(
+            "<main id='out'></main><script>const before = window.location.username + '|' + window.location.password; document.location.username = 'bob'; document.location.password = 'hunter2'; document.location.port = '9444'; const after = window.location.username + '|' + window.location.password + '|' + window.location.port; document.getElementById('out').textContent = before + ':' + after + ':' + document.location;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("location username/password should remain available through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "alice|secret:bob|hunter2|9444:https://bob:hunter2@example.test:9444/start?x#old"
+    );
+    assert_eq!(
+        session.document_location(),
+        "https://bob:hunter2@example.test:9444/start?x#old"
+    );
+    assert_eq!(
+        session.mocks().location().navigations(),
+        &[
+            "https://bob:secret@example.test:8443/start?x#old".to_string(),
+            "https://bob:hunter2@example.test:8443/start?x#old".to_string(),
+            "https://bob:hunter2@example.test:9444/start?x#old".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn session_rejects_location_port_with_non_numeric_value_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test:8443/start?x#old".to_string(),
+        html: Some("<script>document.location.port = 'abc';</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("session should reject non-numeric location.port assignments");
+
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported location.port value: abc")
+    );
+}
+
+#[test]
+fn session_rejects_location_assign_without_url_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<script>window.location.assign();</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("location.assign should reject missing URLs");
+
+    assert!(
+        error
+            .to_string()
+            .contains("location.assign() expects exactly one argument")
+    );
+}
+
+#[test]
+fn session_rejects_location_href_without_url_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<script>window.location.href = '';</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("location.href should reject missing URLs");
+
+    assert!(
+        error
+            .to_string()
+            .contains("navigate() requires a non-empty URL")
+    );
+}
+
+#[test]
 fn session_resolves_document_cookie_without_special_handling_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/start".to_string(),
@@ -414,6 +805,53 @@ fn document_domain_assignment_is_rejected_regression() {
 
     assert!(error.to_string().contains("unsupported assignment target"));
     assert!(error.to_string().contains("domain"));
+}
+
+#[test]
+fn document_first_child_assignment_is_rejected_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/start".to_string(),
+        html: Some(
+            "<main id='out'></main><script>document.firstChild = null;</script>".to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("document.firstChild should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("firstChild"));
+}
+
+#[test]
+fn node_next_sibling_assignment_is_rejected_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/start".to_string(),
+        html: Some(
+            "<main id='root'><span id='child'>Child</span><span id='sibling'>Sibling</span></main><script>document.getElementById('child').nextSibling = null;</script>".to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("nextSibling should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("on element"));
+    assert!(error.to_string().contains("nextSibling"));
+}
+
+#[test]
+fn element_next_element_sibling_assignment_is_rejected_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/start".to_string(),
+        html: Some(
+            "<main id='root'><span id='child'>Child</span><span id='sibling'>Sibling</span></main><script>document.getElementById('child').nextElementSibling = null;</script>".to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("nextElementSibling should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("on element"));
+    assert!(error.to_string().contains("nextElementSibling"));
 }
 
 #[test]
@@ -821,6 +1259,225 @@ fn session_resolves_document_style_sheets_entries_regression() {
 }
 
 #[test]
+fn session_resolves_document_create_element_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'></main><div id='out'></div><script>const root = document.getElementById('root'); const created = document.createElement('span'); created.setAttribute('id', 'created'); created.textContent = 'Hello'; root.appendChild(created); document.getElementById('out').textContent = String(root.children.length) + ':' + root.children.namedItem('created').textContent + ':' + created.ownerDocument.documentElement.getAttribute('id');</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.createElement should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "1:Hello:root");
+}
+
+#[test]
+fn session_resolves_document_create_text_node_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'></main><div id='out'></div><script>const root = document.getElementById('root'); const text = document.createTextNode('Hello'); root.appendChild(text); document.getElementById('out').textContent = root.textContent + ':' + String(text.nodeType) + ':' + text.nodeName;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.createTextNode should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "Hello:3:#text");
+}
+
+#[test]
+fn session_resolves_document_create_comment_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'></main><div id='out'></div><script>const root = document.getElementById('root'); const comment = document.createComment('Hello'); root.appendChild(comment); document.getElementById('out').textContent = root.textContent + ':' + String(comment.nodeType) + ':' + comment.nodeName + ':' + comment.textContent + ':' + String(root.childNodes.length);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.createComment should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        ":8:#comment::1"
+    );
+}
+
+#[test]
+fn session_resolves_document_create_document_fragment_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'></main><div id='out'></div><script>const root = document.getElementById('root'); const frag = document.createDocumentFragment(); frag.appendChild(document.createTextNode('Hello')); const returned = root.appendChild(frag); document.getElementById('out').textContent = String(returned) + ':' + String(frag.childNodes.length) + ':' + root.textContent + ':' + String(root.childNodes.length);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.createDocumentFragment should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "[object DocumentFragment]:0:Hello:1"
+    );
+}
+
+#[test]
+fn session_resolves_node_equality_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>const left = document.createElement('div'); left.appendChild(document.createTextNode('Hello')); const right = document.createElement('div'); right.appendChild(document.createTextNode('Hello')); const fragLeft = document.createDocumentFragment(); fragLeft.appendChild(document.createTextNode('Hello')); const fragRight = document.createDocumentFragment(); fragRight.appendChild(document.createTextNode('Hello')); document.getElementById('out').textContent = String(left.isSameNode(right)) + ':' + String(left.isEqualNode(right)) + ':' + String(fragLeft.isSameNode(fragRight)) + ':' + String(fragLeft.isEqualNode(fragRight));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("isEqualNode should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false:true:false:true"
+    );
+}
+
+#[test]
+fn session_resolves_document_import_node_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'></main><div id='out'></div><script>const root = document.getElementById('root'); const source = document.createDocumentFragment(); source.appendChild(document.createTextNode('Hello')); const imported = document.importNode(source, true); const returned = root.appendChild(imported); document.getElementById('out').textContent = String(returned) + ':' + String(imported.childNodes.length) + ':' + root.textContent + ':' + String(root.childNodes.length);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.importNode should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "[object DocumentFragment]:0:Hello:1"
+    );
+}
+
+#[test]
+fn session_resolves_node_normalize_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'>First</main><div id='out'></div><script>const root = document.getElementById('root'); root.appendChild(document.createTextNode('Second')); root.appendChild(document.createTextNode('Third')); root.normalize(); document.getElementById('out').textContent = String(root.childNodes.length) + ':' + String(root.firstChild.nodeType) + ':' + root.textContent;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("Node.normalize should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "1:3:FirstSecondThird"
+    );
+}
+
+#[test]
+fn session_resolves_node_remove_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'></main><div id='out'></div><script>const root = document.getElementById('root'); const child = document.createTextNode('Hello'); root.appendChild(child); child.remove(); document.getElementById('out').textContent = String(child.parentNode) + ':' + String(root.childNodes.length);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("Node.remove should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "null:0");
+}
+
+#[test]
+fn session_resolves_node_clone_node_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'></main><div id='out'></div><script>const root = document.getElementById('root'); const child = document.createTextNode('Hello'); root.appendChild(child); const clone = root.cloneNode(true); document.getElementById('out').textContent = String(clone) + ':' + String(clone.childNodes.length) + ':' + clone.childNodes.item(0).nodeName + ':' + String(clone.childNodes.item(0).nodeType) + ':' + clone.childNodes.item(0).textContent + ':' + String(root.childNodes.length);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("Node.cloneNode should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "[object Element]:1:#text:3:Hello:1"
+    );
+}
+
+#[test]
+fn session_resolves_node_replace_with_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'>First<span id='second'>Second</span></main><div id='out'></div><script>const root = document.getElementById('root'); const first = root.childNodes.item(0); first.replaceWith(document.createTextNode('Alpha')); document.getElementById('out').textContent = String(root.childNodes.length) + ':' + String(root.childNodes.item(0).nodeType) + ':' + root.childNodes.item(0).textContent + ':' + root.childNodes.item(1).textContent + ':' + String(first.parentNode);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("Node.replaceWith should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "2:3:Alpha:Second:null"
+    );
+}
+
+#[test]
+fn session_resolves_node_contains_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><span id='child'>Child</span></main><div id='out'></div><script>const root = document.getElementById('root'); const child = document.getElementById('child'); const detached = document.createElement('div'); document.getElementById('out').textContent = String(document.contains(root)) + ':' + String(root.contains(child)) + ':' + String(child.contains(root)) + ':' + String(detached.contains(detached)) + ':' + String(detached.contains(root)) + ':' + String(root.contains(null));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("contains should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "true:true:false:true:false:false"
+    );
+}
+
+#[test]
+fn session_resolves_has_child_nodes_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><span id='child'>Child</span></main><template id='tpl'><span id='inner'>Inner</span></template><div id='out'></div><script>const root = document.getElementById('root'); const child = document.getElementById('child'); const tpl = document.getElementById('tpl'); document.getElementById('out').textContent = String(document.hasChildNodes()) + ':' + String(root.hasChildNodes()) + ':' + String(child.hasChildNodes()) + ':' + String(tpl.content.hasChildNodes());</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("hasChildNodes should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "true:true:true:true"
+    );
+}
+
+#[test]
 fn session_resolves_document_style_sheets_named_item_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -936,6 +1593,44 @@ fn session_resolves_template_content_live_collection_regression() {
 }
 
 #[test]
+fn session_resolves_template_content_query_selector_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<template id='tpl'><span class='primary' id='first'>First</span><span class='primary' id='second'>Second</span></template><div id='out'></div><script>const tpl = document.getElementById('tpl'); const content = tpl.content; const first = content.querySelector('.primary'); const all = content.querySelectorAll('.primary'); document.getElementById('out').textContent = String(content) + ':' + first.textContent + ':' + String(all.length) + ':' + all.item(0).textContent + ':' + all.item(1).textContent + ':' + String(all.item(2));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("template content query selectors should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "[object DocumentFragment]:First:2:First:Second:null"
+    );
+}
+
+#[test]
+fn session_resolves_template_content_get_element_by_id_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<template id='tpl'><span id='foo,bar'>First</span></template><div id='out'></div><script>const tpl = document.getElementById('tpl'); const content = tpl.content; const hit = content.getElementById('foo,bar'); document.getElementById('out').textContent = String(hit) + ':' + hit.textContent;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("template content getElementById should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "[object Element]:First"
+    );
+}
+
+#[test]
 fn session_resolves_template_content_inner_html_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -953,6 +1648,79 @@ fn session_resolves_template_content_inner_html_regression() {
         "<span id=\"inner\">Inner</span>|<!--tail--><span id=\"second\">Second</span>|2:#comment:1:Second"
     );
     assert_eq!(session.dom().select("#second").unwrap().len(), 1);
+}
+
+#[test]
+fn session_resolves_template_content_text_content_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<template id='tpl'><span id='inner'>Inner</span></template><div id='out'></div><script>const content = document.getElementById('tpl').content; const before = content.textContent; content.textContent = 'Updated'; document.getElementById('out').textContent = before + ':' + content.textContent + ':' + content.innerHTML;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("template content textContent should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "Inner:Updated:Updated"
+    );
+}
+
+#[test]
+fn session_resolves_template_content_fragment_reflection_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<template id='tpl'><span id='inner'>Inner</span></template><div id='out'></div><script>const content = document.getElementById('tpl').content; document.getElementById('out').textContent = String(content.nodeType) + ':' + content.nodeName + ':' + String(content.parentNode) + ':' + String(content.ownerDocument);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("template content fragment reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "11:#document-fragment:null:[object Document]"
+    );
+}
+
+#[test]
+fn session_resolves_template_content_clone_node_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<template id='tpl'><span id='inner'>Inner</span></template><div id='out'></div><script>const content = document.getElementById('tpl').content; const deep = content.cloneNode(true); const shallow = content.cloneNode(); document.getElementById('out').textContent = String(deep) + ':' + String(deep.childNodes.length) + ':' + deep.childNodes.item(0).nodeName + ':' + deep.childNodes.item(0).textContent + ':' + String(shallow.childNodes.length);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("template content cloneNode should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "[object DocumentFragment]:1:span:Inner:0"
+    );
+}
+
+#[test]
+fn session_resolves_template_content_append_child_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<template id='tpl'><span id='inner'>Inner</span></template><div id='out'></div><script>const content = document.getElementById('tpl').content; const clone = content.cloneNode(true); const child = clone.childNodes.item(0); content.appendChild(child); document.getElementById('out').textContent = String(content.childNodes.length) + ':' + content.childNodes.item(1).textContent + ':' + String(clone.childNodes.length);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("template content appendChild should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "2:Inner:0");
 }
 
 #[test]
@@ -1043,12 +1811,101 @@ fn session_resolves_window_children_regression() {
 }
 
 #[test]
+fn session_resolves_owner_document_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<html><body id='body'><main id='out'></main><script>document.getElementById('out').textContent = String(document.body.ownerDocument) + ':' + String(document.body.ownerDocument.defaultView) + ':' + String(document.ownerDocument);</script></body></html>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("ownerDocument should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "[object Document]:[object Window]:null"
+    );
+}
+
+#[test]
+fn session_resolves_parent_node_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<html><body id='body'>Text<main id='out'></main><script>const body = document.body; const text = body.childNodes.item(0); document.getElementById('out').textContent = String(document.parentNode) + ':' + String(document.documentElement.parentNode) + ':' + String(document.documentElement.parentElement) + ':' + String(body.parentNode) + ':' + String(body.parentElement) + ':' + String(text.parentNode) + ':' + String(text.parentElement);</script></body></html>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("parentNode should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "null:[object Document]:null:[object Element]:[object Element]:[object Element]:[object Element]"
+    );
+}
+
+#[test]
+fn session_rejects_parent_node_assignment_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<body id='body'><script>document.body.parentNode = null;</script></body>".to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("parentNode should be read-only");
+
+    let message = error.to_string();
+    assert!(message.contains("unsupported assignment target"));
+    assert!(message.contains("parentNode"));
+}
+
+#[test]
+fn session_resolves_first_and_last_element_child_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<html><head></head><body><div id='wrapper'><span></span><span></span></div><template id='tmpl'><span></span><span></span></template><main id='out'></main><script>const html = document.documentElement; const wrapper = document.getElementById('wrapper'); const template = document.getElementById('tmpl').content; document.getElementById('out').textContent = String(document.childElementCount) + ':' + String(document.firstElementChild) + ':' + String(document.lastElementChild) + ':' + String(html.childElementCount) + ':' + String(html.firstElementChild) + ':' + String(html.lastElementChild) + ':' + String(wrapper.childElementCount) + ':' + String(wrapper.firstElementChild) + ':' + String(wrapper.lastElementChild) + ':' + String(template.childElementCount) + ':' + String(template.firstElementChild) + ':' + String(template.lastElementChild);</script></body></html>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("first/lastElementChild should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "1:[object Element]:[object Element]:2:[object Element]:[object Element]:2:[object Element]:[object Element]:2:[object Element]:[object Element]"
+    );
+}
+
+#[test]
+fn session_rejects_first_element_child_assignment_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<body id='body'><script>document.body.firstElementChild = null;</script></body>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("firstElementChild should be read-only");
+
+    let message = error.to_string();
+    assert!(message.contains("unsupported assignment target"));
+    assert!(message.contains("firstElementChild"));
+}
+
+#[test]
 fn session_rejects_window_frames_length_assignment_regression() {
     let error = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
         html: Some(
-            "<iframe id='first'></iframe><script>window.frames.length = 2;</script>"
-                .to_string(),
+            "<iframe id='first'></iframe><script>window.frames.length = 2;</script>".to_string(),
         ),
         local_storage: BTreeMap::new(),
     })
@@ -1158,6 +2015,71 @@ fn session_exposes_document_content_type_regression() {
 
     let out_id = session.dom().select("#out").unwrap()[0];
     assert_eq!(session.dom().text_content_for_node(out_id), "text/html");
+}
+
+#[test]
+fn session_exposes_document_design_mode_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>const before = document.designMode; document.designMode = 'on'; document.getElementById('out').textContent = before + ':' + document.designMode;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.designMode should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "off:on");
+    assert_eq!(session.document_design_mode(), "on");
+}
+
+#[test]
+fn session_rejects_invalid_document_design_mode_assignment_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<script>document.designMode = 'maybe';</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("document.designMode should reject unsupported values");
+
+    assert!(error.to_string().contains("unsupported"));
+    assert!(error.to_string().contains("designMode"));
+}
+
+#[test]
+fn session_exposes_element_content_editable_getter_setter_and_is_content_editable_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><div id='parent' contenteditable='true'><span id='child' contenteditable='false'>Edit</span></div><script>const child = document.getElementById('child'); const before = child.contentEditable; const beforeState = child.isContentEditable; child.contentEditable = 'inherit'; const after = child.contentEditable; const afterState = child.isContentEditable; document.getElementById('out').textContent = before + ':' + String(beforeState) + ':' + after + ':' + String(afterState) + ':' + String(child.matches(':read-write'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("element.contentEditable should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false:false:inherit:true:true"
+    );
+}
+
+#[test]
+fn session_rejects_invalid_element_content_editable_assignment_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='editable' contenteditable='true'></div><script>document.getElementById('editable').contentEditable = 'maybe';</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("element.contentEditable should reject unsupported values");
+
+    assert!(error.to_string().contains("unsupported"));
+    assert!(error.to_string().contains("contentEditable"));
 }
 
 #[test]
@@ -1670,6 +2592,25 @@ fn session_resolves_collection_entries_regression() {
 }
 
 #[test]
+fn session_resolves_collection_to_string_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>const childNodes = document.childNodes; document.getElementById('out').textContent = childNodes.toString() + ':' + document.plugins.toString() + ':' + window.navigator.mimeTypes.toString();</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("collection toString helpers should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "[object NodeList]:[object HTMLCollection]:[object MimeTypeArray]"
+    );
+}
+
+#[test]
 fn session_resolves_get_elements_by_tag_name_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -2118,7 +3059,7 @@ fn session_resolves_window_navigator_on_line_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
         html: Some(
-            "<div id='out'></div><script>document.getElementById('out').textContent = String(window.navigator.onLine) + ':' + String(window.navigator.webdriver) + ':' + String(window.navigator.appCodeName) + ':' + String(window.navigator.appName) + ':' + String(window.navigator.appVersion) + ':' + String(window.navigator.product) + ':' + String(window.navigator.productSub) + ':' + String(window.navigator.vendor) + ':' + String(window.navigator.vendorSub) + ':' + String(window.navigator.pdfViewerEnabled) + ':' + String(window.navigator.doNotTrack) + ':' + String(window.navigator.javaEnabled()) + ':' + String(window.navigator.hardwareConcurrency) + ':' + String(window.navigator.maxTouchPoints);</script>"
+            "<div id='out'></div><script>document.getElementById('out').textContent = String(window.navigator.onLine) + ':' + String(window.navigator.webdriver) + ':' + String(window.navigator.appCodeName) + ':' + String(window.navigator.appName) + ':' + String(window.navigator.appVersion) + ':' + String(window.navigator.product) + ':' + String(window.navigator.productSub) + ':' + String(window.navigator.vendor) + ':' + String(window.navigator.vendorSub) + ':' + String(window.navigator.pdfViewerEnabled) + ':' + String(window.navigator.doNotTrack) + ':' + String(window.navigator.javaEnabled()) + ':' + String(window.navigator.hardwareConcurrency) + ':' + String(window.navigator.maxTouchPoints) + ':' + window.navigator.userLanguage + ':' + window.navigator.browserLanguage + ':' + window.navigator.systemLanguage + ':' + window.navigator.oscpu + ':' + String(window.navigator.languages.length) + ':' + window.navigator.languages.item(0) + ':' + window.navigator.languages.toString();</script>"
                 .to_string(),
         ),
         local_storage: BTreeMap::new(),
@@ -2128,7 +3069,28 @@ fn session_resolves_window_navigator_on_line_regression() {
     let out_id = session.dom().select("#out").unwrap()[0];
     assert_eq!(
         session.dom().text_content_for_node(out_id),
-        "true:false:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:false:unspecified:false:8:0"
+        "true:false:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:false:unspecified:false:8:0:en-US:en-US:en-US:unknown:1:en-US:[object DOMStringList]"
+    );
+}
+
+#[test]
+fn session_rejects_window_navigator_languages_assignment_regression() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = bt_runtime::Session::new(bt_runtime::SessionConfig::default())
+        .expect("session should build");
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.languages = null;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("navigator.languages should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `languages` on navigator value")
     );
 }
 
@@ -2137,7 +3099,7 @@ fn session_resolves_window_navigator_plugins_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
         html: Some(
-            "<div id='root'><embed id='first-embed'><embed name='second-embed'></div><div id='out'></div><script>document.getElementById('out').textContent = String(window.navigator.plugins.length);</script>"
+            "<div id='root'><embed id='first-embed'><embed name='second-embed'></div><div id='out'></div><script>document.getElementById('out').textContent = String(window.navigator.plugins.length) + ':' + String(window.navigator.plugins.namedItem('first-embed')) + ':' + String(window.navigator.plugins.namedItem('missing'));</script>"
                 .to_string(),
         ),
         local_storage: BTreeMap::new(),
@@ -2145,7 +3107,10 @@ fn session_resolves_window_navigator_plugins_regression() {
     .expect("navigator.plugins should be wired through Session");
 
     let out_id = session.dom().select("#out").unwrap()[0];
-    assert_eq!(session.dom().text_content_for_node(out_id), "2");
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "2:[object Element]:null"
+    );
 }
 
 #[test]
@@ -2218,6 +3183,24 @@ fn session_rejects_document_all_on_elements_explicitly() {
     assert!(error.to_string().contains("unsupported member access"));
     assert!(error.to_string().contains("`all`"));
     assert!(error.to_string().contains("element value"));
+}
+
+#[test]
+fn session_rejects_html_collection_reserved_named_property_access_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><span id='first'>First</span></main><script>document.getElementById('root').children.item;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("reserved HTMLCollection named property access should fail explicitly");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(error.to_string().contains("unsupported member access"));
+    assert!(error.to_string().contains("`item`"));
+    assert!(error.to_string().contains("html collection value"));
 }
 
 #[test]
@@ -2366,6 +3349,44 @@ fn session_reorders_nodes_with_before_and_after_regression() {
 }
 
 #[test]
+fn session_compare_document_position_reports_tree_order_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<html><body><main id='root'><span id='a'><em id='c'>Child</em></span><span id='b'>Sibling</span></main><div id='out'></div><script>const a = document.getElementById('a'); const b = document.getElementById('b'); const c = document.getElementById('c'); const detached = document.createElement('p'); document.getElementById('out').textContent = String(document.compareDocumentPosition(a)) + ':' + String(a.compareDocumentPosition(document)) + ':' + String(a.compareDocumentPosition(b)) + ':' + String(b.compareDocumentPosition(a)) + ':' + String(a.compareDocumentPosition(c)) + ':' + String(c.compareDocumentPosition(a)) + ':' + String(a.compareDocumentPosition(detached)) + ':' + String(detached.compareDocumentPosition(a)) + ':' + String(document.compareDocumentPosition(document));</script></body></html>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("compareDocumentPosition should remain deterministic");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "20:10:4:2:20:10:37:35:0"
+    );
+}
+
+#[test]
+fn session_rejects_node_before_self_insertion_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'></main><script>const root = document.getElementById('root'); const child = document.createTextNode('Hello'); root.appendChild(child); child.before(child);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("self-insertion through Node.before should fail explicitly");
+
+    assert!(
+        error
+            .to_string()
+            .contains("a node cannot be inserted relative to itself")
+    );
+}
+
+#[test]
 fn session_rejects_tree_mutation_cycles_explicitly() {
     let error = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -2426,6 +3447,28 @@ fn session_serializes_insert_adjacent_html_regression() {
 }
 
 #[test]
+fn session_serializes_insert_adjacent_element_and_text_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><section id='target'><button id='old' class='primary'>Old</button></section></main><div id='out'></div><script>const target = document.getElementById('target'); const before = target.insertAdjacentElement('beforebegin', document.createElement('aside')); before.setAttribute('id', 'before'); before.textContent = 'Before'; target.insertAdjacentText('afterbegin', 'First'); const last = target.insertAdjacentElement('beforeend', document.createElement('span')); last.setAttribute('id', 'last'); last.textContent = 'Last'; const after = target.insertAdjacentElement('afterend', document.createElement('aside')); after.setAttribute('id', 'after'); after.textContent = 'After'; target.insertAdjacentText('beforeend', 'Tail'); document.getElementById('out').textContent = document.getElementById('root').innerHTML + '|' + target.innerHTML + '|' + String(before) + ':' + String(after);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("insertAdjacentElement and insertAdjacentText should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "<aside id=\"before\">Before</aside><section id=\"target\">First<button class=\"primary\" id=\"old\">Old</button><span id=\"last\">Last</span>Tail</section><aside id=\"after\">After</aside>|First<button class=\"primary\" id=\"old\">Old</button><span id=\"last\">Last</span>Tail|[object Element]:[object Element]"
+    );
+    assert_eq!(session.dom().select("#before").unwrap().len(), 1);
+    assert_eq!(session.dom().select("#after").unwrap().len(), 1);
+    assert_eq!(session.dom().select("#target > #last").unwrap().len(), 1);
+}
+
+#[test]
 fn session_rejects_detached_insert_adjacent_html_regression() {
     let error = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -2442,6 +3485,43 @@ fn session_rejects_detached_insert_adjacent_html_regression() {
         error
             .to_string()
             .contains("insertAdjacentHTML(beforebegin)")
+    );
+}
+
+#[test]
+fn session_rejects_invalid_insert_adjacent_element_position_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><section id='target'></section><div id='out'></div><script>document.getElementById('target').insertAdjacentElement('middle', document.createElement('aside'));</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("invalid insertAdjacentElement positions should fail explicitly");
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported insertAdjacentElement position")
+    );
+}
+
+#[test]
+fn session_rejects_void_insert_adjacent_text_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><img id='image'></main><script>document.getElementById('image').insertAdjacentText('beforeend', 'Bad');</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("void elements should reject insertAdjacentText explicitly");
+
+    assert!(
+        error
+            .to_string()
+            .contains("insertAdjacentText is not supported on void elements")
     );
 }
 
@@ -2514,6 +3594,25 @@ fn session_rejects_storage_method_wrong_arity_explicitly() {
         error
             .to_string()
             .contains("setItem() expects exactly two arguments")
+    );
+}
+
+#[test]
+fn session_rejects_storage_length_assignment_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>window.localStorage.length = '2';</script>".to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("storage length should be read-only");
+
+    assert!(error.to_string().contains("Script error"));
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `length` on storage value")
     );
 }
 

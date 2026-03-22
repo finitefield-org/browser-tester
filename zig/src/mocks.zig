@@ -512,6 +512,14 @@ pub const MatchMediaMocks = struct {
         return null;
     }
 
+    pub fn currentMatch(self: *const MatchMediaMocks, query: []const u8) ?bool {
+        if (self.findRule(query)) |rule| {
+            if (rule.is_failure) return null;
+            return rule.matches;
+        }
+        return null;
+    }
+
     pub fn reset(self: *MatchMediaMocks) void {
         self.rule_log = .{};
         self.call_log = .{};

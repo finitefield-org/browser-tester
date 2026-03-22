@@ -369,6 +369,16 @@ pub const DomStore = struct {
         return self.findElementByIdInSubtree(self.documentId(), id);
     }
 
+    pub fn findElementByIdWithin(self: *const DomStore, node_id: NodeId, id: []const u8) ?NodeId {
+        const node = self.nodeAt(node_id) orelse return null;
+        for (node.children.items) |child_id| {
+            if (self.findElementByIdInSubtree(child_id, id)) |found| {
+                return found;
+            }
+        }
+        return null;
+    }
+
     pub fn tagNameForNode(self: *const DomStore, node_id: NodeId) ?[]const u8 {
         const node = self.nodeAt(node_id) orelse return null;
         return switch (node.kind) {
@@ -552,7 +562,7 @@ pub const DomStore = struct {
         }
         node.children.items.len = 0;
 
-        try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, node_id, 0);
+        try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, node_id, 0, true);
         try self.syncDocumentTitleFromDom();
         if (std.mem.eql(u8, element.tag_name, "textarea")) {
             try self.resetSelectionToEnd(node_id);
@@ -594,7 +604,7 @@ pub const DomStore = struct {
         const fragment_children = fragment_store.childIds(fragment_root);
 
         try self.removeNode(node_id);
-        try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, parent_id, insertion_index);
+        try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, parent_id, insertion_index, true);
         try self.syncDocumentTitleFromDom();
         return;
     }
@@ -620,7 +630,7 @@ pub const DomStore = struct {
 
             const fragment_root = try self.parseHtmlFragmentIntoStore(&fragment_store, parent_id, html);
             const fragment_children = fragment_store.childIds(fragment_root);
-            try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, parent_id, insertion_index);
+            try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, parent_id, insertion_index, true);
             try self.syncDocumentTitleFromDom();
             return;
         }
@@ -635,7 +645,7 @@ pub const DomStore = struct {
 
             const fragment_root = try self.parseHtmlFragmentIntoStore(&fragment_store, node_id, html);
             const fragment_children = fragment_store.childIds(fragment_root);
-            try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, node_id, 0);
+            try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, node_id, 0, true);
             try self.syncDocumentTitleFromDom();
             if (std.mem.eql(u8, element.tag_name, "textarea")) {
                 try self.resetSelectionToEnd(node_id);
@@ -655,7 +665,7 @@ pub const DomStore = struct {
 
             const fragment_root = try self.parseHtmlFragmentIntoStore(&fragment_store, node_id, html);
             const fragment_children = fragment_store.childIds(fragment_root);
-            try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, node_id, insertion_index);
+            try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, node_id, insertion_index, true);
             try self.syncDocumentTitleFromDom();
             if (std.mem.eql(u8, element.tag_name, "textarea")) {
                 try self.resetSelectionToEnd(node_id);
@@ -672,7 +682,7 @@ pub const DomStore = struct {
 
             const fragment_root = try self.parseHtmlFragmentIntoStore(&fragment_store, parent_id, html);
             const fragment_children = fragment_store.childIds(fragment_root);
-            try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, parent_id, insertion_index);
+            try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, parent_id, insertion_index, true);
             try self.syncDocumentTitleFromDom();
             return;
         }
@@ -716,6 +726,159 @@ pub const DomStore = struct {
             },
             else => return error.HtmlParse,
         }
+    }
+
+    pub fn setNodeValue(self: *DomStore, node_id: NodeId, text: []const u8) errors.Result(void) {
+        const node = self.nodeAtMut(node_id) orelse return error.HtmlParse;
+        const arena_alloc = self.arena.allocator();
+        switch (node.kind) {
+            .text => node.kind = .{ .text = try arena_alloc.dupe(u8, text) },
+            .comment => node.kind = .{ .comment = try arena_alloc.dupe(u8, text) },
+            else => return error.DomError,
+        }
+        try self.syncDocumentTitleFromDom();
+    }
+
+    pub fn characterDataText(self: *const DomStore, node_id: NodeId) errors.Result([]const u8) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        return switch (node.kind) {
+            .text => |text| text,
+            .comment => |comment| comment,
+            else => return error.DomError,
+        };
+    }
+
+    pub fn appendCharacterData(self: *DomStore, node_id: NodeId, text: []const u8) errors.Result(void) {
+        const current = try self.characterDataText(node_id);
+        const merged = try self.concatText(current, text);
+        try self.setNodeValue(node_id, merged);
+    }
+
+    pub fn insertCharacterData(
+        self: *DomStore,
+        node_id: NodeId,
+        offset: usize,
+        text: []const u8,
+    ) errors.Result(void) {
+        const current = try self.characterDataText(node_id);
+        if (offset > current.len) return error.DomError;
+
+        const merged_prefix = try self.concatText(current[0..offset], text);
+        const merged = try self.concatText(merged_prefix, current[offset..]);
+        try self.setNodeValue(node_id, merged);
+    }
+
+    pub fn deleteCharacterData(
+        self: *DomStore,
+        node_id: NodeId,
+        offset: usize,
+        count: usize,
+    ) errors.Result(void) {
+        const current = try self.characterDataText(node_id);
+        if (offset > current.len) return error.DomError;
+
+        const remaining = current.len - offset;
+        const delete_count = if (count > remaining) remaining else count;
+        const end = offset + delete_count;
+        const merged = try self.concatText(current[0..offset], current[end..]);
+        try self.setNodeValue(node_id, merged);
+    }
+
+    pub fn replaceCharacterData(
+        self: *DomStore,
+        node_id: NodeId,
+        offset: usize,
+        count: usize,
+        text: []const u8,
+    ) errors.Result(void) {
+        const current = try self.characterDataText(node_id);
+        if (offset > current.len) return error.DomError;
+
+        const remaining = current.len - offset;
+        const delete_count = if (count > remaining) remaining else count;
+        const end = offset + delete_count;
+        const merged_prefix = try self.concatText(current[0..offset], text);
+        const merged = try self.concatText(merged_prefix, current[end..]);
+        try self.setNodeValue(node_id, merged);
+    }
+
+    pub fn splitTextNode(self: *DomStore, node_id: NodeId, offset: usize) errors.Result(NodeId) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        const text_value = switch (node.kind) {
+            .text => |text| text,
+            else => return error.DomError,
+        };
+        if (offset > text_value.len) return error.DomError;
+
+        const parent_id = node.parent;
+        const head = text_value[0..offset];
+        const tail = text_value[offset..];
+        try self.setNodeValue(node_id, head);
+
+        if (parent_id) |attached_parent| {
+            const split = try self.addText(attached_parent, tail);
+            try self.insertChildrenAfter(attached_parent, node_id, &.{split});
+            return split;
+        }
+
+        return try self.createTextNode(tail);
+    }
+
+    pub fn normalize(self: *DomStore, node_id: NodeId) errors.Result(void) {
+        const node = self.nodeAtMut(node_id) orelse return error.HtmlParse;
+        switch (node.kind) {
+            .document, .element => {
+                const old_children = node.children.items;
+                const arena_alloc = self.arena.allocator();
+                var new_children: std.ArrayListUnmanaged(NodeId) = .{};
+                var previous_text: ?NodeId = null;
+
+                for (old_children) |child_id| {
+                    const child = self.nodeAt(child_id) orelse return error.HtmlParse;
+                    switch (child.kind) {
+                        .document, .element => {
+                            try self.normalize(child_id);
+                            try new_children.append(arena_alloc, child_id);
+                            previous_text = null;
+                        },
+                        .text => |text| {
+                            if (text.len == 0) {
+                                if (self.nodeAtMut(child_id)) |removed| {
+                                    removed.parent = null;
+                                }
+                                continue;
+                            }
+
+                            if (previous_text) |previous_id| {
+                                const previous = self.nodeAtMut(previous_id) orelse return error.HtmlParse;
+                                const previous_text_value = switch (previous.kind) {
+                                    .text => |value| value,
+                                    else => return error.HtmlParse,
+                                };
+                                const merged = try self.concatText(previous_text_value, text);
+                                previous.kind = .{ .text = merged };
+                                if (self.nodeAtMut(child_id)) |removed| {
+                                    removed.parent = null;
+                                }
+                                continue;
+                            }
+
+                            try new_children.append(arena_alloc, child_id);
+                            previous_text = child_id;
+                        },
+                        .comment => {
+                            try new_children.append(arena_alloc, child_id);
+                            previous_text = null;
+                        },
+                    }
+                }
+
+                node.children = new_children;
+                try self.syncDocumentTitleFromDom();
+            },
+            .text, .comment => {},
+        }
+        return;
     }
 
     pub fn getAttribute(
@@ -1103,6 +1266,13 @@ pub const DomStore = struct {
         return;
     }
 
+    pub fn removeChild(self: *DomStore, parent: NodeId, child: NodeId) errors.Result(NodeId) {
+        const child_parent = parentOf(self, child) orelse return error.DomError;
+        if (!sameNodeId(child_parent, parent)) return error.DomError;
+        try self.removeNode(child);
+        return child;
+    }
+
     pub fn appendChildren(
         self: *DomStore,
         parent: NodeId,
@@ -1252,6 +1422,14 @@ pub const DomStore = struct {
         }
     }
 
+    fn concatText(self: *DomStore, left: []const u8, right: []const u8) errors.Result([]const u8) {
+        const arena_alloc = self.arena.allocator();
+        const merged = try arena_alloc.alloc(u8, left.len + right.len);
+        @memcpy(merged[0..left.len], left);
+        @memcpy(merged[left.len..], right);
+        return merged;
+    }
+
     fn parseHtmlFragmentIntoStore(
         self: *const DomStore,
         fragment_store: *DomStore,
@@ -1282,10 +1460,11 @@ pub const DomStore = struct {
         fragment_children: []const NodeId,
         parent: NodeId,
         insertion_index: usize,
+        deep: bool,
     ) errors.Result(void) {
         var next_index = insertion_index;
         for (fragment_children) |child_id| {
-            _ = try self.cloneSubtreeAt(fragment_store, child_id, parent, next_index);
+            _ = try self.cloneSubtreeAt(fragment_store, child_id, parent, next_index, deep);
             next_index += 1;
         }
     }
@@ -1296,6 +1475,7 @@ pub const DomStore = struct {
         source_node_id: NodeId,
         parent: NodeId,
         insertion_index: usize,
+        deep: bool,
     ) errors.Result(NodeId) {
         const source_node = source.nodeAt(source_node_id) orelse return error.DomError;
         const created = switch (source_node.kind) {
@@ -1317,15 +1497,31 @@ pub const DomStore = struct {
 
         try self.moveAppendedChildToIndex(parent, created, insertion_index);
 
-        if (source_node.kind == .element) {
+        if (deep and source_node.kind == .element) {
             const source_children = source_node.children.items;
             var child_index: usize = 0;
             while (child_index < source_children.len) : (child_index += 1) {
-                _ = try self.cloneSubtreeAt(source, source_children[child_index], created, child_index);
+                _ = try self.cloneSubtreeAt(source, source_children[child_index], created, child_index, true);
             }
         }
 
         return created;
+    }
+
+    pub fn cloneNode(self: *DomStore, source_node_id: NodeId, deep: bool) errors.Result(NodeId) {
+        const source_node = self.nodeAt(source_node_id) orelse return error.DomError;
+        if (source_node.kind == .document) {
+            return error.DomError;
+        }
+
+        var fragment_store = try DomStore.init(self.allocator);
+        defer fragment_store.deinit();
+
+        const fragment_root = try fragment_store.cloneSubtreeAt(self, source_node_id, fragment_store.documentId(), 0, deep);
+        const insertion_index = try self.childCount(self.documentId());
+        const cloned = try self.cloneSubtreeAt(&fragment_store, fragment_root, self.documentId(), insertion_index, deep);
+        try self.removeNode(cloned);
+        return cloned;
     }
 
     fn moveAppendedChildToIndex(
@@ -1760,6 +1956,16 @@ pub const DomStore = struct {
         return false;
     }
 
+    pub fn nodeContains(self: *const DomStore, container_id: NodeId, target_id: NodeId) bool {
+        return comparisonContains(self, container_id, target_id);
+    }
+
+    pub fn nodeContainsFragment(self: *const DomStore, fragment_root_id: NodeId, target_id: NodeId) bool {
+        if (sameNodeId(fragment_root_id, target_id)) return true;
+        const target_root = comparisonRoot(self, target_id) orelse return false;
+        return sameNodeId(target_root, fragment_root_id);
+    }
+
     fn ensureMutationParent(self: *const DomStore, parent: NodeId) errors.Result(void) {
         const node = self.nodeAt(parent) orelse return error.DomError;
         switch (node.kind) {
@@ -1942,6 +2148,51 @@ pub const DomStore = struct {
             .kind = .{ .comment = text_copy },
         });
         try self.attachNode(parent, node_id);
+        return node_id;
+    }
+
+    pub fn createElementDetached(self: *DomStore, tag_name: []const u8) errors.Result(NodeId) {
+        if (!isValidDetachedElementTagName(tag_name)) {
+            return error.DomError;
+        }
+
+        const arena_alloc = self.arena.allocator();
+        const node_id = NodeId.new(@intCast(self.nodes.items.len), 0);
+        try self.nodes.append(arena_alloc, .{
+            .id = node_id,
+            .parent = null,
+            .children = .{},
+            .kind = .{ .element = .{
+                .tag_name = try duplicateLowercase(self, tag_name),
+                .attributes = .{},
+            } },
+        });
+        return node_id;
+    }
+
+    pub fn createTextNode(self: *DomStore, text: []const u8) errors.Result(NodeId) {
+        const arena_alloc = self.arena.allocator();
+        const text_copy = try arena_alloc.dupe(u8, text);
+        const node_id = NodeId.new(@intCast(self.nodes.items.len), 0);
+        try self.nodes.append(arena_alloc, .{
+            .id = node_id,
+            .parent = null,
+            .children = .{},
+            .kind = .{ .text = text_copy },
+        });
+        return node_id;
+    }
+
+    pub fn createComment(self: *DomStore, text: []const u8) errors.Result(NodeId) {
+        const arena_alloc = self.arena.allocator();
+        const text_copy = try arena_alloc.dupe(u8, text);
+        const node_id = NodeId.new(@intCast(self.nodes.items.len), 0);
+        try self.nodes.append(arena_alloc, .{
+            .id = node_id,
+            .parent = null,
+            .children = .{},
+            .kind = .{ .comment = text_copy },
+        });
         return node_id;
     }
 
@@ -2251,6 +2502,14 @@ fn duplicateLowercase(store: *DomStore, value: []const u8) errors.Result([]const
         out[i] = std.ascii.toLower(byte);
     }
     return out;
+}
+
+fn isValidDetachedElementTagName(name: []const u8) bool {
+    if (name.len == 0) return false;
+    for (name) |byte| {
+        if (!isTagNameByte(byte)) return false;
+    }
+    return true;
 }
 
 fn trimAttributeName(name: []const u8) ?[]const u8 {
@@ -3249,6 +3508,109 @@ fn parentOf(self: *const DomStore, node_id: NodeId) ?NodeId {
     return node.parent;
 }
 
+pub fn comparisonRoot(self: *const DomStore, node_id: NodeId) ?NodeId {
+    var current = node_id;
+    while (true) {
+        const node = self.nodeAt(current) orelse return null;
+        if (node.parent) |parent_id| {
+            const parent = self.nodeAt(parent_id) orelse return null;
+            if (parent.kind == .element) {
+                if (self.tagNameForNode(parent_id)) |tag_name| {
+                    if (std.mem.eql(u8, tag_name, "template")) {
+                        return parent_id;
+                    }
+                }
+            }
+            current = parent_id;
+        } else {
+            return current;
+        }
+    }
+}
+
+fn comparisonDepth(self: *const DomStore, node_id: NodeId, root_id: NodeId) ?usize {
+    var depth: usize = 0;
+    var current = node_id;
+    while (!sameNodeId(current, root_id)) {
+        current = parentOf(self, current) orelse return null;
+        depth += 1;
+    }
+    return depth;
+}
+
+fn comparisonContains(self: *const DomStore, container_id: NodeId, target_id: NodeId) bool {
+    if (sameNodeId(container_id, target_id)) return true;
+    const container_root = comparisonRoot(self, container_id) orelse return false;
+    const target_root = comparisonRoot(self, target_id) orelse return false;
+    if (!sameNodeId(container_root, target_root)) return false;
+
+    var current = target_id;
+    while (!sameNodeId(current, container_root)) {
+        current = parentOf(self, current) orelse return false;
+        if (sameNodeId(current, container_id)) return true;
+    }
+    return false;
+}
+
+fn comparisonOrder(
+    self: *const DomStore,
+    left_id: NodeId,
+    right_id: NodeId,
+    root_id: NodeId,
+) ?bool {
+    var left = left_id;
+    var right = right_id;
+    var left_depth = comparisonDepth(self, left_id, root_id) orelse return null;
+    var right_depth = comparisonDepth(self, right_id, root_id) orelse return null;
+    while (left_depth > right_depth) {
+        left = parentOf(self, left) orelse return null;
+        left_depth -= 1;
+    }
+    while (right_depth > left_depth) {
+        right = parentOf(self, right) orelse return null;
+        right_depth -= 1;
+    }
+
+    while (true) {
+        const left_parent = parentOf(self, left) orelse return null;
+        const right_parent = parentOf(self, right) orelse return null;
+        if (sameNodeId(left_parent, right_parent)) break;
+        left = left_parent;
+        right = right_parent;
+    }
+
+    const parent_id = parentOf(self, left) orelse return null;
+    const left_index = self.childIndex(parent_id, left) catch return null;
+    const right_index = self.childIndex(parent_id, right) catch return null;
+    return left_index < right_index;
+}
+
+pub fn firstChild(self: *const DomStore, node_id: NodeId) ?NodeId {
+    const node = self.nodeAt(node_id) orelse return null;
+    return if (node.children.items.len > 0) node.children.items[0] else null;
+}
+
+pub fn lastChild(self: *const DomStore, node_id: NodeId) ?NodeId {
+    const node = self.nodeAt(node_id) orelse return null;
+    if (node.children.items.len == 0) return null;
+    return node.children.items[node.children.items.len - 1];
+}
+
+pub fn hasChildNodes(self: *const DomStore, node_id: NodeId) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    return node.children.items.len != 0;
+}
+
+pub fn isConnected(self: *const DomStore, node_id: NodeId) bool {
+    var current = node_id;
+    while (true) {
+        if (sameNodeId(current, self.documentId())) {
+            return true;
+        }
+        current = parentOf(self, current) orelse return false;
+    }
+}
+
 fn documentElementId(self: *const DomStore) ?NodeId {
     const document = self.nodeAt(self.documentId()) orelse return null;
     for (document.children.items) |child_id| {
@@ -3266,7 +3628,7 @@ fn selectorScopeRootForSearch(self: *const DomStore, root_id: NodeId) ?NodeId {
     return root_id;
 }
 
-fn previousElementSibling(self: *const DomStore, node_id: NodeId) ?NodeId {
+pub fn previousElementSibling(self: *const DomStore, node_id: NodeId) ?NodeId {
     const parent_id = parentOf(self, node_id) orelse return null;
     const parent = self.nodeAt(parent_id) orelse return null;
     var index = self.childIndex(parent_id, node_id) catch return null;
@@ -3280,7 +3642,74 @@ fn previousElementSibling(self: *const DomStore, node_id: NodeId) ?NodeId {
     return null;
 }
 
-fn nextElementSibling(self: *const DomStore, node_id: NodeId) ?NodeId {
+pub fn compareDocumentPosition(self: *const DomStore, node_id: NodeId, other_id: NodeId) u16 {
+    const DISCONNECTED: u16 = 0x01;
+    const PRECEDING: u16 = 0x02;
+    const FOLLOWING: u16 = 0x04;
+    const CONTAINS: u16 = 0x08;
+    const CONTAINED_BY: u16 = 0x10;
+    const IMPLEMENTATION_SPECIFIC: u16 = 0x20;
+
+    if (sameNodeId(node_id, other_id)) return 0;
+
+    const node_root = comparisonRoot(self, node_id) orelse return DISCONNECTED | IMPLEMENTATION_SPECIFIC | FOLLOWING;
+    const other_root = comparisonRoot(self, other_id) orelse return DISCONNECTED | IMPLEMENTATION_SPECIFIC | PRECEDING;
+    if (!sameNodeId(node_root, other_root)) {
+        return if (node_root.index < other_root.index)
+            DISCONNECTED | IMPLEMENTATION_SPECIFIC | FOLLOWING
+        else
+            DISCONNECTED | IMPLEMENTATION_SPECIFIC | PRECEDING;
+    }
+
+    if (comparisonContains(self, node_id, other_id)) {
+        return CONTAINED_BY | FOLLOWING;
+    }
+
+    if (comparisonContains(self, other_id, node_id)) {
+        return CONTAINS | PRECEDING;
+    }
+
+    return if (comparisonOrder(self, node_id, other_id, node_root) orelse false) FOLLOWING else PRECEDING;
+}
+
+pub fn nodeIsEqualNode(self: *const DomStore, node_id: NodeId, other_id: NodeId) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    const other = self.nodeAt(other_id) orelse return false;
+
+    return switch (node.kind) {
+        .document => switch (other.kind) {
+            .document => nodeChildrenEqual(self, node.children.items, other.children.items),
+            else => false,
+        },
+        .element => |left| switch (other.kind) {
+            .element => |right| elementDataEqual(left, right) and nodeChildrenEqual(self, node.children.items, other.children.items),
+            else => false,
+        },
+        .text => |left| switch (other.kind) {
+            .text => |right| std.mem.eql(u8, left, right),
+            else => false,
+        },
+        .comment => |left| switch (other.kind) {
+            .comment => |right| std.mem.eql(u8, left, right),
+            else => false,
+        },
+    };
+}
+
+pub fn templateContentIsEqualNode(self: *const DomStore, left: NodeId, right: NodeId) bool {
+    const left_record = self.nodeAt(left) orelse return false;
+    const right_record = self.nodeAt(right) orelse return false;
+
+    return switch (left_record.kind) {
+        .element => switch (right_record.kind) {
+            .element => nodeChildrenEqual(self, left_record.children.items, right_record.children.items),
+            else => false,
+        },
+        else => false,
+    };
+}
+
+pub fn nextElementSibling(self: *const DomStore, node_id: NodeId) ?NodeId {
     const parent_id = parentOf(self, node_id) orelse return null;
     const parent = self.nodeAt(parent_id) orelse return null;
     const start_index = self.childIndex(parent_id, node_id) catch return null;
@@ -3294,7 +3723,24 @@ fn nextElementSibling(self: *const DomStore, node_id: NodeId) ?NodeId {
     return null;
 }
 
-fn firstElementChild(self: *const DomStore, parent_id: NodeId) ?NodeId {
+pub fn previousSibling(self: *const DomStore, node_id: NodeId) ?NodeId {
+    const parent_id = parentOf(self, node_id) orelse return null;
+    const parent = self.nodeAt(parent_id) orelse return null;
+    const index = self.childIndex(parent_id, node_id) catch return null;
+    if (index == 0) return null;
+    return parent.children.items[index - 1];
+}
+
+pub fn nextSibling(self: *const DomStore, node_id: NodeId) ?NodeId {
+    const parent_id = parentOf(self, node_id) orelse return null;
+    const parent = self.nodeAt(parent_id) orelse return null;
+    const index = self.childIndex(parent_id, node_id) catch return null;
+    const next_index = index + 1;
+    if (next_index >= parent.children.items.len) return null;
+    return parent.children.items[next_index];
+}
+
+pub fn firstElementChild(self: *const DomStore, parent_id: NodeId) ?NodeId {
     const parent = self.nodeAt(parent_id) orelse return null;
     for (parent.children.items) |child_id| {
         if (self.tagNameForNode(child_id) != null) {
@@ -3304,7 +3750,7 @@ fn firstElementChild(self: *const DomStore, parent_id: NodeId) ?NodeId {
     return null;
 }
 
-fn lastElementChild(self: *const DomStore, parent_id: NodeId) ?NodeId {
+pub fn lastElementChild(self: *const DomStore, parent_id: NodeId) ?NodeId {
     const parent = self.nodeAt(parent_id) orelse return null;
     var index = parent.children.items.len;
     while (index > 0) {
@@ -3315,6 +3761,17 @@ fn lastElementChild(self: *const DomStore, parent_id: NodeId) ?NodeId {
         }
     }
     return null;
+}
+
+pub fn childElementCount(self: *const DomStore, parent_id: NodeId) usize {
+    const parent = self.nodeAt(parent_id) orelse return 0;
+    var count: usize = 0;
+    for (parent.children.items) |child_id| {
+        if (self.tagNameForNode(child_id) != null) {
+            count += 1;
+        }
+    }
+    return count;
 }
 
 fn isOnlyElementChild(self: *const DomStore, node_id: NodeId) bool {
@@ -3927,6 +4384,32 @@ fn isRequiredPseudoCandidate(tag_name: []const u8) bool {
 
 fn sameNodeId(left: NodeId, right: NodeId) bool {
     return left.index == right.index and left.generation == right.generation;
+}
+
+fn elementDataEqual(left: ElementData, right: ElementData) bool {
+    if (!std.mem.eql(u8, left.tag_name, right.tag_name)) return false;
+    if (left.attributes.items.len != right.attributes.items.len) return false;
+
+    for (left.attributes.items) |left_attribute| {
+        var matched = false;
+        for (right.attributes.items) |right_attribute| {
+            if (!asciiEqualIgnoreCase(left_attribute.name, right_attribute.name)) continue;
+            if (!std.mem.eql(u8, left_attribute.value, right_attribute.value)) continue;
+            matched = true;
+            break;
+        }
+        if (!matched) return false;
+    }
+
+    return true;
+}
+
+fn nodeChildrenEqual(self: *const DomStore, left: []const NodeId, right: []const NodeId) bool {
+    if (left.len != right.len) return false;
+    for (left, right) |left_child, right_child| {
+        if (!nodeIsEqualNode(self, left_child, right_child)) return false;
+    }
+    return true;
 }
 
 fn serializationNamespaceForChild(

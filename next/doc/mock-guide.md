@@ -43,6 +43,8 @@ The typed registry is still the source of truth for seeds and capture.
 Use `Harness::mocks_mut()` to configure the family, then call the matching action on `Harness`.
 Download capture records `DownloadCapture` artifacts in the registry and exposes them through `downloads().artifacts()`.
 `matchMedia` is registry-backed and builder-seeded rather than a standalone `Harness` action.
+The location family also captures script-side `window.location.assign()`, `window.location.replace()`, `window.location.reload()`, and `window.location.hash` / `document.location.hash` / `window.location.pathname` / `document.location.pathname` / `window.location.search` / `document.location.search` assignments through the same navigation log that `Harness::navigate()` uses.
+The same navigation log also covers `document.location.href`, `document.location.hash`, `document.location.pathname`, `document.location.search`, `document.location.origin`, `window.location.href`, `window.location.hash`, `window.location.pathname`, `window.location.search`, and `window.location.origin` assignments.
 
 ## Minimal Example
 
@@ -198,7 +200,7 @@ Examples:
 - `fetch`: response rules, error rules, request call capture
 - `dialogs`: queued confirm/prompt answers, alert capture, and call-message capture
 - `clipboard`: seeded read state and write capture
-- `location`: current URL seed and navigation capture
+- `location`: current URL seed and navigation capture, including `window.location.href`, `document.location.href`, `window.location.hash`, `document.location.hash`, `window.location.pathname`, `document.location.pathname`, `window.location.search`, `document.location.search`, `window.location.origin`, `document.location.origin`, `window.location.assign()`, `window.location.replace()`, and `window.location.reload()`
 - `downloads`: artifact capture through the registry and `Harness::capture_download(...)`
 - `file_input`: file selection seed and capture
 - `print`: call capture through the registry and `Harness::print(...)`, plus optional builder-seeded bootstrap failure
