@@ -2066,6 +2066,18 @@ impl HostBindings for RecordingHost {
         Ok(self.attributes.contains_key(&(element, name.to_string())))
     }
 
+    fn element_attribute_names(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<String>> {
+        Ok(self
+            .attributes
+            .keys()
+            .filter(|(candidate_element, _)| *candidate_element == element)
+            .map(|(_, name)| name.clone())
+            .collect())
+    }
+
     fn element_toggle_attribute(
         &mut self,
         element: ElementHandle,
@@ -4927,6 +4939,8 @@ fn runtime_resolves_window_navigator_plugins_access() {
     host.seed_element("first-embed", ElementHandle::new(1), "");
     host.seed_element("second-embed", ElementHandle::new(2), "");
     host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_attribute(ElementHandle::new(1), "id", "first-embed");
+    host.seed_attribute(ElementHandle::new(2), "id", "second-embed");
     let plugins_collection = HtmlCollectionTarget::ByTagName {
         scope: HtmlCollectionScope::Document,
         tag_name: "embed".to_string(),
@@ -4967,6 +4981,8 @@ fn runtime_resolves_window_navigator_plugins_named_item_access() {
     host.seed_element("first-embed", ElementHandle::new(1), "");
     host.seed_element("second-embed", ElementHandle::new(2), "");
     host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_attribute(ElementHandle::new(1), "id", "first-embed");
+    host.seed_attribute(ElementHandle::new(2), "id", "second-embed");
     let plugins_collection = HtmlCollectionTarget::ByTagName {
         scope: HtmlCollectionScope::Document,
         tag_name: "embed".to_string(),
@@ -5003,6 +5019,110 @@ fn runtime_resolves_window_navigator_plugins_named_item_access() {
     assert_eq!(
         host.html_collection_tag_name_named_item_calls,
         vec![(plugins_collection, "first-embed".to_string())]
+    );
+}
+
+#[test]
+fn runtime_resolves_window_navigator_plugins_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("first-embed", ElementHandle::new(1), "");
+    host.seed_element("second-embed", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_attribute(ElementHandle::new(1), "id", "first-embed");
+    host.seed_attribute(ElementHandle::new(2), "id", "second-embed");
+    let plugins_collection = HtmlCollectionTarget::ByTagName {
+        scope: HtmlCollectionScope::Document,
+        tag_name: "embed".to_string(),
+    };
+    host.seed_html_collection_tag_name_items(
+        plugins_collection.clone(),
+        vec![ElementHandle::new(1), ElementHandle::new(2)],
+    );
+
+    runtime
+        .eval_program(
+            "const plugins = window.navigator.plugins; const keys = plugins.keys(); const values = plugins.values(); const entries = plugins.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; plugins.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.navigator.plugins iterator helpers should resolve through host bindings");
+
+    assert_eq!(
+        host.html_collection_tag_name_items_calls,
+        vec![
+            plugins_collection.clone(),
+            plugins_collection.clone(),
+            plugins_collection.clone(),
+            plugins_collection.clone(),
+            plugins_collection.clone(),
+            plugins_collection,
+        ]
+    );
+    assert_eq!(
+        host.html_collection_tag_name_named_item_calls,
+        Vec::<(HtmlCollectionTarget, String)>::new()
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("0:first-embed:0:first-embed:0:first-embed:2;1:second-embed:2;")
+    );
+}
+
+#[test]
+fn runtime_resolves_window_navigator_plugins_refresh() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("first-embed", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    let plugins_collection = HtmlCollectionTarget::ByTagName {
+        scope: HtmlCollectionScope::Document,
+        tag_name: "embed".to_string(),
+    };
+    host.seed_html_collection_tag_name_items(
+        plugins_collection.clone(),
+        vec![ElementHandle::new(1)],
+    );
+
+    runtime
+        .eval_program(
+            "const plugins = window.navigator.plugins; document.getElementById('out').textContent = String(plugins.refresh()) + ':' + String(plugins.length);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.navigator.plugins.refresh should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("undefined:1")
+    );
+    assert_eq!(
+        host.html_collection_tag_name_items_calls,
+        vec![plugins_collection]
+    );
+}
+
+#[test]
+fn runtime_rejects_window_navigator_plugins_refresh_extra_arguments() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.plugins.refresh(1, 2);",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("window.navigator.plugins.refresh should reject extra arguments");
+
+    assert!(
+        error
+            .to_string()
+            .contains("navigator.plugins.refresh() expects no arguments")
     );
 }
 
@@ -7084,7 +7204,7 @@ fn runtime_resolves_document_forms_access() {
 
     runtime
         .eval_program(
-            "const forms = document.forms; const named = forms.namedItem('signup'); document.getElementById('out').textContent = String(forms.length) + ':' + forms.item(0).textContent + ':' + named.textContent + ':' + String(forms.namedItem('missing'));",
+            "const forms = document.forms; const named = forms.namedItem('signup'); document.getElementById('out').textContent = String(forms.length) + ':' + forms.item(0).textContent + ':' + named.textContent + ':' + forms.signup.textContent + ':' + String(forms.namedItem('missing'));",
             "inline-script",
             &mut host,
         )
@@ -7094,7 +7214,7 @@ fn runtime_resolves_document_forms_access() {
         host.text_content
             .get(&ElementHandle::new(3))
             .map(String::as_str),
-        Some("2:Signup:Signup:null")
+        Some("2:Signup:Signup:Signup:null")
     );
     assert_eq!(
         host.html_collection_tag_name_items_calls,
@@ -7115,9 +7235,55 @@ fn runtime_resolves_document_forms_access() {
                     scope: HtmlCollectionScope::Document,
                     tag_name: "form".to_string(),
                 },
+                "signup".to_string()
+            ),
+            (
+                HtmlCollectionTarget::ByTagName {
+                    scope: HtmlCollectionScope::Document,
+                    tag_name: "form".to_string(),
+                },
                 "missing".to_string()
             ),
         ]
+    );
+}
+
+#[test]
+fn runtime_resolves_document_forms_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("first-form", ElementHandle::new(1), "");
+    host.seed_element("second-form", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_attribute(ElementHandle::new(1), "id", "first-form");
+    host.seed_attribute(ElementHandle::new(2), "id", "second-form");
+
+    let forms_collection = HtmlCollectionTarget::ByTagName {
+        scope: HtmlCollectionScope::Document,
+        tag_name: "form".to_string(),
+    };
+    host.seed_html_collection_tag_name_items(
+        forms_collection.clone(),
+        vec![ElementHandle::new(1), ElementHandle::new(2)],
+    );
+
+    runtime
+        .eval_program(
+            "const forms = document.forms; const keys = forms.keys(); const values = forms.values(); const entries = forms.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; forms.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.forms iterator helpers should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("0:first-form:0:first-form:0:first-form:2;1:second-form:2;")
+    );
+    assert_eq!(
+        host.html_collection_tag_name_items_calls,
+        vec![forms_collection; 6]
     );
 }
 
@@ -9121,6 +9287,55 @@ fn runtime_resolves_document_anchors_access() {
 }
 
 #[test]
+fn runtime_supports_document_images_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("hero", ElementHandle::new(1), "");
+    host.seed_element("thumb", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_attribute(ElementHandle::new(1), "id", "hero");
+    host.seed_attribute(ElementHandle::new(2), "id", "thumb");
+    let images_collection = HtmlCollectionTarget::ByTagName {
+        scope: HtmlCollectionScope::Document,
+        tag_name: "img".to_string(),
+    };
+    host.seed_html_collection_tag_name_items(
+        images_collection.clone(),
+        vec![ElementHandle::new(1), ElementHandle::new(2)],
+    );
+
+    runtime
+        .eval_program(
+            "const images = document.images; const keys = images.keys(); const values = images.values(); const entries = images.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; images.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.images iterator helpers should resolve through host bindings");
+
+    assert_eq!(
+        host.html_collection_tag_name_items_calls,
+        vec![
+            images_collection.clone(),
+            images_collection.clone(),
+            images_collection.clone(),
+            images_collection.clone(),
+            images_collection.clone(),
+            images_collection,
+        ]
+    );
+    assert_eq!(
+        host.html_collection_tag_name_named_item_calls,
+        Vec::<(HtmlCollectionTarget, String)>::new()
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("0:hero:0:hero:0:hero:2;1:thumb:2;")
+    );
+}
+
+#[test]
 fn runtime_resolves_document_children_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -9183,6 +9398,34 @@ fn runtime_resolves_window_frames_access() {
         host.window_frames_named_item_calls,
         vec!["first".to_string(), "missing".to_string()]
     );
+}
+
+#[test]
+fn runtime_resolves_window_frames_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("first-frame", ElementHandle::new(1), "");
+    host.seed_element("second-frame", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_attribute(ElementHandle::new(1), "id", "first");
+    host.seed_attribute(ElementHandle::new(2), "id", "second");
+    host.seed_window_frames_items(vec![ElementHandle::new(1), ElementHandle::new(2)]);
+
+    runtime
+        .eval_program(
+            "const frames = window.frames; const keys = frames.keys(); const values = frames.values(); const entries = frames.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; frames.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.frames iterator helpers should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("0:first:0:first:0:first:2;1:second:2;")
+    );
+    assert_eq!(host.window_frames_items_calls, 6);
 }
 
 #[test]
@@ -10304,6 +10547,52 @@ fn runtime_resolves_document_embeds_access() {
 }
 
 #[test]
+fn runtime_supports_document_plugins_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("first-embed", ElementHandle::new(1), "");
+    host.seed_element("second-embed", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_attribute(ElementHandle::new(1), "id", "first-embed");
+    host.seed_attribute(ElementHandle::new(2), "id", "second-embed");
+    let plugins_collection = HtmlCollectionTarget::ByTagName {
+        scope: HtmlCollectionScope::Document,
+        tag_name: "embed".to_string(),
+    };
+    host.seed_html_collection_tag_name_items(
+        plugins_collection.clone(),
+        vec![ElementHandle::new(1), ElementHandle::new(2)],
+    );
+
+    runtime
+        .eval_program(
+            "const plugins = document.plugins; const keys = plugins.keys(); const values = plugins.values(); const entries = plugins.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); document.getElementById('out').textContent = String(firstKey.value) + ':' + String(firstValue.value) + ':' + String(firstEntry.value.index) + ':' + String(firstEntry.value.value);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.plugins iterator helpers should resolve through host bindings");
+
+    assert_eq!(
+        host.html_collection_tag_name_items_calls,
+        vec![
+            plugins_collection.clone(),
+            plugins_collection.clone(),
+            plugins_collection.clone(),
+        ]
+    );
+    assert_eq!(
+        host.html_collection_tag_name_named_item_calls,
+        Vec::<(HtmlCollectionTarget, String)>::new()
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("0:[object Element]:0:[object Element]")
+    );
+}
+
+#[test]
 fn runtime_resolves_document_all_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -10359,6 +10648,52 @@ fn runtime_resolves_document_all_access() {
             (all_collection.clone(), "second".to_string()),
             (all_collection, "missing".to_string()),
         ]
+    );
+}
+
+#[test]
+fn runtime_resolves_document_all_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "root");
+    host.seed_element("first", ElementHandle::new(2), "First");
+    host.seed_element("second", ElementHandle::new(3), "Second");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_attribute(ElementHandle::new(1), "id", "root");
+    host.seed_attribute(ElementHandle::new(2), "id", "first");
+    host.seed_attribute(ElementHandle::new(3), "id", "second");
+    host.seed_attribute(ElementHandle::new(4), "id", "out");
+    let all_collection = HtmlCollectionTarget::ByTagName {
+        scope: HtmlCollectionScope::Document,
+        tag_name: "*".to_string(),
+    };
+    host.seed_html_collection_tag_name_items(
+        all_collection.clone(),
+        vec![
+            ElementHandle::new(1),
+            ElementHandle::new(2),
+            ElementHandle::new(3),
+            ElementHandle::new(4),
+        ],
+    );
+
+    runtime
+        .eval_program(
+            "const all = document.all; const keys = all.keys(); const values = all.values(); const entries = all.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; all.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.all iterator helpers should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("0:root:0:root:0:root:4;1:first:4;2:second:4;3:out:4;")
+    );
+    assert_eq!(
+        host.html_collection_tag_name_items_calls,
+        vec![all_collection; 8]
     );
 }
 
@@ -12470,4 +12805,380 @@ fn runtime_rejects_contains_wrong_arity() {
             .to_string()
             .contains("contains() expects exactly one argument")
     );
+}
+
+#[test]
+fn runtime_supports_detached_attribute_nodes() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "const plain = document.createAttribute('data-role'); plain.value = 'dialog'; const namespaced = document.createAttributeNS('urn:test', 'svg:stroke'); namespaced.value = 'azure'; document.getElementById('out').textContent = String(plain) + ':' + plain.name + ':' + String(plain.namespaceURI) + ':' + plain.localName + ':' + String(plain.prefix) + ':' + plain.nodeName + ':' + String(plain.nodeType) + ':' + plain.value + ':' + plain.data + ':' + plain.textContent + ':' + String(plain.ownerDocument) + ':' + String(plain.parentNode) + ':' + String(plain.parentElement) + ':' + String(plain.ownerElement) + ';' + String(namespaced) + ':' + namespaced.name + ':' + String(namespaced.namespaceURI) + ':' + namespaced.localName + ':' + String(namespaced.prefix) + ':' + namespaced.nodeName + ':' + String(namespaced.nodeType) + ':' + namespaced.value + ':' + namespaced.data + ':' + namespaced.textContent + ':' + String(namespaced.ownerDocument) + ':' + String(namespaced.parentNode) + ':' + String(namespaced.parentElement) + ':' + String(namespaced.ownerElement);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("createAttribute should return detached Attr values");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some(
+            "[object Attr]:data-role:null:data-role:null:data-role:2:dialog:dialog:dialog:[object Document]:null:null:null;[object Attr]:svg:stroke:urn:test:stroke:svg:svg:stroke:2:azure:azure:azure:[object Document]:null:null:null"
+        )
+    );
+}
+
+#[test]
+fn runtime_exposes_attribute_specified() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "data-role", "menu");
+
+    runtime
+        .eval_program(
+            "const detached = document.createAttribute('data-state'); const attached = document.getElementById('box').getAttributeNode('data-role'); document.getElementById('out').textContent = String(detached.specified) + ':' + String(attached.specified);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("Attr.specified should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("true:true")
+    );
+}
+
+#[test]
+fn runtime_rejects_attribute_specified_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "document.createAttribute('data-state').specified = false;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("Attr.specified should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `specified` on attr value")
+    );
+}
+
+#[test]
+fn runtime_exposes_attribute_is_id() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "id", "box");
+
+    runtime
+        .eval_program(
+            "const detached = document.createAttribute('data-state'); const attached = document.getElementById('box').getAttributeNode('id'); document.getElementById('out').textContent = String(detached.isId) + ':' + String(attached.isId);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("Attr.isId should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("false:true")
+    );
+}
+
+#[test]
+fn runtime_rejects_attribute_is_id_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "document.createAttribute('data-state').isId = false;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("Attr.isId should be read-only");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot assign to `isId` on attr value")
+    );
+}
+
+#[test]
+fn runtime_supports_named_node_map_attribute_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "data-role", "menu");
+    host.seed_attribute(ElementHandle::new(1), "svg:stroke", "azure");
+
+    runtime
+        .eval_program(
+            "const box = document.getElementById('box'); const attrs = box.attributes; const item0 = attrs.item(0); const item1 = attrs.item(1); const named = attrs.getNamedItem('data-role'); const namespaced = attrs.getNamedItemNS('urn:test', 'stroke'); const keys = attrs.keys(); const values = attrs.values(); const entries = attrs.entries(); const firstEntry = entries.next().value; document.getElementById('out').textContent = String(attrs) + ':' + String(attrs.length) + ':' + item0.name + ':' + item1.name + ':' + named.value + ':' + String(named.ownerElement) + ':' + namespaced.value + ':' + String(namespaced.namespaceURI) + ':' + namespaced.localName + ':' + String(keys.next().value) + ':' + values.next().value.name + ':' + String(firstEntry.index) + ':' + firstEntry.value.name;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("NamedNodeMap access should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some(
+            "[object NamedNodeMap]:2:data-role:svg:stroke:menu:[object Element]:azure:urn:test:stroke:0:data-role:0:data-role"
+        )
+    );
+}
+
+#[test]
+fn runtime_supports_named_node_map_for_each() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "data-role", "menu");
+    host.seed_attribute(ElementHandle::new(1), "svg:stroke", "azure");
+
+    runtime
+        .eval_program(
+            "const attrs = document.getElementById('box').attributes; let out = ''; attrs.forEach((attr, index, list) => { out += String(index) + ':' + attr.name + ':' + attr.value + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = out;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("NamedNodeMap.forEach should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("0:data-role:menu:2;1:svg:stroke:azure:2;")
+    );
+}
+
+#[test]
+fn runtime_supports_named_node_map_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "data-role", "menu");
+    host.seed_attribute(ElementHandle::new(1), "data-state", "azure");
+
+    runtime
+        .eval_program(
+            "const attrs = document.getElementById('box').attributes; const keys = attrs.keys(); const values = attrs.values(); const entries = attrs.entries(); const firstKey = keys.next(); const secondKey = keys.next(); const thirdKey = keys.next(); const firstValue = values.next(); const secondValue = values.next(); const thirdValue = values.next(); const firstEntry = entries.next(); const secondEntry = entries.next(); const thirdEntry = entries.next(); document.getElementById('out').textContent = String(attrs) + ':' + String(firstKey.value) + ':' + String(secondKey.value) + ':' + String(thirdKey.done) + ':' + firstValue.value.name + ':' + secondValue.value.name + ':' + String(thirdValue.done) + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.name + ':' + String(secondEntry.value.index) + ':' + secondEntry.value.value.name + ':' + String(thirdEntry.done);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("NamedNodeMap iterator helpers should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some(
+            "[object NamedNodeMap]:0:1:true:data-role:data-state:true:0:data-role:1:data-state:true"
+        )
+    );
+}
+
+#[test]
+fn runtime_rejects_named_node_map_for_each_non_function() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('box').attributes.forEach(123);",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("NamedNodeMap.forEach should require a callback");
+
+    let message = error.to_string();
+    assert!(message.contains("NamedNodeMap.forEach() requires an arrow function callback"));
+}
+
+#[test]
+fn runtime_supports_named_node_map_set_and_remove_named_item() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "data-role", "menu");
+
+    runtime
+        .eval_program(
+            "const box = document.getElementById('box'); const attrs = box.attributes; const created = document.createAttribute('data-state'); created.value = 'open'; const before = attrs.length; const previous = attrs.setNamedItem(created); const during = attrs.length; const snapshot = attrs.getNamedItem('data-state'); const snapshotOwner = snapshot.ownerElement; const createdOwner = created.ownerElement; const removed = attrs.removeNamedItem('data-state'); const removedOwner = removed.ownerElement; const after = attrs.length; document.getElementById('out').textContent = String(before) + ':' + String(previous) + ':' + String(during) + ':' + String(snapshot) + ':' + snapshot.name + ':' + snapshot.value + ':' + String(snapshotOwner) + ':' + String(createdOwner) + ':' + String(removed) + ':' + String(removedOwner) + ':' + String(after) + ':' + String(box.getAttributeNode('data-state'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("NamedNodeMap.setNamedItem should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some(
+            "1:null:2:[object Attr]:data-state:open:[object Element]:[object Element]:[object Attr]:null:1:null"
+        )
+    );
+}
+
+#[test]
+fn runtime_supports_named_node_map_set_and_remove_named_item_ns() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+
+    runtime
+        .eval_program(
+            "const box = document.getElementById('box'); const attrs = box.attributes; const created = document.createAttributeNS('urn:test', 'svg:stroke'); created.value = 'azure'; const before = attrs.length; const previous = attrs.setNamedItemNS(created); const during = attrs.length; const snapshot = attrs.getNamedItemNS('urn:test', 'stroke'); const snapshotOwner = snapshot.ownerElement; const createdOwner = created.ownerElement; const removed = attrs.removeNamedItemNS('urn:test', 'stroke'); const removedOwner = removed.ownerElement; const after = attrs.length; document.getElementById('out').textContent = String(before) + ':' + String(previous) + ':' + String(during) + ':' + String(snapshot) + ':' + snapshot.name + ':' + String(snapshot.namespaceURI) + ':' + snapshot.localName + ':' + String(snapshot.prefix) + ':' + snapshot.value + ':' + String(snapshotOwner) + ':' + String(createdOwner) + ':' + String(removed) + ':' + String(removedOwner) + ':' + String(after) + ':' + String(box.getAttributeNodeNS('urn:test', 'stroke'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("NamedNodeMap.setNamedItemNS should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some(
+            "0:null:1:[object Attr]:svg:stroke:urn:test:stroke:svg:azure:[object Element]:[object Element]:[object Attr]:null:0:null"
+        )
+    );
+}
+
+#[test]
+fn runtime_supports_attribute_node_attach_and_remove() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "data-role", "menu");
+
+    runtime
+        .eval_program(
+            "const box = document.getElementById('box'); const created = document.createAttribute('data-state'); created.value = 'open'; const previous = box.setAttributeNode(created); const snapshot = box.getAttributeNode('data-state'); const snapshotOwner = snapshot.ownerElement; const createdOwner = created.ownerElement; const removed = box.removeAttributeNode(created); const removedOwner = removed.ownerElement; const attached = box.getAttributeNode('data-role'); document.getElementById('out').textContent = String(previous) + ':' + String(snapshot) + ':' + snapshot.name + ':' + snapshot.value + ':' + String(snapshotOwner) + ':' + String(createdOwner) + ':' + String(removed) + ':' + String(removedOwner) + ':' + String(box.getAttributeNode('data-state')) + ':' + String(attached) + ':' + attached.value + ':' + String(attached.ownerElement);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("attribute node attach/remove should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some(
+            "null:[object Attr]:data-state:open:[object Element]:[object Element]:[object Attr]:null:null:[object Attr]:menu:[object Element]"
+        )
+    );
+}
+
+#[test]
+fn runtime_supports_namespaced_attribute_node_attach_and_remove() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+
+    runtime
+        .eval_program(
+            "const box = document.getElementById('box'); const created = document.createAttributeNS('urn:test', 'svg:stroke'); created.value = 'azure'; const previous = box.setAttributeNodeNS(created); const snapshot = box.getAttributeNodeNS('urn:test', 'stroke'); const snapshotOwner = snapshot.ownerElement; const createdOwner = created.ownerElement; const removed = box.removeAttributeNode(created); const removedOwner = removed.ownerElement; document.getElementById('out').textContent = String(previous) + ':' + String(snapshot) + ':' + snapshot.name + ':' + String(snapshot.namespaceURI) + ':' + snapshot.localName + ':' + String(snapshot.prefix) + ':' + snapshot.value + ':' + String(snapshotOwner) + ':' + String(createdOwner) + ':' + String(removed) + ':' + String(removedOwner) + ':' + String(box.getAttributeNodeNS('urn:test', 'stroke'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("namespaced attribute node attach/remove should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some(
+            "null:[object Attr]:svg:stroke:urn:test:stroke:svg:azure:[object Element]:[object Element]:[object Attr]:null:null"
+        )
+    );
+}
+
+#[test]
+fn runtime_rejects_invalid_attribute_creation() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("document.createAttribute('');", "inline-script", &mut host)
+        .expect_err("empty attribute names should fail");
+    assert!(
+        error
+            .to_string()
+            .contains("attribute name must not be empty")
+    );
+
+    let error = runtime
+        .eval_program(
+            "document.createAttributeNS(null, 'svg:stroke');",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("qualified attribute names need a namespace");
+    assert!(
+        error
+            .to_string()
+            .contains("invalid qualified attribute name")
+    );
+}
+
+#[test]
+fn runtime_rejects_named_node_map_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('box').attributes.length = 1;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("NamedNodeMap should remain read-only");
+
+    assert!(error.to_string().contains("named node map"));
+    assert!(error.to_string().contains("length"));
+}
+
+#[test]
+fn runtime_rejects_named_node_map_remove_missing() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('box').attributes.removeNamedItem('missing');",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("removeNamedItem should reject missing attributes");
+
+    let message = error.to_string();
+    assert!(message.contains("NamedNodeMap.removeNamedItem()"));
+    assert!(message.contains("existing attribute"));
 }

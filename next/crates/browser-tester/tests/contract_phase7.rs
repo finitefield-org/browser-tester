@@ -148,10 +148,10 @@ fn script_get_elements_by_name_are_live_end_to_end() -> browser_tester_next::Res
 #[test]
 fn script_document_forms_are_live_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
-        "<div id='root'><form id='signup' name='signup'>Signup</form><form id='login' name='login'>Login</form></div><div id='out'></div><script>const forms = document.forms; const first = forms.item(0); const named = forms.namedItem('signup'); const before = forms.length; const firstText = first.textContent; const namedText = named.textContent; document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(forms.length) + ':' + firstText + ':' + namedText + ':' + String(forms.namedItem('missing'));</script>",
+        "<div id='root'><form id='signup' name='signup'>Signup</form><form id='login' name='login'>Login</form></div><div id='out'></div><script>const forms = document.forms; const first = forms.item(0); const named = forms.namedItem('signup'); const signup = forms.signup; const login = forms.login; const before = forms.length; const firstText = first.textContent; const namedText = named.textContent; document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(forms.length) + ':' + firstText + ':' + namedText + ':' + signup.textContent + ':' + login.textContent + ':' + String(forms.namedItem('missing'));</script>",
     )?;
 
-    harness.assert_text("#out", "2:0:Signup:Signup:null")?;
+    harness.assert_text("#out", "2:0:Signup:Signup:Signup:Login:null")?;
     Ok(())
 }
 
@@ -205,6 +205,19 @@ fn script_document_all_is_live_end_to_end() -> browser_tester_next::Result<()> {
     )?;
 
     harness.assert_text("#out", "5:3:[object Element]:null")?;
+    Ok(())
+}
+
+#[test]
+fn script_document_all_iterator_helpers_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<div id='root'><span id='first'>First</span><span id='second'>Second</span></div><div id='out'></div><script id='script'>const all = document.all; const keys = all.keys(); const values = all.values(); const entries = all.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; all.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "0:root:0:root:0:root:5;1:first:5;2:second:5;3:out:5;4:script:5;",
+    )?;
     Ok(())
 }
 
@@ -400,6 +413,16 @@ fn script_placeholder_shown_pseudo_class_works_end_to_end() -> browser_tester_ne
     )?;
 
     harness.assert_text("#out", "2:name:0:false:false")?;
+    Ok(())
+}
+
+#[test]
+fn script_blank_pseudo_class_works_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><input id='empty' type='text' value='  '><textarea id='bio'> \n </textarea><input id='check' type='checkbox'></main><div id='out'></div><script>const blank = document.querySelectorAll(':blank'); const empty = document.getElementById('empty'); const bio = document.getElementById('bio'); const check = document.getElementById('check'); document.getElementById('out').textContent = String(blank.length) + ':' + blank.item(0).getAttribute('id') + ':' + blank.item(1).getAttribute('id') + ':' + String(empty.matches(':blank')) + ':' + String(bio.matches(':blank')) + ':' + String(check.matches(':blank'));</script>",
+    )?;
+
+    harness.assert_text("#out", "2:empty:bio:true:true:false")?;
     Ok(())
 }
 

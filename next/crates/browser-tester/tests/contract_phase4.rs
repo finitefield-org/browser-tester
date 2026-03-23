@@ -635,6 +635,29 @@ fn window_frames_are_publicly_supported() -> browser_tester_next::Result<()> {
 }
 
 #[test]
+fn window_frames_iterator_helpers_are_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<iframe id='first'></iframe><iframe id='second'></iframe><div id='out'></div><script>const frames = window.frames; const keys = frames.keys(); const values = frames.values(); const entries = frames.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; frames.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;</script>",
+    )?;
+
+    harness.assert_text("#out", "0:first:0:first:0:first:2;1:second:2;")?;
+    Ok(())
+}
+
+#[test]
+fn document_forms_iterator_helpers_are_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<div id='root'><form id='first-form' name='first-form'>First</form><form id='second-form' name='second-form'>Second</form></div><div id='out'></div><script>const forms = document.forms; const keys = forms.keys(); const values = forms.values(); const entries = forms.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; forms.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "0:first-form:0:first-form:0:first-form:2;1:second-form:2;",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn window_frames_length_assignment_is_rejected() -> browser_tester_next::Result<()> {
     let error = Harness::from_html(
         "<iframe id='first'></iframe><script>window.frames.length = 2;</script>",
@@ -1239,6 +1262,29 @@ fn navigator_plugins_is_publicly_supported() -> browser_tester_next::Result<()> 
     )?;
 
     harness.assert_text("#out", "2:[object Element]:null")?;
+    Ok(())
+}
+
+#[test]
+fn navigator_plugins_iterator_helpers_are_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<div id='root'><embed id='first-embed'><embed id='second-embed'></div><div id='out'></div><script>const plugins = window.navigator.plugins; const keys = plugins.keys(); const values = plugins.values(); const entries = plugins.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; plugins.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "0:first-embed:0:first-embed:0:first-embed:2;1:second-embed:2;",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn navigator_plugins_refresh_is_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<div id='out'></div><script>document.getElementById('out').textContent = String(document.plugins.refresh()) + ':' + String(window.navigator.plugins.refresh());</script>",
+    )?;
+
+    harness.assert_text("#out", "undefined:undefined")?;
     Ok(())
 }
 

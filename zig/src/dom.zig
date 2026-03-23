@@ -120,6 +120,7 @@ const SelectorPseudoClass = union(enum) {
     any_link,
     defined,
     placeholder_shown,
+    blank,
     indeterminate,
     default,
     valid,
@@ -130,6 +131,7 @@ const SelectorPseudoClass = union(enum) {
     read_write,
     target,
     focus,
+    focus_visible,
     focus_within,
     lang: std.ArrayListUnmanaged([]const u8),
     dir: SelectorDirValue,
@@ -670,6 +672,43 @@ pub const DomStore = struct {
         if (std.mem.eql(u8, element.tag_name, "textarea")) {
             try self.resetSelectionToEnd(node_id);
         }
+        return;
+    }
+
+    pub fn clearDocument(self: *DomStore) errors.Result(void) {
+        const document_id = self.documentId();
+        const document = self.nodeAtMut(document_id) orelse return error.DomError;
+
+        const old_children = document.children.items;
+        for (old_children) |child_id| {
+            if (self.focused_node) |focused| {
+                if (sameNodeId(focused, child_id) or self.nodeIsDescendantOf(focused, child_id)) {
+                    self.focused_node = null;
+                }
+            }
+
+            self.clearSelectionStateForSubtree(child_id);
+            self.clearCustomValidityStateForSubtree(child_id);
+
+            if (self.nodeAtMut(child_id)) |child_record| {
+                child_record.parent = null;
+            }
+        }
+
+        document.children.items.len = 0;
+        return;
+    }
+
+    pub fn appendHtmlToDocument(self: *DomStore, html: []const u8) errors.Result(void) {
+        var fragment_store = try DomStore.init(self.allocator);
+        defer fragment_store.deinit();
+
+        const fragment_root = try self.parseHtmlFragmentIntoStore(&fragment_store, self.documentId(), html);
+        const fragment_children = fragment_store.childIds(fragment_root);
+
+        const insertion_index = try self.childCount(self.documentId());
+        try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, self.documentId(), insertion_index, true);
+        try self.syncDocumentTitleFromDom();
         return;
     }
 
@@ -1269,6 +1308,17 @@ pub const DomStore = struct {
 
         if (std.mem.eql(u8, element.tag_name, "textarea")) {
             try self.setTextContent(node_id, value);
+            return;
+        }
+
+        if (std.mem.eql(u8, element.tag_name, "input") and std.mem.eql(u8, elementAttributeValue(element.*, "type") orelse "text", "range")) {
+            const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+            const candidate = if (trimmed.len == 0) null else std.fmt.parseFloat(f64, trimmed) catch null;
+            const normalized = normalizedRangeValue(self, node_id, candidate) orelse return error.DomError;
+            const text = try std.fmt.allocPrint(self.allocator, "{d}", .{normalized});
+            defer self.allocator.free(text);
+            const arena_alloc = self.arena.allocator();
+            try upsertAttribute(arena_alloc, &element.attributes, "value", try duplicateString(self, text));
             return;
         }
 
@@ -2032,10 +2082,85 @@ pub const DomStore = struct {
             .element => |element| element,
             else => return allocator.dupe(u8, ""),
         };
+        const input_type = elementAttributeValue(element, "type");
+        if (std.mem.eql(u8, element.tag_name, "input") and std.mem.eql(u8, input_type orelse "text", "range")) {
+            const raw_value = elementAttributeValue(element, "value") orelse "";
+            const trimmed = std.mem.trim(u8, raw_value, " \t\r\n\x0c");
+            const candidate = if (trimmed.len == 0) null else std.fmt.parseFloat(f64, trimmed) catch null;
+            const normalized = normalizedRangeValue(self, node_id, candidate) orelse return allocator.dupe(u8, "");
+            return std.fmt.allocPrint(allocator, "{d}", .{normalized});
+        }
         return if (elementAttributeValue(element, "value")) |value|
             allocator.dupe(u8, value)
         else
             allocator.dupe(u8, "");
+    }
+
+    pub fn inputValueAsNumber(self: *const DomStore, node_id: NodeId) ?f64 {
+        const node = self.nodeAt(node_id) orelse return null;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return null,
+        };
+        if (!std.mem.eql(u8, element.tag_name, "input")) return null;
+
+        const input_type = elementAttributeValue(element, "type");
+        const kind = inputValueAsNumberKind(input_type) orelse return null;
+        const text = elementAttributeValue(element, "value") orelse "";
+        return inputValueAsNumberFromText(self, node_id, kind, text);
+    }
+
+    pub fn inputValueAsDate(self: *const DomStore, node_id: NodeId) ?f64 {
+        const node = self.nodeAt(node_id) orelse return null;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return null,
+        };
+        if (!std.mem.eql(u8, element.tag_name, "input")) return null;
+
+        const input_type = elementAttributeValue(element, "type");
+        const kind = inputValueAsDateKind(input_type) orelse return null;
+        const text = elementAttributeValue(element, "value") orelse "";
+        return inputValueAsDateFromText(kind, text);
+    }
+
+    pub fn setInputValueAsNumber(self: *DomStore, node_id: NodeId, value: f64) errors.Result(void) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return error.DomError,
+        };
+        if (!std.mem.eql(u8, element.tag_name, "input")) return error.DomError;
+
+        const input_type = elementAttributeValue(element, "type");
+        const kind = inputValueAsNumberKind(input_type) orelse return error.DomError;
+        const text = try inputValueTextFromNumber(self, node_id, kind, value);
+        defer self.allocator.free(text);
+        try self.setAttribute(node_id, "value", text);
+    }
+
+    pub fn setInputValueAsDate(self: *DomStore, node_id: NodeId, value: ?f64) errors.Result(void) {
+        const node = self.nodeAtMut(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |*element| element,
+            else => return error.DomError,
+        };
+        if (!std.mem.eql(u8, element.tag_name, "input")) return error.DomError;
+
+        const input_type = elementAttributeValue(element.*, "type");
+        const kind = inputValueAsDateKind(input_type) orelse return error.DomError;
+        const text = try if (value) |ms| switch (kind) {
+            .date => if (!std.math.isFinite(ms)) allocatorDupe(self, "") else formatDateValue(self.allocator, ms),
+            .datetime_local => if (!std.math.isFinite(ms)) allocatorDupe(self, "") else formatDateTimeLocalValue(self.allocator, ms),
+            .month => if (!std.math.isFinite(ms)) allocatorDupe(self, "") else formatMonthValue(self.allocator, ms),
+            .week => if (!std.math.isFinite(ms)) allocatorDupe(self, "") else formatWeekValue(self.allocator, ms),
+            .time => if (!std.math.isFinite(ms)) allocatorDupe(self, "") else formatTimeValue(self.allocator, ms),
+        } else allocatorDupe(self, "");
+        defer self.allocator.free(text);
+
+        const arena_alloc = self.arena.allocator();
+        const copy = try duplicateString(self, text);
+        try upsertAttribute(arena_alloc, &element.attributes, "value", copy);
     }
 
     fn optionValueForNode(self: *const DomStore, allocator: std.mem.Allocator, node_id: NodeId) errors.Result([]u8) {
@@ -3552,6 +3677,8 @@ fn parseSelectorPseudoClass(
         .defined
     else if (asciiEqualIgnoreCase(name, "placeholder-shown"))
         .placeholder_shown
+    else if (asciiEqualIgnoreCase(name, "blank"))
+        .blank
     else if (asciiEqualIgnoreCase(name, "indeterminate"))
         .indeterminate
     else if (asciiEqualIgnoreCase(name, "default"))
@@ -3572,6 +3699,8 @@ fn parseSelectorPseudoClass(
         .target
     else if (asciiEqualIgnoreCase(name, "focus"))
         .focus
+    else if (asciiEqualIgnoreCase(name, "focus-visible"))
+        .focus_visible
     else if (asciiEqualIgnoreCase(name, "focus-within"))
         .focus_within
     else {
@@ -4430,6 +4559,38 @@ fn isPlaceholderShownPseudo(self: *const DomStore, node_id: NodeId) bool {
     return isEmptyElement(self, node_id);
 }
 
+fn isBlankPseudoClass(self: *const DomStore, node_id: NodeId) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return false,
+    };
+
+    if (isContentEditableElement(element)) {
+        const value = self.textContent(self.allocator, node_id) catch return false;
+        defer self.allocator.free(value);
+        return std.mem.trim(u8, value, " \t\r\n\x0c").len == 0;
+    }
+
+    if (std.mem.eql(u8, element.tag_name, "textarea")) {
+        const value = self.textContent(self.allocator, node_id) catch return false;
+        defer self.allocator.free(value);
+        return std.mem.trim(u8, value, " \t\r\n\x0c").len == 0;
+    }
+
+    if (!std.mem.eql(u8, element.tag_name, "input")) {
+        return false;
+    }
+
+    const input_type = elementAttributeValue(element, "type");
+    if (!isTextInputType(input_type)) {
+        return false;
+    }
+
+    const value = elementAttributeValue(element, "value") orelse "";
+    return std.mem.trim(u8, value, " \t\r\n\x0c").len == 0;
+}
+
 fn isIndeterminatePseudoClass(self: *const DomStore, node_id: NodeId) bool {
     const node = self.nodeAt(node_id) orelse return false;
     const element = switch (node.kind) {
@@ -5016,32 +5177,464 @@ fn numericRangeLimits(self: *const DomStore, node_id: NodeId) ?NumericRangeLimit
 }
 
 fn numericStepMismatch(self: *const DomStore, node_id: NodeId, current_value: f64) bool {
-    const node = self.nodeAt(node_id) orelse return false;
+    const step = numericStepValue(self, node_id) orelse return false;
+    const base = numericStepBase(self, node_id);
+
+    const quotient = (current_value - base) / step;
+    return std.math.round(quotient) != quotient;
+}
+
+fn numericStepValue(self: *const DomStore, node_id: NodeId) ?f64 {
+    const node = self.nodeAt(node_id) orelse return null;
     const element = switch (node.kind) {
         .element => |element| element,
-        else => return false,
+        else => return null,
     };
 
     const input_type = elementAttributeValue(element, "type");
-    if (!isRangeInputType(input_type)) return false;
+    if (!isRangeInputType(input_type)) return null;
 
     const step = if (elementAttributeValue(element, "step")) |value| blk: {
         const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
-        if (trimmed.len == 0) return false;
-        if (std.ascii.eqlIgnoreCase(trimmed, "any")) return false;
-        const parsed = std.fmt.parseFloat(f64, trimmed) catch return false;
-        if (!std.math.isFinite(parsed) or parsed <= 0) return false;
+        if (trimmed.len == 0) break :blk 1.0;
+        if (std.ascii.eqlIgnoreCase(trimmed, "any")) return null;
+        const parsed = std.fmt.parseFloat(f64, trimmed) catch return null;
+        if (!std.math.isFinite(parsed) or parsed <= 0) return null;
         break :blk parsed;
     } else 1.0;
 
-    const base = if (elementAttributeValue(element, "min")) |value| blk: {
+    return step;
+}
+
+fn numericStepBase(self: *const DomStore, node_id: NodeId) f64 {
+    const node = self.nodeAt(node_id) orelse return 0.0;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return 0.0,
+    };
+
+    const input_type = elementAttributeValue(element, "type");
+    if (!isRangeInputType(input_type)) return 0.0;
+
+    return if (elementAttributeValue(element, "min")) |value| blk: {
         const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
         if (trimmed.len == 0) break :blk 0.0;
         break :blk std.fmt.parseFloat(f64, trimmed) catch 0.0;
     } else 0.0;
+}
 
-    const quotient = (current_value - base) / step;
-    return std.math.round(quotient) != quotient;
+const InputValueAsNumberKind = enum {
+    number,
+    range,
+    date,
+    datetime_local,
+    month,
+    week,
+    time,
+};
+
+fn inputValueAsNumberKind(input_type: ?[]const u8) ?InputValueAsNumberKind {
+    const value = input_type orelse "text";
+    if (std.ascii.eqlIgnoreCase(value, "number")) return .number;
+    if (std.ascii.eqlIgnoreCase(value, "range")) return .range;
+    if (std.ascii.eqlIgnoreCase(value, "date")) return .date;
+    if (std.ascii.eqlIgnoreCase(value, "datetime-local")) return .datetime_local;
+    if (std.ascii.eqlIgnoreCase(value, "month")) return .month;
+    if (std.ascii.eqlIgnoreCase(value, "week")) return .week;
+    if (std.ascii.eqlIgnoreCase(value, "time")) return .time;
+    return null;
+}
+
+const InputValueAsDateKind = enum {
+    date,
+    datetime_local,
+    month,
+    week,
+    time,
+};
+
+fn inputValueAsDateKind(input_type: ?[]const u8) ?InputValueAsDateKind {
+    const value = input_type orelse "text";
+    if (std.ascii.eqlIgnoreCase(value, "date")) return .date;
+    if (std.ascii.eqlIgnoreCase(value, "datetime-local")) return .datetime_local;
+    if (std.ascii.eqlIgnoreCase(value, "month")) return .month;
+    if (std.ascii.eqlIgnoreCase(value, "week")) return .week;
+    if (std.ascii.eqlIgnoreCase(value, "time")) return .time;
+    return null;
+}
+
+fn inputValueAsDateFromText(kind: InputValueAsDateKind, text: []const u8) ?f64 {
+    return switch (kind) {
+        .date => parseDateValue(text),
+        .datetime_local => parseDateTimeLocalValue(text),
+        .month => parseMonthValue(text),
+        .week => parseWeekValue(text),
+        .time => parseTimeValue(text),
+    };
+}
+
+fn inputValueAsNumberFromText(self: *const DomStore, node_id: NodeId, kind: InputValueAsNumberKind, text: []const u8) ?f64 {
+    return switch (kind) {
+        .number => blk: {
+            const trimmed = std.mem.trim(u8, text, " \t\r\n\x0c");
+            if (trimmed.len == 0) break :blk std.math.nan(f64);
+            const parsed = std.fmt.parseFloat(f64, trimmed) catch break :blk std.math.nan(f64);
+            break :blk if (std.math.isFinite(parsed)) parsed else std.math.nan(f64);
+        },
+        .range => blk: {
+            const trimmed = std.mem.trim(u8, text, " \t\r\n\x0c");
+            const current = if (trimmed.len == 0) null else std.fmt.parseFloat(f64, trimmed) catch null;
+            break :blk normalizedRangeValue(self, node_id, current) orelse std.math.nan(f64);
+        },
+        .date => parseDateValue(text) orelse std.math.nan(f64),
+        .datetime_local => parseDateTimeLocalValue(text) orelse std.math.nan(f64),
+        .month => parseMonthValue(text) orelse std.math.nan(f64),
+        .week => parseWeekValue(text) orelse std.math.nan(f64),
+        .time => parseTimeValue(text) orelse std.math.nan(f64),
+    };
+}
+
+fn inputValueTextFromNumber(
+    self: *const DomStore,
+    node_id: NodeId,
+    kind: InputValueAsNumberKind,
+    value: f64,
+) errors.Result([]u8) {
+    return switch (kind) {
+        .number => blk: {
+            if (!std.math.isFinite(value)) break :blk allocatorDupe(self, "");
+            break :blk try std.fmt.allocPrint(self.allocator, "{d}", .{value});
+        },
+        .range => blk: {
+            const normalized = normalizedRangeValue(self, node_id, if (std.math.isFinite(value)) value else null) orelse return error.DomError;
+            break :blk try std.fmt.allocPrint(self.allocator, "{d}", .{normalized});
+        },
+        .date => if (!std.math.isFinite(value)) allocatorDupe(self, "") else formatDateValue(self.allocator, value),
+        .datetime_local => if (!std.math.isFinite(value)) allocatorDupe(self, "") else formatDateTimeLocalValue(self.allocator, value),
+        .month => if (!std.math.isFinite(value)) allocatorDupe(self, "") else formatMonthValue(self.allocator, value),
+        .week => if (!std.math.isFinite(value)) allocatorDupe(self, "") else formatWeekValue(self.allocator, value),
+        .time => if (!std.math.isFinite(value)) allocatorDupe(self, "") else formatTimeValue(self.allocator, value),
+    };
+}
+
+fn allocatorDupe(allocator_owner: *const DomStore, text: []const u8) errors.Result([]u8) {
+    return allocator_owner.allocator.dupe(u8, text);
+}
+
+fn normalizedRangeValue(self: *const DomStore, node_id: NodeId, candidate: ?f64) ?f64 {
+    const limits = numericRangeLimits(self, node_id) orelse return null;
+
+    if (limits.min) |min| {
+        if (limits.max) |max| {
+            if (max < min) return min;
+        }
+    }
+
+    var value = candidate orelse defaultRangeValue(limits);
+    if (!std.math.isFinite(value)) {
+        value = defaultRangeValue(limits);
+    }
+
+    if (limits.min) |min| {
+        if (value < min) value = min;
+    }
+    if (limits.max) |max| {
+        if (value > max) value = max;
+    }
+
+    if (numericStepValue(self, node_id)) |step| {
+        const base = numericStepBase(self, node_id);
+        value = std.math.round((value - base) / step) * step + base;
+        if (limits.min) |min| {
+            if (value < min) value = min;
+        }
+        if (limits.max) |max| {
+            if (value > max) value = max;
+        }
+    }
+
+    return value;
+}
+
+fn defaultRangeValue(limits: NumericRangeLimits) f64 {
+    const min = limits.min orelse 0.0;
+    const max = limits.max orelse 100.0;
+    if (max < min) return min;
+    return (min + max) / 2.0;
+}
+
+fn parseUnsignedComponent(text: []const u8) ?u32 {
+    return std.fmt.parseInt(u32, text, 10) catch null;
+}
+
+fn parseDateValue(text: []const u8) ?f64 {
+    if (text.len != 10) return null;
+    if (text[4] != '-' or text[7] != '-') return null;
+    const year = parseUnsignedComponent(text[0..4]) orelse return null;
+    const month = parseUnsignedComponent(text[5..7]) orelse return null;
+    const day = parseUnsignedComponent(text[8..10]) orelse return null;
+    if (month < 1 or month > 12) return null;
+    if (day < 1 or day > daysInMonth(@as(i64, @intCast(year)), @as(u8, @intCast(month)))) return null;
+    const days = daysFromCivil(@as(i64, @intCast(year)), @as(u8, @intCast(month)), @as(u8, @intCast(day)));
+    return @as(f64, @floatFromInt(days)) * @as(f64, @floatFromInt(millisPerDay()));
+}
+
+fn parseMonthValue(text: []const u8) ?f64 {
+    if (text.len != 7) return null;
+    if (text[4] != '-') return null;
+    const year = parseUnsignedComponent(text[0..4]) orelse return null;
+    const month = parseUnsignedComponent(text[5..7]) orelse return null;
+    if (month < 1 or month > 12) return null;
+    const days = daysFromCivil(@as(i64, @intCast(year)), @as(u8, @intCast(month)), 1);
+    return @as(f64, @floatFromInt(days)) * @as(f64, @floatFromInt(millisPerDay()));
+}
+
+fn parseTimeValue(text: []const u8) ?f64 {
+    const dot_index = std.mem.indexOfScalar(u8, text, '.') orelse text.len;
+    const main = text[0..dot_index];
+    const fraction = if (dot_index < text.len) text[dot_index + 1 ..] else "";
+
+    if (main.len != 5 and main.len != 8) return null;
+    if (main[2] != ':') return null;
+    const hour = parseUnsignedComponent(main[0..2]) orelse return null;
+    const minute = parseUnsignedComponent(main[3..5]) orelse return null;
+    var second: u32 = 0;
+    if (main.len == 8) {
+        if (main[5] != ':') return null;
+        second = parseUnsignedComponent(main[6..8]) orelse return null;
+    }
+    if (hour > 23 or minute > 59 or second > 59) return null;
+
+    var millisecond: u32 = 0;
+    if (fraction.len != 0) {
+        if (fraction.len > 3) return null;
+        millisecond = parseUnsignedComponent(fraction) orelse return null;
+        millisecond *= switch (fraction.len) {
+            1 => 100,
+            2 => 10,
+            else => 1,
+        };
+    }
+
+    const total_ms = (@as(i64, @intCast(hour)) * 3600000) +
+        (@as(i64, @intCast(minute)) * 60000) +
+        (@as(i64, @intCast(second)) * 1000) +
+        @as(i64, @intCast(millisecond));
+    return @as(f64, @floatFromInt(total_ms));
+}
+
+fn parseDateTimeLocalValue(text: []const u8) ?f64 {
+    const separator = std.mem.indexOfScalar(u8, text, 'T') orelse return null;
+    if (separator != 10) return null;
+    const date = parseDateValue(text[0..10]) orelse return null;
+    const time = parseTimeValue(text[11..]) orelse return null;
+    return date + time;
+}
+
+fn parseWeekValue(text: []const u8) ?f64 {
+    if (text.len != 8) return null;
+    if (text[4] != '-' or (text[5] != 'W' and text[5] != 'w')) return null;
+    const year = parseUnsignedComponent(text[0..4]) orelse return null;
+    const week = parseUnsignedComponent(text[6..8]) orelse return null;
+    if (week < 1 or week > weeksInIsoWeekYear(@as(i64, @intCast(year)))) return null;
+    const days = isoWeekStartDays(@as(i64, @intCast(year)), @as(u8, @intCast(week)));
+    return @as(f64, @floatFromInt(days)) * @as(f64, @floatFromInt(millisPerDay()));
+}
+
+fn formatDateValue(allocator: std.mem.Allocator, value: f64) errors.Result([]u8) {
+    const calendar = calendarFromMilliseconds(value);
+    const year_text = try formatYearText(allocator, calendar.year);
+    defer allocator.free(year_text);
+    return try std.fmt.allocPrint(allocator, "{s}-{d:0>2}-{d:0>2}", .{ year_text, calendar.month, calendar.day });
+}
+
+fn formatMonthValue(allocator: std.mem.Allocator, value: f64) errors.Result([]u8) {
+    const calendar = calendarFromMilliseconds(value);
+    const year_text = try formatYearText(allocator, calendar.year);
+    defer allocator.free(year_text);
+    return try std.fmt.allocPrint(allocator, "{s}-{d:0>2}", .{ year_text, calendar.month });
+}
+
+fn formatTimeValue(allocator: std.mem.Allocator, value: f64) errors.Result([]u8) {
+    const time = timeFromMilliseconds(value);
+    return try formatTimeParts(allocator, time.hour, time.minute, time.second, time.millisecond);
+}
+
+fn formatDateTimeLocalValue(allocator: std.mem.Allocator, value: f64) errors.Result([]u8) {
+    const calendar = calendarFromMilliseconds(value);
+    const time = timeFromMilliseconds(value);
+    const year_text = try formatYearText(allocator, calendar.year);
+    defer allocator.free(year_text);
+    const date_text = try std.fmt.allocPrint(allocator, "{s}-{d:0>2}-{d:0>2}", .{ year_text, calendar.month, calendar.day });
+    defer allocator.free(date_text);
+    const time_text = try formatTimeParts(allocator, time.hour, time.minute, time.second, time.millisecond);
+    defer allocator.free(time_text);
+    return try std.fmt.allocPrint(allocator, "{s}T{s}", .{ date_text, time_text });
+}
+
+pub fn formatDateTimeIsoValue(allocator: std.mem.Allocator, value: f64) errors.Result([]u8) {
+    const calendar = calendarFromMilliseconds(value);
+    const time = timeFromMilliseconds(value);
+    const year_text = try formatYearText(allocator, calendar.year);
+    defer allocator.free(year_text);
+    const date_text = try std.fmt.allocPrint(allocator, "{s}-{d:0>2}-{d:0>2}", .{ year_text, calendar.month, calendar.day });
+    defer allocator.free(date_text);
+    const fraction_full = try std.fmt.allocPrint(allocator, "{d:0>3}", .{time.millisecond});
+    defer allocator.free(fraction_full);
+    const time_text = try std.fmt.allocPrint(allocator, "{d:0>2}:{d:0>2}:{d:0>2}.{s}", .{ time.hour, time.minute, time.second, fraction_full });
+    defer allocator.free(time_text);
+    return try std.fmt.allocPrint(allocator, "{s}T{s}Z", .{ date_text, time_text });
+}
+
+fn formatWeekValue(allocator: std.mem.Allocator, value: f64) errors.Result([]u8) {
+    const calendar = calendarFromMilliseconds(value);
+    const week = isoWeekInfoFromDays(calendar.days);
+    const year_text = try formatYearText(allocator, week.week_year);
+    defer allocator.free(year_text);
+    return try std.fmt.allocPrint(allocator, "{s}-W{d:0>2}", .{ year_text, week.week });
+}
+
+fn formatTimeParts(
+    allocator: std.mem.Allocator,
+    hour: u8,
+    minute: u8,
+    second: u8,
+    millisecond: u16,
+) errors.Result([]u8) {
+    if (second == 0 and millisecond == 0) {
+        return try std.fmt.allocPrint(allocator, "{d:0>2}:{d:0>2}", .{ hour, minute });
+    }
+    if (millisecond == 0) {
+        return try std.fmt.allocPrint(allocator, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hour, minute, second });
+    }
+
+    const fraction_full = try std.fmt.allocPrint(allocator, "{d:0>3}", .{millisecond});
+    defer allocator.free(fraction_full);
+    var fraction_len = fraction_full.len;
+    while (fraction_len > 1 and fraction_full[fraction_len - 1] == '0') {
+        fraction_len -= 1;
+    }
+    return try std.fmt.allocPrint(allocator, "{d:0>2}:{d:0>2}:{d:0>2}.{s}", .{ hour, minute, second, fraction_full[0..fraction_len] });
+}
+
+fn formatYearText(allocator: std.mem.Allocator, year: i64) errors.Result([]u8) {
+    const magnitude: u64 = if (year < 0)
+        @as(u64, @intCast(-year))
+    else
+        @as(u64, @intCast(year));
+    const digits = try std.fmt.allocPrint(allocator, "{d:0>4}", .{magnitude});
+    if (year >= 0) return digits;
+
+    defer allocator.free(digits);
+    return try std.fmt.allocPrint(allocator, "-{s}", .{digits});
+}
+
+const CalendarDate = struct {
+    year: i64,
+    month: u8,
+    day: u8,
+    weekday: u8,
+    days: i64,
+};
+
+const TimeParts = struct {
+    hour: u8,
+    minute: u8,
+    second: u8,
+    millisecond: u16,
+};
+
+fn millisPerDay() i64 {
+    return 86_400_000;
+}
+
+fn isLeapYearNumber(year: i64) bool {
+    if (@mod(year, 4) != 0) return false;
+    if (@mod(year, 100) != 0) return true;
+    return @mod(year, 400) == 0;
+}
+
+fn daysInMonth(year: i64, month: u8) u8 {
+    return switch (month) {
+        1, 3, 5, 7, 8, 10, 12 => 31,
+        4, 6, 9, 11 => 30,
+        2 => if (isLeapYearNumber(year)) 29 else 28,
+        else => 30,
+    };
+}
+
+fn daysFromCivil(year: i64, month: u8, day: u8) i64 {
+    var y = year;
+    const m: i64 = month;
+    const d: i64 = day;
+    y -= if (m <= 2) 1 else 0;
+    const era = @divFloor(y, 400);
+    const yoe = y - era * 400;
+    const mp: i64 = m + @as(i64, if (m > 2) -3 else 9);
+    const doy = @divFloor(153 * mp + 2, 5) + d - 1;
+    const doe = yoe * 365 + @divFloor(yoe, 4) - @divFloor(yoe, 100) + doy;
+    return era * 146097 + doe - 719468;
+}
+
+fn civilFromDays(days: i64) CalendarDate {
+    const z = days + 719468;
+    const era = @divFloor(z, 146097);
+    const doe = z - era * 146097;
+    const yoe = @divFloor(doe - @divFloor(doe, 1460) + @divFloor(doe, 36524) - @divFloor(doe, 146096), 365);
+    var y = yoe + era * 400;
+    const doy = doe - (yoe * 365 + @divFloor(yoe, 4) - @divFloor(yoe, 100));
+    const mp = @divFloor(5 * doy + 2, 153);
+    const day = doy - @divFloor(153 * mp + 2, 5) + 1;
+    const month: i64 = mp + @as(i64, if (mp < 10) 3 else -9);
+    y += if (month <= 2) 1 else 0;
+    return .{
+        .year = y,
+        .month = @as(u8, @intCast(month)),
+        .day = @as(u8, @intCast(day)),
+        .weekday = @as(u8, @intCast(@mod(days + 3, 7) + 1)),
+        .days = days,
+    };
+}
+
+fn timeFromMilliseconds(value: f64) TimeParts {
+    const rounded = @as(i64, @intFromFloat(std.math.floor(value)));
+    const millis = @mod(rounded, millisPerDay());
+    const hour = @as(u8, @intCast(@divTrunc(millis, 3600000)));
+    const minute = @as(u8, @intCast(@divTrunc(@mod(millis, 3600000), 60000)));
+    const second = @as(u8, @intCast(@divTrunc(@mod(millis, 60000), 1000)));
+    const millisecond = @as(u16, @intCast(@mod(millis, 1000)));
+    return .{
+        .hour = hour,
+        .minute = minute,
+        .second = second,
+        .millisecond = millisecond,
+    };
+}
+
+fn calendarFromMilliseconds(value: f64) CalendarDate {
+    const days = @as(i64, @intFromFloat(std.math.floor(value / @as(f64, @floatFromInt(millisPerDay())))));
+    return civilFromDays(days);
+}
+
+fn weeksInIsoWeekYear(year: i64) u8 {
+    const jan1 = civilFromDays(daysFromCivil(year, 1, 1));
+    return if (jan1.weekday == 4 or (isLeapYearNumber(year) and jan1.weekday == 3)) 53 else 52;
+}
+
+fn isoWeekStartDays(week_year: i64, week: u8) i64 {
+    const jan4 = daysFromCivil(week_year, 1, 4);
+    const jan4_weekday = @as(i64, @intCast(civilFromDays(jan4).weekday));
+    const week1_monday = jan4 - (jan4_weekday - 1);
+    return week1_monday + @as(i64, @intCast(week - 1)) * 7;
+}
+
+fn isoWeekInfoFromDays(days: i64) struct { week_year: i64, week: u8 } {
+    const weekday = @as(i64, @intCast(civilFromDays(days).weekday));
+    const thursday_days = days + (4 - weekday);
+    const week_year = civilFromDays(thursday_days).year;
+    const week1_monday = isoWeekStartDays(week_year, 1);
+    const week = @as(u8, @intCast(@divFloor(thursday_days - week1_monday, 7) + 1));
+    return .{ .week_year = week_year, .week = week };
 }
 
 fn isValidEmailAddress(value: []const u8) bool {
@@ -6220,6 +6813,7 @@ fn nodeMatchesPseudoClass(self: *const DomStore, node_id: NodeId, pseudo: Select
         .any_link => isLinkPseudo(self, node_id),
         .defined => isDefinedPseudoClass(self, node_id),
         .placeholder_shown => isPlaceholderShownPseudo(self, node_id),
+        .blank => isBlankPseudoClass(self, node_id),
         .indeterminate => isIndeterminatePseudoClass(self, node_id),
         .default => isDefaultPseudoClass(self, node_id),
         .valid => isValidPseudoClass(self, node_id),
@@ -6230,6 +6824,7 @@ fn nodeMatchesPseudoClass(self: *const DomStore, node_id: NodeId, pseudo: Select
         .read_write => isReadWritePseudoClass(self, node_id),
         .target => isTargetPseudoClass(self, node_id),
         .focus => isFocusPseudoClass(self, node_id),
+        .focus_visible => isFocusPseudoClass(self, node_id),
         .focus_within => isFocusWithinPseudoClass(self, node_id),
         .lang => |langs| isLangPseudoClass(self, node_id, langs.items),
         .dir => |dir| isDirPseudoClass(self, node_id, dir),
@@ -6931,7 +7526,7 @@ test "phase six: selector expansion matches structural and state pseudo-classes"
     defer store.deinit();
 
     try store.bootstrapHtml(
-        "<main id='root'><section id='buttons'><button id='first' class='primary' disabled>First</button><button id='second' class='secondary'>Second</button></section><div id='empty'></div><div id='not-empty'>x</div><input id='agree' type='checkbox' checked><input id='field' required><input id='optional'><textarea id='bio' placeholder='Bio'></textarea><a id='docs' href='/docs'>Docs</a><section id='types'><span id='only-span'>Span</span><button id='other'>Other</button></section></main>",
+        "<main id='root'><section id='buttons'><button id='first' class='primary' disabled>First</button><button id='second' class='secondary'>Second</button></section><div id='empty'></div><div id='not-empty'>x</div><input id='agree' type='checkbox' checked><input id='field' required><input id='optional'><input id='blank-input' value='   '><textarea id='bio' placeholder='Bio'></textarea><textarea id='blank-textarea'>   </textarea><div id='blank-editable' contenteditable='true'>   </div><a id='docs' href='/docs'>Docs</a><section id='types'><span id='only-span'>Span</span><button id='other'>Other</button></section></main>",
     );
 
     const root = try store.select(allocator, ":root");
@@ -7016,6 +7611,25 @@ test "phase six: selector expansion matches structural and state pseudo-classes"
     defer allocator.free(placeholder_shown);
     try std.testing.expectEqual(@as(usize, 1), placeholder_shown.len);
     try std.testing.expectEqualStrings("bio", (try store.getAttribute(placeholder_shown[0], "id")).?);
+
+    const blank_input = try store.select(allocator, "#blank-input:blank");
+    defer allocator.free(blank_input);
+    try std.testing.expectEqual(@as(usize, 1), blank_input.len);
+    try std.testing.expectEqualStrings("blank-input", (try store.getAttribute(blank_input[0], "id")).?);
+
+    const blank_textarea = try store.select(allocator, "#blank-textarea:blank");
+    defer allocator.free(blank_textarea);
+    try std.testing.expectEqual(@as(usize, 1), blank_textarea.len);
+    try std.testing.expectEqualStrings("blank-textarea", (try store.getAttribute(blank_textarea[0], "id")).?);
+
+    const blank_editable = try store.select(allocator, "#blank-editable:blank");
+    defer allocator.free(blank_editable);
+    try std.testing.expectEqual(@as(usize, 1), blank_editable.len);
+    try std.testing.expectEqualStrings("blank-editable", (try store.getAttribute(blank_editable[0], "id")).?);
+
+    const filled_blank = try store.select(allocator, "#filled:blank");
+    defer allocator.free(filled_blank);
+    try std.testing.expectEqual(@as(usize, 0), filled_blank.len);
 
     const is_buttons = try store.select(allocator, "#buttons > button:is(.primary, .secondary)");
     defer allocator.free(is_buttons);
@@ -7196,6 +7810,11 @@ test "phase six: selector expansion matches focus target and nth pseudo-classes"
     defer allocator.free(focus);
     try std.testing.expectEqual(@as(usize, 1), focus.len);
     try std.testing.expectEqual(field, focus[0]);
+
+    const focus_visible = try store.select(allocator, ":focus-visible");
+    defer allocator.free(focus_visible);
+    try std.testing.expectEqual(@as(usize, 1), focus_visible.len);
+    try std.testing.expectEqual(field, focus_visible[0]);
 
     const focus_within = try store.select(allocator, "#panel:focus-within");
     defer allocator.free(focus_within);

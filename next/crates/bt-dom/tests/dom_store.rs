@@ -418,6 +418,49 @@ fn placeholder_shown_pseudo_class_matches_empty_text_controls() {
 }
 
 #[test]
+fn blank_pseudo_class_matches_empty_text_controls() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><input id='empty' type='text' value='  '><textarea id='bio'> \n </textarea><input id='check' type='checkbox'><div id='other'></div></main>",
+        )
+        .expect("HTML should parse");
+
+    let empty_id = store.select("#empty").unwrap()[0];
+    let bio_id = store.select("#bio").unwrap()[0];
+
+    assert_eq!(store.select(":blank").unwrap(), vec![empty_id, bio_id]);
+    assert_eq!(store.select("#empty:blank").unwrap(), vec![empty_id]);
+    assert_eq!(store.select("#bio:blank").unwrap(), vec![bio_id]);
+    assert!(store.select("#check:blank").unwrap().is_empty());
+    assert!(store.select("#other:blank").unwrap().is_empty());
+    assert!(store.select(":blank()").is_err());
+}
+
+#[test]
+fn where_pseudo_class_matches_blank_text_controls() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><input id='empty' type='text' value='  '><textarea id='bio'> \n </textarea><input id='check' type='checkbox'></main>",
+        )
+        .expect("HTML should parse");
+
+    let empty_id = store.select("#empty").unwrap()[0];
+    let bio_id = store.select("#bio").unwrap()[0];
+
+    assert_eq!(
+        store.select(":where(:blank, .missing)").unwrap(),
+        vec![empty_id, bio_id]
+    );
+    assert_eq!(
+        store.select("input:where(:blank, .missing)").unwrap(),
+        vec![empty_id]
+    );
+    assert!(store.select("input:where(.missing)").unwrap().is_empty());
+}
+
+#[test]
 fn read_only_and_read_write_pseudo_classes_match_editable_controls() {
     let mut store = DomStore::new_empty();
     store

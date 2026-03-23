@@ -211,6 +211,50 @@ fn session_resolves_window_navigator_languages_iterator_helpers_regression() {
 }
 
 #[test]
+fn session_resolves_window_navigator_plugins_iterator_helpers_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><embed id='first-embed'><embed id='second-embed'></div><div id='out'></div><script>const plugins = window.navigator.plugins; const keys = plugins.keys(); const values = plugins.values(); const entries = plugins.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; plugins.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("navigator.plugins iterator helpers should be wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:first-embed:0:first-embed:0:first-embed:2;1:second-embed:2;"
+    );
+}
+
+#[test]
+fn session_rejects_window_navigator_plugins_refresh_extra_arguments_regression() {
+    let mut session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<div id='out'></div>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("navigator.plugins.refresh should be wired through Session");
+    let mut runtime = ScriptRuntime::new();
+
+    let error = runtime
+        .eval_program(
+            "document.plugins.refresh(1);",
+            "inline-script",
+            &mut session,
+        )
+        .expect_err("navigator.plugins.refresh should reject extra arguments");
+
+    assert!(
+        error
+            .to_string()
+            .contains("navigator.plugins.refresh() expects no arguments")
+    );
+}
+
+#[test]
 fn session_rejects_unsupported_selector_syntax_in_closest_explicitly() {
     let error = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -1497,6 +1541,25 @@ fn session_reflects_input_textarea_placeholder_through_inline_script_regression(
 }
 
 #[test]
+fn session_reflects_blank_pseudo_class_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='empty' type='text' value='  '><textarea id='bio'> \n </textarea><input id='check' type='checkbox'></main><div id='out'></div><script>const blank = document.querySelectorAll(':blank'); const empty = document.getElementById('empty'); const bio = document.getElementById('bio'); const check = document.getElementById('check'); document.getElementById('out').textContent = String(blank.length) + ':' + blank.item(0).getAttribute('id') + ':' + blank.item(1).getAttribute('id') + ':' + String(empty.matches(':blank')) + ':' + String(bio.matches(':blank')) + ':' + String(check.matches(':blank'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("blank selector should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "2:empty:bio:true:true:false"
+    );
+}
+
+#[test]
 fn session_reflects_input_textarea_autofocus_through_inline_script_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -1801,6 +1864,133 @@ fn session_resolves_html_collection_named_item_regression() {
 
     let out_id = session.dom().select("#out").unwrap()[0];
     assert_eq!(session.dom().text_content_for_node(out_id), "First:null");
+}
+
+#[test]
+fn session_resolves_document_forms_named_properties_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><form id='signup' name='signup'>Signup</form><form id='login' name='login'>Login</form></div><div id='out'></div><script>const forms = document.forms; const signup = forms.signup; const login = forms.login; document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = signup.textContent + ':' + login.textContent + ':' + String(forms.missing);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.forms named properties should remain available");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "Signup:Login:undefined"
+    );
+}
+
+#[test]
+fn session_resolves_document_forms_iterator_helpers_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><form id='first-form' name='first-form'>First</form><form id='second-form' name='second-form'>Second</form></div><div id='out'></div><script>const forms = document.forms; const keys = forms.keys(); const values = forms.values(); const entries = forms.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; forms.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.forms iterator helpers should remain available");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:first-form:0:first-form:0:first-form:2;1:second-form:2;"
+    );
+}
+
+#[test]
+fn session_resolves_named_node_map_for_each_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='box' data-role='menu' data-state='azure'></div><div id='out'></div><script>const attrs = document.getElementById('box').attributes; let out = ''; attrs.forEach((attr, index, list) => { out += String(index) + ':' + attr.name + ':' + attr.value + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = out;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("NamedNodeMap.forEach should remain available");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:data-role:menu:3;1:data-state:azure:3;2:id:box:3;"
+    );
+}
+
+#[test]
+fn session_resolves_named_node_map_iterator_helpers_exhaustion_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='box' data-role='menu' data-state='azure'></div><div id='out'></div><script>const attrs = document.getElementById('box').attributes; const keys = attrs.keys(); const values = attrs.values(); const entries = attrs.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); document.getElementById('out').textContent = String(attrs) + ':' + String(firstKey.value) + ':' + firstValue.value.name + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.name;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("NamedNodeMap iterator helpers should remain available");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "[object NamedNodeMap]:0:data-role:0:data-role"
+    );
+}
+
+#[test]
+fn session_resolves_named_node_map_iterator_helpers_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='box' data-role='menu' data-state='azure'></div><div id='out'></div><script>const attrs = document.getElementById('box').attributes; const keys = attrs.keys(); const values = attrs.values(); const entries = attrs.entries(); const firstKey = keys.next(); const secondKey = keys.next(); const thirdKey = keys.next(); const firstValue = values.next(); const secondValue = values.next(); const thirdValue = values.next(); const firstEntry = entries.next(); const secondEntry = entries.next(); const thirdEntry = entries.next(); document.getElementById('out').textContent = String(attrs) + ':' + String(firstKey.value) + ':' + String(secondKey.value) + ':' + String(thirdKey.done) + ':' + firstValue.value.name + ':' + secondValue.value.name + ':' + String(thirdValue.done) + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.name + ':' + String(secondEntry.value.index) + ':' + secondEntry.value.value.name + ':' + String(thirdEntry.done);</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("NamedNodeMap iterator helpers should remain available");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "[object NamedNodeMap]:0:1:false:data-role:data-state:false:0:data-role:1:data-state:false"
+    );
+}
+
+#[test]
+fn session_resolves_attribute_specified_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='box' data-role='menu'></div><div id='out'></div><script>const detached = document.createAttribute('data-state'); const attached = document.getElementById('box').getAttributeNode('data-role'); document.getElementById('out').textContent = String(detached.specified) + ':' + String(attached.specified);</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("Attr.specified should remain available");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "true:true");
+}
+
+#[test]
+fn session_resolves_attribute_is_id_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='box'></div><div id='out'></div><script>const detached = document.createAttribute('data-state'); const attached = document.getElementById('box').getAttributeNode('id'); document.getElementById('out').textContent = String(detached.isId) + ':' + String(attached.isId);</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("Attr.isId should remain available");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "false:true");
 }
 
 #[test]
@@ -2763,6 +2953,25 @@ fn session_rejects_window_frames_length_assignment_regression() {
 }
 
 #[test]
+fn session_resolves_window_frames_iterator_helpers_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<iframe id='first'></iframe><iframe id='second'></iframe><div id='out'></div><script>const frames = window.frames; const keys = frames.keys(); const values = frames.values(); const entries = frames.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; frames.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("window.frames iterator helpers should resolve");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:first:0:first:0:first:2;1:second:2;"
+    );
+}
+
+#[test]
 fn session_rejects_window_frame_element_assignment_regression() {
     let error = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -3621,6 +3830,25 @@ fn session_resolves_document_embeds_regression() {
 }
 
 #[test]
+fn session_resolves_document_images_iterator_helpers_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><img id='hero' name='hero' alt='Hero'><img id='thumb' name='thumb' alt='Thumb'></div><div id='out'></div><script>const images = document.images; const keys = images.keys(); const values = images.values(); const entries = images.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; images.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.images iterator helpers should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:hero:0:hero:0:hero:2;1:thumb:2;"
+    );
+}
+
+#[test]
 fn session_resolves_document_plugins_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -3636,6 +3864,25 @@ fn session_resolves_document_plugins_regression() {
     assert_eq!(
         session.dom().text_content_for_node(out_id),
         "2:0:[object Element]:null"
+    );
+}
+
+#[test]
+fn session_resolves_document_plugins_iterator_helpers_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><embed id='first-embed'><embed name='second-embed'></div><div id='out'></div><script>const plugins = document.plugins; const keys = plugins.keys(); const values = plugins.values(); const entries = plugins.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id');</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.plugins iterator helpers should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:first-embed:0:first-embed"
     );
 }
 
@@ -4335,6 +4582,25 @@ fn session_rejects_document_all_on_elements_explicitly() {
 }
 
 #[test]
+fn session_resolves_document_all_iterator_helpers_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><span id='first'>First</span><span id='second'>Second</span></div><div id='out'></div><script id='script'>const all = document.all; const keys = all.keys(); const values = all.values(); const entries = all.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; all.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.all iterator helpers should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:root:0:root:0:root:5;1:first:5;2:second:5;3:out:5;4:script:5;"
+    );
+}
+
+#[test]
 fn session_rejects_html_collection_reserved_named_property_access_explicitly() {
     let error = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -4843,5 +5109,23 @@ fn session_rejects_unseeded_match_media_explicitly() {
         error
             .to_string()
             .contains("no matchMedia mock configured for `(prefers-color-scheme: dark)`")
+    );
+}
+
+#[test]
+fn session_supports_namespaced_attribute_nodes_explicitly() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='box'></div><div id='out'></div><script>const box = document.getElementById('box'); const attrs = box.attributes; const created = document.createAttributeNS('urn:test', 'svg:stroke'); created.value = 'azure'; const before = attrs.length; const previous = attrs.setNamedItemNS(created); const during = attrs.length; const snapshot = box.getAttributeNodeNS('urn:test', 'stroke'); const snapshotOwner = snapshot.ownerElement; const createdOwner = created.ownerElement; const removed = attrs.removeNamedItemNS('urn:test', 'stroke'); const removedOwner = removed.ownerElement; document.getElementById('out').textContent = String(before) + ':' + String(previous) + ':' + String(during) + ':' + String(snapshot) + ':' + snapshot.name + ':' + String(snapshot.namespaceURI) + ':' + snapshot.localName + ':' + String(snapshot.prefix) + ':' + snapshot.value + ':' + String(snapshotOwner) + ':' + String(createdOwner) + ':' + String(removed) + ':' + String(removedOwner) + ':' + String(box.getAttributeNodeNS('urn:test', 'stroke'));</script></main>".to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should build");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "1:null:2:[object Attr]:svg:stroke:urn:test:stroke:svg:azure:[object Element]:[object Element]:[object Attr]:null:null"
     );
 }

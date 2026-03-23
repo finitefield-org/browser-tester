@@ -4430,6 +4430,9 @@ impl HostBindings for Session {
             HtmlCollectionTarget::FormElements(element) => self.form_elements(element),
             HtmlCollectionTarget::SelectOptions(element) => self.select_options(element),
             HtmlCollectionTarget::SelectSelectedOptions(element) => self.selected_options(element),
+            HtmlCollectionTarget::DocumentPlugins => {
+                self.elements_by_tag_name(&HtmlCollectionScope::Document, "embed")
+            }
             HtmlCollectionTarget::DocumentLinks => self.document_links(),
             HtmlCollectionTarget::DocumentAnchors => self.document_anchors(),
             HtmlCollectionTarget::DocumentChildren => self.document_children(),
@@ -4475,6 +4478,11 @@ impl HostBindings for Session {
             HtmlCollectionTarget::SelectSelectedOptions(element) => {
                 self.selected_options_named_item(element, name)
             }
+            HtmlCollectionTarget::DocumentPlugins => self.named_item_for_tag_name_collection(
+                &HtmlCollectionScope::Document,
+                "embed",
+                name,
+            ),
             HtmlCollectionTarget::DocumentLinks => self.document_links_named_item(name),
             HtmlCollectionTarget::DocumentAnchors => self.document_anchors_named_item(name),
             HtmlCollectionTarget::DocumentChildren => self.document_children_named_item(name),
@@ -4508,6 +4516,9 @@ impl HostBindings for Session {
             HtmlCollectionTarget::FormElements(element) => self.form_elements(element),
             HtmlCollectionTarget::SelectOptions(element) => self.select_options(element),
             HtmlCollectionTarget::SelectSelectedOptions(element) => self.selected_options(element),
+            HtmlCollectionTarget::DocumentPlugins => {
+                self.elements_by_tag_name(&HtmlCollectionScope::Document, "embed")
+            }
             HtmlCollectionTarget::DocumentLinks => self.document_links(),
             HtmlCollectionTarget::DocumentAnchors => self.document_anchors(),
             HtmlCollectionTarget::DocumentChildren => self.document_children(),
@@ -4553,6 +4564,11 @@ impl HostBindings for Session {
             HtmlCollectionTarget::SelectSelectedOptions(element) => {
                 self.selected_options_named_item(element, name)
             }
+            HtmlCollectionTarget::DocumentPlugins => self.named_item_for_tag_name_collection(
+                &HtmlCollectionScope::Document,
+                "embed",
+                name,
+            ),
             HtmlCollectionTarget::DocumentLinks => self.document_links_named_item(name),
             HtmlCollectionTarget::DocumentAnchors => self.document_anchors_named_item(name),
             HtmlCollectionTarget::DocumentChildren => self.document_children_named_item(name),
@@ -5066,6 +5082,21 @@ impl HostBindings for Session {
         self.dom
             .has_attribute(node_id, name)
             .map_err(ScriptError::new)
+    }
+
+    fn element_attribute_names(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<String>> {
+        let node_id = self.node_id_for_handle(element)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        Ok(element.attributes.keys().cloned().collect())
     }
 
     fn element_toggle_attribute(

@@ -81,6 +81,7 @@ enum SelectorPseudoClass {
     Defined,
     Dir(SelectorDirValue),
     PlaceholderShown,
+    Blank,
     Indeterminate,
     Default,
     Focus,
@@ -2396,6 +2397,7 @@ impl DomStore {
             SelectorPseudoClass::PlaceholderShown => {
                 self.is_placeholder_shown_pseudo_class(node_id)
             }
+            SelectorPseudoClass::Blank => self.is_blank_pseudo_class(node_id),
             SelectorPseudoClass::Indeterminate => self.is_indeterminate_pseudo_class(node_id),
             SelectorPseudoClass::Default => self.is_default_pseudo_class(node_id),
             SelectorPseudoClass::Focus => self.is_focus_pseudo_class(node_id),
@@ -2689,6 +2691,7 @@ impl DomStore {
                         "lang" => SelectorPseudoClass::Lang(parse_lang_argument(selector, pos)?),
                         "dir" => SelectorPseudoClass::Dir(parse_dir_argument(selector, pos)?),
                         "placeholder-shown" => SelectorPseudoClass::PlaceholderShown,
+                        "blank" => SelectorPseudoClass::Blank,
                         "indeterminate" => SelectorPseudoClass::Indeterminate,
                         "default" => SelectorPseudoClass::Default,
                         "focus" => SelectorPseudoClass::Focus,
@@ -2924,6 +2927,23 @@ impl DomStore {
             "input" if is_text_input_type(element.attributes.get("type").map(String::as_str)) => {
                 element.attributes.contains_key("placeholder")
                     && self.value_for_node(node_id).is_empty()
+            }
+            _ => false,
+        }
+    }
+
+    fn is_blank_pseudo_class(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        match element.tag_name.as_str() {
+            "textarea" => self.value_for_node(node_id).trim().is_empty(),
+            "input" if is_blank_input_type(element.attributes.get("type").map(String::as_str)) => {
+                self.value_for_node(node_id).trim().is_empty()
             }
             _ => false,
         }
@@ -4030,7 +4050,7 @@ impl DomStore {
 
 fn selector_not_supported(selector: &str) -> String {
     format!(
-        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, `:enabled`, `:indeterminate`, `:default`, `:valid`, `:invalid`, `:in-range`, and `:out-of-range`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`; additional bounded structural pseudo-classes include `:root`, `:empty`, `:only-child`, `:only-of-type`, `:first-of-type`, `:last-of-type`, `:nth-of-type(2)`, `:nth-of-type(... of <selector-list>)`, `:nth-last-of-type(2)`, and `:nth-last-of-type(... of <selector-list>)`; additional bounded selector grammar now also includes `:scope`, `:has(...)`, `:lang(...)`, `:defined`, `:nth-child(... of <selector-list>)` / `:nth-last-child(... of <selector-list>)`, `:focus`, `:focus-visible`, `:focus-within`, and `:target`; form-editable state pseudo-classes also include `:read-only` and `:read-write`"
+        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, `:enabled`, `:indeterminate`, `:default`, `:valid`, `:invalid`, `:in-range`, and `:out-of-range`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`; additional bounded structural pseudo-classes include `:root`, `:empty`, `:only-child`, `:only-of-type`, `:first-of-type`, `:last-of-type`, `:nth-of-type(2)`, `:nth-of-type(... of <selector-list>)`, `:nth-last-of-type(2)`, and `:nth-last-of-type(... of <selector-list>)`; additional bounded selector grammar now also includes `:scope`, `:has(...)`, `:lang(...)`, `:defined`, `:nth-child(... of <selector-list>)` / `:nth-last-child(... of <selector-list>)`, `:focus`, `:focus-visible`, `:focus-within`, `:target`, and `:blank`; form-editable state pseudo-classes also include `:read-only` and `:read-write`"
     )
 }
 
@@ -5300,6 +5320,24 @@ fn is_text_input_type(input_type: Option<&str>) -> bool {
             | "week"
             | "time"
             | "color"
+    )
+}
+
+fn is_blank_input_type(input_type: Option<&str>) -> bool {
+    matches!(
+        input_type.unwrap_or("text"),
+        "text"
+            | "search"
+            | "url"
+            | "tel"
+            | "email"
+            | "password"
+            | "number"
+            | "date"
+            | "datetime-local"
+            | "month"
+            | "week"
+            | "time"
     )
 }
 

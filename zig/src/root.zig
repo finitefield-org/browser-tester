@@ -437,6 +437,20 @@ test "contract: Harness.scrollTo and Harness.scrollBy record calls through the r
     try std.testing.expectEqual(@as(i64, 3), subject.mocksMut().scroll().calls()[1].y);
 }
 
+test "contract: Harness.scrollTo dispatches window and document scroll handlers" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='doc'></main><main id='win'></main><script>document.onscroll = () => { document.getElementById('doc').textContent = String(window.scrollX) + ':' + String(window.scrollY); }; window.onscroll = () => { document.getElementById('win').textContent = String(window.scrollX) + ':' + String(window.scrollY); };</script>",
+    );
+    defer subject.deinit();
+
+    try subject.scrollTo(10, 20);
+
+    try subject.assertValue("#doc", "10:20");
+    try subject.assertValue("#win", "10:20");
+}
+
 test "failure: malformed html is rejected" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -526,11 +540,22 @@ test "contract: Harness.fromHtml exposes document metadata and window.children d
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
         allocator,
-        "<html id='html'><head><title>Example</title></head><body id='body'><main id='out'></main><script>const metadata = document.compatMode + ':' + document.characterSet + ':' + document.charset + ':' + document.contentType; const active = document.activeElement.getAttribute('id'); const documentChildren = document.children; const windowChildren = window.children; document.getElementById('out').textContent = metadata + ':' + active + ':' + String(documentChildren.length) + ':' + String(windowChildren.length) + ':' + documentChildren.item(0).getAttribute('id') + ':' + windowChildren.item(0).getAttribute('id');</script></body></html>",
+        "<html id='html'><head><title>Example</title></head><body id='body'><main id='out'></main><script>const metadata = document.compatMode + ':' + document.characterSet + ':' + document.charset + ':' + document.contentType; const active = document.activeElement.getAttribute('id'); const documentChildren = document.children; const windowChildren = window.children; document.getElementById('out').textContent = metadata + ':' + active + ':' + String(documentChildren.length) + ':' + String(windowChildren.length) + ':' + String(window.frameElement) + ':' + documentChildren.item(0).getAttribute('id') + ':' + windowChildren.item(0).getAttribute('id');</script></body></html>",
     );
     defer subject.deinit();
 
-    try subject.assertValue("#out", "CSS1Compat:UTF-8:UTF-8:text/html:body:1:1:html:html");
+    try subject.assertValue("#out", "CSS1Compat:UTF-8:UTF-8:text/html:body:1:1:null:html:html");
+}
+
+test "failure: Harness.fromHtml rejects window.frameElement assignment" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='out'></div><script>window.frameElement = document.documentElement;</script></main>",
+        ),
+    );
 }
 
 test "contract: Harness.fromHtml exposes document referrer and dir during bootstrap" {
@@ -815,6 +840,17 @@ test "contract: Harness.fromHtml resolves read-only and read-write pseudo-classe
         "#out",
         "3:name:bio:editable:true:true:true:true",
     );
+}
+
+test "contract: Harness.fromHtml resolves blank pseudo-classes during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='blank-input' value='   '><textarea id='blank-textarea'>   </textarea><div id='blank-editable' contenteditable='true'>   </div><input id='filled' value='Ada'></main><div id='out'></div><script>const blankInput = document.getElementById('blank-input'); const blankTextarea = document.getElementById('blank-textarea'); const blankEditable = document.getElementById('blank-editable'); const filled = document.getElementById('filled'); document.getElementById('out').textContent = String(blankInput.matches(':blank')) + ':' + String(blankTextarea.matches(':blank')) + ':' + String(blankEditable.matches(':blank')) + ':' + String(filled.matches(':blank')) + ':' + String(document.querySelectorAll('#blank-input:blank').length) + ':' + String(document.querySelectorAll('#blank-textarea:blank').length) + ':' + String(document.querySelectorAll('#blank-editable:blank').length) + ':' + String(document.querySelectorAll('#filled:blank').length);</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "true:true:true:false:1:1:1:0");
 }
 
 test "contract: Harness.fromHtml resolves valid, invalid, in-range, and out-of-range pseudo-classes during bootstrap" {
@@ -3204,6 +3240,20 @@ test "contract: Harness.fromHtml runs DOMTokenList value and item during bootstr
     try subject.assertValue("#out", "base primary:primary secondary:stylesheet preload:base:null:primary:stylesheet:null|alpha beta:alpha beta:alpha:beta:accent tertiary:accent tertiary:accent:stylesheet preload:stylesheet preload:[object CSSStyleSheet]:true:true:stylesheet:preload");
 }
 
+test "contract: Harness.fromHtml runs DOMTokenList iterators and forEach during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><button id='button' class='base primary base'>First</button><div id='parted' part='primary secondary primary'></div><link id='link' rel='stylesheet preload stylesheet' href='a.css'><div id='out'></div><script>const button = document.getElementById('button'); const parted = document.getElementById('parted'); const link = document.getElementById('link'); const classKeys = button.classList.keys(); const classValues = button.classList.values(); const classEntries = button.classList.entries(); const classKey0 = classKeys.next(); const classKey1 = classKeys.next(); const classKey2 = classKeys.next(); const classValue0 = classValues.next(); const classValue1 = classValues.next(); const classValue2 = classValues.next(); const classEntry0 = classEntries.next(); const classEntry1 = classEntries.next(); const classEntry2 = classEntries.next(); document.getElementById('out').textContent = String(classKey0.value) + ':' + String(classKey1.value) + ':' + String(classKey2.done) + '|' + classValue0.value + ':' + classValue1.value + ':' + String(classValue2.done) + '|' + String(classEntry0.value.index) + ':' + classEntry0.value.value + ':' + String(classEntry1.value.index) + ':' + classEntry1.value.value + ':' + String(classEntry2.done) + '|'; button.classList.forEach((token, index, list) => { document.getElementById('out').textContent += String(index) + ':' + token + ':' + String(list.length) + ';'; }, null); document.getElementById('out').textContent += '|'; parted.part.forEach((token, index, list) => { document.getElementById('out').textContent += String(index) + ':' + token + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent += '|'; link.relList.forEach((token, index, list) => { document.getElementById('out').textContent += String(index) + ':' + token + ':' + String(list.length) + ';'; }, null);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "0:1:true|base:primary:true|0:base:1:primary:true|0:base:2;1:primary:2;|0:primary:2;1:secondary:2;|0:stylesheet:2;1:preload:2;",
+    );
+}
+
 test "contract: Harness.fromHtml runs inline style declaration surface during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -3268,6 +3318,39 @@ test "contract: Harness.fromHtml runs selection state on inputs and textareas du
     try subject.assertValue("#out", "3:3:none:5:5:none:null:null:null|1:3:backward|0:5:none|null:null:null");
 }
 
+test "contract: Harness.fromHtml runs selectionchange handlers during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='name' value='Ada Lovelace'><div id='out'></div><script>const name = document.getElementById('name'); document.onselectionchange = () => { document.getElementById('out').textContent += '1'; }; name.setSelectionRange(4, 12); name.setRangeText('Byron', 4, 12, 'select'); document.getElementById('out').textContent += ':' + String(name.selectionStart) + ':' + String(name.selectionEnd) + ':' + name.selectionDirection;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "11:4:9:none");
+}
+
+test "contract: Harness.fromHtml runs readystatechange handlers during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><div id='out'></div><script>document.onreadystatechange = () => { document.getElementById('out').textContent += ':' + document.readyState; }; document.getElementById('out').textContent = document.readyState;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "loading:complete");
+}
+
+test "failure: Harness.fromHtml rejects readystatechange handlers on unsupported targets" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>document.onreadystatechange = 1;</script>",
+        ),
+    );
+}
+
 test "contract: Harness.fromHtml runs setRangeText on selection controls during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -3290,6 +3373,34 @@ test "contract: Harness.fromHtml runs stepUp and stepDown on numeric inputs duri
     try subject.assertValue("#out", "2:false|4:false|2:false");
 }
 
+test "contract: Harness.fromHtml runs input.valueAsNumber getters and setters during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='num' type='number' value='42.5'><input id='date' type='date' value='2017-06-01'><input id='dt' type='datetime-local' value='2017-06-01T08:30'><input id='time' type='time' value='15:30:05.006'><input id='range' type='range' min='2' max='10' step='2' value='9'><input id='text' type='text' value='5'><div id='out'></div><script>const num = document.getElementById('num'); const date = document.getElementById('date'); const dt = document.getElementById('dt'); const time = document.getElementById('time'); const range = document.getElementById('range'); const text = document.getElementById('text'); const notANumber = text.valueAsNumber; const first = num.valueAsNumber + ':' + date.valueAsNumber + ':' + dt.valueAsNumber + ':' + time.valueAsNumber + ':' + range.valueAsNumber + ':' + String(notANumber); num.valueAsNumber = 10; date.valueAsNumber = 1496275200000; dt.valueAsNumber = 1496305805006; time.valueAsNumber = 32405006; range.valueAsNumber = 9; const second = num.value + ':' + num.valueAsNumber + '|' + date.value + ':' + date.valueAsNumber + '|' + dt.value + ':' + dt.valueAsNumber + '|' + time.value + ':' + time.valueAsNumber + '|' + range.value + ':' + range.valueAsNumber; num.valueAsNumber = notANumber; date.valueAsNumber = notANumber; dt.valueAsNumber = notANumber; time.valueAsNumber = notANumber; range.valueAsNumber = notANumber; const third = '[' + num.value + ']:' + String(num.valueAsNumber) + '|[' + date.value + ']:' + String(date.valueAsNumber) + '|[' + dt.value + ']:' + String(dt.valueAsNumber) + '|[' + time.value + ']:' + String(time.valueAsNumber) + '|' + range.value + ':' + range.valueAsNumber; document.getElementById('out').textContent = first + '|' + second + '|' + third;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "42.5:1496275200000:1496305800000:55805006:10:NaN|10:10|2017-06-01:1496275200000|2017-06-01T08:30:05.006:1496305805006|09:00:05.006:32405006|10:10|[]:NaN|[]:NaN|[]:NaN|[]:NaN|6:6",
+    );
+}
+
+test "contract: Harness.fromHtml runs input.valueAsDate getters and setters during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='date' type='date' value='2017-06-01'><input id='dt' type='datetime-local' value='2017-06-01T08:30:05.006'><input id='time' type='time' value='09:00:05.006'><input id='month' type='month' value='2017-06'><input id='text' type='text' value='ignored'><div id='out'></div><script>const date = document.getElementById('date'); const dt = document.getElementById('dt'); const time = document.getElementById('time'); const month = document.getElementById('month'); const text = document.getElementById('text'); const dateObj = new Date(1496275200000); const dtObj = new Date(1496305805006); const timeObj = new Date(32405006); const first = date.valueAsDate.toISOString() + ':' + String(date.valueAsDate.valueOf()) + '|' + dt.valueAsDate.toISOString() + ':' + String(dt.valueAsDate.valueOf()) + '|' + time.valueAsDate.toISOString() + ':' + String(time.valueAsDate.valueOf()) + '|' + month.valueAsDate.toISOString() + ':' + String(month.valueAsDate.valueOf()) + '|' + String(text.valueAsDate); date.valueAsDate = dateObj; dt.valueAsDate = dtObj; time.valueAsDate = timeObj; month.valueAsDate = dateObj; const second = date.value + ':' + date.valueAsDate.toISOString() + '|' + dt.value + ':' + dt.valueAsDate.toISOString() + '|' + time.value + ':' + time.valueAsDate.toISOString() + '|' + month.value + ':' + month.valueAsDate.toISOString(); date.valueAsDate = null; dt.valueAsDate = null; time.valueAsDate = null; month.valueAsDate = null; const third = '[' + date.value + ']:' + String(date.valueAsDate) + '|[' + dt.value + ']:' + String(dt.valueAsDate) + '|[' + time.value + ']:' + String(time.valueAsDate) + '|[' + month.value + ']:' + String(month.valueAsDate); document.getElementById('out').textContent = first + '|' + second + '|' + third;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "2017-06-01T00:00:00.000Z:1496275200000|2017-06-01T08:30:05.006Z:1496305805006|1970-01-01T09:00:05.006Z:32405006|2017-06-01T00:00:00.000Z:1496275200000|null|2017-06-01:2017-06-01T00:00:00.000Z|2017-06-01T08:30:05.006:2017-06-01T08:30:05.006Z|09:00:05.006:1970-01-01T09:00:05.006Z|2017-06:2017-06-01T00:00:00.000Z|[]:null|[]:null|[]:null|[]:null",
+    );
+}
+
 test "failure: Harness.fromHtml rejects selection setters on unsupported controls" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -3297,6 +3408,17 @@ test "failure: Harness.fromHtml rejects selection setters on unsupported control
         Harness.fromHtml(
             allocator,
             "<main id='root'><input id='check' type='checkbox'></main><script>document.getElementById('check').setSelectionRange(0, 1);</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects selectionchange handlers on unsupported targets" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>document.onselectionchange = 1;</script>",
         ),
     );
 }
@@ -3319,6 +3441,28 @@ test "failure: Harness.fromHtml rejects stepUp on unsupported controls" {
         Harness.fromHtml(
             allocator,
             "<main id='root'></main><script>document.createElement('div').stepUp();</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects valueAsNumber setters on unsupported controls" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><input id='text' type='text'></main><script>document.getElementById('text').valueAsNumber = 1;</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects valueAsDate setters on unsupported controls" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><input id='text' type='text'></main><script>document.getElementById('text').valueAsDate = new Date(0);</script>",
         ),
     );
 }
@@ -3742,6 +3886,20 @@ test "contract: Harness.fromHtml runs template.content element boundaries during
     );
 }
 
+test "contract: Harness.fromHtml runs document.open write writeln and close during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><div id='out'></div><script>const opened = document.open(); document.write('<main id=\"root\"><div id=\"out\"></div><span id=\"name\">Ada</span>'); document.writeln('</main>'); document.close(); document.getElementById('out').textContent = String(opened) + ':' + document.getElementById('name').textContent + ':' + String(document.getElementById('root').nextSibling.nodeType);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "[object Document]:Ada:3",
+    );
+}
+
 test "contract: Harness.fromHtml runs namespace-aware serialization during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -3809,6 +3967,17 @@ test "failure: Harness.fromHtml rejects malformed template.content.innerHTML fra
         Harness.fromHtml(
             allocator,
             "<template id='tpl'></template><script>document.getElementById('tpl').content.innerHTML = '<span></main>';</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects document.open arity mismatches" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><script>document.open(1);</script></main>",
         ),
     );
 }
@@ -4213,6 +4382,13 @@ test "failure: Harness.fromHtml rejects malformed state pseudo-class selectors" 
             "<main id='root'></main><script>document.querySelector('main:defined()');</script>",
         ),
     );
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>document.querySelector('main:blank()');</script>",
+        ),
+    );
 }
 
 test "failure: Harness.fromHtml rejects malformed :lang selectors" {
@@ -4255,6 +4431,35 @@ test "contract: Harness.fromHtml resolves scope pseudo-class selectors during bo
     defer subject.deinit();
 
     try subject.assertValue("#out", "root:section:null:true:child");
+}
+
+test "contract: Harness.fromHtml resolves focus-visible pseudo-class selectors during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><section id='panel'><input id='field'></section><div id='out'></div><script>const field = document.getElementById('field'); field.focus(); document.getElementById('out').textContent = String(field.matches(':focus')) + ':' + String(field.matches(':focus-visible')) + ':' + String(document.querySelectorAll(':focus-visible').length) + ':' + String(document.querySelector('#panel:focus-visible')) + ':' + String(document.querySelector('#root:focus-visible'));</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "true:true:1:null:null");
+}
+
+test "failure: Harness.fromHtml rejects document.focus and document.blur calls" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='out'></div><script>document.focus();</script></main>",
+        ),
+    );
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='out'></div><script>document.blur();</script></main>",
+        ),
+    );
 }
 
 test "contract: Harness.fromHtml resolves :has pseudo-class selectors during bootstrap" {
@@ -5190,6 +5395,17 @@ test "failure: Harness.fromHtml rejects token-list item with a non-numeric index
     );
 }
 
+test "failure: Harness.fromHtml rejects token-list forEach with a non-function callback" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<button id='button' class='base primary'></button><script>document.getElementById('button').classList.forEach(123);</script>",
+        ),
+    );
+}
+
 test "failure: Harness.assertExists rejects malformed selectors" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(allocator, "<main id='app'><span>Hello</span></main>");
@@ -5410,11 +5626,11 @@ test "contract: Harness.fromHtml dispatches window load events after bootstrap" 
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
         allocator,
-        "<main id='out'></main><script>window.addEventListener('load', () => { document.getElementById('out').textContent += 'load|'; }); window.onload = () => { document.getElementById('out').textContent += 'property-load'; };</script>",
+        "<main id='out'></main><script>window.addEventListener('load', () => { document.getElementById('out').textContent += 'load|'; }); window.onload = () => { document.getElementById('out').textContent += 'property-load|'; }; window.addEventListener('pageshow', () => { document.getElementById('out').textContent += 'pageshow|'; }); window.onpageshow = () => { document.getElementById('out').textContent += 'property-pageshow'; };</script>",
     );
     defer subject.deinit();
 
-    try subject.assertValue("#out", "load|property-load");
+    try subject.assertValue("#out", "load|property-load|pageshow|property-pageshow");
 }
 
 test "contract: Harness.focus and Harness.blur sync focus pseudo-classes" {
@@ -5957,6 +6173,22 @@ test "contract: Harness.fromHtmlWithUrl dispatches hashchange listeners and onha
     try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().location().navigations().len);
 }
 
+test "contract: Harness.click dispatches pagehide and pageshow handlers on navigation" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='out'></main><button id='nav'>Go</button><script>window.addEventListener('pagehide', () => { document.getElementById('out').textContent += 'hide|'; }); window.onpagehide = () => { document.getElementById('out').textContent += 'property-hide|'; }; window.addEventListener('pageshow', () => { document.getElementById('out').textContent += 'show|'; }); window.onpageshow = () => { document.getElementById('out').textContent += 'property-show|'; }; document.getElementById('nav').addEventListener('click', () => { document.getElementById('out').textContent = ''; document.location = 'https://example.test:8443/next'; });</script>",
+    );
+    defer subject.deinit();
+
+    try subject.click("#nav");
+    try subject.assertValue("#out", "hide|property-hide|show|property-show|");
+    try std.testing.expectEqualStrings(
+        "https://example.test:8443/next",
+        subject.mocksMut().location().currentUrl().?,
+    );
+}
+
 test "contract: Harness.fromHtmlWithUrl dispatches popstate listeners and onpopstate handlers" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtmlWithUrl(
@@ -6075,6 +6307,28 @@ test "failure: Harness.fromHtml rejects non-callable window.onload assignments" 
     );
 }
 
+test "failure: Harness.fromHtml rejects non-callable window.onpageshow assignments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='out'></main><script>window.onpageshow = 123;</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects non-callable window.onpagehide assignments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='out'></main><script>window.onpagehide = 123;</script>",
+        ),
+    );
+}
+
 test "failure: Harness.fromHtml rejects non-callable window.onstorage assignments" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -6082,6 +6336,28 @@ test "failure: Harness.fromHtml rejects non-callable window.onstorage assignment
         Harness.fromHtml(
             allocator,
             "<main id='out'></main><script>window.onstorage = 123;</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects non-callable window.onscroll assignments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='out'></main><script>window.onscroll = 123;</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects non-callable document.onscroll assignments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='out'></main><script>document.onscroll = 123;</script>",
         ),
     );
 }

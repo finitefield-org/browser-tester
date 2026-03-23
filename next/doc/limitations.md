@@ -16,7 +16,7 @@ What exists today:
 - public and internal type skeletons
 - deterministic session bootstrap
 - real HTML parsing and DOM tree construction for the Phase 1 subset
-- selector matching for `#id`, tag, `[attr]`, `[attr=value]`, `[attr^=value]`, `[attr$=value]`, `[attr*=value]`, `[attr~=value]`, `[attr|=value]`, optional `i` / `s` flags, `.class`, `tag.class`, `#id.class`, selector lists, bounded pseudo-classes including `:lang(...)`, `:dir(...)`, `:link`, `:any-link`, `:placeholder-shown`, `:required`, `:optional`, `:focus`, `:focus-visible`, `:focus-within`, `:target`, `:defined`, descendant combinators, child combinators, adjacent sibling combinators, and general sibling combinators
+- selector matching for `#id`, tag, `[attr]`, `[attr=value]`, `[attr^=value]`, `[attr$=value]`, `[attr*=value]`, `[attr~=value]`, `[attr|=value]`, optional `i` / `s` flags, `.class`, `tag.class`, `#id.class`, selector lists, bounded pseudo-classes including `:lang(...)`, `:dir(...)`, `:link`, `:any-link`, `:placeholder-shown`, `:blank`, `:required`, `:optional`, `:focus`, `:focus-visible`, `:focus-within`, `:target`, `:defined`, `:where(...)`, descendant combinators, child combinators, adjacent sibling combinators, and general sibling combinators
 - `assert_exists` and DOM dump helpers
 - inline `<script>` bootstrapping with a minimal script parser/evaluator
 - listener registration through the script host seam
@@ -61,7 +61,7 @@ What exists today:
 - script-side `template.content.innerHTML` is available on `<template>.content` with bounded fragment serialization
 - script-side `Element.matches` is available
 - script-side `Element.closest` is available
-- script-side `getAttribute`, `setAttribute`, `removeAttribute`, `hasAttribute`, and `toggleAttribute` are available on `Element`
+- script-side `getAttribute`, `setAttribute`, `removeAttribute`, `hasAttribute`, and `toggleAttribute` are available on `Element`, together with `Element.attributes` / `Attr` / `NamedNodeMap` and `document.createAttribute()` / `document.createAttributeNS()` / `getAttributeNode()` / `getAttributeNodeNS()` / `setAttributeNode()` / `setAttributeNodeNS()` / `removeAttributeNode()` / `NamedNodeMap.setNamedItem()` / `NamedNodeMap.setNamedItemNS()` / `NamedNodeMap.removeNamedItem()` / `NamedNodeMap.removeNamedItemNS()` / `NamedNodeMap.keys()` / `NamedNodeMap.values()` / `NamedNodeMap.entries()` / `NamedNodeMap.forEach()`; `Attr.specified` and `Attr.isId` are exposed as read-only booleans
 - selector hardening and regression coverage are available
 
 What does not exist yet:

@@ -79,6 +79,7 @@ pub enum HtmlCollectionTarget {
     FormElements(ElementHandle),
     SelectOptions(ElementHandle),
     SelectSelectedOptions(ElementHandle),
+    DocumentPlugins,
     DocumentLinks,
     DocumentAnchors,
     DocumentChildren,
@@ -177,6 +178,70 @@ impl MimeTypeArrayState {
 
     pub fn items(&self) -> &[String] {
         &self.items
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AttributeState {
+    namespace_uri: Option<String>,
+    name: String,
+    value: String,
+    owner_element: Option<ElementHandle>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AttributeHandle(Rc<RefCell<AttributeState>>);
+
+impl AttributeHandle {
+    pub fn new(
+        namespace_uri: Option<String>,
+        name: impl Into<String>,
+        value: impl Into<String>,
+        owner_element: Option<ElementHandle>,
+    ) -> Self {
+        Self(Rc::new(RefCell::new(AttributeState {
+            namespace_uri,
+            name: name.into(),
+            value: value.into(),
+            owner_element,
+        })))
+    }
+
+    pub fn namespace_uri(&self) -> Option<String> {
+        self.0.borrow().namespace_uri.clone()
+    }
+
+    pub fn name(&self) -> String {
+        self.0.borrow().name.clone()
+    }
+
+    pub fn value(&self) -> String {
+        self.0.borrow().value.clone()
+    }
+
+    pub fn set_value(&self, value: impl Into<String>) {
+        self.0.borrow_mut().value = value.into();
+    }
+
+    pub fn owner_element(&self) -> Option<ElementHandle> {
+        self.0.borrow().owner_element
+    }
+
+    pub fn set_owner_element(&self, owner_element: Option<ElementHandle>) {
+        self.0.borrow_mut().owner_element = owner_element;
+    }
+
+    pub fn local_name(&self) -> String {
+        let name = self.name();
+        name.split_once(':')
+            .map(|(_, local_name)| local_name.to_string())
+            .unwrap_or(name)
+    }
+
+    pub fn prefix(&self) -> Option<String> {
+        self.name()
+            .split_once(':')
+            .map(|(prefix, _)| prefix.to_string())
     }
 }
 
@@ -417,9 +482,11 @@ pub enum ScriptValue {
     Number(f64),
     String(String),
     Element(ElementHandle),
+    Attribute(AttributeHandle),
     ClassList(ElementHandle),
     Dataset(ElementHandle),
     TemplateContent(ElementHandle),
+    NamedNodeMap(ElementHandle),
     HtmlCollection(HtmlCollectionTarget),
     StyleSheetList(StyleSheetListTarget),
     Storage(StorageTarget),
@@ -1501,6 +1568,10 @@ pub trait HostBindings {
 
     fn element_has_attribute(&mut self, _element: ElementHandle, _name: &str) -> Result<bool> {
         Err(ScriptError::phase_not_ready("element.hasAttribute"))
+    }
+
+    fn element_attribute_names(&mut self, _element: ElementHandle) -> Result<Vec<String>> {
+        Err(ScriptError::phase_not_ready("Element.attributes"))
     }
 
     fn element_toggle_attribute(

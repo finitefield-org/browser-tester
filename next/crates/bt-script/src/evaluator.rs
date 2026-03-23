@@ -4,7 +4,7 @@ use url::Url;
 
 use crate::syntax::{AssignTarget, Expr, Program, Statement};
 use crate::{
-    CollectionEntryHandle, CollectionIteratorHandle, ElementHandle, HostBindings,
+    AttributeHandle, CollectionEntryHandle, CollectionIteratorHandle, ElementHandle, HostBindings,
     HtmlCollectionNamedItem, HtmlCollectionScope, HtmlCollectionTarget, ListenerTarget,
     MediaQueryListState, MimeTypeArrayState, NodeHandle, NodeListTarget, RadioNodeListTarget,
     Result, ScriptError, ScriptValue as Value, StorageTarget, StringListState,
@@ -42,9 +42,11 @@ fn as_string(value: &Value) -> String {
         }
         Value::String(value) => value.clone(),
         Value::Element(_) => "[object Element]".to_string(),
+        Value::Attribute(_) => "[object Attr]".to_string(),
         Value::ClassList(_) => "[object DOMTokenList]".to_string(),
         Value::Dataset(_) => "[object DOMStringMap]".to_string(),
         Value::TemplateContent(_) => "[object DocumentFragment]".to_string(),
+        Value::NamedNodeMap(_) => "[object NamedNodeMap]".to_string(),
         Value::HtmlCollection(_) => "[object HTMLCollection]".to_string(),
         Value::StyleSheetList(_) => "[object StyleSheetList]".to_string(),
         Value::StyleSheet(_) => "[object CSSStyleSheet]".to_string(),
@@ -1446,11 +1448,22 @@ fn eval_assignment<H: HostBindings>(
                     let attribute_name = dataset_attribute_name(property)?;
                     host.element_set_attribute(element, &attribute_name, &as_string(&value))
                 }
+                (Value::Attribute(attr), property)
+                    if matches!(property, "value" | "nodeValue" | "data" | "textContent") =>
+                {
+                    attribute_set_value(attr, &as_string(&value), host)
+                }
+                (Value::Attribute(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on attr value"
+                ))),
                 (Value::TemplateContent(_), property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on template content value"
                 ))),
                 (Value::Element(_), _) => Err(ScriptError::new(format!(
                     "unsupported assignment target on element: {property}"
+                ))),
+                (Value::NamedNodeMap(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on named node map value"
                 ))),
                 (Value::ClassList(_), property) => Err(ScriptError::new(format!(
                     "unsupported assignment target on class list value: {property}"
@@ -1777,10 +1790,7 @@ fn eval_member<H: HostBindings>(
             }))
         }
         Value::Document if property == "plugins" => {
-            Ok(Value::HtmlCollection(HtmlCollectionTarget::ByTagName {
-                scope: HtmlCollectionScope::Document,
-                tag_name: "embed".to_string(),
-            }))
+            Ok(Value::HtmlCollection(HtmlCollectionTarget::DocumentPlugins))
         }
         Value::Window if property == "document" => Ok(Value::Document),
         Value::Window if property == "self" => Ok(Value::Window),
@@ -1949,10 +1959,7 @@ fn eval_member<H: HostBindings>(
             Ok(Value::Boolean(host.window_navigator_java_enabled()?))
         }
         Value::Navigator if property == "plugins" => {
-            Ok(Value::HtmlCollection(HtmlCollectionTarget::ByTagName {
-                scope: HtmlCollectionScope::Document,
-                tag_name: "embed".to_string(),
-            }))
+            Ok(Value::HtmlCollection(HtmlCollectionTarget::DocumentPlugins))
         }
         Value::Navigator if property == "hardwareConcurrency" => Ok(Value::Number(
             host.window_navigator_hardware_concurrency()? as f64,
@@ -2432,6 +2439,7 @@ fn eval_member<H: HostBindings>(
                 ))
             }
         }
+        Value::Element(element) if property == "attributes" => Ok(Value::NamedNodeMap(element)),
         Value::Element(element) if property == "classList" => Ok(Value::ClassList(element)),
         Value::Element(element) if property == "dataset" => Ok(Value::Dataset(element)),
         Value::Element(element) if property == "children" => Ok(Value::HtmlCollection(
@@ -2555,7 +2563,9 @@ fn eval_member<H: HostBindings>(
             let length = html_collection_items(&collection, host)?.len();
             Ok(Value::Number(length as f64))
         }
-        Value::HtmlCollection(_collection) if html_collection_property_is_reserved(property) => {
+        Value::HtmlCollection(collection)
+            if html_collection_property_is_reserved(&collection, property) =>
+        {
             Err(unsupported_member_access(property, "html collection"))
         }
         Value::HtmlCollection(collection) => Ok(
@@ -2579,6 +2589,39 @@ fn eval_member<H: HostBindings>(
             Ok(Value::Number(entry.index() as f64))
         }
         Value::CollectionEntry(entry) if property == "value" => Ok(entry.value()),
+        Value::Attribute(attr) if property == "name" => Ok(Value::String(attr.name())),
+        Value::Attribute(attr) if property == "nodeName" => Ok(Value::String(attr.name())),
+        Value::Attribute(attr) if property == "localName" => Ok(Value::String(attr.local_name())),
+        Value::Attribute(attr) if property == "prefix" => Ok(match attr.prefix() {
+            Some(value) => Value::String(value),
+            None => Value::Null,
+        }),
+        Value::Attribute(attr) if property == "namespaceURI" => Ok(match attr.namespace_uri() {
+            Some(value) => Value::String(value),
+            None => Value::Null,
+        }),
+        Value::Attribute(_) if property == "nodeType" => Ok(Value::Number(2.0)),
+        Value::Attribute(_) if property == "ownerDocument" => Ok(Value::Document),
+        Value::Attribute(attr) if property == "ownerElement" => {
+            Ok(attribute_owner_element_value(&attr, host)?)
+        }
+        Value::Attribute(_) if property == "specified" => Ok(Value::Boolean(true)),
+        Value::Attribute(attr) if property == "isId" => {
+            Ok(Value::Boolean(matches!(attr.name().as_str(), "id")))
+        }
+        Value::Attribute(_) if property == "parentNode" => Ok(Value::Null),
+        Value::Attribute(_) if property == "parentElement" => Ok(Value::Null),
+        Value::Attribute(attr)
+            if property == "value"
+                || property == "nodeValue"
+                || property == "data"
+                || property == "textContent" =>
+        {
+            Ok(Value::String(attribute_current_value(&attr, host)?))
+        }
+        Value::NamedNodeMap(element) if property == "length" => Ok(Value::Number(
+            named_node_map_names(element, host)?.len() as f64,
+        )),
         Value::ClassList(element) if property == "length" => {
             let length = class_list_tokens(element, host)?.len();
             Ok(Value::Number(length as f64))
@@ -2607,6 +2650,8 @@ fn eval_member<H: HostBindings>(
         Value::Screen => Err(unsupported_member_access(property, "screen")),
         Value::Element(_) => Err(unsupported_member_access(property, "element")),
         Value::ClassList(_) => Err(unsupported_member_access(property, "class list")),
+        Value::Attribute(_) => Err(unsupported_member_access(property, "attr")),
+        Value::NamedNodeMap(_) => Err(unsupported_member_access(property, "named node map")),
         Value::Dataset(element) => {
             let attribute_name = dataset_attribute_name(property)?;
             Ok(
@@ -3414,6 +3459,26 @@ fn eval_method_call<H: HostBindings>(
                 let text = as_string(&eval_expr(text_expr, env, host)?);
                 Ok(Value::Node(host.document_create_comment(&text)?))
             }
+            "createAttribute" => {
+                let [qualified_name_expr] = args else {
+                    return Err(ScriptError::new(
+                        "document.createAttribute() expects exactly one argument",
+                    ));
+                };
+                let qualified_name = as_string(&eval_expr(qualified_name_expr, env, host)?);
+                create_attribute_value(None, &qualified_name)
+            }
+            "createAttributeNS" => {
+                let [namespace_expr, qualified_name_expr] = args else {
+                    return Err(ScriptError::new(
+                        "document.createAttributeNS() expects exactly two arguments",
+                    ));
+                };
+                let namespace_uri =
+                    namespace_uri_from_value(&eval_expr(namespace_expr, env, host)?);
+                let qualified_name = as_string(&eval_expr(qualified_name_expr, env, host)?);
+                create_attribute_value(namespace_uri.as_deref(), &qualified_name)
+            }
             "createDocumentFragment" => {
                 if !args.is_empty() {
                     return Err(ScriptError::new(
@@ -3596,6 +3661,11 @@ fn eval_method_call<H: HostBindings>(
             "removeAttribute" => element_remove_attribute(element, args, env, host),
             "hasAttribute" => element_has_attribute(element, args, env, host),
             "toggleAttribute" => element_toggle_attribute(element, args, env, host),
+            "getAttributeNode" => element_get_attribute_node(element, args, env, host),
+            "getAttributeNodeNS" => element_get_attribute_node_ns(element, args, env, host),
+            "setAttributeNode" => element_set_attribute_node(element, args, env, host),
+            "setAttributeNodeNS" => element_set_attribute_node_ns(element, args, env, host),
+            "removeAttributeNode" => element_remove_attribute_node(element, args, env, host),
             "isSameNode" => same_node(Value::Element(element), args, env, host),
             "isEqualNode" => equal_node(Value::Element(element), args, env, host),
             "compareDocumentPosition" => {
@@ -3758,18 +3828,41 @@ fn eval_method_call<H: HostBindings>(
         Value::ScreenOrientation(_) => Err(ScriptError::new(format!(
             "unsupported ScreenOrientation method: {method}"
         ))),
-        Value::HtmlCollection(collection) => match method {
-            "item" => html_collection_item(&collection, args, env, host),
-            "namedItem" => html_collection_named_item(&collection, args, env, host),
-            "forEach" => html_collection_for_each(&collection, args, env, host),
-            "keys" => html_collection_keys(&collection, host),
-            "values" => html_collection_values(&collection, host),
-            "entries" => html_collection_entries(&collection, host),
-            "add" => html_collection_select_options_add(&collection, args, env, host),
-            "remove" => html_collection_select_options_remove(&collection, args, env, host),
-            "toString" => collection_to_string("HTMLCollection", args),
+        Value::HtmlCollection(collection) => {
+            if matches!(collection, HtmlCollectionTarget::DocumentPlugins) && method == "refresh" {
+                return plugins_refresh(args);
+            }
+
+            match method {
+                "item" => html_collection_item(&collection, args, env, host),
+                "namedItem" => html_collection_named_item(&collection, args, env, host),
+                "forEach" => html_collection_for_each(&collection, args, env, host),
+                "keys" => html_collection_keys(&collection, host),
+                "values" => html_collection_values(&collection, host),
+                "entries" => html_collection_entries(&collection, host),
+                "add" => html_collection_select_options_add(&collection, args, env, host),
+                "remove" => html_collection_select_options_remove(&collection, args, env, host),
+                "toString" => collection_to_string("HTMLCollection", args),
+                other => Err(ScriptError::new(format!(
+                    "unsupported HTMLCollection method: {other}"
+                ))),
+            }
+        }
+        Value::NamedNodeMap(element) => match method {
+            "item" => named_node_map_item(&element, args, env, host),
+            "getNamedItem" => named_node_map_get_named_item(&element, args, env, host),
+            "getNamedItemNS" => named_node_map_get_named_item_ns(&element, args, env, host),
+            "setNamedItem" => named_node_map_set_named_item(&element, args, env, host),
+            "setNamedItemNS" => named_node_map_set_named_item_ns(&element, args, env, host),
+            "removeNamedItem" => named_node_map_remove_named_item(&element, args, env, host),
+            "removeNamedItemNS" => named_node_map_remove_named_item_ns(&element, args, env, host),
+            "keys" => named_node_map_keys(&element, host),
+            "values" => named_node_map_values(&element, host),
+            "entries" => named_node_map_entries(&element, host),
+            "forEach" => named_node_map_for_each(&element, args, env, host),
+            "toString" => collection_to_string("NamedNodeMap", args),
             other => Err(ScriptError::new(format!(
-                "unsupported HTMLCollection method: {other}"
+                "unsupported NamedNodeMap method: {other}"
             ))),
         },
         Value::StyleSheetList(target) => match method {
@@ -3958,6 +4051,12 @@ fn eval_method_call<H: HostBindings>(
         Value::CollectionEntry(_) => Err(ScriptError::new(format!(
             "cannot call `{method}` on an iterator entry value"
         ))),
+        Value::Attribute(_) => match method {
+            "toString" => collection_to_string("Attr", args),
+            other => Err(ScriptError::new(format!(
+                "cannot call `{other}` on an attr value"
+            ))),
+        },
         Value::IteratorResult(_) => Err(ScriptError::new(format!(
             "cannot call `{method}` on an iterator result value"
         ))),
@@ -5111,6 +5210,12 @@ fn html_collection_items<H: HostBindings>(
         HtmlCollectionTarget::SelectSelectedOptions(element) => {
             host.html_collection_select_selected_options_items(*element)
         }
+        HtmlCollectionTarget::DocumentPlugins => {
+            host.html_collection_tag_name_items(HtmlCollectionTarget::ByTagName {
+                scope: HtmlCollectionScope::Document,
+                tag_name: "embed".to_string(),
+            })
+        }
         HtmlCollectionTarget::DocumentLinks => host.html_collection_document_links_items(),
         HtmlCollectionTarget::DocumentAnchors => host.html_collection_document_anchors_items(),
         HtmlCollectionTarget::DocumentChildren => host.html_collection_document_children_items(),
@@ -5179,6 +5284,15 @@ fn html_collection_named_item_handle<H: HostBindings>(
             .map(|value| value.map(HtmlCollectionNamedItem::Element)),
         HtmlCollectionTarget::SelectSelectedOptions(element) => host
             .html_collection_select_selected_options_named_item(*element, name)
+            .map(|value| value.map(HtmlCollectionNamedItem::Element)),
+        HtmlCollectionTarget::DocumentPlugins => host
+            .html_collection_tag_name_named_item(
+                HtmlCollectionTarget::ByTagName {
+                    scope: HtmlCollectionScope::Document,
+                    tag_name: "embed".to_string(),
+                },
+                name,
+            )
             .map(|value| value.map(HtmlCollectionNamedItem::Element)),
         HtmlCollectionTarget::DocumentLinks => host
             .html_collection_document_links_named_item(name)
@@ -5440,6 +5554,596 @@ fn collection_to_string(tag: &'static str, args: &[Expr]) -> Result<Value> {
     };
 
     Ok(Value::String(format!("[object {tag}]")))
+}
+
+fn namespace_uri_from_value(value: &Value) -> Option<String> {
+    match value {
+        Value::Null | Value::Undefined => None,
+        _ => {
+            let text = as_string(value);
+            if text.is_empty() { None } else { Some(text) }
+        }
+    }
+}
+
+fn create_attribute_value(namespace_uri: Option<&str>, qualified_name: &str) -> Result<Value> {
+    let qualified_name = qualified_name.trim();
+    if qualified_name.is_empty() {
+        return Err(ScriptError::new("attribute name must not be empty"));
+    }
+
+    if let Some(colon) = qualified_name.find(':') {
+        if colon == 0 || colon + 1 >= qualified_name.len() {
+            return Err(ScriptError::new(format!(
+                "invalid qualified attribute name: `{qualified_name}`"
+            )));
+        }
+        if qualified_name[colon + 1..].contains(':') {
+            return Err(ScriptError::new(format!(
+                "invalid qualified attribute name: `{qualified_name}`"
+            )));
+        }
+        if namespace_uri.is_none() {
+            return Err(ScriptError::new(format!(
+                "invalid qualified attribute name: `{qualified_name}`"
+            )));
+        }
+    }
+
+    Ok(Value::Attribute(AttributeHandle::new(
+        namespace_uri.map(str::to_string),
+        qualified_name,
+        "",
+        None,
+    )))
+}
+
+fn attribute_name_matches_local_name(attribute_name: &str, local_name: &str) -> bool {
+    if attribute_name == local_name {
+        return true;
+    }
+
+    match attribute_name.split_once(':') {
+        Some((_, suffix)) => suffix == local_name,
+        None => false,
+    }
+}
+
+fn attribute_name_matches_namespace_local_name(
+    attribute_name: &str,
+    namespace_uri: Option<&str>,
+    local_name: &str,
+) -> bool {
+    let has_colon = attribute_name.contains(':');
+    match namespace_uri {
+        None => !has_colon && attribute_name == local_name,
+        Some(_) => has_colon && attribute_name_matches_local_name(attribute_name, local_name),
+    }
+}
+
+fn attribute_current_value<H: HostBindings>(
+    attr: &AttributeHandle,
+    host: &mut H,
+) -> Result<String> {
+    let state = attr.0.borrow();
+    if let Some(owner_element) = state.owner_element {
+        if host.element_has_attribute(owner_element, &state.name)? {
+            return Ok(host
+                .element_get_attribute(owner_element, &state.name)?
+                .unwrap_or_else(String::new));
+        }
+    }
+
+    Ok(state.value.clone())
+}
+
+fn attribute_owner_element_value<H: HostBindings>(
+    attr: &AttributeHandle,
+    host: &mut H,
+) -> Result<Value> {
+    let state = attr.0.borrow();
+    if let Some(owner_element) = state.owner_element {
+        if host.element_has_attribute(owner_element, &state.name)? {
+            return Ok(Value::Element(owner_element));
+        }
+    }
+
+    Ok(Value::Null)
+}
+
+fn attribute_set_value<H: HostBindings>(
+    attr: AttributeHandle,
+    value: &str,
+    host: &mut H,
+) -> Result<()> {
+    let owner_element = attr.owner_element();
+    attr.set_value(value);
+    if let Some(owner_element) = owner_element {
+        host.element_set_attribute(owner_element, &attr.name(), value)?;
+    }
+    Ok(())
+}
+
+fn get_attribute_node_snapshot<H: HostBindings>(
+    host: &mut H,
+    element: ElementHandle,
+    namespace_uri: Option<&str>,
+    local_name: &str,
+) -> Result<Option<Value>> {
+    for name in named_node_map_names(element, host)? {
+        if !attribute_name_matches_namespace_local_name(&name, namespace_uri, local_name) {
+            continue;
+        }
+
+        let Some(value) = host.element_get_attribute(element, &name)? else {
+            continue;
+        };
+        return Ok(Some(Value::Attribute(AttributeHandle::new(
+            namespace_uri.map(str::to_string),
+            name,
+            value,
+            Some(element),
+        ))));
+    }
+
+    Ok(None)
+}
+
+fn element_get_attribute_node<H: HostBindings>(
+    element: ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [name_expr] = args else {
+        return Err(ScriptError::new(
+            "getAttributeNode() expects exactly one argument",
+        ));
+    };
+
+    let name = as_string(&eval_expr(name_expr, env, host)?);
+    Ok(
+        match get_attribute_node_snapshot(host, element, None, &name)? {
+            Some(snapshot) => snapshot,
+            None => Value::Null,
+        },
+    )
+}
+
+fn element_get_attribute_node_ns<H: HostBindings>(
+    element: ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [namespace_expr, local_name_expr] = args else {
+        return Err(ScriptError::new(
+            "getAttributeNodeNS() expects exactly two arguments",
+        ));
+    };
+
+    let namespace_uri = namespace_uri_from_value(&eval_expr(namespace_expr, env, host)?);
+    let local_name = as_string(&eval_expr(local_name_expr, env, host)?);
+    Ok(
+        match get_attribute_node_snapshot(host, element, namespace_uri.as_deref(), &local_name)? {
+            Some(snapshot) => snapshot,
+            None => Value::Null,
+        },
+    )
+}
+
+fn element_set_attribute_node<H: HostBindings>(
+    element: ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [attr_expr] = args else {
+        return Err(ScriptError::new(
+            "setAttributeNode() expects exactly one argument",
+        ));
+    };
+
+    let attr = match eval_expr(attr_expr, env, host)? {
+        Value::Attribute(attr) => attr,
+        _ => {
+            return Err(ScriptError::new(
+                "setAttributeNode() requires an Attr argument",
+            ));
+        }
+    };
+
+    if let Some(owner_element) = attr.owner_element() {
+        if owner_element != element {
+            return Err(ScriptError::new(
+                "setAttributeNode() requires an Attr that belongs to the element",
+            ));
+        }
+    }
+
+    let previous = host.element_get_attribute(element, &attr.name())?;
+    host.element_set_attribute(element, &attr.name(), &attr.value())?;
+    attr.set_owner_element(Some(element));
+
+    Ok(match previous {
+        Some(text) => Value::Attribute(AttributeHandle::new(
+            attr.namespace_uri(),
+            attr.name(),
+            text,
+            None,
+        )),
+        None => Value::Null,
+    })
+}
+
+fn element_set_attribute_node_ns<H: HostBindings>(
+    element: ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [attr_expr] = args else {
+        return Err(ScriptError::new(
+            "setAttributeNodeNS() expects exactly one argument",
+        ));
+    };
+
+    let attr = match eval_expr(attr_expr, env, host)? {
+        Value::Attribute(attr) => attr,
+        _ => {
+            return Err(ScriptError::new(
+                "setAttributeNodeNS() requires an Attr argument",
+            ));
+        }
+    };
+
+    if let Some(owner_element) = attr.owner_element() {
+        if owner_element != element {
+            return Err(ScriptError::new(
+                "setAttributeNodeNS() requires an Attr that belongs to the element",
+            ));
+        }
+    }
+
+    let previous = host.element_get_attribute(element, &attr.name())?;
+    host.element_set_attribute(element, &attr.name(), &attr.value())?;
+    attr.set_owner_element(Some(element));
+
+    Ok(match previous {
+        Some(text) => Value::Attribute(AttributeHandle::new(
+            attr.namespace_uri(),
+            attr.name(),
+            text,
+            None,
+        )),
+        None => Value::Null,
+    })
+}
+
+fn element_remove_attribute_node<H: HostBindings>(
+    element: ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [attr_expr] = args else {
+        return Err(ScriptError::new(
+            "removeAttributeNode() expects exactly one argument",
+        ));
+    };
+
+    let attr = match eval_expr(attr_expr, env, host)? {
+        Value::Attribute(attr) => attr,
+        _ => {
+            return Err(ScriptError::new(
+                "removeAttributeNode() requires an Attr argument",
+            ));
+        }
+    };
+
+    match attr.owner_element() {
+        Some(owner_element) if owner_element == element => {}
+        _ => {
+            return Err(ScriptError::new(
+                "removeAttributeNode() requires an Attr that belongs to the element",
+            ));
+        }
+    }
+
+    let current = host.element_get_attribute(element, &attr.name())?;
+    let current_text = current.ok_or_else(|| {
+        ScriptError::new("removeAttributeNode() requires an Attr that belongs to the element")
+    })?;
+    host.element_remove_attribute(element, &attr.name())?;
+    attr.set_owner_element(None);
+
+    Ok(Value::Attribute(AttributeHandle::new(
+        attr.namespace_uri(),
+        attr.name(),
+        current_text,
+        None,
+    )))
+}
+
+fn named_node_map_names<H: HostBindings>(
+    element: ElementHandle,
+    host: &mut H,
+) -> Result<Vec<String>> {
+    host.element_attribute_names(element)
+}
+
+fn named_node_map_item<H: HostBindings>(
+    element: &ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [index_expr] = args else {
+        return Err(ScriptError::new(
+            "NamedNodeMap.item() expects exactly one argument",
+        ));
+    };
+
+    let index_value = eval_expr(index_expr, env, host)?;
+    let Some(index) = index_from_value(&index_value) else {
+        return Ok(Value::Null);
+    };
+
+    named_node_map_item_value(*element, index, host)
+}
+
+fn named_node_map_get_named_item<H: HostBindings>(
+    element: &ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [name_expr] = args else {
+        return Err(ScriptError::new(
+            "NamedNodeMap.getNamedItem() expects exactly one argument",
+        ));
+    };
+
+    let name = as_string(&eval_expr(name_expr, env, host)?);
+    named_node_map_get_named_item_value(*element, &name, host)
+}
+
+fn named_node_map_get_named_item_ns<H: HostBindings>(
+    element: &ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [namespace_expr, local_name_expr] = args else {
+        return Err(ScriptError::new(
+            "NamedNodeMap.getNamedItemNS() expects exactly two arguments",
+        ));
+    };
+
+    let namespace_uri = namespace_uri_from_value(&eval_expr(namespace_expr, env, host)?);
+    let local_name = as_string(&eval_expr(local_name_expr, env, host)?);
+    named_node_map_get_named_item_ns_value(*element, namespace_uri, &local_name, host)
+}
+
+fn named_node_map_current_values<H: HostBindings>(
+    element: ElementHandle,
+    host: &mut H,
+) -> Result<Vec<Value>> {
+    let names = named_node_map_names(element, host)?;
+    let mut values = Vec::with_capacity(names.len());
+    for name in names {
+        let Some(value) = host.element_get_attribute(element, &name)? else {
+            continue;
+        };
+        values.push(Value::Attribute(AttributeHandle::new(
+            None,
+            name,
+            value,
+            Some(element),
+        )));
+    }
+    Ok(values)
+}
+
+fn named_node_map_item_value<H: HostBindings>(
+    element: ElementHandle,
+    index: usize,
+    host: &mut H,
+) -> Result<Value> {
+    let names = named_node_map_names(element, host)?;
+    let Some(name) = names.get(index) else {
+        return Ok(Value::Null);
+    };
+    let Some(value) = host.element_get_attribute(element, name)? else {
+        return Ok(Value::Null);
+    };
+    Ok(Value::Attribute(AttributeHandle::new(
+        None,
+        name.clone(),
+        value,
+        Some(element),
+    )))
+}
+
+fn named_node_map_get_named_item_value<H: HostBindings>(
+    element: ElementHandle,
+    name: &str,
+    host: &mut H,
+) -> Result<Value> {
+    let Some(value) = host.element_get_attribute(element, name)? else {
+        return Ok(Value::Null);
+    };
+    Ok(Value::Attribute(AttributeHandle::new(
+        None,
+        name.to_string(),
+        value,
+        Some(element),
+    )))
+}
+
+fn named_node_map_get_named_item_ns_value<H: HostBindings>(
+    element: ElementHandle,
+    namespace_uri: Option<String>,
+    local_name: &str,
+    host: &mut H,
+) -> Result<Value> {
+    for name in named_node_map_names(element, host)? {
+        if !attribute_name_matches_namespace_local_name(&name, namespace_uri.as_deref(), local_name)
+        {
+            continue;
+        }
+
+        let Some(value) = host.element_get_attribute(element, &name)? else {
+            continue;
+        };
+        return Ok(Value::Attribute(AttributeHandle::new(
+            namespace_uri.clone(),
+            name,
+            value,
+            Some(element),
+        )));
+    }
+
+    Ok(Value::Null)
+}
+
+fn named_node_map_set_named_item<H: HostBindings>(
+    element: &ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    element_set_attribute_node(*element, args, env, host)
+}
+
+fn named_node_map_set_named_item_ns<H: HostBindings>(
+    element: &ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    element_set_attribute_node_ns(*element, args, env, host)
+}
+
+fn named_node_map_remove_named_item<H: HostBindings>(
+    element: &ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [name_expr] = args else {
+        return Err(ScriptError::new(
+            "NamedNodeMap.removeNamedItem() expects exactly one argument",
+        ));
+    };
+
+    let name = as_string(&eval_expr(name_expr, env, host)?);
+    let Some(value) = host.element_get_attribute(*element, &name)? else {
+        return Err(ScriptError::new(
+            "NamedNodeMap.removeNamedItem() requires an existing attribute",
+        ));
+    };
+
+    host.element_remove_attribute(*element, &name)?;
+    Ok(Value::Attribute(AttributeHandle::new(
+        None, name, value, None,
+    )))
+}
+
+fn named_node_map_remove_named_item_ns<H: HostBindings>(
+    element: &ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [namespace_expr, local_name_expr] = args else {
+        return Err(ScriptError::new(
+            "NamedNodeMap.removeNamedItemNS() expects exactly two arguments",
+        ));
+    };
+
+    let namespace_uri = namespace_uri_from_value(&eval_expr(namespace_expr, env, host)?);
+    let local_name = as_string(&eval_expr(local_name_expr, env, host)?);
+
+    for name in named_node_map_names(*element, host)? {
+        if !attribute_name_matches_namespace_local_name(
+            &name,
+            namespace_uri.as_deref(),
+            &local_name,
+        ) {
+            continue;
+        }
+
+        let Some(value) = host.element_get_attribute(*element, &name)? else {
+            continue;
+        };
+
+        host.element_remove_attribute(*element, &name)?;
+        return Ok(Value::Attribute(AttributeHandle::new(
+            namespace_uri,
+            name,
+            value,
+            None,
+        )));
+    }
+
+    Err(ScriptError::new(
+        "NamedNodeMap.removeNamedItemNS() requires an existing attribute",
+    ))
+}
+
+fn named_node_map_keys(element: &ElementHandle, host: &mut impl HostBindings) -> Result<Value> {
+    let names = named_node_map_names(*element, host)?;
+    Ok(collection_iterator(
+        (0..names.len())
+            .map(|index| Value::Number(index as f64))
+            .collect(),
+    ))
+}
+
+fn named_node_map_values(element: &ElementHandle, host: &mut impl HostBindings) -> Result<Value> {
+    Ok(collection_iterator(named_node_map_current_values(
+        *element, host,
+    )?))
+}
+
+fn named_node_map_entries(element: &ElementHandle, host: &mut impl HostBindings) -> Result<Value> {
+    Ok(collection_entries(named_node_map_current_values(
+        *element, host,
+    )?))
+}
+
+fn named_node_map_for_each<H: HostBindings>(
+    element: &ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let (callback_expr, this_arg_expr) = match args {
+        [callback_expr] => (callback_expr, None),
+        [callback_expr, this_arg_expr] => (callback_expr, Some(this_arg_expr)),
+        _ => {
+            return Err(ScriptError::new(
+                "NamedNodeMap.forEach() expects one or two arguments",
+            ));
+        }
+    };
+
+    let callback = match eval_expr(callback_expr, env, host)? {
+        Value::Function(function) => function,
+        _ => {
+            return Err(ScriptError::new(
+                "NamedNodeMap.forEach() requires an arrow function callback",
+            ));
+        }
+    };
+    if let Some(this_arg_expr) = this_arg_expr {
+        let _ = eval_expr(this_arg_expr, env, host)?;
+    }
+
+    let items = named_node_map_current_values(*element, host)?;
+    let collection_value = Value::NamedNodeMap(*element);
+    for_each_over_items(&callback, items, collection_value, env, host)
 }
 
 fn mime_type_array_item<H: HostBindings>(
@@ -5747,11 +6451,21 @@ fn storage_property_is_reserved(property: &str) -> bool {
     )
 }
 
-fn html_collection_property_is_reserved(property: &str) -> bool {
+fn html_collection_property_is_reserved(collection: &HtmlCollectionTarget, property: &str) -> bool {
     matches!(
         property,
         "item" | "namedItem" | "forEach" | "keys" | "values" | "entries" | "toString"
-    )
+    ) || matches!(collection, HtmlCollectionTarget::DocumentPlugins) && property == "refresh"
+}
+
+fn plugins_refresh(args: &[Expr]) -> Result<Value> {
+    let [] = args else {
+        return Err(ScriptError::new(
+            "navigator.plugins.refresh() expects no arguments",
+        ));
+    };
+
+    Ok(Value::Undefined)
 }
 
 fn window_scroll_to<H: HostBindings>(
@@ -5816,8 +6530,10 @@ fn is_truthy(value: &Value) -> bool {
         Value::Number(value) => *value != 0.0,
         Value::String(value) => !value.is_empty(),
         Value::Element(_)
+        | Value::Attribute(_)
         | Value::ClassList(_)
         | Value::Dataset(_)
+        | Value::NamedNodeMap(_)
         | Value::Navigator
         | Value::History
         | Value::HtmlCollection(_)

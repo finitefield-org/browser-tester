@@ -155,6 +155,7 @@ pub const Session = struct {
     history_scroll_restoration: []const u8 = "auto",
     math_random_state: u64 = 1,
     crypto_random_state: u64 = 1,
+    document_write_buffer: std.ArrayListUnmanaged(u8) = .{},
     clock_ms: i64 = 0,
     scroll_x: i64 = 0,
     scroll_y: i64 = 0,
@@ -162,9 +163,17 @@ pub const Session = struct {
     window_load_handler: ?script.ScriptFunction = null,
     window_focus_handler: ?script.ScriptFunction = null,
     window_blur_handler: ?script.ScriptFunction = null,
+    window_pageshow_handler: ?script.ScriptFunction = null,
+    window_pagehide_handler: ?script.ScriptFunction = null,
+    document_scroll_handler: ?script.ScriptFunction = null,
+    document_selectionchange_handler: ?script.ScriptFunction = null,
+    document_readystatechange_handler: ?script.ScriptFunction = null,
     window_hashchange_handler: ?script.ScriptFunction = null,
     window_popstate_handler: ?script.ScriptFunction = null,
     window_storage_handler: ?script.ScriptFunction = null,
+    window_scroll_handler: ?script.ScriptFunction = null,
+    document_ready_state: []const u8 = "complete",
+    document_ready_state_change_pending: bool = true,
     cookie_jar: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
 
     pub fn init(allocator: std.mem.Allocator, config: SessionConfig) errors.Result(Session) {
@@ -248,12 +257,21 @@ pub const Session = struct {
         var window_hashchange_handler: ?script.ScriptFunction = null;
         var scroll_x: i64 = 0;
         var scroll_y: i64 = 0;
+        var document_write_buffer: std.ArrayListUnmanaged(u8) = .{};
         var next_timer_id: u64 = 1;
         var window_load_handler: ?script.ScriptFunction = null;
         var window_focus_handler: ?script.ScriptFunction = null;
         var window_blur_handler: ?script.ScriptFunction = null;
+        var window_pageshow_handler: ?script.ScriptFunction = null;
+        var window_pagehide_handler: ?script.ScriptFunction = null;
+        var document_scroll_handler: ?script.ScriptFunction = null;
+        var document_selectionchange_handler: ?script.ScriptFunction = null;
+        var document_readystatechange_handler: ?script.ScriptFunction = null;
         var window_popstate_handler: ?script.ScriptFunction = null;
         var window_storage_handler: ?script.ScriptFunction = null;
+        var window_scroll_handler: ?script.ScriptFunction = null;
+        var document_ready_state: []const u8 = "loading";
+        var document_ready_state_change_pending: bool = true;
         var bootstrap_host = BootstrapHost{
             .dom_store = &dom_store,
             .listeners = &script_event_listeners,
@@ -271,12 +289,21 @@ pub const Session = struct {
             .window_load_handler = &window_load_handler,
             .window_focus_handler = &window_focus_handler,
             .window_blur_handler = &window_blur_handler,
+            .window_pageshow_handler = &window_pageshow_handler,
+            .window_pagehide_handler = &window_pagehide_handler,
+            .document_scroll_handler = &document_scroll_handler,
+            .document_selectionchange_handler = &document_selectionchange_handler,
+            .document_readystatechange_handler = &document_readystatechange_handler,
             .window_hashchange_handler = &window_hashchange_handler,
             .window_popstate_handler = &window_popstate_handler,
             .window_storage_handler = &window_storage_handler,
+            .window_scroll_handler = &window_scroll_handler,
+            .document_ready_state = &document_ready_state,
+            .document_ready_state_change_pending = &document_ready_state_change_pending,
             .history_scroll_restoration = &history_scroll_restoration,
             .math_random_state = &math_random_state,
             .crypto_random_state = &crypto_random_state,
+            .document_write_buffer = &document_write_buffer,
             .cookie_jar = &cookie_jar,
             .scroll_x = &scroll_x,
             .scroll_y = &scroll_y,
@@ -295,6 +322,18 @@ pub const Session = struct {
             var bootstrap_steps: usize = 0;
             try drainQueuedMicrotasks(allocator, &script_runtime, &bootstrap_host, &queued_microtasks, &bootstrap_steps);
         }
+        bootstrap_host.setDocumentReadyState("complete");
+        if (bootstrap_host.documentReadyStateChangePending()) {
+            try script_runtime.dispatchDocumentEvent(
+                std.heap.page_allocator,
+                &bootstrap_host,
+                "readystatechange",
+                script_event_listeners.items,
+                bootstrap_host.documentReadyStateChange(),
+                "onreadystatechange",
+            );
+            bootstrap_host.setDocumentReadyStateChangePending(false);
+        }
         try script_runtime.dispatchWindowEvent(
             std.heap.page_allocator,
             &bootstrap_host,
@@ -302,6 +341,14 @@ pub const Session = struct {
             script_event_listeners.items,
             bootstrap_host.windowLoad(),
             "onload",
+        );
+        try script_runtime.dispatchWindowEvent(
+            std.heap.page_allocator,
+            &bootstrap_host,
+            "pageshow",
+            script_event_listeners.items,
+            bootstrap_host.windowPageShow(),
+            "onpageshow",
         );
 
         return .{
@@ -327,6 +374,7 @@ pub const Session = struct {
             .history_scroll_restoration = history_scroll_restoration,
             .math_random_state = math_random_state,
             .crypto_random_state = crypto_random_state,
+            .document_write_buffer = document_write_buffer,
             .clock_ms = 0,
             .scroll_x = scroll_x,
             .scroll_y = scroll_y,
@@ -334,14 +382,23 @@ pub const Session = struct {
             .window_load_handler = window_load_handler,
             .window_focus_handler = window_focus_handler,
             .window_blur_handler = window_blur_handler,
+            .window_pageshow_handler = window_pageshow_handler,
+            .window_pagehide_handler = window_pagehide_handler,
+            .document_scroll_handler = document_scroll_handler,
+            .document_selectionchange_handler = document_selectionchange_handler,
+            .document_readystatechange_handler = document_readystatechange_handler,
             .window_hashchange_handler = window_hashchange_handler,
             .window_popstate_handler = window_popstate_handler,
             .window_storage_handler = window_storage_handler,
+            .window_scroll_handler = window_scroll_handler,
+            .document_ready_state = "complete",
+            .document_ready_state_change_pending = false,
             .cookie_jar = cookie_jar,
         };
     }
 
     pub fn deinit(self: *Session) void {
+        self.document_write_buffer.deinit(self.arena.allocator());
         self.mock_registry.deinit();
         self.history.deinit();
         self.cookie_jar.deinit(self.arena.allocator());
@@ -499,9 +556,30 @@ pub const Session = struct {
 
         const before_url = self.currentLocationUrl();
         const target = try self.history.push(null, trimmed);
+        const page_lifecycle = shouldDispatchPageLifecycle(before_url, target);
+        if (page_lifecycle) {
+            try self.script_runtime.dispatchWindowEvent(
+                std.heap.page_allocator,
+                self,
+                "pagehide",
+                self.scriptEventListeners(),
+                self.windowPageHide(),
+                "onpagehide",
+            );
+        }
         try syncLocationState(self.mock_registry.location(), &self.dom_store, target, true);
         self.resetScrollPosition();
         try self.script_runtime.dispatchHashChangeIfNeeded(std.heap.page_allocator, self, before_url, target);
+        if (page_lifecycle) {
+            try self.script_runtime.dispatchWindowEvent(
+                std.heap.page_allocator,
+                self,
+                "pageshow",
+                self.scriptEventListeners(),
+                self.windowPageShow(),
+                "onpageshow",
+            );
+        }
         return;
     }
 
@@ -511,16 +589,53 @@ pub const Session = struct {
 
         const before_url = self.currentLocationUrl();
         const target = try self.history.replace(null, trimmed);
+        const page_lifecycle = shouldDispatchPageLifecycle(before_url, target);
+        if (page_lifecycle) {
+            try self.script_runtime.dispatchWindowEvent(
+                std.heap.page_allocator,
+                self,
+                "pagehide",
+                self.scriptEventListeners(),
+                self.windowPageHide(),
+                "onpagehide",
+            );
+        }
         try syncLocationState(self.mock_registry.location(), &self.dom_store, target, true);
         self.resetScrollPosition();
         try self.script_runtime.dispatchHashChangeIfNeeded(std.heap.page_allocator, self, before_url, target);
+        if (page_lifecycle) {
+            try self.script_runtime.dispatchWindowEvent(
+                std.heap.page_allocator,
+                self,
+                "pageshow",
+                self.scriptEventListeners(),
+                self.windowPageShow(),
+                "onpageshow",
+            );
+        }
         return;
     }
 
     pub fn reloadLocation(self: *Session) errors.Result(void) {
         const target = self.history.current();
+        try self.script_runtime.dispatchWindowEvent(
+            std.heap.page_allocator,
+            self,
+            "pagehide",
+            self.scriptEventListeners(),
+            self.windowPageHide(),
+            "onpagehide",
+        );
         try syncLocationState(self.mock_registry.location(), &self.dom_store, target, true);
         self.resetScrollPosition();
+        try self.script_runtime.dispatchWindowEvent(
+            std.heap.page_allocator,
+            self,
+            "pageshow",
+            self.scriptEventListeners(),
+            self.windowPageShow(),
+            "onpageshow",
+        );
         return;
     }
 
@@ -623,6 +738,39 @@ pub const Session = struct {
         return self.dom_store.documentTitle();
     }
 
+    pub fn documentOpen(self: *Session) errors.Result(void) {
+        try self.dom_store.clearDocument();
+        self.document_write_buffer.clearRetainingCapacity();
+        self.document_ready_state = "loading";
+        self.document_ready_state_change_pending = true;
+        return;
+    }
+
+    pub fn documentWrite(self: *Session, markup: []const u8) errors.Result(void) {
+        try self.document_write_buffer.appendSlice(self.arena.allocator(), markup);
+        return;
+    }
+
+    pub fn documentClose(self: *Session) errors.Result(void) {
+        if (self.document_write_buffer.items.len > 0) {
+            try self.dom_store.appendHtmlToDocument(self.document_write_buffer.items);
+            self.document_write_buffer.clearRetainingCapacity();
+        }
+        self.document_ready_state = "complete";
+        if (self.document_ready_state_change_pending) {
+            try self.script_runtime.dispatchDocumentEvent(
+                std.heap.page_allocator,
+                self,
+                "readystatechange",
+                self.scriptEventListeners(),
+                self.documentReadyStateChange(),
+                "onreadystatechange",
+            );
+            self.document_ready_state_change_pending = false;
+        }
+        return;
+    }
+
     pub fn documentCompatMode(self: *const Session) []const u8 {
         _ = self;
         return "CSS1Compat";
@@ -723,12 +871,77 @@ pub const Session = struct {
         return self.window_blur_handler;
     }
 
+    pub fn windowPageShow(self: *const Session) ?script.ScriptFunction {
+        return self.window_pageshow_handler;
+    }
+
+    pub fn windowPageHide(self: *const Session) ?script.ScriptFunction {
+        return self.window_pagehide_handler;
+    }
+
+    pub fn documentScroll(self: *const Session) ?script.ScriptFunction {
+        return self.document_scroll_handler;
+    }
+
+    pub fn documentSelectionChange(self: *const Session) ?script.ScriptFunction {
+        return self.document_selectionchange_handler;
+    }
+
+    pub fn documentReadyStateChange(self: *const Session) ?script.ScriptFunction {
+        return self.document_readystatechange_handler;
+    }
+
     pub fn setWindowBlur(self: *Session, handler: ?script.ScriptFunction) errors.Result(void) {
         if (handler) |function| {
             self.window_blur_handler = try duplicateScriptFunction(self.arena.allocator(), function);
             return;
         }
         self.window_blur_handler = null;
+        return;
+    }
+
+    pub fn setWindowPageShow(self: *Session, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_pageshow_handler = try duplicateScriptFunction(self.arena.allocator(), function);
+            return;
+        }
+        self.window_pageshow_handler = null;
+        return;
+    }
+
+    pub fn setWindowPageHide(self: *Session, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_pagehide_handler = try duplicateScriptFunction(self.arena.allocator(), function);
+            return;
+        }
+        self.window_pagehide_handler = null;
+        return;
+    }
+
+    pub fn setDocumentScroll(self: *Session, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.document_scroll_handler = try duplicateScriptFunction(self.arena.allocator(), function);
+            return;
+        }
+        self.document_scroll_handler = null;
+        return;
+    }
+
+    pub fn setDocumentSelectionChange(self: *Session, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.document_selectionchange_handler = try duplicateScriptFunction(self.arena.allocator(), function);
+            return;
+        }
+        self.document_selectionchange_handler = null;
+        return;
+    }
+
+    pub fn setDocumentReadyStateChange(self: *Session, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.document_readystatechange_handler = try duplicateScriptFunction(self.arena.allocator(), function);
+            return;
+        }
+        self.document_readystatechange_handler = null;
         return;
     }
 
@@ -755,6 +968,19 @@ pub const Session = struct {
             return;
         }
         self.window_storage_handler = null;
+        return;
+    }
+
+    pub fn windowScroll(self: *const Session) ?script.ScriptFunction {
+        return self.window_scroll_handler;
+    }
+
+    pub fn setWindowScroll(self: *Session, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_scroll_handler = try duplicateScriptFunction(self.arena.allocator(), function);
+            return;
+        }
+        self.window_scroll_handler = null;
         return;
     }
 
@@ -1079,8 +1305,7 @@ pub const Session = struct {
     }
 
     pub fn documentReadyState(self: *const Session) []const u8 {
-        _ = self;
-        return "complete";
+        return self.document_ready_state;
     }
 
     pub fn currentScript(self: *const Session) ?dom.NodeId {
@@ -1096,6 +1321,18 @@ pub const Session = struct {
             self.scriptEventListeners(),
             self.windowStorage(),
             "onstorage",
+        );
+        return;
+    }
+
+    pub fn dispatchSelectionChange(self: *Session) errors.Result(void) {
+        try self.script_runtime.dispatchDocumentEvent(
+            std.heap.page_allocator,
+            self,
+            "selectionchange",
+            self.scriptEventListeners(),
+            self.documentSelectionChange(),
+            "onselectionchange",
         );
         return;
     }
@@ -1154,15 +1391,59 @@ pub const Session = struct {
 
     pub fn scrollTo(self: *Session, x: i64, y: i64) errors.Result(void) {
         try self.mock_registry.scroll().recordCall(.To, x, y);
+        const old_x = self.scroll_x;
+        const old_y = self.scroll_y;
         self.scroll_x = x;
         self.scroll_y = y;
+        if (old_x != x or old_y != y) {
+            var runtime = script.ScriptRuntime{};
+            try runtime.dispatchDocumentEvent(
+                std.heap.page_allocator,
+                self,
+                "scroll",
+                self.scriptEventListeners(),
+                self.documentScroll(),
+                "onscroll",
+            );
+            try runtime.dispatchWindowEvent(
+                std.heap.page_allocator,
+                self,
+                "scroll",
+                self.scriptEventListeners(),
+                self.windowScroll(),
+                "onscroll",
+            );
+        }
         return;
     }
 
     pub fn scrollBy(self: *Session, x: i64, y: i64) errors.Result(void) {
         try self.mock_registry.scroll().recordCall(.By, x, y);
-        self.scroll_x = std.math.add(i64, self.scroll_x, x) catch return error.ScriptRuntime;
-        self.scroll_y = std.math.add(i64, self.scroll_y, y) catch return error.ScriptRuntime;
+        const next_x = std.math.add(i64, self.scroll_x, x) catch return error.ScriptRuntime;
+        const next_y = std.math.add(i64, self.scroll_y, y) catch return error.ScriptRuntime;
+        const old_x = self.scroll_x;
+        const old_y = self.scroll_y;
+        self.scroll_x = next_x;
+        self.scroll_y = next_y;
+        if (old_x != next_x or old_y != next_y) {
+            var runtime = script.ScriptRuntime{};
+            try runtime.dispatchDocumentEvent(
+                std.heap.page_allocator,
+                self,
+                "scroll",
+                self.scriptEventListeners(),
+                self.documentScroll(),
+                "onscroll",
+            );
+            try runtime.dispatchWindowEvent(
+                std.heap.page_allocator,
+                self,
+                "scroll",
+                self.scriptEventListeners(),
+                self.windowScroll(),
+                "onscroll",
+            );
+        }
         return;
     }
 
@@ -1379,6 +1660,9 @@ pub const Session = struct {
     pub fn typeTextNode(self: *Session, node_id: dom.NodeId, text: []const u8) errors.Result(void) {
         try self.ensureElementNode(node_id);
         try self.dom_store.setFormControlValue(node_id, text);
+        if (self.dom_store.isSelectionControlNode(node_id)) {
+            try self.dispatchSelectionChange();
+        }
         _ = try self.dispatchDomEvent(node_id, "input", true, false);
         try self.flush();
         return;
@@ -1732,15 +2016,24 @@ const BootstrapHost = struct {
     window_load_handler: *?script.ScriptFunction,
     window_focus_handler: *?script.ScriptFunction,
     window_blur_handler: *?script.ScriptFunction,
+    window_pageshow_handler: *?script.ScriptFunction,
+    window_pagehide_handler: *?script.ScriptFunction,
+    document_scroll_handler: *?script.ScriptFunction,
+    document_selectionchange_handler: *?script.ScriptFunction,
+    document_readystatechange_handler: *?script.ScriptFunction,
     cookie_jar: *std.StringArrayHashMapUnmanaged([]const u8),
     scroll_x: *i64,
     scroll_y: *i64,
     history_scroll_restoration: *[]const u8,
+    document_ready_state: *[]const u8,
+    document_ready_state_change_pending: *bool,
     math_random_state: *u64,
     crypto_random_state: *u64,
+    document_write_buffer: *std.ArrayListUnmanaged(u8),
     window_hashchange_handler: *?script.ScriptFunction,
     window_popstate_handler: *?script.ScriptFunction,
     window_storage_handler: *?script.ScriptFunction,
+    window_scroll_handler: *?script.ScriptFunction,
     storage: *mocks.StorageSeeds,
     current_script: ?dom.NodeId = null,
 
@@ -1778,6 +2071,32 @@ const BootstrapHost = struct {
 
     pub fn documentTitle(self: *const BootstrapHost) []const u8 {
         return self.dom_store.documentTitle();
+    }
+
+    pub fn documentOpen(self: *BootstrapHost) errors.Result(void) {
+        try self.dom_store.clearDocument();
+        self.document_write_buffer.clearRetainingCapacity();
+        self.document_ready_state.* = "loading";
+        self.document_ready_state_change_pending.* = true;
+        return;
+    }
+
+    pub fn documentWrite(self: *BootstrapHost, markup: []const u8) errors.Result(void) {
+        try self.document_write_buffer.appendSlice(self.allocator, markup);
+        return;
+    }
+
+    pub fn documentClose(self: *BootstrapHost) errors.Result(void) {
+        if (self.document_write_buffer.items.len > 0) {
+            try self.dom_store.appendHtmlToDocument(self.document_write_buffer.items);
+            self.document_write_buffer.clearRetainingCapacity();
+        }
+        self.document_ready_state.* = "complete";
+        if (self.document_ready_state_change_pending.*) {
+            try self.dispatchDocumentReadyStateChange();
+            self.document_ready_state_change_pending.* = false;
+        }
+        return;
     }
 
     pub fn documentCompatMode(self: *const BootstrapHost) []const u8 {
@@ -1875,6 +2194,26 @@ const BootstrapHost = struct {
         return self.window_blur_handler.*;
     }
 
+    pub fn windowPageShow(self: *const BootstrapHost) ?script.ScriptFunction {
+        return self.window_pageshow_handler.*;
+    }
+
+    pub fn windowPageHide(self: *const BootstrapHost) ?script.ScriptFunction {
+        return self.window_pagehide_handler.*;
+    }
+
+    pub fn documentScroll(self: *const BootstrapHost) ?script.ScriptFunction {
+        return self.document_scroll_handler.*;
+    }
+
+    pub fn documentSelectionChange(self: *const BootstrapHost) ?script.ScriptFunction {
+        return self.document_selectionchange_handler.*;
+    }
+
+    pub fn documentReadyStateChange(self: *const BootstrapHost) ?script.ScriptFunction {
+        return self.document_readystatechange_handler.*;
+    }
+
     pub fn setWindowBlur(self: *BootstrapHost, handler: ?script.ScriptFunction) errors.Result(void) {
         if (handler) |function| {
             self.window_blur_handler.* = try duplicateScriptFunction(self.allocator, function);
@@ -1882,6 +2221,59 @@ const BootstrapHost = struct {
         }
         self.window_blur_handler.* = null;
         return;
+    }
+
+    pub fn setWindowPageShow(self: *BootstrapHost, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_pageshow_handler.* = try duplicateScriptFunction(self.allocator, function);
+            return;
+        }
+        self.window_pageshow_handler.* = null;
+        return;
+    }
+
+    pub fn setWindowPageHide(self: *BootstrapHost, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_pagehide_handler.* = try duplicateScriptFunction(self.allocator, function);
+            return;
+        }
+        self.window_pagehide_handler.* = null;
+        return;
+    }
+
+    pub fn setDocumentScroll(self: *BootstrapHost, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.document_scroll_handler.* = try duplicateScriptFunction(self.allocator, function);
+            return;
+        }
+        self.document_scroll_handler.* = null;
+        return;
+    }
+
+    pub fn setDocumentSelectionChange(self: *BootstrapHost, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.document_selectionchange_handler.* = try duplicateScriptFunction(self.allocator, function);
+            return;
+        }
+        self.document_selectionchange_handler.* = null;
+        return;
+    }
+
+    pub fn setDocumentReadyStateChange(self: *BootstrapHost, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.document_readystatechange_handler.* = try duplicateScriptFunction(self.allocator, function);
+            return;
+        }
+        self.document_readystatechange_handler.* = null;
+        return;
+    }
+
+    pub fn documentReadyStateChangePending(self: *const BootstrapHost) bool {
+        return self.document_ready_state_change_pending.*;
+    }
+
+    pub fn setDocumentReadyStateChangePending(self: *BootstrapHost, pending: bool) void {
+        self.document_ready_state_change_pending.* = pending;
     }
 
     pub fn windowPopState(self: *const BootstrapHost) ?script.ScriptFunction {
@@ -1907,6 +2299,19 @@ const BootstrapHost = struct {
             return;
         }
         self.window_storage_handler.* = null;
+        return;
+    }
+
+    pub fn windowScroll(self: *const BootstrapHost) ?script.ScriptFunction {
+        return self.window_scroll_handler.*;
+    }
+
+    pub fn setWindowScroll(self: *BootstrapHost, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_scroll_handler.* = try duplicateScriptFunction(self.allocator, function);
+            return;
+        }
+        self.window_scroll_handler.* = null;
         return;
     }
 
@@ -2243,13 +2648,42 @@ const BootstrapHost = struct {
         return;
     }
 
+    pub fn dispatchSelectionChange(self: *BootstrapHost) errors.Result(void) {
+        var runtime = script.ScriptRuntime{};
+        try runtime.dispatchDocumentEvent(
+            self.allocator,
+            self,
+            "selectionchange",
+            self.listeners.items,
+            self.documentSelectionChange(),
+            "onselectionchange",
+        );
+        return;
+    }
+
+    pub fn dispatchDocumentReadyStateChange(self: *BootstrapHost) errors.Result(void) {
+        var runtime = script.ScriptRuntime{};
+        try runtime.dispatchDocumentEvent(
+            self.allocator,
+            self,
+            "readystatechange",
+            self.listeners.items,
+            self.documentReadyStateChange(),
+            "onreadystatechange",
+        );
+        return;
+    }
+
     pub fn documentActiveElement(self: *const BootstrapHost) ?dom.NodeId {
         return self.dom_store.activeElement();
     }
 
     pub fn documentReadyState(self: *const BootstrapHost) []const u8 {
-        _ = self;
-        return "loading";
+        return self.document_ready_state.*;
+    }
+
+    pub fn setDocumentReadyState(self: *BootstrapHost, value: []const u8) void {
+        self.document_ready_state.* = value;
     }
 
     pub fn nowMs(self: *const BootstrapHost) i64 {
@@ -2274,9 +2708,33 @@ const BootstrapHost = struct {
         const trimmed = std.mem.trim(u8, url_source, " \t\r\n");
         if (trimmed.len == 0) return error.MockError;
 
+        const before_url = self.currentLocationUrl();
         const target = try self.history.push(null, trimmed);
+        const page_lifecycle = shouldDispatchPageLifecycle(before_url, target);
+        if (page_lifecycle) {
+            var runtime = script.ScriptRuntime{};
+            try runtime.dispatchWindowEvent(
+                self.allocator,
+                self,
+                "pagehide",
+                self.listeners.items,
+                self.windowPageHide(),
+                "onpagehide",
+            );
+        }
         try syncLocationState(self.location, self.dom_store, target, true);
         self.resetScrollPosition();
+        if (page_lifecycle) {
+            var runtime = script.ScriptRuntime{};
+            try runtime.dispatchWindowEvent(
+                self.allocator,
+                self,
+                "pageshow",
+                self.listeners.items,
+                self.windowPageShow(),
+                "onpageshow",
+            );
+        }
         return;
     }
 
@@ -2284,16 +2742,57 @@ const BootstrapHost = struct {
         const trimmed = std.mem.trim(u8, url_source, " \t\r\n");
         if (trimmed.len == 0) return error.MockError;
 
+        const before_url = self.currentLocationUrl();
         const target = try self.history.replace(null, trimmed);
+        const page_lifecycle = shouldDispatchPageLifecycle(before_url, target);
+        if (page_lifecycle) {
+            var runtime = script.ScriptRuntime{};
+            try runtime.dispatchWindowEvent(
+                self.allocator,
+                self,
+                "pagehide",
+                self.listeners.items,
+                self.windowPageHide(),
+                "onpagehide",
+            );
+        }
         try syncLocationState(self.location, self.dom_store, target, true);
         self.resetScrollPosition();
+        if (page_lifecycle) {
+            var runtime = script.ScriptRuntime{};
+            try runtime.dispatchWindowEvent(
+                self.allocator,
+                self,
+                "pageshow",
+                self.listeners.items,
+                self.windowPageShow(),
+                "onpageshow",
+            );
+        }
         return;
     }
 
     pub fn reloadLocation(self: *BootstrapHost) errors.Result(void) {
         const target = self.history.current();
+        var runtime = script.ScriptRuntime{};
+        try runtime.dispatchWindowEvent(
+            self.allocator,
+            self,
+            "pagehide",
+            self.listeners.items,
+            self.windowPageHide(),
+            "onpagehide",
+        );
         try syncLocationState(self.location, self.dom_store, target, true);
         self.resetScrollPosition();
+        try runtime.dispatchWindowEvent(
+            self.allocator,
+            self,
+            "pageshow",
+            self.listeners.items,
+            self.windowPageShow(),
+            "onpageshow",
+        );
         return;
     }
 
@@ -2477,15 +2976,59 @@ const BootstrapHost = struct {
 
     pub fn scrollTo(self: *BootstrapHost, x: i64, y: i64) errors.Result(void) {
         try self.scroll_mocks.recordCall(.To, x, y);
+        const old_x = self.scroll_x.*;
+        const old_y = self.scroll_y.*;
         self.scroll_x.* = x;
         self.scroll_y.* = y;
+        if (old_x != x or old_y != y) {
+            var runtime = script.ScriptRuntime{};
+            try runtime.dispatchDocumentEvent(
+                self.allocator,
+                self,
+                "scroll",
+                self.listeners.items,
+                self.documentScroll(),
+                "onscroll",
+            );
+            try runtime.dispatchWindowEvent(
+                self.allocator,
+                self,
+                "scroll",
+                self.listeners.items,
+                self.windowScroll(),
+                "onscroll",
+            );
+        }
         return;
     }
 
     pub fn scrollBy(self: *BootstrapHost, x: i64, y: i64) errors.Result(void) {
         try self.scroll_mocks.recordCall(.By, x, y);
-        self.scroll_x.* = std.math.add(i64, self.scroll_x.*, x) catch return error.ScriptRuntime;
-        self.scroll_y.* = std.math.add(i64, self.scroll_y.*, y) catch return error.ScriptRuntime;
+        const next_x = std.math.add(i64, self.scroll_x.*, x) catch return error.ScriptRuntime;
+        const next_y = std.math.add(i64, self.scroll_y.*, y) catch return error.ScriptRuntime;
+        const old_x = self.scroll_x.*;
+        const old_y = self.scroll_y.*;
+        self.scroll_x.* = next_x;
+        self.scroll_y.* = next_y;
+        if (old_x != next_x or old_y != next_y) {
+            var runtime = script.ScriptRuntime{};
+            try runtime.dispatchDocumentEvent(
+                self.allocator,
+                self,
+                "scroll",
+                self.listeners.items,
+                self.documentScroll(),
+                "onscroll",
+            );
+            try runtime.dispatchWindowEvent(
+                self.allocator,
+                self,
+                "scroll",
+                self.listeners.items,
+                self.windowScroll(),
+                "onscroll",
+            );
+        }
         return;
     }
 
@@ -2974,6 +3517,15 @@ fn fragmentIdentifierFromUrl(url: []const u8) ?[]const u8 {
     const fragment_index = std.mem.indexOfScalar(u8, url, '#') orelse return null;
     if (fragment_index + 1 >= url.len) return null;
     return url[fragment_index + 1 ..];
+}
+
+fn urlWithoutFragmentText(url: []const u8) []const u8 {
+    const fragment_index = std.mem.indexOfScalar(u8, url, '#') orelse return url;
+    return url[0..fragment_index];
+}
+
+fn shouldDispatchPageLifecycle(before_url: []const u8, after_url: []const u8) bool {
+    return !std.mem.eql(u8, urlWithoutFragmentText(before_url), urlWithoutFragmentText(after_url));
 }
 
 fn locationHashFromUrl(allocator: std.mem.Allocator, url: []const u8) errors.Result([]const u8) {

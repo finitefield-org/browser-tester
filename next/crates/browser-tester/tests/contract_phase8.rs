@@ -735,12 +735,33 @@ fn document_embeds_are_live_end_to_end() -> browser_tester_next::Result<()> {
 }
 
 #[test]
+fn document_images_iterator_helpers_are_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><img id='hero' name='hero' alt='Hero'><img id='thumb' name='thumb' alt='Thumb'></main><div id='out'></div><script>const images = document.images; const keys = images.keys(); const values = images.values(); const entries = images.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; images.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;</script>",
+    )?;
+
+    harness.assert_text("#out", "0:hero:0:hero:0:hero:2;1:thumb:2;")?;
+    Ok(())
+}
+
+#[test]
 fn document_plugins_are_live_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><embed id='first-embed'><embed name='second-embed'></main><div id='out'></div><script>const plugins = document.plugins; const before = plugins.length; const first = plugins.namedItem('first-embed'); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(plugins.length) + ':' + String(first) + ':' + String(plugins.namedItem('missing'));</script>",
     )?;
 
     harness.assert_text("#out", "2:0:[object Element]:null")?;
+    Ok(())
+}
+
+#[test]
+fn document_plugins_iterator_helpers_are_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><embed id='first-embed'><embed name='second-embed'></main><div id='out'></div><script>const plugins = document.plugins; const keys = plugins.keys(); const values = plugins.values(); const entries = plugins.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id');</script>",
+    )?;
+
+    harness.assert_text("#out", "0:first-embed:0:first-embed")?;
+    harness.assert_exists("#root")?;
     Ok(())
 }
 
@@ -1509,5 +1530,100 @@ fn html_serialization_surfaces_reject_malformed_fragments_end_to_end()
     .expect_err("malformed HTML fragments should fail explicitly");
 
     assert!(error.to_string().contains("mismatched closing tag"));
+    Ok(())
+}
+
+#[test]
+fn attribute_nodes_and_named_node_map_are_available_end_to_end() -> browser_tester_next::Result<()>
+{
+    let harness = Harness::from_html(
+        "<main id='root'><div id='box' data-role='menu'></div><div id='out'></div><script>const box = document.getElementById('box'); const attrs = box.attributes; const named = attrs.getNamedItem('data-role'); const created = document.createAttribute('data-state'); created.value = 'open'; const before = attrs.length; const previous = attrs.setNamedItem(created); const during = attrs.length; const snapshot = box.getAttributeNode('data-state'); const keys = attrs.keys(); const values = attrs.values(); const entries = attrs.entries(); const firstEntry = entries.next().value; document.getElementById('out').textContent = String(attrs) + ':' + String(before) + ':' + String(previous) + ':' + String(during) + ':' + String(snapshot) + ':' + snapshot.name + ':' + snapshot.value + ':' + String(snapshot.ownerElement) + ':' + String(created.ownerElement) + ':' + String(attrs.removeNamedItem('data-state')) + ':' + String(attrs.length) + ':' + String(box.getAttributeNode('data-state')) + ':' + named.value + ':' + String(named.ownerElement) + ':' + String(keys.next().value) + ':' + values.next().value.name + ':' + String(firstEntry.index) + ':' + firstEntry.value.name;</script></main>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "[object NamedNodeMap]:2:null:3:[object Attr]:data-state:open:[object Element]:[object Element]:[object Attr]:2:null:menu:[object Element]:0:data-role:0:data-role",
+    )?;
+    harness.assert_exists("#box")?;
+    Ok(())
+}
+
+#[test]
+fn attribute_specified_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><div id='box' data-role='menu'></div><div id='out'></div><script>const detached = document.createAttribute('data-state'); const attached = document.getElementById('box').getAttributeNode('data-role'); document.getElementById('out').textContent = String(detached.specified) + ':' + String(attached.specified);</script></main>",
+    )?;
+
+    harness.assert_text("#out", "true:true")?;
+    harness.assert_exists("#box")?;
+    Ok(())
+}
+
+#[test]
+fn attribute_is_id_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><div id='box'></div><div id='out'></div><script>const detached = document.createAttribute('data-state'); const attached = document.getElementById('box').getAttributeNode('id'); document.getElementById('out').textContent = String(detached.isId) + ':' + String(attached.isId);</script></main>",
+    )?;
+
+    harness.assert_text("#out", "false:true")?;
+    harness.assert_exists("#box")?;
+    Ok(())
+}
+
+#[test]
+fn named_node_map_for_each_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><div id='box' data-role='menu' data-state='azure'></div><div id='out'></div><script>const attrs = document.getElementById('box').attributes; let out = ''; attrs.forEach((attr, index, list) => { out += String(index) + ':' + attr.name + ':' + attr.value + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = out;</script></main>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "0:data-role:menu:3;1:data-state:azure:3;2:id:box:3;",
+    )?;
+    harness.assert_exists("#box")?;
+    Ok(())
+}
+
+#[test]
+fn named_node_map_iterator_helpers_are_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><div id='box' data-role='menu' data-state='azure'></div><div id='out'></div><script>const attrs = document.getElementById('box').attributes; const keys = attrs.keys(); const values = attrs.values(); const entries = attrs.entries(); const firstKey = keys.next(); const secondKey = keys.next(); const thirdKey = keys.next(); const firstValue = values.next(); const secondValue = values.next(); const thirdValue = values.next(); const firstEntry = entries.next(); const secondEntry = entries.next(); const thirdEntry = entries.next(); document.getElementById('out').textContent = String(attrs) + ':' + String(firstKey.value) + ':' + String(secondKey.value) + ':' + String(thirdKey.done) + ':' + firstValue.value.name + ':' + secondValue.value.name + ':' + String(thirdValue.done) + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.name + ':' + String(secondEntry.value.index) + ':' + secondEntry.value.value.name + ':' + String(thirdEntry.done);</script></main>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "[object NamedNodeMap]:0:1:false:data-role:data-state:false:0:data-role:1:data-state:false",
+    )?;
+    harness.assert_exists("#box")?;
+    Ok(())
+}
+
+#[test]
+fn namespaced_attribute_nodes_are_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><div id='box'></div><div id='out'></div><script>const box = document.getElementById('box'); const attrs = box.attributes; const created = document.createAttributeNS('urn:test', 'svg:stroke'); created.value = 'azure'; const before = attrs.length; const previous = attrs.setNamedItemNS(created); const during = attrs.length; const snapshot = box.getAttributeNodeNS('urn:test', 'stroke'); document.getElementById('out').textContent = String(before) + ':' + String(previous) + ':' + String(during) + ':' + String(snapshot) + ':' + snapshot.name + ':' + String(snapshot.namespaceURI) + ':' + snapshot.localName + ':' + String(snapshot.prefix) + ':' + snapshot.value + ':' + String(snapshot.ownerElement) + ':' + String(created.ownerElement) + ':' + String(attrs.removeNamedItemNS('urn:test', 'stroke')) + ':' + String(box.getAttributeNodeNS('urn:test', 'stroke'));</script></main>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "1:null:2:[object Attr]:svg:stroke:urn:test:stroke:svg:azure:[object Element]:[object Element]:[object Attr]:null",
+    )?;
+    harness.assert_exists("#box")?;
+    Ok(())
+}
+
+#[test]
+fn create_attribute_rejects_invalid_qualified_names_end_to_end() -> browser_tester_next::Result<()>
+{
+    let error = Harness::from_html(
+        "<main id='root'><div id='out'></div><script>document.createAttributeNS(null, 'svg:stroke');</script></main>",
+    )
+    .expect_err("qualified attribute names should require a namespace");
+
+    assert!(
+        error
+            .to_string()
+            .contains("invalid qualified attribute name")
+    );
     Ok(())
 }
