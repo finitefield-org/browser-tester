@@ -357,6 +357,14 @@ impl RecordingHost {
         self.inner_html.insert(element, html.into());
     }
 
+    fn option_value(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+        Ok(self
+            .element_get_attribute(element, "value")?
+            .or_else(|| self.values.get(&element).cloned())
+            .or_else(|| self.text_content.get(&element).cloned())
+            .unwrap_or_default())
+    }
+
     fn seed_element_labels(&mut self, element: ElementHandle, result: Vec<ElementHandle>) {
         self.element_labels_results.insert(element, result);
     }
@@ -1991,17 +1999,47 @@ impl HostBindings for RecordingHost {
     }
 
     fn element_value(&mut self, element: ElementHandle) -> bt_script::Result<String> {
-        Ok(self
-            .values
-            .get(&element)
-            .cloned()
-            .or_else(|| self.text_content.get(&element).cloned())
-            .unwrap_or_default())
+        let tag_name = self.element_tag_name(element).ok();
+        match tag_name.as_deref() {
+            Some("select") => {
+                let options = self.html_collection_select_options_items(element)?;
+                for item in options {
+                    if self.element_get_attribute(item, "selected")?.is_some() {
+                        return self.option_value(item);
+                    }
+                }
+                Ok(String::new())
+            }
+            Some("option") => self.option_value(element),
+            _ => Ok(self
+                .values
+                .get(&element)
+                .cloned()
+                .or_else(|| self.text_content.get(&element).cloned())
+                .unwrap_or_default()),
+        }
     }
 
     fn element_set_value(&mut self, element: ElementHandle, value: &str) -> bt_script::Result<()> {
-        self.values.insert(element, value.to_string());
-        Ok(())
+        let tag_name = self.element_tag_name(element).ok();
+        match tag_name.as_deref() {
+            Some("select") => {
+                let options = self.html_collection_select_options_items(element)?;
+                let mut matched = false;
+                for item in options {
+                    self.element_remove_attribute(item, "selected")?;
+                    if !matched && self.option_value(item)? == value {
+                        self.element_set_attribute(item, "selected", "")?;
+                        matched = true;
+                    }
+                }
+                Ok(())
+            }
+            _ => {
+                self.values.insert(element, value.to_string());
+                Ok(())
+            }
+        }
     }
 
     fn element_checked(&mut self, element: ElementHandle) -> bt_script::Result<bool> {
@@ -7703,6 +7741,64 @@ fn runtime_resolves_fieldset_elements_and_datalist_options_access() {
 }
 
 #[test]
+fn runtime_resolves_fieldset_elements_and_datalist_options_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("fieldset", ElementHandle::new(1), "fieldset");
+    host.seed_element("first-control", ElementHandle::new(2), "Ada");
+    host.seed_element("second-control", ElementHandle::new(3), "Bio");
+    host.seed_element("list", ElementHandle::new(4), "list");
+    host.seed_element("first-option", ElementHandle::new(5), "One");
+    host.seed_element("second-option", ElementHandle::new(6), "Two");
+    host.seed_element("out", ElementHandle::new(7), "");
+    host.seed_attribute(ElementHandle::new(2), "id", "first-control");
+    host.seed_attribute(ElementHandle::new(3), "id", "second-control");
+    host.seed_attribute(ElementHandle::new(5), "id", "first-option");
+    host.seed_attribute(ElementHandle::new(6), "id", "second-option");
+    host.seed_html_collection_form_elements_items(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2), ElementHandle::new(3)],
+    );
+    host.seed_html_collection_select_options_items(
+        ElementHandle::new(4),
+        vec![ElementHandle::new(5), ElementHandle::new(6)],
+    );
+
+    runtime
+        .eval_program(
+            "const controls = document.getElementById('fieldset').elements; const options = document.getElementById('list').options; const controlKeys = controls.keys(); const controlValues = controls.values(); const controlEntries = controls.entries(); const optionKeys = options.keys(); const optionValues = options.values(); const optionEntries = options.entries(); const firstControlKey = controlKeys.next(); const firstControlValue = controlValues.next(); const firstControlEntry = controlEntries.next(); const firstOptionKey = optionKeys.next(); const firstOptionValue = optionValues.next(); const firstOptionEntry = optionEntries.next(); let serial = ''; controls.forEach((element, index, list) => { serial += 'C' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); options.forEach((element, index, list) => { serial += 'O' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstControlKey.value) + ':' + firstControlValue.value.getAttribute('id') + ':' + String(firstControlEntry.value.index) + ':' + firstControlEntry.value.value.getAttribute('id') + ':' + String(firstOptionKey.value) + ':' + firstOptionValue.value.getAttribute('id') + ':' + String(firstOptionEntry.value.index) + ':' + firstOptionEntry.value.value.getAttribute('id') + ':' + serial;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("fieldset.elements and datalist.options iterator helpers should resolve");
+
+    assert_eq!(
+        host.html_collection_form_elements_items_calls,
+        vec![ElementHandle::new(1); 6]
+    );
+    assert_eq!(
+        host.html_collection_form_elements_named_item_calls,
+        Vec::<(ElementHandle, String)>::new()
+    );
+    assert_eq!(
+        host.html_collection_select_options_items_calls,
+        vec![ElementHandle::new(4); 6]
+    );
+    assert_eq!(
+        host.html_collection_select_options_named_item_calls,
+        Vec::<(ElementHandle, String)>::new()
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(7))
+            .map(String::as_str),
+        Some(
+            "0:first-control:0:first-control:0:first-option:0:first-option:C0:first-control:2;C1:second-control:2;O0:first-option:2;O1:second-option:2;"
+        )
+    );
+}
+
+#[test]
 fn runtime_resolves_select_selected_options_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -7910,6 +8006,54 @@ fn runtime_resolves_select_selected_index_access() {
         host.attributes
             .get(&(ElementHandle::new(4), "selected".to_string())),
         Some(&String::new())
+    );
+}
+
+#[test]
+fn runtime_resolves_select_value_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("mode", ElementHandle::new(1), "mode");
+    host.seed_element("first", ElementHandle::new(2), "A");
+    host.seed_element("second", ElementHandle::new(3), "B");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "select");
+    host.seed_element_tag_name(ElementHandle::new(2), "option");
+    host.seed_element_tag_name(ElementHandle::new(3), "option");
+    host.seed_node_type(NodeHandle::new(1), 1);
+    host.seed_attribute(ElementHandle::new(2), "id", "first");
+    host.seed_attribute(ElementHandle::new(2), "value", "a");
+    host.seed_attribute(ElementHandle::new(2), "selected", "");
+    host.seed_attribute(ElementHandle::new(3), "id", "second");
+    host.seed_attribute(ElementHandle::new(3), "value", "b");
+    host.seed_html_collection_select_options_items(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2), ElementHandle::new(3)],
+    );
+
+    runtime
+        .eval_program(
+            "const select = document.getElementById('mode'); const before = select.value; select.value = 'b'; const afterMatch = select.value; select.value = 'missing'; const afterMissing = select.value; document.getElementById('out').textContent = before + ':' + afterMatch + ':' + afterMissing + ':' + String(select.selectedIndex) + ':' + String(document.querySelectorAll('option:checked').length) + ':' + String(document.querySelector('option:checked'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("select.value should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("a:b::-1:0:null")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(2), "selected".to_string())),
+        None
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(3), "selected".to_string())),
+        None
     );
 }
 
@@ -8755,6 +8899,148 @@ fn runtime_resolves_option_form_access() {
 }
 
 #[test]
+fn runtime_resolves_button_form_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("owner", ElementHandle::new(1), "");
+    host.seed_element("button", ElementHandle::new(2), "Button");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_attribute(ElementHandle::new(1), "id", "owner");
+    host.seed_element_tag_name(ElementHandle::new(1), "form");
+    host.seed_element_tag_name(ElementHandle::new(2), "button");
+    host.seed_node_type(NodeHandle::new(1), 1);
+    host.seed_node_type(NodeHandle::new(2), 1);
+    host.seed_node_parent(NodeHandle::new(2), Some(NodeHandle::new(1)));
+
+    runtime
+        .eval_program(
+            "const button = document.getElementById('button'); document.getElementById('out').textContent = button.form.getAttribute('id');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("button.form should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("owner")
+    );
+}
+
+#[test]
+fn runtime_resolves_fieldset_and_output_form_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("owner", ElementHandle::new(1), "");
+    host.seed_element("fieldset", ElementHandle::new(2), "");
+    host.seed_element("output", ElementHandle::new(3), "");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_attribute(ElementHandle::new(1), "id", "owner");
+    host.seed_element_tag_name(ElementHandle::new(1), "form");
+    host.seed_element_tag_name(ElementHandle::new(2), "fieldset");
+    host.seed_element_tag_name(ElementHandle::new(3), "output");
+    host.seed_node_type(NodeHandle::new(1), 1);
+    host.seed_node_type(NodeHandle::new(2), 1);
+    host.seed_node_type(NodeHandle::new(3), 1);
+    host.seed_node_parent(NodeHandle::new(2), Some(NodeHandle::new(1)));
+    host.seed_node_parent(NodeHandle::new(3), Some(NodeHandle::new(1)));
+
+    runtime
+        .eval_program(
+            "const fieldset = document.getElementById('fieldset'); const output = document.getElementById('output'); const beforeFieldset = fieldset.form; const beforeOutput = output.form; document.getElementById('out').textContent = beforeFieldset.getAttribute('id') + ':' + beforeOutput.getAttribute('id');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("fieldset.form and output.form should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("owner:owner")
+    );
+}
+
+#[test]
+fn runtime_resolves_object_form_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("owner", ElementHandle::new(1), "");
+    host.seed_element("asset", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_attribute(ElementHandle::new(1), "id", "owner");
+    host.seed_element_tag_name(ElementHandle::new(1), "form");
+    host.seed_element_tag_name(ElementHandle::new(2), "object");
+    host.seed_node_type(NodeHandle::new(1), 1);
+    host.seed_node_type(NodeHandle::new(2), 1);
+    host.seed_node_parent(NodeHandle::new(2), Some(NodeHandle::new(1)));
+
+    runtime
+        .eval_program(
+            "const object = document.getElementById('asset'); document.getElementById('out').textContent = object.form.getAttribute('id');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("object.form should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("owner")
+    );
+}
+
+#[test]
+fn runtime_resolves_embed_form_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("owner", ElementHandle::new(1), "");
+    host.seed_element("asset", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_attribute(ElementHandle::new(1), "id", "owner");
+    host.seed_element_tag_name(ElementHandle::new(1), "form");
+    host.seed_element_tag_name(ElementHandle::new(2), "embed");
+    host.seed_node_type(NodeHandle::new(1), 1);
+    host.seed_node_type(NodeHandle::new(2), 1);
+    host.seed_node_parent(NodeHandle::new(2), Some(NodeHandle::new(1)));
+
+    runtime
+        .eval_program(
+            "const embed = document.getElementById('asset'); document.getElementById('out').textContent = embed.form.getAttribute('id');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("embed.form should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("owner")
+    );
+}
+
+#[test]
+fn runtime_rejects_non_form_associated_form_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("wrapper", ElementHandle::new(1), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "div");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('wrapper').form;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-form-associated form access should fail");
+
+    assert!(error.to_string().contains("form"));
+}
+
+#[test]
 fn runtime_resolves_option_disabled_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -8955,19 +9241,19 @@ fn runtime_rejects_non_option_label_access() {
 }
 
 #[test]
-fn runtime_rejects_non_option_form_access() {
+fn runtime_rejects_non_form_associated_form_access_getter() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
-    host.seed_element("button", ElementHandle::new(1), "Button");
-    host.seed_element_tag_name(ElementHandle::new(1), "button");
+    host.seed_element("wrapper", ElementHandle::new(1), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "div");
 
     let error = runtime
         .eval_program(
-            "document.getElementById('button').form;",
+            "document.getElementById('wrapper').form;",
             "inline-script",
             &mut host,
         )
-        .expect_err("non-option form access should fail");
+        .expect_err("non-form-associated form access should fail");
 
     assert!(error.to_string().contains("form"));
 }
@@ -9284,6 +9570,64 @@ fn runtime_resolves_map_areas_and_table_bodies_access() {
             (ElementHandle::new(4), "second-body".to_string()),
             (ElementHandle::new(4), "missing".to_string()),
         ]
+    );
+}
+
+#[test]
+fn runtime_resolves_map_areas_and_table_bodies_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("map", ElementHandle::new(1), "map");
+    host.seed_element("first-area", ElementHandle::new(2), "First area");
+    host.seed_element("second-area", ElementHandle::new(3), "Second area");
+    host.seed_element("table", ElementHandle::new(4), "table");
+    host.seed_element("first-body", ElementHandle::new(5), "Body 1");
+    host.seed_element("second-body", ElementHandle::new(6), "Body 2");
+    host.seed_element("out", ElementHandle::new(7), "");
+    host.seed_attribute(ElementHandle::new(2), "id", "first-area");
+    host.seed_attribute(ElementHandle::new(3), "id", "second-area");
+    host.seed_attribute(ElementHandle::new(5), "id", "first-body");
+    host.seed_attribute(ElementHandle::new(6), "id", "second-body");
+    host.seed_html_collection_map_areas_items(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2), ElementHandle::new(3)],
+    );
+    host.seed_html_collection_table_bodies_items(
+        ElementHandle::new(4),
+        vec![ElementHandle::new(5), ElementHandle::new(6)],
+    );
+
+    runtime
+        .eval_program(
+            "const areas = document.getElementById('map').areas; const bodies = document.getElementById('table').tBodies; const areaKeys = areas.keys(); const areaValues = areas.values(); const areaEntries = areas.entries(); const bodyKeys = bodies.keys(); const bodyValues = bodies.values(); const bodyEntries = bodies.entries(); const firstAreaKey = areaKeys.next(); const firstAreaValue = areaValues.next(); const firstAreaEntry = areaEntries.next(); const firstBodyKey = bodyKeys.next(); const firstBodyValue = bodyValues.next(); const firstBodyEntry = bodyEntries.next(); let serial = ''; areas.forEach((element, index, list) => { serial += 'A' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); bodies.forEach((element, index, list) => { serial += 'B' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstAreaKey.value) + ':' + firstAreaValue.value.getAttribute('id') + ':' + String(firstAreaEntry.value.index) + ':' + firstAreaEntry.value.value.getAttribute('id') + ':' + String(firstBodyKey.value) + ':' + firstBodyValue.value.getAttribute('id') + ':' + String(firstBodyEntry.value.index) + ':' + firstBodyEntry.value.value.getAttribute('id') + ':' + serial;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("map.areas and table.tBodies iterator helpers should resolve");
+
+    assert_eq!(
+        host.html_collection_map_areas_items_calls,
+        vec![ElementHandle::new(1); 6]
+    );
+    assert_eq!(
+        host.html_collection_table_bodies_items_calls,
+        vec![ElementHandle::new(4); 6]
+    );
+    assert_eq!(
+        host.html_collection_map_areas_named_item_calls,
+        Vec::<(ElementHandle, String)>::new()
+    );
+    assert_eq!(
+        host.html_collection_table_bodies_named_item_calls,
+        Vec::<(ElementHandle, String)>::new()
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(7))
+            .map(String::as_str),
+        Some(
+            "0:first-area:0:first-area:0:first-body:0:first-body:A0:first-area:2;A1:second-area:2;B0:first-body:2;B1:second-body:2;"
+        )
     );
 }
 
@@ -9969,6 +10313,126 @@ fn runtime_resolves_table_rows_and_row_cells_access() {
     assert_eq!(
         host.row_cells_named_item_calls,
         vec![(ElementHandle::new(3), "cell".to_string())]
+    );
+}
+
+#[test]
+fn runtime_resolves_table_section_rows_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("head", ElementHandle::new(2), "Head");
+    host.seed_element("foot", ElementHandle::new(4), "Foot");
+    host.seed_element("head-row", ElementHandle::new(3), "Head row");
+    host.seed_element("foot-row", ElementHandle::new(5), "Foot row");
+    host.seed_table_rows_items(ElementHandle::new(2), vec![ElementHandle::new(3)]);
+    host.seed_table_rows_items(ElementHandle::new(4), vec![ElementHandle::new(5)]);
+
+    runtime
+        .eval_program(
+            "const head = document.getElementById('head'); const foot = document.getElementById('foot'); document.getElementById('head-row').textContent = String(head.rows.length) + ':' + String(head.rows.item(0)) + ':' + String(foot.rows.length) + ':' + String(foot.rows.item(0));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("thead.rows and tfoot.rows should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("1:[object Element]:1:[object Element]")
+    );
+    assert_eq!(
+        host.table_rows_items_calls,
+        vec![
+            ElementHandle::new(2),
+            ElementHandle::new(2),
+            ElementHandle::new(4),
+            ElementHandle::new(4)
+        ]
+    );
+    assert_eq!(
+        host.table_rows_named_item_calls,
+        Vec::<(ElementHandle, String)>::new()
+    );
+}
+
+#[test]
+fn runtime_resolves_table_section_rows_named_item_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("head", ElementHandle::new(2), "Head");
+    host.seed_element("foot", ElementHandle::new(4), "Foot");
+    host.seed_element("head-row", ElementHandle::new(3), "Head row");
+    host.seed_element("foot-row", ElementHandle::new(5), "Foot row");
+    host.seed_element("out", ElementHandle::new(6), "");
+    host.seed_table_rows_named_item(
+        ElementHandle::new(2),
+        "head-row",
+        Some(ElementHandle::new(3)),
+    );
+    host.seed_table_rows_named_item(ElementHandle::new(2), "missing", None);
+    host.seed_table_rows_named_item(
+        ElementHandle::new(4),
+        "foot-row",
+        Some(ElementHandle::new(5)),
+    );
+    host.seed_table_rows_named_item(ElementHandle::new(4), "missing", None);
+
+    runtime
+        .eval_program(
+            "const head = document.getElementById('head'); const foot = document.getElementById('foot'); document.getElementById('out').textContent = String(head.rows.namedItem('head-row')) + ':' + String(head.rows.namedItem('missing')) + ':' + String(foot.rows.namedItem('foot-row')) + ':' + String(foot.rows.namedItem('missing'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("thead.rows and tfoot.rows namedItem should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(6))
+            .map(String::as_str),
+        Some("[object Element]:null:[object Element]:null")
+    );
+    assert_eq!(
+        host.table_rows_named_item_calls,
+        vec![
+            (ElementHandle::new(2), "head-row".to_string()),
+            (ElementHandle::new(2), "missing".to_string()),
+            (ElementHandle::new(4), "foot-row".to_string()),
+            (ElementHandle::new(4), "missing".to_string())
+        ]
+    );
+    assert_eq!(host.table_rows_items_calls, Vec::<ElementHandle>::new());
+}
+
+#[test]
+fn runtime_resolves_table_section_rows_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("head", ElementHandle::new(2), "Head");
+    host.seed_element("body", ElementHandle::new(3), "Body");
+    host.seed_element("foot", ElementHandle::new(4), "Foot");
+    host.seed_element("head-row", ElementHandle::new(5), "Head row");
+    host.seed_element("body-row", ElementHandle::new(6), "Body row");
+    host.seed_element("foot-row", ElementHandle::new(7), "Foot row");
+    host.seed_element("out", ElementHandle::new(8), "");
+    host.seed_attribute(ElementHandle::new(6), "id", "body-row");
+    host.seed_table_rows_items(ElementHandle::new(2), vec![ElementHandle::new(5)]);
+    host.seed_table_rows_items(ElementHandle::new(3), vec![ElementHandle::new(6)]);
+    host.seed_table_rows_items(ElementHandle::new(4), vec![ElementHandle::new(7)]);
+
+    runtime
+        .eval_program(
+            "const head = document.getElementById('head'); const body = document.getElementById('body'); const foot = document.getElementById('foot'); const bodyRows = body.rows; const bodyKeys = bodyRows.keys(); const bodyValues = bodyRows.values(); const bodyEntries = bodyRows.entries(); const firstKey = bodyKeys.next(); const firstValue = bodyValues.next(); const firstEntry = bodyEntries.next(); let serial = ''; bodyRows.forEach((element, index, list) => { serial += 'B' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(head.rows.length) + ':' + String(bodyRows.length) + ':' + String(foot.rows.length) + ':' + String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + serial;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("thead.rows, tbody.rows, and tfoot.rows iterator helpers should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(8))
+            .map(String::as_str),
+        Some("1:1:1:0:body-row:0:body-row:B0:body-row:1;")
     );
 }
 

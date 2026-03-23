@@ -2098,10 +2098,12 @@ pub const DomStore = struct {
                 continue;
             }
 
-            const quote: u8 = if (std.mem.indexOfScalar(u8, attribute.value, '"') == null) '"' else if (std.mem.indexOfScalar(u8, attribute.value, '\'') == null) '\'' else return error.DomError;
+            const has_double_quote = std.mem.indexOfScalar(u8, attribute.value, '"') != null;
+            const has_single_quote = std.mem.indexOfScalar(u8, attribute.value, '\'') != null;
+            const quote: u8 = if (!has_double_quote) '"' else if (!has_single_quote) '\'' else '"';
             try output.append(allocator, '=');
             try output.append(allocator, quote);
-            try output.appendSlice(allocator, attribute.value);
+            try writeEscapedAttrValue(output, allocator, attribute.value, quote);
             try output.append(allocator, quote);
         }
     }
@@ -2996,7 +2998,7 @@ const HtmlParser = struct {
     fn parseText(self: *HtmlParser, store: *DomStore, parent: NodeId) errors.Result(void) {
         const rest = self.input[self.pos..];
         const next_tag = std.mem.indexOfScalar(u8, rest, '<') orelse rest.len;
-        const text = rest[0..next_tag];
+        const text = try decodeHtmlCharacterReferences(store, rest[0..next_tag]);
         self.pos += next_tag;
         if (text.len > 0) {
             _ = try store.addText(parent, text);
@@ -3108,9 +3110,9 @@ const HtmlParser = struct {
             self.pos += 1;
             const rest = self.input[self.pos..];
             const end = std.mem.indexOfScalar(u8, rest, quote) orelse return error.HtmlParse;
-            const value = rest[0..end];
+            const value = try decodeHtmlCharacterReferences(store, rest[0..end]);
             self.pos += end + 1;
-            return duplicateString(store, value);
+            return value;
         }
 
         const start = self.pos;
@@ -3119,12 +3121,122 @@ const HtmlParser = struct {
             self.pos += 1;
         }
         if (self.pos == start) return error.HtmlParse;
-        return duplicateString(store, self.input[start..self.pos]);
+        return decodeHtmlCharacterReferences(store, self.input[start..self.pos]);
     }
 };
 
 fn duplicateString(store: *DomStore, value: []const u8) errors.Result([]const u8) {
     return try store.arena.allocator().dupe(u8, value);
+}
+
+fn decodeHtmlCharacterReferences(store: *DomStore, value: []const u8) errors.Result([]const u8) {
+    if (std.mem.indexOfScalar(u8, value, '&') == null) {
+        return duplicateString(store, value);
+    }
+
+    var output: std.ArrayList(u8) = .empty;
+    errdefer output.deinit(store.arena.allocator());
+
+    var index: usize = 0;
+    while (index < value.len) {
+        if (value[index] != '&') {
+            try output.append(store.arena.allocator(), value[index]);
+            index += 1;
+            continue;
+        }
+
+        if (try decodeHtmlCharacterReferenceInto(store, value, &index, &output)) {
+            continue;
+        }
+
+        try output.append(store.arena.allocator(), '&');
+        index += 1;
+    }
+
+    return try output.toOwnedSlice(store.arena.allocator());
+}
+
+fn decodeHtmlCharacterReferenceInto(
+    store: *DomStore,
+    value: []const u8,
+    index: *usize,
+    output: *std.ArrayList(u8),
+) errors.Result(bool) {
+    const start = index.*;
+    if (start + 1 >= value.len or value[start] != '&') return false;
+
+    const allocator = store.arena.allocator();
+    if (value[start + 1] == '#') {
+        var pos = start + 2;
+        var base: u8 = 10;
+        if (pos < value.len and (value[pos] == 'x' or value[pos] == 'X')) {
+            base = 16;
+            pos += 1;
+        }
+
+        const digits_start = pos;
+        while (pos < value.len) : (pos += 1) {
+            const byte = value[pos];
+            if (base == 10) {
+                if (!std.ascii.isDigit(byte)) break;
+            } else if (!isHexDigit(byte)) {
+                break;
+            }
+        }
+        if (pos == digits_start) return false;
+
+        const number = std.fmt.parseInt(u21, value[digits_start..pos], base) catch return false;
+        if (pos < value.len and value[pos] == ';') pos += 1;
+        try appendUtf8Codepoint(output, allocator, number);
+        index.* = pos;
+        return true;
+    }
+
+    const named_references = [_]struct { name: []const u8, replacement: []const u8 }{
+        .{ .name = "amp", .replacement = "&" },
+        .{ .name = "AMP", .replacement = "&" },
+        .{ .name = "lt", .replacement = "<" },
+        .{ .name = "LT", .replacement = "<" },
+        .{ .name = "gt", .replacement = ">" },
+        .{ .name = "GT", .replacement = ">" },
+        .{ .name = "quot", .replacement = "\"" },
+        .{ .name = "QUOT", .replacement = "\"" },
+        .{ .name = "nbsp", .replacement = "\xC2\xA0" },
+        .{ .name = "NBSP", .replacement = "\xC2\xA0" },
+        .{ .name = "copy", .replacement = "\xC2\xA9" },
+        .{ .name = "COPY", .replacement = "\xC2\xA9" },
+        .{ .name = "reg", .replacement = "\xC2\xAE" },
+        .{ .name = "REG", .replacement = "\xC2\xAE" },
+        .{ .name = "apos", .replacement = "'" },
+        .{ .name = "APOS", .replacement = "'" },
+    };
+
+    for (named_references) |reference| {
+        if (!startsWithCaseInsensitive(value[start + 1 ..], reference.name)) continue;
+        const after_name = start + 1 + reference.name.len;
+        if (after_name < value.len and value[after_name] != ';' and std.ascii.isAlphanumeric(value[after_name])) {
+            continue;
+        }
+        try output.appendSlice(allocator, reference.replacement);
+        index.* = if (after_name < value.len and value[after_name] == ';') after_name + 1 else after_name;
+        return true;
+    }
+
+    return false;
+}
+
+fn appendUtf8Codepoint(output: *std.ArrayList(u8), allocator: std.mem.Allocator, codepoint: u21) errors.Result(void) {
+    var buf: [4]u8 = undefined;
+    const len = std.unicode.utf8Encode(codepoint, &buf) catch return error.HtmlParse;
+    try output.appendSlice(allocator, buf[0..len]);
+}
+
+fn startsWithCaseInsensitive(haystack: []const u8, needle: []const u8) bool {
+    if (haystack.len < needle.len) return false;
+    for (needle, 0..) |needle_byte, index| {
+        if (std.ascii.toLower(haystack[index]) != std.ascii.toLower(needle_byte)) return false;
+    }
+    return true;
 }
 
 fn duplicateLowercase(store: *DomStore, value: []const u8) errors.Result([]const u8) {
@@ -3191,6 +3303,10 @@ fn isHtmlWhitespace(byte: u8) bool {
         ' ', '\n', '\r', '\t', 0x0c => true,
         else => false,
     };
+}
+
+fn isHexDigit(byte: u8) bool {
+    return std.ascii.isDigit(byte) or (byte >= 'a' and byte <= 'f') or (byte >= 'A' and byte <= 'F');
 }
 
 fn isTagNameByte(byte: u8) bool {
@@ -3299,12 +3415,30 @@ fn writeEscapedAttr(
     allocator: std.mem.Allocator,
     value: []const u8,
 ) errors.Result(void) {
+    try writeEscapedAttrValue(output, allocator, value, '"');
+}
+
+fn writeEscapedAttrValue(
+    output: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    value: []const u8,
+    quote: u8,
+) errors.Result(void) {
     for (value) |byte| {
         switch (byte) {
             '&' => try output.appendSlice(allocator, "&amp;"),
             '<' => try output.appendSlice(allocator, "&lt;"),
             '>' => try output.appendSlice(allocator, "&gt;"),
-            '"' => try output.appendSlice(allocator, "&quot;"),
+            '"' => if (quote == '"') {
+                try output.appendSlice(allocator, "&quot;");
+            } else {
+                try output.append(allocator, byte);
+            },
+            '\'' => if (quote == '\'') {
+                try output.appendSlice(allocator, "&apos;");
+            } else {
+                try output.append(allocator, byte);
+            },
             else => try output.append(allocator, byte),
         }
     }
@@ -8242,7 +8376,7 @@ test "failure: HTML serialization surfaces reject detached insertAdjacentHTML in
     try std.testing.expectError(error.DomError, store.insertAdjacentHtml(target, "beforebegin", "<aside id='before'>Before</aside>"));
 }
 
-test "failure: HTML serialization surfaces reject lossy attribute serialization in DomStore" {
+test "contract: HTML serialization surfaces escape mixed-quote attribute values in DomStore" {
     const allocator = std.testing.allocator;
     var store = try DomStore.init(allocator);
     defer store.deinit();
@@ -8250,8 +8384,13 @@ test "failure: HTML serialization surfaces reject lossy attribute serialization 
     try store.bootstrapHtml("<main id='root'><div id='target'></div></main>");
 
     const target = store.findElementById("target").?;
-    try store.setAttribute(target, "data-label", "a'b\"c");
-    try std.testing.expectError(error.DomError, store.outerHtml(allocator, target));
+    try store.setAttribute(target, "data-label", "a'b\"c&d<e>");
+    const html = try store.outerHtml(allocator, target);
+    defer allocator.free(html);
+    try std.testing.expectEqualStrings(
+        "<div data-label=\"a'b&quot;c&amp;d&lt;e&gt;\" id=\"target\"></div>",
+        html,
+    );
 }
 
 test "failure: tree mutation rejects ancestor cycles in DomStore" {

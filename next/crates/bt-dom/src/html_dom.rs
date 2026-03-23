@@ -650,25 +650,16 @@ impl DomStore {
             ));
         }
 
-        let mut found = false;
-        for option_id in &options {
-            let option_value = self.option_value_for_node(*option_id);
-            if option_value == value {
-                found = true;
-                break;
+        let mut first_matching_option = None;
+        for option_id in options {
+            self.set_option_selected(option_id, false)?;
+            if first_matching_option.is_none() && self.option_value_for_node(option_id) == value {
+                first_matching_option = Some(option_id);
             }
         }
 
-        if !found {
-            return Err(format!(
-                "select node {:?} does not contain an option with value `{}`",
-                node_id, value
-            ));
-        }
-
-        for option_id in options {
-            let selected = self.option_value_for_node(option_id) == value;
-            self.set_option_selected(option_id, selected)?;
+        if let Some(option_id) = first_matching_option {
+            self.set_option_selected(option_id, true)?;
         }
 
         Ok(())
@@ -1886,23 +1877,17 @@ impl DomStore {
         }
 
         let descendants = self.collect_subtree_nodes(node.children.iter().copied());
-        let mut first_option_value: Option<String> = None;
         for descendant_id in descendants {
             if !self.is_option_node(descendant_id) {
                 continue;
             }
 
-            let option_value = self.option_value_for_node(descendant_id);
-            if first_option_value.is_none() {
-                first_option_value = Some(option_value.clone());
-            }
-
             if self.is_option_selected(descendant_id) {
-                return option_value;
+                return self.option_value_for_node(descendant_id);
             }
         }
 
-        first_option_value.unwrap_or_default()
+        String::new()
     }
 
     fn is_option_selected(&self, node_id: NodeId) -> bool {
@@ -5110,53 +5095,117 @@ fn decode_html_entities(value: &str) -> String {
     while let Some(amp_index) = rest.find('&') {
         output.push_str(&rest[..amp_index]);
         let candidate = &rest[amp_index + 1..];
-        let Some(semi_index) = candidate.find(';') else {
+        let Some((decoded, consumed)) = decode_html_entity_candidate(candidate) else {
             output.push('&');
             rest = candidate;
             continue;
         };
 
+        output.push_str(&decoded);
+        rest = &candidate[consumed..];
+    }
+
+    output.push_str(rest);
+    output
+}
+
+fn decode_html_entity_candidate(candidate: &str) -> Option<(String, usize)> {
+    if let Some(semi_index) = candidate.find(';') {
         let entity = &candidate[..semi_index];
-        let decoded = match entity {
-            "amp" => Some("&".to_string()),
-            "lt" => Some("<".to_string()),
-            "gt" => Some(">".to_string()),
-            "quot" => Some("\"".to_string()),
-            "apos" => Some("'".to_string()),
-            "nbsp" => Some("\u{a0}".to_string()),
-            _ if entity.starts_with("#x") || entity.starts_with("#X") => {
-                u32::from_str_radix(&entity[2..], 16)
-                    .ok()
-                    .and_then(char::from_u32)
-                    .map(|ch| {
-                        let mut buf = String::new();
-                        buf.push(ch);
-                        buf
-                    })
-            }
-            _ if entity.starts_with('#') => entity[1..]
-                .parse::<u32>()
+        if let Some(decoded) = decode_html_named_or_numeric_entity(entity) {
+            return Some((decoded, semi_index + 1));
+        }
+    }
+
+    if let Some((entity, consumed)) = decode_html_numeric_entity_without_semicolon(candidate) {
+        if let Some(decoded) = decode_html_named_or_numeric_entity(entity) {
+            return Some((decoded, consumed));
+        }
+    }
+
+    if let Some((entity, consumed)) = decode_html_named_entity_without_semicolon(candidate) {
+        if let Some(decoded) = decode_html_named_or_numeric_entity(entity) {
+            return Some((decoded, consumed));
+        }
+    }
+
+    None
+}
+
+fn decode_html_named_or_numeric_entity(entity: &str) -> Option<String> {
+    match entity {
+        "AMP" | "amp" => Some("&".to_string()),
+        "LT" | "lt" => Some("<".to_string()),
+        "GT" | "gt" => Some(">".to_string()),
+        "QUOT" | "quot" => Some("\"".to_string()),
+        "apos" => Some("'".to_string()),
+        "NBSP" | "nbsp" => Some("\u{a0}".to_string()),
+        "COPY" | "copy" => Some("©".to_string()),
+        "REG" | "reg" => Some("®".to_string()),
+        _ if entity.starts_with("#x") || entity.starts_with("#X") => {
+            u32::from_str_radix(&entity[2..], 16)
                 .ok()
                 .and_then(char::from_u32)
                 .map(|ch| {
                     let mut buf = String::new();
                     buf.push(ch);
                     buf
-                }),
-            _ => None,
+                })
+        }
+        _ if entity.starts_with('#') => entity[1..]
+            .parse::<u32>()
+            .ok()
+            .and_then(char::from_u32)
+            .map(|ch| {
+                let mut buf = String::new();
+                buf.push(ch);
+                buf
+            }),
+        _ => None,
+    }
+}
+
+fn decode_html_numeric_entity_without_semicolon(candidate: &str) -> Option<(&str, usize)> {
+    let rest = candidate.strip_prefix('#')?;
+
+    let (digits, consumed_prefix) =
+        if let Some(hex_rest) = rest.strip_prefix('x').or_else(|| rest.strip_prefix('X')) {
+            let consumed = hex_rest
+                .chars()
+                .take_while(|ch| ch.is_ascii_hexdigit())
+                .count();
+            if consumed == 0 {
+                return None;
+            }
+            (&hex_rest[..consumed], 2)
+        } else {
+            let consumed = rest.chars().take_while(|ch| ch.is_ascii_digit()).count();
+            if consumed == 0 {
+                return None;
+            }
+            (&rest[..consumed], 1)
         };
 
-        if let Some(decoded) = decoded {
-            output.push_str(&decoded);
-            rest = &candidate[semi_index + 1..];
+    let consumed = consumed_prefix + digits.len();
+    Some((&candidate[..consumed], consumed))
+}
+
+fn decode_html_named_entity_without_semicolon(candidate: &str) -> Option<(&'static str, usize)> {
+    for entity in [
+        "NBSP", "nbsp", "QUOT", "quot", "apos", "AMP", "amp", "LT", "lt", "GT", "gt", "COPY",
+        "copy", "REG", "reg",
+    ] {
+        if candidate.starts_with(entity) {
+            let next = candidate.as_bytes().get(entity.len()).copied();
+            if next.is_none_or(|byte| !byte.is_ascii_alphanumeric() && byte != b'=') {
+                return Some((entity, entity.len()));
+            }
         } else {
-            output.push('&');
-            rest = candidate;
+            continue;
         }
     }
 
-    output.push_str(rest);
-    output
+    None
 }
 
 fn escape_text(value: &str) -> String {

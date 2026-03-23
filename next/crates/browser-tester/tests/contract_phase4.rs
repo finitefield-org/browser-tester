@@ -614,6 +614,16 @@ fn window_children_are_publicly_supported() -> browser_tester_next::Result<()> {
 }
 
 #[test]
+fn window_frames_iterator_helpers_are_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<iframe id='first'></iframe><iframe id='second'></iframe><div id='out'></div><script>const frames = document.defaultView.frames; const keys = frames.keys(); const values = frames.values(); const entries = frames.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; frames.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out + String(frames.length);</script>",
+    )?;
+
+    harness.assert_text("#out", "0:first:0:first:0:first:2;1:second:2;2")?;
+    Ok(())
+}
+
+#[test]
 fn html_collection_named_property_access_is_publicly_supported() -> browser_tester_next::Result<()>
 {
     let harness = Harness::from_html(
@@ -641,16 +651,6 @@ fn window_frames_are_publicly_supported() -> browser_tester_next::Result<()> {
     )?;
 
     harness.assert_text("#out", "2:1:first:first:null")?;
-    Ok(())
-}
-
-#[test]
-fn window_frames_iterator_helpers_are_publicly_supported() -> browser_tester_next::Result<()> {
-    let harness = Harness::from_html(
-        "<iframe id='first'></iframe><iframe id='second'></iframe><div id='out'></div><script>const frames = window.frames; const keys = frames.keys(); const values = frames.values(); const entries = frames.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; frames.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;</script>",
-    )?;
-
-    harness.assert_text("#out", "0:first:0:first:0:first:2;1:second:2;")?;
     Ok(())
 }
 

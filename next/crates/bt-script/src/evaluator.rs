@@ -509,12 +509,14 @@ fn option_index_for_element<H: HostBindings>(option: ElementHandle, host: &mut H
         .unwrap_or(-1))
 }
 
-fn option_form_for_element<H: HostBindings>(option: ElementHandle, host: &mut H) -> Result<Value> {
-    if host.element_tag_name(option)? != "option" {
-        return Err(unsupported_member_access("form", "element"));
+fn form_owner_for_element<H: HostBindings>(element: ElementHandle, host: &mut H) -> Result<Value> {
+    match host.element_tag_name(element)?.as_str() {
+        "input" | "button" | "select" | "textarea" | "option" | "fieldset" | "output"
+        | "object" | "embed" => {}
+        _ => return Err(unsupported_member_access("form", "element")),
     }
 
-    let mut current = NodeHandle::new(option.raw());
+    let mut current = NodeHandle::new(element.raw());
     while let Some(parent) = host.node_parent(current)? {
         if host.node_type(parent)? == 1 {
             let parent_element = ElementHandle::new(parent.raw());
@@ -2387,7 +2389,7 @@ fn eval_member<H: HostBindings>(
         Value::Element(element) if property == "index" => Ok(Value::Number(
             option_index_for_element(element, host)? as f64,
         )),
-        Value::Element(element) if property == "form" => option_form_for_element(element, host),
+        Value::Element(element) if property == "form" => form_owner_for_element(element, host),
         Value::Element(element) if property == "disabled" => {
             match host.element_tag_name(element)?.as_str() {
                 "input" | "textarea" | "button" | "select" | "option" => Ok(Value::Boolean(

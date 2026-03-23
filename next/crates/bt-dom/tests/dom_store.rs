@@ -1846,3 +1846,89 @@ fn html_parser_decodes_common_named_character_entities_in_attributes_and_text() 
     );
     assert_eq!(store.text_content_for_node(target_id), "A\u{a0}B");
 }
+
+#[test]
+fn html_parser_decodes_semicolonless_common_named_character_entities_in_attributes_and_text() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><section id='target' data-label='a&nbsp b &amp c &copy d &reg e'>A&nbsp B &amp C &copy D &reg E</section></main>",
+        )
+        .expect("HTML should parse");
+
+    let target_id = store.select("#target").unwrap()[0];
+    assert_eq!(
+        store
+            .get_attribute(target_id, "data-label")
+            .expect("attribute lookup should succeed"),
+        Some("a\u{a0} b & c © d ® e".to_string())
+    );
+    assert_eq!(
+        store.text_content_for_node(target_id),
+        "A\u{a0} B & C © D ® E"
+    );
+}
+
+#[test]
+fn html_parser_decodes_semicolonless_uppercase_common_named_character_entities_in_attributes_and_text()
+ {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><section id='target' data-label='a&AMP b &LT c &GT d &QUOT e &NBSP f &COPY g &REG h'>A&AMP B &LT C &GT D &QUOT E &NBSP F &COPY G &REG H</section></main>",
+        )
+        .expect("HTML should parse");
+
+    let target_id = store.select("#target").unwrap()[0];
+    assert_eq!(
+        store
+            .get_attribute(target_id, "data-label")
+            .expect("attribute lookup should succeed"),
+        Some("a& b < c > d \" e \u{a0} f © g ® h".to_string())
+    );
+    assert_eq!(
+        store.text_content_for_node(target_id),
+        "A& B < C > D \" E \u{a0} F © G ® H"
+    );
+}
+
+#[test]
+fn html_parser_decodes_semicolonless_lt_and_gt_named_character_entities_in_attributes_and_text() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><section id='target' data-label='a&lt b &gt c'>A&lt B &gt C</section></main>",
+        )
+        .expect("HTML should parse");
+
+    let target_id = store.select("#target").unwrap()[0];
+    assert_eq!(
+        store
+            .get_attribute(target_id, "data-label")
+            .expect("attribute lookup should succeed"),
+        Some("a< b > c".to_string())
+    );
+    assert_eq!(store.text_content_for_node(target_id), "A< B > C");
+}
+
+#[test]
+fn html_parser_decodes_semicolonless_numeric_character_entities_in_attributes_and_text() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><section id='target' data-label='a&#160 b c&#xA0 d'>A&#160 B C&#xA0 D</section></main>",
+        )
+        .expect("HTML should parse");
+
+    let target_id = store.select("#target").unwrap()[0];
+    assert_eq!(
+        store
+            .get_attribute(target_id, "data-label")
+            .expect("attribute lookup should succeed"),
+        Some("a\u{a0} b c\u{a0} d".to_string())
+    );
+    assert_eq!(
+        store.text_content_for_node(target_id),
+        "A\u{a0} B C\u{a0} D"
+    );
+}

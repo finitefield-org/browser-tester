@@ -53,6 +53,17 @@ fn select_selected_index_is_available_end_to_end() -> browser_tester_next::Resul
 }
 
 #[test]
+fn select_value_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><select id='mode'><option id='first' value='a' selected>A</option><option id='second' value='b'>B</option></select><div id='out'></div><script>const select = document.getElementById('mode'); const before = select.value; select.value = 'b'; const afterMatch = select.value; select.value = 'missing'; const afterMissing = select.value; document.getElementById('out').textContent = before + ':' + afterMatch + ':' + afterMissing + ':' + String(select.selectedIndex) + ':' + String(document.querySelectorAll('option:checked').length) + ':' + String(document.querySelector('option:checked'));</script></main>",
+    )?;
+
+    harness.assert_text("#out", "a:b::-1:0:null")?;
+    harness.assert_exists("option")?;
+    Ok(())
+}
+
+#[test]
 fn option_index_is_available_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><select id='mode'><option id='first' value='a'>A</option><option id='second' value='b'>B</option></select><div id='out'></div><script>const select = document.getElementById('mode'); const second = document.getElementById('second'); const before = second.index; select.insertAdjacentHTML('afterbegin', '<option id=\"zero\" value=\"z\">Z</option>'); document.getElementById('out').textContent = String(before) + ':' + String(second.index) + ':' + String(document.getElementById('zero').index);</script></main>",
@@ -67,6 +78,46 @@ fn option_index_is_available_end_to_end() -> browser_tester_next::Result<()> {
 fn option_form_is_available_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><form id='owner'><select id='mode'><option id='first' value='a'>A</option><option id='second' value='b'>B</option></select></form><div id='out'></div><script>const second = document.getElementById('second'); const before = second.form; document.getElementById('mode').remove(); document.getElementById('out').textContent = before.getAttribute('id') + ':' + String(second.form);</script></main>",
+    )?;
+
+    harness.assert_text("#out", "owner:null")?;
+    Ok(())
+}
+
+#[test]
+fn button_form_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><form id='owner'><button id='button'>Button</button></form><div id='out'></div><script>const button = document.getElementById('button'); document.getElementById('out').textContent = button.form.getAttribute('id');</script></main>",
+    )?;
+
+    harness.assert_text("#out", "owner")?;
+    Ok(())
+}
+
+#[test]
+fn fieldset_and_output_form_are_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><form id='owner'><fieldset id='fieldset'></fieldset><output id='output'></output></form><div id='out'></div><script>const fieldset = document.getElementById('fieldset'); const output = document.getElementById('output'); const beforeFieldset = fieldset.form; const beforeOutput = output.form; document.getElementById('owner').removeChild(fieldset); document.getElementById('owner').removeChild(output); document.getElementById('out').textContent = beforeFieldset.getAttribute('id') + ':' + beforeOutput.getAttribute('id') + ':' + String(fieldset.form) + ':' + String(output.form);</script></main>",
+    )?;
+
+    harness.assert_text("#out", "owner:owner:null:null")?;
+    Ok(())
+}
+
+#[test]
+fn object_form_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><form id='owner'><object id='asset'></object></form><div id='out'></div><script>const asset = document.getElementById('asset'); const before = asset.form; document.getElementById('owner').removeChild(asset); document.getElementById('out').textContent = before.getAttribute('id') + ':' + String(asset.form);</script></main>",
+    )?;
+
+    harness.assert_text("#out", "owner:null")?;
+    Ok(())
+}
+
+#[test]
+fn embed_form_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><form id='owner'><embed id='asset'></form><div id='out'></div><script>const asset = document.getElementById('asset'); const before = asset.form; document.getElementById('owner').removeChild(asset); document.getElementById('out').textContent = before.getAttribute('id') + ':' + String(asset.form);</script></main>",
     )?;
 
     harness.assert_text("#out", "owner:null")?;
@@ -748,6 +799,20 @@ fn document_embeds_are_live_end_to_end() -> browser_tester_next::Result<()> {
 }
 
 #[test]
+fn fieldset_elements_and_datalist_options_iterator_helpers_are_live_end_to_end()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><fieldset id='fieldset'><input id='first-control' name='first' value='Ada'><textarea id='second-control' name='bio'>Bio</textarea></fieldset><datalist id='list'><option id='first-option' name='alpha' value='a'>A</option><option id='second-option' value='b'>B</option></datalist></main><div id='out'></div><script>const elements = document.getElementById('fieldset').elements; const options = document.getElementById('list').options; const elementKeys = elements.keys(); const elementValues = elements.values(); const elementEntries = elements.entries(); const optionKeys = options.keys(); const optionValues = options.values(); const optionEntries = options.entries(); const firstElementKey = elementKeys.next(); const firstElementValue = elementValues.next(); const firstElementEntry = elementEntries.next(); const firstOptionKey = optionKeys.next(); const firstOptionValue = optionValues.next(); const firstOptionEntry = optionEntries.next(); let serial = ''; elements.forEach((element, index, list) => { serial += 'E' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); options.forEach((element, index, list) => { serial += 'O' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstElementKey.value) + ':' + firstElementValue.value.getAttribute('id') + ':' + String(firstElementEntry.value.index) + ':' + firstElementEntry.value.value.getAttribute('id') + ':' + String(firstOptionKey.value) + ':' + firstOptionValue.value.getAttribute('id') + ':' + String(firstOptionEntry.value.index) + ':' + firstOptionEntry.value.value.getAttribute('id') + ':' + serial;</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "0:first-control:0:first-control:0:first-option:0:first-option:E0:first-control:2;E1:second-control:2;O0:first-option:2;O1:second-option:2;",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn document_images_iterator_helpers_are_available_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><img id='hero' name='hero' alt='Hero'><img id='thumb' name='thumb' alt='Thumb'></main><div id='out'></div><script>const images = document.images; const keys = images.keys(); const values = images.values(); const entries = images.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; images.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;</script>",
@@ -775,6 +840,20 @@ fn document_plugins_iterator_helpers_are_available_end_to_end() -> browser_teste
 
     harness.assert_text("#out", "0:first-embed:0:first-embed")?;
     harness.assert_exists("#root")?;
+    Ok(())
+}
+
+#[test]
+fn map_areas_and_table_bodies_iterator_helpers_are_live_end_to_end()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><map id='map'><area id='first-area' name='first' href='/first'><area id='second-area' name='second' href='/second'></map><table id='table'><tbody id='first-body'><tr><td>One</td></tr></tbody></table></main><div id='out'></div><script>const areas = document.getElementById('map').areas; const bodies = document.getElementById('table').tBodies; const areaKeys = areas.keys(); const areaValues = areas.values(); const areaEntries = areas.entries(); const bodyKeys = bodies.keys(); const bodyValues = bodies.values(); const bodyEntries = bodies.entries(); const firstAreaKey = areaKeys.next(); const firstAreaValue = areaValues.next(); const firstAreaEntry = areaEntries.next(); const firstBodyKey = bodyKeys.next(); const firstBodyValue = bodyValues.next(); const firstBodyEntry = bodyEntries.next(); let serial = ''; areas.forEach((element, index, list) => { serial += 'A' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); bodies.forEach((element, index, list) => { serial += 'B' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstAreaKey.value) + ':' + firstAreaValue.value.getAttribute('id') + ':' + String(firstAreaEntry.value.index) + ':' + firstAreaEntry.value.value.getAttribute('id') + ':' + String(firstBodyKey.value) + ':' + firstBodyValue.value.getAttribute('id') + ':' + String(firstBodyEntry.value.index) + ':' + firstBodyEntry.value.value.getAttribute('id') + ':' + serial;</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "0:first-area:0:first-area:0:first-body:0:first-body:A0:first-area:2;A1:second-area:2;B0:first-body:1;",
+    )?;
     Ok(())
 }
 
@@ -973,6 +1052,36 @@ fn table_rows_and_cells_are_live_end_to_end() -> browser_tester_next::Result<()>
         "3:1:1:[object Element]:[object Element]|4:2:2:[object Element]:[object Element]:[object Element]",
     )?;
     harness.assert_exists("#second-row")?;
+    Ok(())
+}
+
+#[test]
+fn table_section_rows_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<table id='table'><thead id='head'><tr id='head-row'><th id='head-cell'>H</th></tr></thead><tbody id='body'><tr id='first-row'><td id='first-cell'>A</td></tr></tbody><tfoot id='foot'><tr id='foot-row'><td id='foot-cell'>F</td></tr></tfoot></table><div id='out'></div><script>const head = document.getElementById('head'); const foot = document.getElementById('foot'); const before = String(head.rows.length) + ':' + String(head.rows.item(0)) + ':' + String(foot.rows.length) + ':' + String(foot.rows.item(0)); document.getElementById('out').textContent = before + '|' + head.rows.item(0).textContent + ':' + foot.rows.item(0).textContent;</script>",
+    )?;
+
+    harness.assert_text("#out", "1:[object Element]:1:[object Element]|H:F")?;
+    Ok(())
+}
+
+#[test]
+fn table_section_rows_named_item_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<table id='table'><thead id='head'><tr id='head-row'><th id='head-cell'>H</th></tr></thead><tbody id='body'><tr id='first-row'><td id='first-cell'>A</td></tr></tbody><tfoot id='foot'><tr id='foot-row'><td id='foot-cell'>F</td></tr></tfoot></table><div id='out'></div><script>const head = document.getElementById('head'); const foot = document.getElementById('foot'); document.getElementById('out').textContent = String(head.rows.namedItem('head-row')) + ':' + String(head.rows.namedItem('missing')) + ':' + String(foot.rows.namedItem('foot-row')) + ':' + String(foot.rows.namedItem('missing'));</script>",
+    )?;
+
+    harness.assert_text("#out", "[object Element]:null:[object Element]:null")?;
+    Ok(())
+}
+
+#[test]
+fn table_section_rows_iterator_helpers_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<table id='table'><thead id='head'><tr id='head-row'><th id='head-cell'>H</th></tr></thead><tbody id='body'><tr id='body-row'><td id='body-cell'>B</td></tr></tbody><tfoot id='foot'><tr id='foot-row'><td id='foot-cell'>F</td></tr></tfoot></table><div id='out'></div><script>const head = document.getElementById('head'); const body = document.getElementById('body'); const foot = document.getElementById('foot'); const bodyRows = body.rows; const bodyKeys = bodyRows.keys(); const bodyValues = bodyRows.values(); const bodyEntries = bodyRows.entries(); const firstKey = bodyKeys.next(); const firstValue = bodyValues.next(); const firstEntry = bodyEntries.next(); let serial = ''; bodyRows.forEach((element, index, list) => { serial += 'B' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(head.rows.length) + ':' + String(bodyRows.length) + ':' + String(foot.rows.length) + ':' + String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + serial;</script>",
+    )?;
+
+    harness.assert_text("#out", "1:1:1:0:body-row:0:body-row:B0:body-row:1;")?;
     Ok(())
 }
 
@@ -1601,6 +1710,62 @@ fn html_serialization_surfaces_common_named_character_entities_in_document_write
     harness.assert_text(
         "#out",
         "a\u{a0}b:A\u{a0}B:<div data-label=\"a\u{a0}b\" id=\"target\">A\u{a0}B</div>",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn html_serialization_surfaces_semicolonless_common_named_character_entities_in_document_write_end_to_end()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><div id='out'></div><script>document.write('<div id=\"target\" data-label=\"a&nbsp b &amp c &copy d &reg e\">A&nbsp B &amp C &copy D &reg E</div>'); const target = document.getElementById('target'); document.getElementById('out').textContent = target.getAttribute('data-label') + ':' + target.textContent + ':' + target.outerHTML;</script></main>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "a\u{a0} b & c © d ® e:A\u{a0} B & C © D ® E:<div data-label=\"a\u{a0} b &amp; c © d ® e\" id=\"target\">A\u{a0} B &amp; C © D ® E</div>",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn html_serialization_surfaces_semicolonless_lt_and_gt_named_character_entities_in_document_write_end_to_end()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><div id='out'></div><script>document.write('<div id=\"target\" data-label=\"a&lt b &gt c\">A&lt B &gt C</div>'); const target = document.getElementById('target'); document.getElementById('out').textContent = target.getAttribute('data-label') + ':' + target.textContent + ':' + target.outerHTML;</script></main>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "a< b > c:A< B > C:<div data-label=\"a&lt; b &gt; c\" id=\"target\">A&lt; B &gt; C</div>",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn html_serialization_surfaces_semicolonless_uppercase_common_named_character_entities_in_document_write_end_to_end()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><div id='out'></div><script>document.write('<div id=\"target\" data-label=\"a&AMP b &LT c &GT d &QUOT e &NBSP f &COPY g &REG h\">A&AMP B &LT C &GT D &QUOT E &NBSP F &COPY G &REG H</div>'); const target = document.getElementById('target'); document.getElementById('out').textContent = target.getAttribute('data-label') + ':' + target.textContent + ':' + target.outerHTML;</script></main>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "a& b < c > d \" e \u{a0} f © g ® h:A& B < C > D \" E \u{a0} F © G ® H:<div data-label=\"a&amp; b &lt; c &gt; d &quot; e \u{a0} f © g ® h\" id=\"target\">A&amp; B &lt; C &gt; D \" E \u{a0} F © G ® H</div>",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn html_serialization_surfaces_semicolonless_numeric_character_entities_in_document_write_end_to_end()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><div id='out'></div><script>document.write('<div id=\"target\" data-label=\"a&#160 b c&#xA0 d\">A&#160 B C&#xA0 D</div>'); const target = document.getElementById('target'); document.getElementById('out').textContent = target.getAttribute('data-label') + ':' + target.textContent + ':' + target.outerHTML;</script></main>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "a\u{a0} b c\u{a0} d:A\u{a0} B C\u{a0} D:<div data-label=\"a\u{a0} b c\u{a0} d\" id=\"target\">A\u{a0} B C\u{a0} D</div>",
     )?;
     Ok(())
 }

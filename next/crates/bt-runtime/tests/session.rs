@@ -1693,6 +1693,28 @@ fn session_resolves_select_selected_index_through_inline_scripts() {
 }
 
 #[test]
+fn session_resolves_select_value_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><select id='mode'><option id='first' value='a' selected>A</option><option id='second' value='b'>B</option></select></div><div id='out'></div><script>const select = document.getElementById('mode'); const before = select.value; select.value = 'b'; const afterMatch = select.value; select.value = 'missing'; const afterMissing = select.value; document.getElementById('out').textContent = before + ':' + afterMatch + ':' + afterMissing + ':' + String(select.selectedIndex) + ':' + String(document.querySelectorAll('option:checked').length) + ':' + String(document.querySelector('option:checked'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute select.value scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "a:b::-1:0:null"
+    );
+    assert_eq!(session.dom().select("option:checked").unwrap().len(), 0);
+    assert_eq!(session.dom().select("#first[selected]").unwrap().len(), 0);
+    assert_eq!(session.dom().select("#second[selected]").unwrap().len(), 0);
+}
+
+#[test]
 fn session_resolves_select_type_through_inline_scripts() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -1738,6 +1760,70 @@ fn session_resolves_option_form_through_inline_scripts() {
         local_storage: BTreeMap::new(),
     })
     .expect("session should execute option.form scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "owner:null");
+}
+
+#[test]
+fn session_resolves_button_form_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><form id='owner'><button id='button'>Button</button></form></div><div id='out'></div><script>const button = document.getElementById('button'); document.getElementById('out').textContent = button.form.getAttribute('id');</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute button.form scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "owner");
+}
+
+#[test]
+fn session_resolves_fieldset_and_output_form_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><form id='owner'><fieldset id='fieldset'></fieldset><output id='output'></output></form></div><div id='out'></div><script>const fieldset = document.getElementById('fieldset'); const output = document.getElementById('output'); const beforeFieldset = fieldset.form; const beforeOutput = output.form; document.getElementById('owner').removeChild(fieldset); document.getElementById('owner').removeChild(output); document.getElementById('out').textContent = beforeFieldset.getAttribute('id') + ':' + beforeOutput.getAttribute('id') + ':' + String(fieldset.form) + ':' + String(output.form);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute fieldset.form and output.form scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "owner:owner:null:null");
+}
+
+#[test]
+fn session_resolves_object_form_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><form id='owner'><object id='asset'></object></form></div><div id='out'></div><script>const asset = document.getElementById('asset'); const before = asset.form; document.getElementById('owner').removeChild(asset); document.getElementById('out').textContent = before.getAttribute('id') + ':' + String(asset.form);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute object.form scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "owner:null");
+}
+
+#[test]
+fn session_resolves_embed_form_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><form id='owner'><embed id='asset'></form></div><div id='out'></div><script>const asset = document.getElementById('asset'); const before = asset.form; document.getElementById('owner').removeChild(asset); document.getElementById('out').textContent = before.getAttribute('id') + ':' + String(asset.form);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute embed.form scripts");
 
     let out_id = session.dom().select("#out").unwrap()[0];
     assert_eq!(session.dom().text_content_for_node(out_id), "owner:null");
@@ -2431,16 +2517,16 @@ fn session_rejects_non_option_text_access_explicitly() {
 }
 
 #[test]
-fn session_rejects_non_option_form_access_explicitly() {
+fn session_rejects_non_form_associated_form_access_explicitly() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
         html: Some(
-            "<div id='wrapper'><button id='button'>Button</button></div><script>document.getElementById('button').form;</script>"
+            "<div id='wrapper'><div id='box'></div></div><script>document.getElementById('box').form;</script>"
                 .to_string(),
         ),
         local_storage: BTreeMap::new(),
     })
-    .expect_err("non-option form access should fail explicitly");
+    .expect_err("non-form-associated form access should fail explicitly");
 
     assert!(session.to_string().contains("form"));
 }
@@ -2593,6 +2679,26 @@ fn session_resolves_fieldset_elements_and_datalist_options_through_inline_script
 }
 
 #[test]
+fn session_resolves_fieldset_elements_and_datalist_options_iterator_helpers_through_inline_scripts()
+{
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><fieldset id='fieldset'><input id='first-control' name='first' value='Ada'><textarea id='second-control' name='bio'>Bio</textarea></fieldset><datalist id='list'><option id='first-option' name='alpha' value='a'>A</option><option id='second-option' value='b'>B</option></datalist></div><div id='out'></div><script>const elements = document.getElementById('fieldset').elements; const options = document.getElementById('list').options; const elementKeys = elements.keys(); const elementValues = elements.values(); const elementEntries = elements.entries(); const optionKeys = options.keys(); const optionValues = options.values(); const optionEntries = options.entries(); const firstElementKey = elementKeys.next(); const firstElementValue = elementValues.next(); const firstElementEntry = elementEntries.next(); const firstOptionKey = optionKeys.next(); const firstOptionValue = optionValues.next(); const firstOptionEntry = optionEntries.next(); let serial = ''; elements.forEach((element, index, list) => { serial += 'E' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); options.forEach((element, index, list) => { serial += 'O' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstElementKey.value) + ':' + firstElementValue.value.getAttribute('id') + ':' + String(firstElementEntry.value.index) + ':' + firstElementEntry.value.value.getAttribute('id') + ':' + String(firstOptionKey.value) + ':' + firstOptionValue.value.getAttribute('id') + ':' + String(firstOptionEntry.value.index) + ':' + firstOptionEntry.value.value.getAttribute('id') + ':' + serial;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute fieldset.elements and datalist.options iterator helper scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:first-control:0:first-control:0:first-option:0:first-option:E0:first-control:2;E1:second-control:2;O0:first-option:2;O1:second-option:2;"
+    );
+}
+
+#[test]
 fn session_resolves_map_areas_and_table_t_bodies_through_inline_scripts() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -2608,6 +2714,25 @@ fn session_resolves_map_areas_and_table_t_bodies_through_inline_scripts() {
     assert_eq!(
         session.dom().text_content_for_node(out_id),
         "2:3:1:2:first-area:first-body:[object Element]:[object Element]:null"
+    );
+}
+
+#[test]
+fn session_resolves_map_areas_and_table_t_bodies_iterator_helpers_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><map id='map'><area id='first-area' name='first' href='/first'><area id='second-area' name='second' href='/second'></map><table id='table'><tbody id='first-body'><tr><td>One</td></tr></tbody></table></div><div id='out'></div><script>const areas = document.getElementById('map').areas; const bodies = document.getElementById('table').tBodies; const areaKeys = areas.keys(); const areaValues = areas.values(); const areaEntries = areas.entries(); const bodyKeys = bodies.keys(); const bodyValues = bodies.values(); const bodyEntries = bodies.entries(); const firstAreaKey = areaKeys.next(); const firstAreaValue = areaValues.next(); const firstAreaEntry = areaEntries.next(); const firstBodyKey = bodyKeys.next(); const firstBodyValue = bodyValues.next(); const firstBodyEntry = bodyEntries.next(); let serial = ''; areas.forEach((element, index, list) => { serial += 'A' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); bodies.forEach((element, index, list) => { serial += 'B' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstAreaKey.value) + ':' + firstAreaValue.value.getAttribute('id') + ':' + String(firstAreaEntry.value.index) + ':' + firstAreaEntry.value.value.getAttribute('id') + ':' + String(firstBodyKey.value) + ':' + firstBodyValue.value.getAttribute('id') + ':' + String(firstBodyEntry.value.index) + ':' + firstBodyEntry.value.value.getAttribute('id') + ':' + serial;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute map.areas and table.tBodies iterator helper scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:first-area:0:first-area:0:first-body:0:first-body:A0:first-area:2;A1:second-area:2;B0:first-body:1;"
     );
 }
 
@@ -2942,6 +3067,63 @@ fn session_resolves_table_rows_and_row_cells_through_inline_scripts() {
         "3:1:1:[object Element]:[object Element]|4:2:2:[object Element]:[object Element]:[object Element]"
     );
     assert_eq!(session.dom().select("#second-row").unwrap().len(), 1);
+}
+
+#[test]
+fn session_resolves_table_section_rows_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<table id='table'><thead id='head'><tr id='head-row'><th id='head-cell'>H</th></tr></thead><tbody id='body'><tr id='first-row'><td id='first-cell'>A</td></tr></tbody><tfoot id='foot'><tr id='foot-row'><td id='foot-cell'>F</td></tr></tfoot></table><div id='out'></div><script>const head = document.getElementById('head'); const foot = document.getElementById('foot'); document.getElementById('out').textContent = String(head.rows.length) + ':' + String(head.rows.item(0)) + ':' + String(foot.rows.length) + ':' + String(foot.rows.item(0));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute table section rows scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "1:[object Element]:1:[object Element]"
+    );
+}
+
+#[test]
+fn session_resolves_table_section_rows_named_item_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<table id='table'><thead id='head'><tr id='head-row'><th id='head-cell'>H</th></tr></thead><tbody id='body'><tr id='first-row'><td id='first-cell'>A</td></tr></tbody><tfoot id='foot'><tr id='foot-row'><td id='foot-cell'>F</td></tr></tfoot></table><div id='out'></div><script>const head = document.getElementById('head'); const foot = document.getElementById('foot'); document.getElementById('out').textContent = String(head.rows.namedItem('head-row')) + ':' + String(head.rows.namedItem('missing')) + ':' + String(foot.rows.namedItem('foot-row')) + ':' + String(foot.rows.namedItem('missing'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute table section rows namedItem scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "[object Element]:null:[object Element]:null"
+    );
+}
+
+#[test]
+fn session_resolves_table_section_rows_iterator_helpers_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<table id='table'><thead id='head'><tr id='head-row'><th id='head-cell'>H</th></tr></thead><tbody id='body'><tr id='body-row'><td id='body-cell'>B</td></tr></tbody><tfoot id='foot'><tr id='foot-row'><td id='foot-cell'>F</td></tr></tfoot></table><div id='out'></div><script>const head = document.getElementById('head'); const body = document.getElementById('body'); const foot = document.getElementById('foot'); const bodyRows = body.rows; const bodyKeys = bodyRows.keys(); const bodyValues = bodyRows.values(); const bodyEntries = bodyRows.entries(); const firstKey = bodyKeys.next(); const firstValue = bodyValues.next(); const firstEntry = bodyEntries.next(); let serial = ''; bodyRows.forEach((element, index, list) => { serial += 'B' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(head.rows.length) + ':' + String(bodyRows.length) + ':' + String(foot.rows.length) + ':' + String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + serial;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute table section rows iterator helper scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "1:1:1:0:body-row:0:body-row:B0:body-row:1;"
+    );
 }
 
 #[test]
@@ -3341,7 +3523,7 @@ fn session_resolves_document_embeds_iterator_helpers_through_inline_scripts() {
     let out_id = session.dom().select("#out").unwrap()[0];
     assert_eq!(
         session.dom().text_content_for_node(out_id),
-        "0:[object Element]:0:[object Element]:0:[object Element]:2;1:[object Element]:2;:1"
+        "0:[object Element]:0:[object Element]:0:[object Element]:2;1:[object Element]:2;:0"
     );
 }
 

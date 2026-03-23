@@ -5001,9 +5001,21 @@ impl HostBindings for Session {
 
     fn element_set_value(&mut self, element: ElementHandle, value: &str) -> bt_script::Result<()> {
         let node_id = self.node_id_for_handle(element)?;
-        self.dom
-            .set_form_control_value(node_id, value)
-            .map_err(ScriptError::new)
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        match &node.kind {
+            NodeKind::Element(element) if element.tag_name == "select" => self
+                .dom
+                .set_select_value(node_id, value)
+                .map_err(ScriptError::new),
+            NodeKind::Element(_) => self
+                .dom
+                .set_form_control_value(node_id, value)
+                .map_err(ScriptError::new),
+            _ => Err(ScriptError::new("invalid element handle")),
+        }
     }
 
     fn element_checked(&mut self, element: ElementHandle) -> bt_script::Result<bool> {
