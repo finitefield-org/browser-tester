@@ -1,0 +1,3301 @@
+
+<!doctype html>
+<html lang="ja" dir="ltr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="file-text" content="原価から目標粗利率の売価を計算し、売価から粗利率・マークアップを逆算。梱包・送料・決済手数料などの追加コストと端数最適化にも対応しています。" />
+  <meta name="viewport" content="width=device-width" />
+  <link rel="icon" href="/img/favicon.ico" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+  <meta name="apple-mobile-web-app-title" content="株式会社ファイナイトフィールド" />
+  <link rel="apple-touch-icon" href="/img/icon-192.png" />
+  <link rel="manifest" href="/manifest.json" />
+  <title>粗利率・マークアップ計算ツール（原価↔売価）｜追加コスト・端数最適化対応</title>
+
+  
+  <link rel="canonical" href="https://finitefield.org/tools/retail/margin-markup-calculator/" />
+  
+
+  
+  <link rel="alternate" hreflang="en" href="https://finitefield.org/en/tools/retail/margin-markup-calculator/" />
+  
+  <link rel="alternate" hreflang="ja" href="https://finitefield.org/tools/retail/margin-markup-calculator/" />
+  
+
+  <meta property="og:title" content="粗利率・マークアップ計算ツール（原価↔売価）｜追加コスト・端数最適化対応" />
+  <meta property="og:description" content="原価から目標粗利率の売価を計算し、売価から粗利率・マークアップを逆算。梱包・送料・決済手数料などの追加コストと端数最適化にも対応しています。" />
+  <meta property="og:type" content="website" />
+  
+  <meta property="og:url" content="https://finitefield.org/tools/retail/margin-markup-calculator/" />
+  
+  <meta property="og:site_name" content="株式会社ファイナイトフィールド" />
+  
+  <meta property="og:image" content="https://finitefield.org/img/logomark_color.png" />
+  
+
+  
+
+  <meta name="twitter:card" content="summary_large_image" />
+  
+  <meta name="twitter:title" content="粗利率・マークアップ計算ツール（原価↔売価）｜追加コスト・端数最適化対応" />
+  <meta name="twitter:description" content="原価から目標粗利率の売価を計算し、売価から粗利率・マークアップを逆算。梱包・送料・決済手数料などの追加コストと端数最適化にも対応しています。" />
+  
+  <meta name="twitter:url" content="https://finitefield.org/tools/retail/margin-markup-calculator/" />
+  
+  
+  <meta name="twitter:image" content="https://finitefield.org/img/logomark_color.png" />
+  
+
+  <link rel="stylesheet" href="/assets/app.css" />
+  
+
+</head>
+<body>
+  
+<div
+  id="margin-markup-calculator-root"
+  class="min-h-screen flex flex-col tool-theme tool-bg tool-text"
+  dir="ltr"
+  data-lang="ja">
+  <style>
+    #margin-markup-calculator-root {
+      font-family: "Space Grotesk", "Noto Sans JP", sans-serif;
+      --mm-primary: #10243d;
+      --mm-accent: #b45309;
+      --mm-accent-strong: #92400e;
+      --mm-accent-soft: rgba(180, 83, 9, 0.14);
+      --mm-info-soft: rgba(14, 165, 233, 0.14);
+      --mm-success-soft: rgba(22, 163, 74, 0.12);
+      --mm-danger-soft: rgba(239, 68, 68, 0.14);
+      --mm-warn-soft: rgba(245, 158, 11, 0.16);
+      --mm-ring: rgba(180, 83, 9, 0.24);
+      background:
+        radial-gradient(920px circle at 8% -16%, rgba(180, 83, 9, 0.16), transparent 56%),
+        radial-gradient(760px circle at 92% -18%, rgba(14, 165, 233, 0.1), transparent 56%),
+        radial-gradient(780px circle at 48% 118%, rgba(16, 36, 61, 0.08), transparent 62%),
+        var(--tool-bg);
+    }
+    #margin-markup-calculator-root .panel {
+      border: 1px solid var(--tool-border);
+      border-radius: 1rem;
+      background: var(--tool-surface);
+      box-shadow: 0 16px 30px rgba(15, 23, 42, 0.08);
+    }
+    #margin-markup-calculator-root .hero-chip-list,
+    #margin-markup-calculator-root .action-row,
+    #margin-markup-calculator-root .summary-actions,
+    #margin-markup-calculator-root .bulk-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+    #margin-markup-calculator-root .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      border: 1px solid var(--tool-border);
+      border-radius: 999px;
+      padding: 0.28rem 0.7rem;
+      background: var(--tool-surface-muted);
+      color: var(--tool-text-muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    #margin-markup-calculator-root .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.38rem;
+      border-radius: 999px;
+      border: 1px solid var(--tool-border);
+      padding: 0.5rem 0.88rem;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    #margin-markup-calculator-root .btn-primary {
+      color: #fff;
+      border-color: transparent;
+      background: linear-gradient(135deg, var(--mm-accent), var(--mm-accent-strong));
+      box-shadow: 0 12px 24px rgba(180, 83, 9, 0.24);
+    }
+    #margin-markup-calculator-root .btn-soft {
+      color: var(--mm-accent-strong);
+      border-color: rgba(180, 83, 9, 0.28);
+      background: var(--mm-accent-soft);
+    }
+    #margin-markup-calculator-root .btn-ghost {
+      color: var(--tool-text-muted);
+      background: transparent;
+      border-style: dashed;
+    }
+    #margin-markup-calculator-root .btn-danger {
+      color: #991b1b;
+      border-color: rgba(239, 68, 68, 0.32);
+      background: var(--mm-danger-soft);
+    }
+    #margin-markup-calculator-root .use-case-grid,
+    #margin-markup-calculator-root .explain-grid,
+    #margin-markup-calculator-root .glossary-grid {
+      display: grid;
+      gap: 0.8rem;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+    #margin-markup-calculator-root .mini-card {
+      border: 1px solid var(--tool-border);
+      border-radius: 0.9rem;
+      background: var(--tool-surface-muted);
+      padding: 0.85rem;
+      display: grid;
+      gap: 0.4rem;
+    }
+    #margin-markup-calculator-root .mini-card .eyebrow {
+      font-size: 11px;
+      color: var(--tool-text-muted);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    #margin-markup-calculator-root .mini-card h3,
+    #margin-markup-calculator-root .mini-card h4 {
+      font-size: 15px;
+      font-weight: 800;
+      color: var(--mm-primary);
+      letter-spacing: -0.01em;
+    }
+    #margin-markup-calculator-root .dialog {
+      position: fixed;
+      inset: 0;
+      z-index: 80;
+      background: rgba(15, 23, 42, 0.62);
+      padding: 0;
+    }
+    #margin-markup-calculator-root .dialog.hidden {
+      display: none;
+    }
+    #margin-markup-calculator-root .dialog-panel {
+      width: 100%;
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      background: var(--tool-bg);
+      overflow: hidden;
+    }
+    #margin-markup-calculator-root .dialog-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.85rem 1rem;
+      border-bottom: 1px solid var(--tool-border);
+      background: var(--tool-surface);
+    }
+    #margin-markup-calculator-root .dialog-head h2 {
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: -0.01em;
+    }
+    #margin-markup-calculator-root .icon-btn {
+      width: 40px;
+      height: 40px;
+      border-radius: 999px;
+      border: 1px solid var(--tool-border);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--tool-surface-muted);
+      color: var(--tool-text-muted);
+    }
+    #margin-markup-calculator-root .mode-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.7rem 1rem;
+      border-bottom: 1px solid var(--tool-border);
+      background: var(--tool-surface);
+    }
+    #margin-markup-calculator-root .mode-tabs,
+    #margin-markup-calculator-root .mobile-tabs {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 0.32rem;
+      border: 1px solid var(--tool-border);
+      border-radius: 999px;
+      background: var(--tool-surface-muted);
+      padding: 0.22rem;
+    }
+    #margin-markup-calculator-root .mode-tab,
+    #margin-markup-calculator-root .mobile-tab {
+      border-radius: 999px;
+      padding: 0.44rem 0.72rem;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--tool-text-muted);
+      background: transparent;
+    }
+    #margin-markup-calculator-root .mode-tab.active,
+    #margin-markup-calculator-root .mobile-tab.active {
+      background: var(--mm-primary);
+      color: #fff;
+      border-color: transparent;
+      box-shadow: 0 10px 20px rgba(16, 36, 61, 0.18);
+    }
+    #margin-markup-calculator-root .dialog-body {
+      overflow: auto;
+      min-height: 0;
+      padding: 1rem;
+      padding-bottom: 6.5rem;
+    }
+    #margin-markup-calculator-root .tool-grid {
+      display: grid;
+      gap: 1rem;
+      grid-template-columns: minmax(0, 1fr);
+      align-items: start;
+    }
+    #margin-markup-calculator-root .stack {
+      display: grid;
+      gap: 0.85rem;
+    }
+    #margin-markup-calculator-root .field-grid {
+      display: grid;
+      gap: 0.7rem;
+      grid-template-columns: minmax(0, 1fr);
+    }
+    #margin-markup-calculator-root .field {
+      display: grid;
+      gap: 0.28rem;
+    }
+    #margin-markup-calculator-root .field label,
+    #margin-markup-calculator-root .field legend,
+    #margin-markup-calculator-root .field-label {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--tool-text);
+    }
+    #margin-markup-calculator-root .field-help,
+    #margin-markup-calculator-root .help {
+      font-size: 11px;
+      color: var(--tool-text-muted);
+    }
+    #margin-markup-calculator-root .error {
+      font-size: 11px;
+      color: #b91c1c;
+      min-height: 1.1rem;
+    }
+    #margin-markup-calculator-root .input,
+    #margin-markup-calculator-root select,
+    #margin-markup-calculator-root textarea {
+      width: 100%;
+      border: 1px solid var(--tool-border);
+      border-radius: 0.8rem;
+      padding: 0.56rem 0.72rem;
+      font-size: 14px;
+      background: var(--tool-surface);
+      color: var(--tool-text);
+    }
+    #margin-markup-calculator-root .input[data-numeric="true"],
+    #margin-markup-calculator-root .formula-box,
+    #margin-markup-calculator-root .breakdown-list,
+    #margin-markup-calculator-root .table-shell table {
+      direction: ltr;
+    }
+    #margin-markup-calculator-root textarea {
+      min-height: 150px;
+      resize: vertical;
+      font-family: "JetBrains Mono", "Noto Sans JP", monospace;
+      font-size: 12px;
+    }
+    #margin-markup-calculator-root .input:focus,
+    #margin-markup-calculator-root select:focus,
+    #margin-markup-calculator-root textarea:focus {
+      outline: none;
+      border-color: var(--mm-accent);
+      box-shadow: 0 0 0 3px var(--mm-ring);
+    }
+    #margin-markup-calculator-root .disclosure {
+      border: 1px solid var(--tool-border);
+      border-radius: 0.9rem;
+      background: var(--tool-surface-muted);
+      overflow: hidden;
+    }
+    #margin-markup-calculator-root .disclosure summary {
+      list-style: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.8rem 0.9rem;
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--mm-primary);
+    }
+    #margin-markup-calculator-root .disclosure summary::-webkit-details-marker {
+      display: none;
+    }
+    #margin-markup-calculator-root .disclosure-body {
+      padding: 0 0.9rem 0.9rem;
+      display: grid;
+      gap: 0.7rem;
+    }
+    #margin-markup-calculator-root .summary-grid {
+      display: grid;
+      gap: 0.6rem;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    }
+    #margin-markup-calculator-root .summary-item {
+      border: 1px solid var(--tool-border);
+      border-radius: 0.9rem;
+      background: var(--tool-surface-muted);
+      padding: 0.78rem;
+    }
+    #margin-markup-calculator-root .summary-item.primary {
+      background: linear-gradient(180deg, rgba(180, 83, 9, 0.12), rgba(180, 83, 9, 0.05));
+      border-color: rgba(180, 83, 9, 0.24);
+    }
+    #margin-markup-calculator-root .summary-item .label {
+      font-size: 11px;
+      color: var(--tool-text-muted);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    #margin-markup-calculator-root .summary-item .value {
+      margin-top: 0.2rem;
+      font-size: 18px;
+      font-weight: 900;
+      letter-spacing: -0.02em;
+      color: var(--mm-primary);
+      word-break: break-word;
+    }
+    #margin-markup-calculator-root .summary-item .sub {
+      margin-top: 0.18rem;
+      font-size: 11px;
+      color: var(--tool-text-muted);
+    }
+    #margin-markup-calculator-root .status-box,
+    #margin-markup-calculator-root .note-box {
+      border-radius: 0.9rem;
+      padding: 0.74rem 0.82rem;
+      font-size: 12px;
+      display: none;
+    }
+    #margin-markup-calculator-root .status-box.show,
+    #margin-markup-calculator-root .note-box.show {
+      display: block;
+    }
+    #margin-markup-calculator-root .status-box {
+      border: 1px solid rgba(239, 68, 68, 0.38);
+      background: var(--mm-danger-soft);
+      color: #991b1b;
+    }
+    #margin-markup-calculator-root .note-box {
+      border: 1px solid rgba(245, 158, 11, 0.32);
+      background: var(--mm-warn-soft);
+      color: #92400e;
+    }
+    #margin-markup-calculator-root .breakdown-list {
+      border: 1px solid var(--tool-border);
+      border-radius: 0.9rem;
+      background: var(--tool-surface-muted);
+      padding: 0.75rem 0.82rem;
+      display: grid;
+      gap: 0.42rem;
+      font-size: 12px;
+    }
+    #margin-markup-calculator-root .breakdown-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.8rem;
+    }
+    #margin-markup-calculator-root .formula-box {
+      border: 1px solid var(--tool-border);
+      border-radius: 0.9rem;
+      background: var(--tool-surface-muted);
+      padding: 0.78rem;
+      font-size: 12px;
+      font-family: "JetBrains Mono", "Noto Sans JP", monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.6;
+    }
+    #margin-markup-calculator-root .rounding-grid {
+      display: grid;
+      gap: 0.7rem;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    }
+    #margin-markup-calculator-root .suggestion-list {
+      display: grid;
+      gap: 0.55rem;
+    }
+    #margin-markup-calculator-root .suggestion-item {
+      border: 1px solid var(--tool-border);
+      border-radius: 0.9rem;
+      background: var(--tool-surface-muted);
+      padding: 0.7rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.7rem;
+    }
+    #margin-markup-calculator-root .suggestion-main {
+      display: grid;
+      gap: 0.12rem;
+    }
+    #margin-markup-calculator-root .suggestion-price {
+      font-size: 15px;
+      font-weight: 800;
+      color: var(--mm-primary);
+    }
+    #margin-markup-calculator-root .suggestion-meta {
+      font-size: 11px;
+      color: var(--tool-text-muted);
+    }
+    #margin-markup-calculator-root .table-shell {
+      border: 1px solid var(--tool-border);
+      border-radius: 0.9rem;
+      overflow: auto;
+      background: var(--tool-surface);
+    }
+    #margin-markup-calculator-root table {
+      width: 100%;
+      min-width: 760px;
+      border-collapse: collapse;
+    }
+    #margin-markup-calculator-root th,
+    #margin-markup-calculator-root td {
+      border-bottom: 1px solid var(--tool-border);
+      padding: 0.5rem 0.58rem;
+      text-align: left;
+      vertical-align: top;
+      font-size: 12px;
+    }
+    #margin-markup-calculator-root th {
+      background: var(--tool-surface-muted);
+      font-size: 11px;
+      color: var(--tool-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    #margin-markup-calculator-root tbody tr:last-child td {
+      border-bottom: none;
+    }
+    #margin-markup-calculator-root .num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    #margin-markup-calculator-root .mapping-grid {
+      display: grid;
+      gap: 0.6rem;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    }
+    #margin-markup-calculator-root .mapping-card {
+      border: 1px solid var(--tool-border);
+      border-radius: 0.85rem;
+      background: var(--tool-surface-muted);
+      padding: 0.6rem;
+      display: grid;
+      gap: 0.3rem;
+    }
+    #margin-markup-calculator-root .mapping-head {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--tool-text-muted);
+    }
+    #margin-markup-calculator-root .bulk-summary {
+      border: 1px solid rgba(14, 165, 233, 0.28);
+      border-radius: 0.9rem;
+      background: var(--mm-info-soft);
+      color: #0c4a6e;
+      padding: 0.7rem 0.8rem;
+      font-size: 12px;
+    }
+    #margin-markup-calculator-root .hidden {
+      display: none !important;
+    }
+    #margin-markup-calculator-root .toast {
+      position: fixed;
+      right: 14px;
+      top: 14px;
+      z-index: 90;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      border-radius: 0.8rem;
+      background: #0f172a;
+      color: #fff;
+      padding: 0.52rem 0.66rem;
+      font-size: 12px;
+      opacity: 0;
+      transform: translateY(-8px);
+      pointer-events: none;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      max-width: min(92vw, 360px);
+    }
+    #margin-markup-calculator-root .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    #margin-markup-calculator-root .mobile-summary {
+      position: fixed;
+      left: 10px;
+      right: 10px;
+      bottom: 10px;
+      z-index: 85;
+      border: 1px solid var(--tool-border);
+      border-radius: 1rem;
+      background: var(--tool-surface);
+      box-shadow: 0 16px 32px rgba(15, 23, 42, 0.18);
+      padding: 0.58rem 0.72rem;
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.8rem;
+    }
+    #margin-markup-calculator-root .mobile-summary .meta {
+      display: grid;
+      gap: 0.12rem;
+      min-width: 0;
+    }
+    #margin-markup-calculator-root .mobile-summary .title {
+      font-size: 10px;
+      color: var(--tool-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 700;
+    }
+    #margin-markup-calculator-root .mobile-summary .value {
+      font-size: 15px;
+      font-weight: 800;
+      color: var(--mm-primary);
+      word-break: break-word;
+    }
+    #margin-markup-calculator-root .mobile-summary .sub {
+      font-size: 11px;
+      color: var(--tool-text-muted);
+    }
+    @media (min-width: 1040px) {
+      #margin-markup-calculator-root .tool-grid {
+        grid-template-columns: minmax(0, 1fr) minmax(360px, 0.95fr);
+      }
+      #margin-markup-calculator-root .result-panel {
+        position: sticky;
+        top: 10px;
+      }
+      #margin-markup-calculator-root .field-grid.two-col {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+    @media (max-width: 1039px) {
+      #margin-markup-calculator-root .mobile-tabs,
+      #margin-markup-calculator-root .mobile-summary {
+        display: flex;
+      }
+      #margin-markup-calculator-root .dialog-body {
+        padding-bottom: 7.6rem;
+      }
+      #margin-markup-calculator-root [data-panel="input"].mobile-hidden,
+      #margin-markup-calculator-root [data-panel="output"].mobile-hidden {
+        display: none !important;
+      }
+    }
+  </style>
+
+  
+<header class="sticky top-0 z-50 border-b border-[color:var(--tool-border)] bg-[color:var(--tool-surface)]/90 backdrop-blur">
+  <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+    <div class="flex min-h-14 items-center justify-between py-2">
+      
+      <a href="/tools/" class="flex items-center gap-3">
+        <div class="flex size-8 items-center justify-center rounded-lg tool-primary-soft tool-primary">
+          
+          <i data-lucide="badge-dollar-sign" class="text-xl"></i>
+          
+        </div>
+        <div class="leading-tight">
+          <span class="block text-sm font-bold tracking-tight tool-text">Margin &amp; Markup Calculator</span>
+          
+          <span class="block text-[10px] font-semibold uppercase tracking-[0.2em] tool-text-muted">Retail Tools</span>
+          
+        </div>
+      </a>
+      
+      <div class="flex items-center gap-3">
+        
+        
+
+<details class="relative">
+  <summary class="flex h-10 w-10 cursor-pointer list-none items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:text-slate-900 hover:shadow [&::-webkit-details-marker]:hidden">
+    <span class="sr-only">日本語</span>
+    <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="9"></circle>
+      <path d="M3.6 9h16.8"></path>
+      <path d="M3.6 15h16.8"></path>
+      <path d="M12 3c2.5 2.8 3.9 6 4 9 0 3-1.3 6.1-4 9"></path>
+      <path d="M12 3c-2.5 2.8-3.9 6-4 9 0 3 1.3 6.1 4 9"></path>
+    </svg>
+  </summary>
+  <div class="absolute right-0 mt-2 w-56 max-h-[70vh] overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-white p-2 text-sm shadow-xl" style="max-height:70vh;overflow-y:auto;overscroll-behavior:contain;">
+    
+    <a href="/en/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">English</a>
+    
+    <a href="/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">日本語</a>
+    
+    <a href="/lo/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">ລາວ</a>
+    
+    <a href="/mn/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Монгол</a>
+    
+    <a href="/uz/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Oʻzbekcha</a>
+    
+    <a href="/tg/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Тоҷикӣ</a>
+    
+    <a href="/ky/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Кыргызча</a>
+    
+    <a href="/kk/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Қазақша</a>
+    
+    <a href="/az/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Azərbaycan</a>
+    
+    <a href="/hy/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Հայերեն</a>
+    
+    <a href="/ka/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">ქართული</a>
+    
+    <a href="/ar/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">العربية</a>
+    
+    <a href="/bg/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Български</a>
+    
+    <a href="/bn/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">বাংলা</a>
+    
+    <a href="/cs/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">čeština</a>
+    
+    <a href="/da/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Dansk</a>
+    
+    <a href="/de/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Deutsch</a>
+    
+    <a href="/el/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Ελληνικά</a>
+    
+    <a href="/es/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Español</a>
+    
+    <a href="/et/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Eesti</a>
+    
+    <a href="/fi/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Suomi</a>
+    
+    <a href="/fr/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Français</a>
+    
+    <a href="/hi/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">हिन्दी</a>
+    
+    <a href="/gu/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">ગુજરાતી</a>
+    
+    <a href="/kn/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">ಕನ್ನಡ</a>
+    
+    <a href="/mr/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">मराठी</a>
+    
+    <a href="/ml/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">മലയാളം</a>
+    
+    <a href="/sr/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Srpski</a>
+    
+    <a href="/sk/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Slovenčina</a>
+    
+    <a href="/sl/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Slovenščina</a>
+    
+    <a href="/sw/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Kiswahili</a>
+    
+    <a href="/hr/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Hrvatski</a>
+    
+    <a href="/hu/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Magyar</a>
+    
+    <a href="/id/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Indonesia</a>
+    
+    <a href="/it/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Italiano</a>
+    
+    <a href="/ko/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">한국어</a>
+    
+    <a href="/lt/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Lietuvių</a>
+    
+    <a href="/lv/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Latviešu</a>
+    
+    <a href="/nl/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Nederlands</a>
+    
+    <a href="/no/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Norsk</a>
+    
+    <a href="/sv/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Svenska</a>
+    
+    <a href="/pl/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Polski</a>
+    
+    <a href="/pt/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Português</a>
+    
+    <a href="/ro/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Română</a>
+    
+    <a href="/ru/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Русский</a>
+    
+    <a href="/uk/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Українська</a>
+    
+    <a href="/be/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Беларуская</a>
+    
+    <a href="/sq/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Shqip</a>
+    
+    <a href="/ur/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">اردو</a>
+    
+    <a href="/ta/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">தமிழ்</a>
+    
+    <a href="/te/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">తెలుగు</a>
+    
+    <a href="/tr/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Türkçe</a>
+    
+    <a href="/th/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">ภาษาไทย</a>
+    
+    <a href="/vi/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Tiếng Việt</a>
+    
+    <a href="/zh/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">简体中文</a>
+    
+    <a href="/zhtw/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">繁體中文</a>
+    
+    <a href="/he/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">עברית</a>
+    
+    <a href="/km/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">ខ្មែរ</a>
+    
+    <a href="/ms/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Melayu</a>
+    
+    <a href="/my/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">မြန်မာ</a>
+    
+    <a href="/pa/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">ਪੰਜਾਬੀ</a>
+    
+    <a href="/si/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">සිංහල</a>
+    
+    <a href="/tl/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">Tagalog</a>
+    
+    <a href="/ne/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">नेपाली</a>
+    
+    <a href="/fa/tools/retail/margin-markup-calculator/" class="block rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900">فارسی</a>
+    
+  </div>
+</details>
+
+
+      </div>
+    </div>
+  </div>
+</header>
+<script>
+  (function () {
+    function hasClass(element, className) {
+      return !!(element && element.classList && element.classList.contains(className));
+    }
+
+    function isTitleTag(tagName) {
+      return tagName === "H1" || tagName === "H2" || tagName === "H3" || tagName === "H4";
+    }
+
+    function isHeaderNote(element) {
+      if (!element || element.nodeType !== 1) {
+        return false;
+      }
+
+      if (element.tagName === "P") {
+        return true;
+      }
+
+      if (hasClass(element, "chip")) {
+        return true;
+      }
+
+      if (hasClass(element, "trust-line") || hasClass(element, "privacy-line")) {
+        return true;
+      }
+
+      if (hasClass(element, "trust-grid") || hasClass(element, "dialog-subtitle")) {
+        return true;
+      }
+
+      if (hasClass(element, "disclaimer-line")) {
+        return true;
+      }
+
+      if (hasClass(element, "line") && hasClass(element, "privacy")) {
+        return true;
+      }
+
+      return hasClass(element, "text-xs") && hasClass(element, "tool-text-muted");
+    }
+
+    function hideTitleCompanionNotes(container) {
+      if (!container || !container.children) {
+        return;
+      }
+
+      const children = Array.from(container.children);
+      children.forEach((child, index) => {
+        if (!isTitleTag(child.tagName)) {
+          return;
+        }
+
+        let cursor = children[index + 1];
+        let cursorIndex = index + 1;
+        while (cursor && isHeaderNote(cursor)) {
+          cursor.remove();
+          cursorIndex += 1;
+          cursor = children[cursorIndex];
+        }
+      });
+    }
+
+    function removeLeadingNotes(container) {
+      if (!container || !container.children) {
+        return;
+      }
+
+      let cursor = container.firstElementChild;
+      while (cursor && isHeaderNote(cursor)) {
+        cursor.remove();
+        cursor = cursor.nextElementSibling;
+      }
+
+      if (hasClass(container, "mode-bar")) {
+        Array.from(container.children).forEach((child) => {
+          if (isHeaderNote(child)) {
+            child.remove();
+          }
+        });
+      }
+    }
+
+    function hideDialogNotes() {
+      document.querySelectorAll('[role="dialog"]').forEach((dialog) => {
+        const panel = dialog.firstElementChild;
+        if (!panel || !panel.children.length) {
+          return;
+        }
+
+        const panelChildren = Array.from(panel.children);
+        const header = panelChildren[0];
+
+        hideTitleCompanionNotes(header);
+        Array.from(header.children).forEach((child) => {
+          hideTitleCompanionNotes(child);
+        });
+
+        panelChildren.slice(1).forEach((child) => {
+          removeLeadingNotes(child);
+        });
+      });
+    }
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", hideDialogNotes);
+      return;
+    }
+
+    hideDialogNotes();
+  })();
+</script>
+
+
+  <div id="margin-markup-calculator-toast" class="toast">
+    <i data-lucide="info" class="w-4 h-4"></i>
+    <span id="margin-markup-calculator-toast-text"></span>
+  </div>
+
+  <main class="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-6 pb-24 md:pb-8">
+    <section class="flex flex-col gap-3">
+      
+<nav class="flex items-center gap-1.5 text-[11px] sm:text-xs font-semibold tool-text-muted">
+  
+  <a href="/tools/" class="hover:text-[color:var(--tool-primary)] transition-colors">
+    ツール
+  </a>
+  
+  
+  <span class="opacity-60">/</span>
+  
+  <a href="/tools/" class="hover:text-[color:var(--tool-primary)] transition-colors">Tools</a>
+  
+  
+  <span class="opacity-60">/</span>
+  
+  <a href="/tools/" class="hover:text-[color:var(--tool-primary)] transition-colors">Retail</a>
+  
+  
+  <span class="opacity-60">/</span>
+  
+  <a href="#" class="hover:text-[color:var(--tool-primary)] transition-colors">粗利率・マークアップ計算</a>
+  
+  
+  
+</nav>
+
+      <div class="space-y-2">
+        <h1 class="text-3xl sm:text-4xl font-black tracking-tight">粗利率・マークアップ計算ツール（原価↔売価）</h1>
+        <p class="text-base tool-text-muted">原価から目標粗利率に合う売価を出し、今の売価から粗利率とマークアップを逆算できます。追加コスト、決済手数料、端数最適化、一括計算まで1ページで完結します。</p>
+      </div>
+      <div class="hero-chip-list">
+        
+        <span class="chip"><i data-lucide="check" class="w-3.5 h-3.5"></i>即時計算</span>
+        
+        <span class="chip"><i data-lucide="check" class="w-3.5 h-3.5"></i>ブラウザ内で計算</span>
+        
+        <span class="chip"><i data-lucide="check" class="w-3.5 h-3.5"></i>端数候補を提案</span>
+        
+        <span class="chip"><i data-lucide="check" class="w-3.5 h-3.5"></i>CSV/TSV一括計算</span>
+        
+      </div>
+      <div class="action-row">
+        <button type="button" id="margin-markup-calculator-open-button" class="btn btn-primary">
+          <i data-lucide="calculator" class="w-4 h-4"></i>ツールを開く
+        </button>
+      </div>
+      <p class="text-xs tool-text-muted">※入力した数値はブラウザ内で計算され、サーバーへ送信されません。</p>
+    </section>
+
+    <section class="panel p-4 sm:p-5 space-y-3">
+      <h2 class="text-xl font-bold">ページの狙い</h2>
+      <div class="use-case-grid">
+        
+        <article class="mini-card">
+          <div class="eyebrow">主要ユースケース 1</div>
+          <h3>原価から推奨売価を決める</h3>
+          <p class="text-sm tool-text-muted">原価、追加コスト、目標粗利率を入れると、理論値と端数候補をすぐに比較できます。</p>
+        </article>
+        
+        <article class="mini-card">
+          <div class="eyebrow">主要ユースケース 2</div>
+          <h3>今の価格が妥当か確認する</h3>
+          <p class="text-sm tool-text-muted">売価から粗利、粗利率、マークアップを逆算し、目標までの差もその場で把握できます。</p>
+        </article>
+        
+        <article class="mini-card">
+          <div class="eyebrow">主要ユースケース 3</div>
+          <h3>複数商品をまとめて再計算する</h3>
+          <p class="text-sm tool-text-muted">CSV/TSVを貼り付けるだけで複数商品の試算ができ、CSVダウンロードやTSVコピーにも対応します。</p>
+        </article>
+        
+      </div>
+    </section>
+
+    <section class="panel p-4 sm:p-5 space-y-3">
+      <h2 class="text-xl font-bold">使い方</h2>
+      <ol class="list-decimal pl-5 space-y-1 text-sm">
+        
+        <li>原価→売価、売価→粗利率、一括計算の3モードから目的に合うものを選びます。</li>
+        
+        <li>必要な原価、売価、目標粗利率、追加コストを入力します。</li>
+        
+        <li>必要に応じて決済手数料や表示桁数を詳細オプションで調整します。</li>
+        
+        <li>結果サマリー、内訳、計算式、端数候補を見てそのまま意思決定します。</li>
+        
+      </ol>
+    </section>
+
+    <section class="panel p-4 sm:p-5 space-y-3">
+      <h2 class="text-xl font-bold">サンプル</h2>
+      <div class="use-case-grid">
+        <article class="mini-card">
+          <h3>原価から推奨売価を出す</h3>
+          <p class="text-sm tool-text-muted">入力例: 原価 1,200円 / 追加コスト 230円 / 目標粗利率 40%</p>
+          <p class="text-sm tool-text-muted">出力例: 理論売価、粗利、粗利率、マークアップ、980・990・999 などの端数候補を表示</p>
+        </article>
+        <article class="mini-card">
+          <h3>今の売価を評価する</h3>
+          <p class="text-sm tool-text-muted">入力例: 原価 600円 / 追加コスト 50円 / 売価 990円</p>
+          <p class="text-sm tool-text-muted">出力例: 粗利、粗利率、マークアップ、目標粗利率との差を表示</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel p-4 sm:p-5 space-y-3">
+      <h2 class="text-xl font-bold">短く理解する</h2>
+      <div class="explain-grid">
+        
+        <article class="mini-card">
+          <h3>粗利率（利益率）の計算</h3>
+          <p class="text-sm tool-text-muted">粗利率は、売価に対してどれだけ粗利が残るかを見る指標です。売価基準で価格の健全性を判断したいときに使います。</p>
+          <div class="formula-box">粗利率 = (売価 - 原価 - 追加コスト - 売価連動手数料) / 売価</div>
+        </article>
+        
+        <article class="mini-card">
+          <h3>マークアップの計算</h3>
+          <p class="text-sm tool-text-muted">マークアップは、原価と固定追加コストに対してどれだけ上乗せしたかを見る指標です。原価基準で価格戦略を考えるときに向いています。</p>
+          <div class="formula-box">マークアップ = 粗利 / (原価 &#43; 追加コスト &#43; 決済固定手数料)</div>
+        </article>
+        
+        <article class="mini-card">
+          <h3>原価から売価を出す式</h3>
+          <p class="text-sm tool-text-muted">目標粗利率から売価を決めるときは、追加コストと決済手数料も同じ式に含めます。実務ではこの差がそのまま価格のズレになります。</p>
+          <div class="formula-box">推奨売価 = (原価 &#43; 追加コスト &#43; 決済固定手数料) / (1 - 決済手数料率 - 目標粗利率)</div>
+        </article>
+        
+      </div>
+    </section>
+
+    <section class="panel p-4 sm:p-5 space-y-3">
+      <h2 class="text-xl font-bold">語句説明</h2>
+      <div class="glossary-grid">
+        
+        <article class="mini-card">
+          <h3>粗利率</h3>
+          <p class="text-sm tool-text-muted">売価に対する粗利の割合です。売価を基準に残る余白を表します。</p>
+        </article>
+        
+        <article class="mini-card">
+          <h3>マークアップ</h3>
+          <p class="text-sm tool-text-muted">原価と固定追加コストに対する粗利の割合です。どれだけ上乗せしたかを示します。</p>
+        </article>
+        
+        <article class="mini-card">
+          <h3>追加コスト</h3>
+          <p class="text-sm tool-text-muted">梱包、送料、固定手数料など、1件ごとに乗る固定の費用です。</p>
+        </article>
+        
+      </div>
+    </section>
+
+    <section class="panel p-4 sm:p-5 space-y-3">
+      <h2 class="text-xl font-bold">計算式</h2>
+      <ul class="list-disc pl-5 space-y-1 text-sm">
+        
+        <li>粗利 = 売価 - (原価 &#43; 追加コスト &#43; 決済固定手数料 &#43; 売価連動手数料)</li>
+        
+        <li>粗利率 = 粗利 / 売価</li>
+        
+        <li>マークアップ = 粗利 / (原価 &#43; 追加コスト &#43; 決済固定手数料)</li>
+        
+        <li>推奨売価 = (原価 &#43; 追加コスト &#43; 決済固定手数料) / (1 - 決済手数料率 - 目標粗利率)</li>
+        
+      </ul>
+    </section>
+
+    <section class="panel p-4 sm:p-5 space-y-3">
+      <h2 class="text-xl font-bold">よくある質問</h2>
+      <div class="space-y-2">
+        
+        <details class="disclosure">
+          <summary>手数料を加味したい。<i data-lucide="chevron-down" class="w-4 h-4"></i></summary>
+          <div class="disclosure-body">
+            <p class="text-sm tool-text-muted">固定の費用は追加コスト欄に、売価に対する決済手数料は詳細オプションの「決済手数料（%）」に入力してください。固定手数料も別で加味できます。</p>
+          </div>
+        </details>
+        
+        <details class="disclosure">
+          <summary>目標粗利率から売価を出せますか？<i data-lucide="chevron-down" class="w-4 h-4"></i></summary>
+          <div class="disclosure-body">
+            <p class="text-sm tool-text-muted">はい。「原価→売価」タブで原価と目標粗利率を入れると、理論売価と端数候補をまとめて表示します。</p>
+          </div>
+        </details>
+        
+        <details class="disclosure">
+          <summary>複数商品は？<i data-lucide="chevron-down" class="w-4 h-4"></i></summary>
+          <div class="disclosure-body">
+            <p class="text-sm tool-text-muted">「一括計算」タブにCSVまたはTSVを貼り付けると、粗利率・マークアップ・推奨売価をまとめて計算できます。結果はCSVでダウンロードするか、TSVでコピーできます。</p>
+          </div>
+        </details>
+        
+      </div>
+    </section>
+
+    <section class="panel p-4 sm:p-5 space-y-2">
+      <h2 class="text-xl font-bold">注意事項</h2>
+      <ul class="list-disc pl-5 space-y-1 text-sm">
+        
+        <li>本ツールは粗利ベースの計算です。販管費、人件費、広告費、税金などを含む会計上の利益とは定義が異なる場合があります。</li>
+        
+        <li>税抜・税込の扱い、消費税、関税、地域ごとの商習慣や心理価格の常識は別途確認してください。</li>
+        
+        <li>実際の価格決定では、競争環境、返品条件、キャンペーン、決済条件もあわせて確認してください。</li>
+        
+      </ul>
+    </section>
+  </main>
+
+  <div
+    id="margin-markup-calculator-fullscreen-dialog"
+    class="dialog hidden"
+    aria-modal="true"
+    role="dialog"
+    aria-labelledby="margin-markup-calculator-dialog-title">
+    <div class="dialog-panel">
+      <div class="dialog-head">
+        <h2 id="margin-markup-calculator-dialog-title">粗利率・マークアップ計算</h2>
+        <button
+          type="button"
+          id="margin-markup-calculator-close-button"
+          class="icon-btn"
+          aria-label="閉じる">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <div class="mode-bar">
+        <div class="mode-tabs" id="margin-markup-calculator-mode-tabs" role="tablist" aria-label="計算モード">
+          <button type="button" class="mode-tab active" data-mode-tab="cost_to_price">原価→売価</button>
+          <button type="button" class="mode-tab" data-mode-tab="price_to_margin">売価→粗利率</button>
+          <button type="button" class="mode-tab" data-mode-tab="bulk">一括計算</button>
+        </div>
+      </div>
+
+      <div class="dialog-body">
+        <div class="mobile-tabs" aria-label="入力と結果の切り替え">
+          <button type="button" class="mobile-tab active" data-mobile-tab="input">入力</button>
+          <button type="button" class="mobile-tab" data-mobile-tab="output">結果</button>
+        </div>
+
+        <section class="tool-grid">
+          <section id="margin-markup-calculator-form" class="panel p-4 sm:p-5 stack" data-panel="input">
+            <div class="field-grid two-col">
+              <div class="field">
+                <label for="field-currency">通貨</label>
+                <select id="field-currency">
+                  
+                  <option value="JPY">日本円 (JPY)</option>
+                  
+                  <option value="USD">米ドル (USD)</option>
+                  
+                  <option value="EUR">ユーロ (EUR)</option>
+                  
+                  <option value="GBP">英ポンド (GBP)</option>
+                  
+                  <option value="CNY">中国人民元 (CNY)</option>
+                  
+                  <option value="KRW">韓国ウォン (KRW)</option>
+                  
+                  <option value="INR">インドルピー (INR)</option>
+                  
+                  <option value="AUD">豪ドル (AUD)</option>
+                  
+                  <option value="CAD">カナダドル (CAD)</option>
+                  
+                  <option value="SGD">シンガポールドル (SGD)</option>
+                  
+                </select>
+                <div class="field-help">ページ言語と通貨は独立しています。必要な通貨を選んで試算できます。</div>
+              </div>
+              <div class="field">
+                <div class="field-label" id="single-mode-title">原価から売価を決める</div>
+                <div class="field-help" id="single-mode-description">最もよく使う価格決め用モードです。目標粗利率に合う理論値と端数候補を同時に見られます。</div>
+              </div>
+            </div>
+
+            <section id="single-mode-pane" class="stack">
+              <div class="field-grid two-col">
+                <div class="field">
+                  <label for="field-cost" id="cost-label">原価（1個あたり）</label>
+                  <input id="field-cost" class="input" data-numeric="true" inputmode="decimal" placeholder="例）1200" />
+                  <div id="error-cost" class="error"></div>
+                </div>
+                <div class="field">
+                  <label for="field-target-margin" id="target-margin-label">目標粗利率（%）</label>
+                  <input id="field-target-margin" class="input" data-numeric="true" inputmode="decimal" placeholder="例）40" />
+                  <div id="target-margin-help" class="field-help">目標粗利率は 100% 未満で入力してください。</div>
+                  <div id="error-target-margin" class="error"></div>
+                </div>
+                <div class="field">
+                  <label for="field-extra-cost">追加コスト（梱包・送料・固定手数料など）</label>
+                  <input id="field-extra-cost" class="input" data-numeric="true" inputmode="decimal" placeholder="例）230" />
+                  <div id="error-extra-cost" class="error"></div>
+                </div>
+                <div class="field">
+                  <label for="field-price" id="price-label">売価（比較用）</label>
+                  <input id="field-price" class="input" data-numeric="true" inputmode="decimal" placeholder="例）1980" />
+                  <div id="price-help" class="field-help">任意で現在売価を入れると、推奨売価との差を表示します。</div>
+                  <div id="error-price" class="error"></div>
+                </div>
+              </div>
+            </section>
+
+            <section id="bulk-mode-pane" class="stack hidden">
+              <div class="field">
+                <label for="bulk-paste">CSV/TSVを貼り付け</label>
+                <textarea id="bulk-paste" placeholder="例）商品名,原価,売価,追加コスト,目標粗利率
+定番A,1200,1980,80,40
+セットB,2400,,230,45"></textarea>
+                <div id="error-bulk" class="error"></div>
+              </div>
+
+              <div class="bulk-actions">
+                <button type="button" id="bulk-insert-sample" class="btn btn-soft">
+                  <i data-lucide="flask-conical" class="w-4 h-4"></i>サンプルを挿入
+                </button>
+                <button type="button" id="bulk-clear" class="btn btn-ghost">
+                  <i data-lucide="eraser" class="w-4 h-4"></i>クリア
+                </button>
+              </div>
+
+              <div class="field-grid two-col">
+                <label class="field">
+                  <span>1行目を見出しとして扱う</span>
+                  <span class="inline-flex items-center gap-2 text-sm">
+                    <input id="bulk-has-header" type="checkbox" class="h-4 w-4" checked />
+                    <span>1行目を見出しとして扱う</span>
+                  </span>
+                </label>
+                <div class="field">
+                  <label for="bulk-default-target">既定目標粗利率（%）</label>
+                  <input id="bulk-default-target" class="input" data-numeric="true" inputmode="decimal" placeholder="例）40" />
+                </div>
+              </div>
+
+              <div class="stack">
+                <div class="field-label">列マッピング</div>
+                <div id="bulk-mapping" class="mapping-grid"></div>
+              </div>
+            </section>
+
+            <details id="margin-markup-calculator-settings" class="disclosure">
+              <summary>
+                <span>詳細オプション</span>
+                <i data-lucide="settings" class="w-4 h-4"></i>
+              </summary>
+              <div class="disclosure-body">
+                <div class="field-grid two-col">
+                  <div class="field">
+                    <label for="field-fee-rate">決済手数料（売価に対する%）</label>
+                    <input id="field-fee-rate" class="input" data-numeric="true" inputmode="decimal" placeholder="0" />
+                    <div id="error-fee-rate" class="error"></div>
+                  </div>
+                  <div class="field">
+                    <label for="field-fee-fixed">決済固定手数料（1件あたり）</label>
+                    <input id="field-fee-fixed" class="input" data-numeric="true" inputmode="decimal" placeholder="0" />
+                    <div id="error-fee-fixed" class="error"></div>
+                  </div>
+                  <div class="field">
+                    <label for="field-price-basis">売価の基準</label>
+                    <select id="field-price-basis">
+                      <option value="tax_exclusive">税抜</option>
+                      <option value="tax_inclusive">税込</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="field-decimal-override">少数桁</label>
+                    <select id="field-decimal-override">
+                      <option value="auto">通貨に合わせる</option>
+                      <option value="0">0</option>
+                      <option value="2">2</option>
+                      <option value="3">3</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </details>
+          </section>
+
+          <section id="margin-markup-calculator-result" class="panel p-4 sm:p-5 stack result-panel" data-panel="output">
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <h3 class="text-lg font-bold">結果サマリー</h3>
+                <p class="text-xs tool-text-muted" id="result-mode-note">推奨売価を主役に、粗利率とマークアップをまとめて表示します。</p>
+              </div>
+            </div>
+
+            <div id="result-error" class="status-box"></div>
+            <div id="result-note" class="note-box"></div>
+
+            <div id="result-single-wrap" class="stack">
+              <div class="summary-grid">
+                <div class="summary-item primary">
+                  <div class="label" id="result-primary-label">推奨売価</div>
+                  <div class="value" id="result-primary-value">-</div>
+                  <div class="sub" id="result-primary-sub">-</div>
+                </div>
+                <div class="summary-item">
+                  <div class="label">粗利</div>
+                  <div class="value" id="result-gross-profit">-</div>
+                </div>
+                <div class="summary-item">
+                  <div class="label">粗利率</div>
+                  <div class="value" id="result-margin">-</div>
+                </div>
+                <div class="summary-item">
+                  <div class="label">マークアップ</div>
+                  <div class="value" id="result-markup">-</div>
+                </div>
+              </div>
+
+              <div id="result-empty" class="bulk-summary">原価と目標粗利率を入力すると、推奨売価と端数候補を表示します。</div>
+
+              <div class="summary-grid">
+                <div class="summary-item">
+                  <div class="label" id="result-secondary-label">理論売価</div>
+                  <div class="value" id="result-secondary-value">-</div>
+                </div>
+                <div class="summary-item">
+                  <div class="label" id="result-gap-label">今の売価との差</div>
+                  <div class="value" id="result-gap-value">-</div>
+                  <div class="sub" id="result-gap-sub">-</div>
+                </div>
+              </div>
+
+              <div class="stack">
+                <div class="field-label">内訳</div>
+                <div id="result-breakdown" class="breakdown-list"></div>
+              </div>
+
+              <details id="result-formula-details" class="disclosure">
+                <summary>
+                  <span>式を見る</span>
+                  <i data-lucide="sigma" class="w-4 h-4"></i>
+                </summary>
+                <div class="disclosure-body">
+                  <div class="field-label">計算根拠</div>
+                  <div id="result-formula" class="formula-box"></div>
+                </div>
+              </details>
+
+              <section id="result-rounding-wrap" class="stack">
+                <div class="field-label">端数最適化</div>
+                <div class="rounding-grid">
+                  <div class="field">
+                    <label for="rounding-unit">丸め単位</label>
+                    <select id="rounding-unit">
+                      
+                      <option value="none">なし</option>
+                      
+                      <option value="1">1</option>
+                      
+                      <option value="10">10</option>
+                      
+                      <option value="100">100</option>
+                      
+                      <option value="1000">1000</option>
+                      
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="rounding-direction">丸め方向</label>
+                    <select id="rounding-direction">
+                      
+                      <option value="round">四捨五入</option>
+                      
+                      <option value="ceil">切り上げ</option>
+                      
+                      <option value="floor">切り捨て</option>
+                      
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="rounding-ending">価格末尾プリセット</label>
+                    <select id="rounding-ending"></select>
+                  </div>
+                </div>
+
+                <div class="stack">
+                  <div class="field-label">候補価格</div>
+                  <div id="suggestion-list" class="suggestion-list"></div>
+                </div>
+              </section>
+
+              <div class="summary-actions">
+                <button type="button" id="copy-primary" class="btn btn-primary">
+                  <i data-lucide="copy" class="w-4 h-4"></i>推奨売価をコピー
+                </button>
+                <button type="button" id="copy-margin" class="btn btn-soft">
+                  <i data-lucide="percent" class="w-4 h-4"></i>粗利率をコピー
+                </button>
+                <button type="button" id="copy-markup" class="btn btn-soft">
+                  <i data-lucide="badge-percent" class="w-4 h-4"></i>マークアップをコピー
+                </button>
+                <button type="button" id="copy-share-url" class="btn btn-ghost">
+                  <i data-lucide="link" class="w-4 h-4"></i>共有リンクをコピー
+                </button>
+              </div>
+            </div>
+
+            <div id="result-bulk-wrap" class="stack hidden">
+              <div id="bulk-summary" class="bulk-summary">CSVまたはTSVを貼り付けると、一括計算の結果をここに表示します。</div>
+              <div class="field-label">プレビュー</div>
+              <div id="margin-markup-calculator-bulk-preview" class="table-shell">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>商品名</th>
+                      <th>原価</th>
+                      <th>売価</th>
+                      <th>追加コスト</th>
+                      <th>目標粗利率</th>
+                      <th>推奨売価</th>
+                      <th>粗利</th>
+                      <th>粗利率</th>
+                      <th>マークアップ</th>
+                      <th>状態</th>
+                    </tr>
+                  </thead>
+                  <tbody id="bulk-preview-body"></tbody>
+                </table>
+              </div>
+
+              <div class="bulk-actions">
+                <button type="button" id="bulk-download-csv" class="btn btn-primary">
+                  <i data-lucide="download" class="w-4 h-4"></i>CSVダウンロード
+                </button>
+                <button type="button" id="bulk-copy-tsv" class="btn btn-soft">
+                  <i data-lucide="table" class="w-4 h-4"></i>結果をコピー（TSV）
+                </button>
+              </div>
+            </div>
+          </section>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <button type="button" id="margin-markup-calculator-mobile-summary" class="mobile-summary hidden">
+    <div class="meta">
+      <div class="title" id="mobile-summary-title">推奨売価</div>
+      <div class="value" id="mobile-summary-value">-</div>
+      <div class="sub" id="mobile-summary-sub">-</div>
+    </div>
+    <i data-lucide="chevrons-right" class="w-4 h-4"></i>
+  </button>
+
+  <footer class="mt-auto border-t tool-border bg-[color:var(--tool-bg-muted)]">
+  <div class="w-full px-4 sm:px-6 lg:px-8 py-8 text-sm tool-text-muted">
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <p class="font-semibold">株式会社ファイナイトフィールド</p>
+      <nav class="flex flex-wrap items-center gap-4 text-xs sm:text-sm" aria-label="Tool footer links">
+        <a href="/tools/" class="hover:text-[color:var(--tool-primary)] transition-colors">ツール</a>
+        <a href="/privacy/" class="hover:text-[color:var(--tool-primary)] transition-colors">プライバシーポリシー</a>
+        <a href="/inquiry/" class="hover:text-[color:var(--tool-primary)] transition-colors">お問い合わせ</a>
+      </nav>
+    </div>
+    <p class="mt-2 text-xs">
+      
+      © 2026 Finite Field, K.K.
+      
+    </p>
+  </div>
+</footer>
+
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "粗利率・マークアップ計算ツール（原価↔売価）",
+    "description": "原価から目標粗利率の売価を計算し、売価から粗利率・マークアップを逆算。梱包・送料・決済手数料などの追加コストと端数最適化にも対応しています。",
+    "applicationCategory": "BusinessApplication",
+    "operatingSystem": "Web",
+    "url": "https://finitefield.org/tools/retail/margin-markup-calculator/"
+  }
+  </script>
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "手数料を加味したい。",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "固定の費用は追加コスト欄に、売価に対する決済手数料は詳細オプションの「決済手数料（%）」に入力してください。固定手数料も別で加味できます。"
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "目標粗利率から売価を出せますか？",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "はい。「原価→売価」タブで原価と目標粗利率を入れると、理論売価と端数候補をまとめて表示します。"
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "複数商品は？",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "「一括計算」タブにCSVまたはTSVを貼り付けると、粗利率・マークアップ・推奨売価をまとめて計算できます。結果はCSVでダウンロードするか、TSVでコピーできます。"
+        }
+      }
+    ]
+  }
+  </script>
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      {
+        "@type": "ListItem",
+        "position": 1,
+        "name": "Tools",
+        "item": "/tools/"
+      },
+      {
+        "@type": "ListItem",
+        "position": 2,
+        "name": "Retail",
+        "item": "/tools/"
+      },
+      {
+        "@type": "ListItem",
+        "position": 3,
+        "name": "粗利率・マークアップ計算",
+        "item": "https://finitefield.org/tools/retail/margin-markup-calculator/"
+      }
+    ]
+  }
+  </script>
+
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script>
+    (() => {
+      const pageRaw = {"Actions":{"OpenTool":"ツールを開く","openTool":"ツールを開く"},"Advanced":{"DecimalAuto":"通貨に合わせる","DecimalOverride":"少数桁","PaymentFeeRate":"決済手数料（売価に対する%）","PaymentFixedFee":"決済固定手数料（1件あたり）","PriceBasis":"売価の基準","PriceBasisExclusive":"税抜","PriceBasisInclusive":"税込","Toggle":"詳細オプション","decimalAuto":"通貨に合わせる","decimalOverride":"少数桁","paymentFeeRate":"決済手数料（売価に対する%）","paymentFixedFee":"決済固定手数料（1件あたり）","priceBasis":"売価の基準","priceBasisExclusive":"税抜","priceBasisInclusive":"税込","toggle":"詳細オプション"},"Breadcrumbs":[{"Label":"Tools","URL":"/tools/","Url":"/tools/","label":"Tools","url":"/tools/"},{"Label":"Retail","URL":"/tools/","Url":"/tools/","label":"Retail","url":"/tools/"},{"Label":"粗利率・マークアップ計算","URL":"#","Url":"#","label":"粗利率・マークアップ計算","url":"#"}],"Bulk":{"Aliases":{"Cost":["原価","cost","仕入","unitcost"],"Extra":["追加コスト","extra","shipping","送料"],"Name":["商品名","name","sku","product"],"Price":["売価","price","sellingprice","販売価格"],"Target":["目標粗利率","targetmargin","margin","粗利率"],"cost":["原価","cost","仕入","unitcost"],"extra":["追加コスト","extra","shipping","送料"],"name":["商品名","name","sku","product"],"price":["売価","price","sellingprice","販売価格"],"target":["目標粗利率","targetmargin","margin","粗利率"]},"Clear":"クリア","ColumnLabel":"列 {index}","Columns":{"Cost":"原価","Extra":"追加コスト","GrossProfit":"粗利","Margin":"粗利率","Markup":"マークアップ","Name":"商品名","Price":"売価","RecommendedPrice":"推奨売価","Status":"状態","TargetMargin":"目標粗利率","cost":"原価","extra":"追加コスト","grossProfit":"粗利","margin":"粗利率","markup":"マークアップ","name":"商品名","price":"売価","recommendedPrice":"推奨売価","status":"状態","targetMargin":"目標粗利率"},"CopyDone":"TSVをコピーしました","CopyTsv":"結果をコピー（TSV）","DefaultName":"商品 {index}","DefaultTargetMargin":"既定目標粗利率（%）","DownloadCsv":"CSVダウンロード","DownloadDone":"CSVをダウンロードしました","HasHeader":"1行目を見出しとして扱う","InsertSample":"サンプルを挿入","MappingOptions":[{"Label":"使用しない","URL":"#","Url":"#","Value":"unused","label":"使用しない","url":"#","value":"unused"},{"Label":"商品名","URL":"#","Url":"#","Value":"name","label":"商品名","url":"#","value":"name"},{"Label":"原価","URL":"#","Url":"#","Value":"cost","label":"原価","url":"#","value":"cost"},{"Label":"売価","URL":"#","Url":"#","Value":"price","label":"売価","url":"#","value":"price"},{"Label":"追加コスト","URL":"#","Url":"#","Value":"extra","label":"追加コスト","url":"#","value":"extra"},{"Label":"目標粗利率","URL":"#","Url":"#","Value":"target","label":"目標粗利率","url":"#","value":"target"}],"MappingTitle":"列マッピング","PasteLabel":"CSV/TSVを貼り付け","PastePlaceholder":"例）商品名,原価,売価,追加コスト,目標粗利率\n定番A,1200,1980,80,40\nセットB,2400,,230,45","PreviewTitle":"プレビュー","Sample":"商品名,原価,売価,追加コスト,目標粗利率\n定番A,1200,1980,80,40\nセットB,2400,,230,45\nSKU-C,600,990,50,","StatusCalculated":"計算済み","StatusError":"エラー","StatusNotCalculated":"未計算","Summary":"全 {total} 行中 {calculated} 行を計算しました。","aliases":{"Cost":["原価","cost","仕入","unitcost"],"Extra":["追加コスト","extra","shipping","送料"],"Name":["商品名","name","sku","product"],"Price":["売価","price","sellingprice","販売価格"],"Target":["目標粗利率","targetmargin","margin","粗利率"],"cost":["原価","cost","仕入","unitcost"],"extra":["追加コスト","extra","shipping","送料"],"name":["商品名","name","sku","product"],"price":["売価","price","sellingprice","販売価格"],"target":["目標粗利率","targetmargin","margin","粗利率"]},"clear":"クリア","columnLabel":"列 {index}","columns":{"Cost":"原価","Extra":"追加コスト","GrossProfit":"粗利","Margin":"粗利率","Markup":"マークアップ","Name":"商品名","Price":"売価","RecommendedPrice":"推奨売価","Status":"状態","TargetMargin":"目標粗利率","cost":"原価","extra":"追加コスト","grossProfit":"粗利","margin":"粗利率","markup":"マークアップ","name":"商品名","price":"売価","recommendedPrice":"推奨売価","status":"状態","targetMargin":"目標粗利率"},"copyDone":"TSVをコピーしました","copyTsv":"結果をコピー（TSV）","defaultName":"商品 {index}","defaultTargetMargin":"既定目標粗利率（%）","downloadCsv":"CSVダウンロード","downloadDone":"CSVをダウンロードしました","hasHeader":"1行目を見出しとして扱う","insertSample":"サンプルを挿入","mappingOptions":[{"Label":"使用しない","URL":"#","Url":"#","Value":"unused","label":"使用しない","url":"#","value":"unused"},{"Label":"商品名","URL":"#","Url":"#","Value":"name","label":"商品名","url":"#","value":"name"},{"Label":"原価","URL":"#","Url":"#","Value":"cost","label":"原価","url":"#","value":"cost"},{"Label":"売価","URL":"#","Url":"#","Value":"price","label":"売価","url":"#","value":"price"},{"Label":"追加コスト","URL":"#","Url":"#","Value":"extra","label":"追加コスト","url":"#","value":"extra"},{"Label":"目標粗利率","URL":"#","Url":"#","Value":"target","label":"目標粗利率","url":"#","value":"target"}],"mappingTitle":"列マッピング","pasteLabel":"CSV/TSVを貼り付け","pastePlaceholder":"例）商品名,原価,売価,追加コスト,目標粗利率\n定番A,1200,1980,80,40\nセットB,2400,,230,45","previewTitle":"プレビュー","sample":"商品名,原価,売価,追加コスト,目標粗利率\n定番A,1200,1980,80,40\nセットB,2400,,230,45\nSKU-C,600,990,50,","statusCalculated":"計算済み","statusError":"エラー","statusNotCalculated":"未計算","summary":"全 {total} 行中 {calculated} 行を計算しました。"},"Common":{"BrowserOnly":"","CurrencyHelp":"ページ言語と通貨は独立しています。必要な通貨を選んで試算できます。","browserOnly":"","currencyHelp":"ページ言語と通貨は独立しています。必要な通貨を選んで試算できます。"},"Currencies":[{"Code":"JPY","Decimals":"0","Label":"日本円 (JPY)","Locale":"ja-JP","URL":"#","Url":"#","code":"JPY","decimals":"0","label":"日本円 (JPY)","locale":"ja-JP","url":"#"},{"Code":"USD","Decimals":"2","Label":"米ドル (USD)","Locale":"en-US","URL":"#","Url":"#","code":"USD","decimals":"2","label":"米ドル (USD)","locale":"en-US","url":"#"},{"Code":"EUR","Decimals":"2","Label":"ユーロ (EUR)","Locale":"de-DE","URL":"#","Url":"#","code":"EUR","decimals":"2","label":"ユーロ (EUR)","locale":"de-DE","url":"#"},{"Code":"GBP","Decimals":"2","Label":"英ポンド (GBP)","Locale":"en-GB","URL":"#","Url":"#","code":"GBP","decimals":"2","label":"英ポンド (GBP)","locale":"en-GB","url":"#"},{"Code":"CNY","Decimals":"2","Label":"中国人民元 (CNY)","Locale":"zh-CN","URL":"#","Url":"#","code":"CNY","decimals":"2","label":"中国人民元 (CNY)","locale":"zh-CN","url":"#"},{"Code":"KRW","Decimals":"0","Label":"韓国ウォン (KRW)","Locale":"ko-KR","URL":"#","Url":"#","code":"KRW","decimals":"0","label":"韓国ウォン (KRW)","locale":"ko-KR","url":"#"},{"Code":"INR","Decimals":"2","Label":"インドルピー (INR)","Locale":"en-IN","URL":"#","Url":"#","code":"INR","decimals":"2","label":"インドルピー (INR)","locale":"en-IN","url":"#"},{"Code":"AUD","Decimals":"2","Label":"豪ドル (AUD)","Locale":"en-AU","URL":"#","Url":"#","code":"AUD","decimals":"2","label":"豪ドル (AUD)","locale":"en-AU","url":"#"},{"Code":"CAD","Decimals":"2","Label":"カナダドル (CAD)","Locale":"en-CA","URL":"#","Url":"#","code":"CAD","decimals":"2","label":"カナダドル (CAD)","locale":"en-CA","url":"#"},{"Code":"SGD","Decimals":"2","Label":"シンガポールドル (SGD)","Locale":"en-SG","URL":"#","Url":"#","code":"SGD","decimals":"2","label":"シンガポールドル (SGD)","locale":"en-SG","url":"#"}],"Defaults":{"Currency":"JPY","DecimalOverride":"auto","Mode":"cost_to_price","PriceBasis":"tax_exclusive","TargetMargin":"40","currency":"JPY","decimalOverride":"auto","mode":"cost_to_price","priceBasis":"tax_exclusive","targetMargin":"40"},"Dialog":{"CloseAria":"閉じる","MobileInput":"入力","MobileOutput":"結果","MobileTabsAria":"入力と結果の切り替え","Title":"粗利率・マークアップ計算","URL":"#","Url":"#","closeAria":"閉じる","mobileInput":"入力","mobileOutput":"結果","mobileTabsAria":"入力と結果の切り替え","title":"粗利率・マークアップ計算","url":"#"},"Errors":{"BatchCostRequired":"原価列をマッピングしてください。","BatchNoRows":"表データがありません。CSVまたはTSVを貼り付けてください。","BatchTooManyRows":"一括計算は500行まで対応しています。","FeeMarginRange":"手数料率と粗利率の合計が100%未満になるよう調整してください","FeeRateRange":"手数料率は0以上100%未満で入力してください","MarginRange":"粗利率は100%未満で入力してください","NonNegative":"0以上で入力してください","PricePositive":"売価は0より大きい値を入力してください","batchCostRequired":"原価列をマッピングしてください。","batchNoRows":"表データがありません。CSVまたはTSVを貼り付けてください。","batchTooManyRows":"一括計算は500行まで対応しています。","feeMarginRange":"手数料率と粗利率の合計が100%未満になるよう調整してください","feeRateRange":"手数料率は0以上100%未満で入力してください","marginRange":"粗利率は100%未満で入力してください","nonNegative":"0以上で入力してください","pricePositive":"売価は0より大きい値を入力してください"},"Explain":{"Items":[{"Body":"粗利率は、売価に対してどれだけ粗利が残るかを見る指標です。売価基準で価格の健全性を判断したいときに使います。","Formula":"粗利率 = (売価 - 原価 - 追加コスト - 売価連動手数料) / 売価","Title":"粗利率（利益率）の計算","URL":"#","Url":"#","body":"粗利率は、売価に対してどれだけ粗利が残るかを見る指標です。売価基準で価格の健全性を判断したいときに使います。","formula":"粗利率 = (売価 - 原価 - 追加コスト - 売価連動手数料) / 売価","title":"粗利率（利益率）の計算","url":"#"},{"Body":"マークアップは、原価と固定追加コストに対してどれだけ上乗せしたかを見る指標です。原価基準で価格戦略を考えるときに向いています。","Formula":"マークアップ = 粗利 / (原価 + 追加コスト + 決済固定手数料)","Title":"マークアップの計算","URL":"#","Url":"#","body":"マークアップは、原価と固定追加コストに対してどれだけ上乗せしたかを見る指標です。原価基準で価格戦略を考えるときに向いています。","formula":"マークアップ = 粗利 / (原価 + 追加コスト + 決済固定手数料)","title":"マークアップの計算","url":"#"},{"Body":"目標粗利率から売価を決めるときは、追加コストと決済手数料も同じ式に含めます。実務ではこの差がそのまま価格のズレになります。","Formula":"推奨売価 = (原価 + 追加コスト + 決済固定手数料) / (1 - 決済手数料率 - 目標粗利率)","Title":"原価から売価を出す式","URL":"#","Url":"#","body":"目標粗利率から売価を決めるときは、追加コストと決済手数料も同じ式に含めます。実務ではこの差がそのまま価格のズレになります。","formula":"推奨売価 = (原価 + 追加コスト + 決済固定手数料) / (1 - 決済手数料率 - 目標粗利率)","title":"原価から売価を出す式","url":"#"}],"Title":"短く理解する","URL":"#","Url":"#","items":[{"Body":"粗利率は、売価に対してどれだけ粗利が残るかを見る指標です。売価基準で価格の健全性を判断したいときに使います。","Formula":"粗利率 = (売価 - 原価 - 追加コスト - 売価連動手数料) / 売価","Title":"粗利率（利益率）の計算","URL":"#","Url":"#","body":"粗利率は、売価に対してどれだけ粗利が残るかを見る指標です。売価基準で価格の健全性を判断したいときに使います。","formula":"粗利率 = (売価 - 原価 - 追加コスト - 売価連動手数料) / 売価","title":"粗利率（利益率）の計算","url":"#"},{"Body":"マークアップは、原価と固定追加コストに対してどれだけ上乗せしたかを見る指標です。原価基準で価格戦略を考えるときに向いています。","Formula":"マークアップ = 粗利 / (原価 + 追加コスト + 決済固定手数料)","Title":"マークアップの計算","URL":"#","Url":"#","body":"マークアップは、原価と固定追加コストに対してどれだけ上乗せしたかを見る指標です。原価基準で価格戦略を考えるときに向いています。","formula":"マークアップ = 粗利 / (原価 + 追加コスト + 決済固定手数料)","title":"マークアップの計算","url":"#"},{"Body":"目標粗利率から売価を決めるときは、追加コストと決済手数料も同じ式に含めます。実務ではこの差がそのまま価格のズレになります。","Formula":"推奨売価 = (原価 + 追加コスト + 決済固定手数料) / (1 - 決済手数料率 - 目標粗利率)","Title":"原価から売価を出す式","URL":"#","Url":"#","body":"目標粗利率から売価を決めるときは、追加コストと決済手数料も同じ式に含めます。実務ではこの差がそのまま価格のズレになります。","formula":"推奨売価 = (原価 + 追加コスト + 決済固定手数料) / (1 - 決済手数料率 - 目標粗利率)","title":"原価から売価を出す式","url":"#"}],"title":"短く理解する","url":"#"},"FAQ":{"Items":[{"Answer":"固定の費用は追加コスト欄に、売価に対する決済手数料は詳細オプションの「決済手数料（%）」に入力してください。固定手数料も別で加味できます。","Question":"手数料を加味したい。","answer":"固定の費用は追加コスト欄に、売価に対する決済手数料は詳細オプションの「決済手数料（%）」に入力してください。固定手数料も別で加味できます。","question":"手数料を加味したい。"},{"Answer":"はい。「原価→売価」タブで原価と目標粗利率を入れると、理論売価と端数候補をまとめて表示します。","Question":"目標粗利率から売価を出せますか？","answer":"はい。「原価→売価」タブで原価と目標粗利率を入れると、理論売価と端数候補をまとめて表示します。","question":"目標粗利率から売価を出せますか？"},{"Answer":"「一括計算」タブにCSVまたはTSVを貼り付けると、粗利率・マークアップ・推奨売価をまとめて計算できます。結果はCSVでダウンロードするか、TSVでコピーできます。","Question":"複数商品は？","answer":"「一括計算」タブにCSVまたはTSVを貼り付けると、粗利率・マークアップ・推奨売価をまとめて計算できます。結果はCSVでダウンロードするか、TSVでコピーできます。","question":"複数商品は？"}],"Title":"よくある質問","URL":"#","Url":"#","items":[{"Answer":"固定の費用は追加コスト欄に、売価に対する決済手数料は詳細オプションの「決済手数料（%）」に入力してください。固定手数料も別で加味できます。","Question":"手数料を加味したい。","answer":"固定の費用は追加コスト欄に、売価に対する決済手数料は詳細オプションの「決済手数料（%）」に入力してください。固定手数料も別で加味できます。","question":"手数料を加味したい。"},{"Answer":"はい。「原価→売価」タブで原価と目標粗利率を入れると、理論売価と端数候補をまとめて表示します。","Question":"目標粗利率から売価を出せますか？","answer":"はい。「原価→売価」タブで原価と目標粗利率を入れると、理論売価と端数候補をまとめて表示します。","question":"目標粗利率から売価を出せますか？"},{"Answer":"「一括計算」タブにCSVまたはTSVを貼り付けると、粗利率・マークアップ・推奨売価をまとめて計算できます。結果はCSVでダウンロードするか、TSVでコピーできます。","Question":"複数商品は？","answer":"「一括計算」タブにCSVまたはTSVを貼り付けると、粗利率・マークアップ・推奨売価をまとめて計算できます。結果はCSVでダウンロードするか、TSVでコピーできます。","question":"複数商品は？"}],"title":"よくある質問","url":"#"},"Faq":{"Items":[{"Answer":"固定の費用は追加コスト欄に、売価に対する決済手数料は詳細オプションの「決済手数料（%）」に入力してください。固定手数料も別で加味できます。","Question":"手数料を加味したい。","answer":"固定の費用は追加コスト欄に、売価に対する決済手数料は詳細オプションの「決済手数料（%）」に入力してください。固定手数料も別で加味できます。","question":"手数料を加味したい。"},{"Answer":"はい。「原価→売価」タブで原価と目標粗利率を入れると、理論売価と端数候補をまとめて表示します。","Question":"目標粗利率から売価を出せますか？","answer":"はい。「原価→売価」タブで原価と目標粗利率を入れると、理論売価と端数候補をまとめて表示します。","question":"目標粗利率から売価を出せますか？"},{"Answer":"「一括計算」タブにCSVまたはTSVを貼り付けると、粗利率・マークアップ・推奨売価をまとめて計算できます。結果はCSVでダウンロードするか、TSVでコピーできます。","Question":"複数商品は？","answer":"「一括計算」タブにCSVまたはTSVを貼り付けると、粗利率・マークアップ・推奨売価をまとめて計算できます。結果はCSVでダウンロードするか、TSVでコピーできます。","question":"複数商品は？"}],"Title":"よくある質問","URL":"#","Url":"#","items":[{"Answer":"固定の費用は追加コスト欄に、売価に対する決済手数料は詳細オプションの「決済手数料（%）」に入力してください。固定手数料も別で加味できます。","Question":"手数料を加味したい。","answer":"固定の費用は追加コスト欄に、売価に対する決済手数料は詳細オプションの「決済手数料（%）」に入力してください。固定手数料も別で加味できます。","question":"手数料を加味したい。"},{"Answer":"はい。「原価→売価」タブで原価と目標粗利率を入れると、理論売価と端数候補をまとめて表示します。","Question":"目標粗利率から売価を出せますか？","answer":"はい。「原価→売価」タブで原価と目標粗利率を入れると、理論売価と端数候補をまとめて表示します。","question":"目標粗利率から売価を出せますか？"},{"Answer":"「一括計算」タブにCSVまたはTSVを貼り付けると、粗利率・マークアップ・推奨売価をまとめて計算できます。結果はCSVでダウンロードするか、TSVでコピーできます。","Question":"複数商品は？","answer":"「一括計算」タブにCSVまたはTSVを貼り付けると、粗利率・マークアップ・推奨売価をまとめて計算できます。結果はCSVでダウンロードするか、TSVでコピーできます。","question":"複数商品は？"}],"title":"よくある質問","url":"#"},"Fields":{"ComparePrice":"売価（比較用）","Cost":"原価（1個あたり）","CostPlaceholder":"例）1200","Currency":"通貨","ExtraCost":"追加コスト（梱包・送料・固定手数料など）","ExtraCostPlaceholder":"例）230","Price":"売価","PricePlaceholder":"例）1980","TargetMargin":"目標粗利率（%）","TargetMarginOptional":"目標粗利率（任意）","TargetMarginPlaceholder":"例）40","comparePrice":"売価（比較用）","cost":"原価（1個あたり）","costPlaceholder":"例）1200","currency":"通貨","extraCost":"追加コスト（梱包・送料・固定手数料など）","extraCostPlaceholder":"例）230","price":"売価","pricePlaceholder":"例）1980","targetMargin":"目標粗利率（%）","targetMarginOptional":"目標粗利率（任意）","targetMarginPlaceholder":"例）40"},"Formula":{"Lines":["粗利 = 売価 - (原価 + 追加コスト + 決済固定手数料 + 売価連動手数料)","粗利率 = 粗利 / 売価","マークアップ = 粗利 / (原価 + 追加コスト + 決済固定手数料)","推奨売価 = (原価 + 追加コスト + 決済固定手数料) / (1 - 決済手数料率 - 目標粗利率)"],"Title":"計算式","URL":"#","Url":"#","lines":["粗利 = 売価 - (原価 + 追加コスト + 決済固定手数料 + 売価連動手数料)","粗利率 = 粗利 / 売価","マークアップ = 粗利 / (原価 + 追加コスト + 決済固定手数料)","推奨売価 = (原価 + 追加コスト + 決済固定手数料) / (1 - 決済手数料率 - 目標粗利率)"],"title":"計算式","url":"#"},"Glossary":{"Items":[{"Description":"売価に対する粗利の割合です。売価を基準に残る余白を表します。","Term":"粗利率","description":"売価に対する粗利の割合です。売価を基準に残る余白を表します。","term":"粗利率"},{"Description":"原価と固定追加コストに対する粗利の割合です。どれだけ上乗せしたかを示します。","Term":"マークアップ","description":"原価と固定追加コストに対する粗利の割合です。どれだけ上乗せしたかを示します。","term":"マークアップ"},{"Description":"梱包、送料、固定手数料など、1件ごとに乗る固定の費用です。","Term":"追加コスト","description":"梱包、送料、固定手数料など、1件ごとに乗る固定の費用です。","term":"追加コスト"}],"Title":"語句説明","URL":"#","Url":"#","items":[{"Description":"売価に対する粗利の割合です。売価を基準に残る余白を表します。","Term":"粗利率","description":"売価に対する粗利の割合です。売価を基準に残る余白を表します。","term":"粗利率"},{"Description":"原価と固定追加コストに対する粗利の割合です。どれだけ上乗せしたかを示します。","Term":"マークアップ","description":"原価と固定追加コストに対する粗利の割合です。どれだけ上乗せしたかを示します。","term":"マークアップ"},{"Description":"梱包、送料、固定手数料など、1件ごとに乗る固定の費用です。","Term":"追加コスト","description":"梱包、送料、固定手数料など、1件ごとに乗る固定の費用です。","term":"追加コスト"}],"title":"語句説明","url":"#"},"Hero":{"Assurance":"※入力した数値はブラウザ内で計算され、サーバーへ送信されません。","Badges":["即時計算","ブラウザ内で計算","端数候補を提案","CSV/TSV一括計算"],"Lead":"原価から目標粗利率に合う売価を出し、今の売価から粗利率とマークアップを逆算できます。追加コスト、決済手数料、端数最適化、一括計算まで1ページで完結します。","Title":"粗利率・マークアップ計算ツール（原価↔売価）","URL":"#","Url":"#","assurance":"※入力した数値はブラウザ内で計算され、サーバーへ送信されません。","badges":["即時計算","ブラウザ内で計算","端数候補を提案","CSV/TSV一括計算"],"lead":"原価から目標粗利率に合う売価を出し、今の売価から粗利率とマークアップを逆算できます。追加コスト、決済手数料、端数最適化、一括計算まで1ページで完結します。","title":"粗利率・マークアップ計算ツール（原価↔売価）","url":"#"},"Messages":{"TargetGapAmount":"必要売価との差 {value}","TargetGapPoints":"粗利率差 {value}","targetGapAmount":"必要売価との差 {value}","targetGapPoints":"粗利率差 {value}"},"Meta":{"Description":"原価から目標粗利率の売価を計算し、売価から粗利率・マークアップを逆算。梱包・送料・決済手数料などの追加コストと端数最適化にも対応しています。","Lang":"ja","Lastmod":"2026-03-16","Title":"粗利率・マークアップ計算ツール（原価↔売価）｜追加コスト・端数最適化対応","URL":"#","Url":"#","description":"原価から目標粗利率の売価を計算し、売価から粗利率・マークアップを逆算。梱包・送料・決済手数料などの追加コストと端数最適化にも対応しています。","lang":"ja","lastmod":"2026-03-16","title":"粗利率・マークアップ計算ツール（原価↔売価）｜追加コスト・端数最適化対応","url":"#"},"Mode":{"CostToPrice":{"Description":"最もよく使う価格決め用モードです。目標粗利率に合う理論値と端数候補を同時に見られます。","PriceHelp":"任意で現在売価を入れると、推奨売価との差を表示します。","ResultNote":"推奨売価を主役に、粗利率とマークアップをまとめて表示します。","TargetHelp":"目標粗利率は 100% 未満で入力してください。","Title":"原価から売価を決める","URL":"#","Url":"#","description":"最もよく使う価格決め用モードです。目標粗利率に合う理論値と端数候補を同時に見られます。","priceHelp":"任意で現在売価を入れると、推奨売価との差を表示します。","resultNote":"推奨売価を主役に、粗利率とマークアップをまとめて表示します。","targetHelp":"目標粗利率は 100% 未満で入力してください。","title":"原価から売価を決める","url":"#"},"PriceToMargin":{"Description":"いまの売価から粗利とマークアップを確認し、必要なら目標粗利率までの差も出します。","PriceHelp":"売価は 0 より大きい値を入力してください。","ResultNote":"現行売価の粗利構造を確認し、目標までの不足分を把握できます。","TargetHelp":"目標粗利率を入れると、必要売価との差分も計算します。","Title":"今の売価を逆算する","URL":"#","Url":"#","description":"いまの売価から粗利とマークアップを確認し、必要なら目標粗利率までの差も出します。","priceHelp":"売価は 0 より大きい値を入力してください。","resultNote":"現行売価の粗利構造を確認し、目標までの不足分を把握できます。","targetHelp":"目標粗利率を入れると、必要売価との差分も計算します。","title":"今の売価を逆算する","url":"#"},"costToPrice":{"Description":"最もよく使う価格決め用モードです。目標粗利率に合う理論値と端数候補を同時に見られます。","PriceHelp":"任意で現在売価を入れると、推奨売価との差を表示します。","ResultNote":"推奨売価を主役に、粗利率とマークアップをまとめて表示します。","TargetHelp":"目標粗利率は 100% 未満で入力してください。","Title":"原価から売価を決める","URL":"#","Url":"#","description":"最もよく使う価格決め用モードです。目標粗利率に合う理論値と端数候補を同時に見られます。","priceHelp":"任意で現在売価を入れると、推奨売価との差を表示します。","resultNote":"推奨売価を主役に、粗利率とマークアップをまとめて表示します。","targetHelp":"目標粗利率は 100% 未満で入力してください。","title":"原価から売価を決める","url":"#"},"priceToMargin":{"Description":"いまの売価から粗利とマークアップを確認し、必要なら目標粗利率までの差も出します。","PriceHelp":"売価は 0 より大きい値を入力してください。","ResultNote":"現行売価の粗利構造を確認し、目標までの不足分を把握できます。","TargetHelp":"目標粗利率を入れると、必要売価との差分も計算します。","Title":"今の売価を逆算する","URL":"#","Url":"#","description":"いまの売価から粗利とマークアップを確認し、必要なら目標粗利率までの差も出します。","priceHelp":"売価は 0 より大きい値を入力してください。","resultNote":"現行売価の粗利構造を確認し、目標までの不足分を把握できます。","targetHelp":"目標粗利率を入れると、必要売価との差分も計算します。","title":"今の売価を逆算する","url":"#"}},"Notice":{"Lines":["本ツールは粗利ベースの計算です。販管費、人件費、広告費、税金などを含む会計上の利益とは定義が異なる場合があります。","税抜・税込の扱い、消費税、関税、地域ごとの商習慣や心理価格の常識は別途確認してください。","実際の価格決定では、競争環境、返品条件、キャンペーン、決済条件もあわせて確認してください。"],"Title":"注意事項","URL":"#","Url":"#","lines":["本ツールは粗利ベースの計算です。販管費、人件費、広告費、税金などを含む会計上の利益とは定義が異なる場合があります。","税抜・税込の扱い、消費税、関税、地域ごとの商習慣や心理価格の常識は別途確認してください。","実際の価格決定では、競争環境、返品条件、キャンペーン、決済条件もあわせて確認してください。"],"title":"注意事項","url":"#"},"Results":{"BreakdownBaseCost":"原価 + 固定費の合計","BreakdownExtraCost":"追加コスト","BreakdownFixedFee":"決済固定手数料","BreakdownPaymentFee":"売価連動の手数料","BreakdownTitle":"内訳","Copied":"コピーしました","CopyMargin":"粗利率をコピー","CopyMarkup":"マークアップをコピー","CopyPrimary":"推奨売価をコピー","CurrentPrice":"現在売価","CurrentPriceNote":"入力した売価をそのまま使用","EmptyBulk":"CSVまたはTSVを貼り付けると、一括計算の結果をここに表示します。","EmptyCostToPrice":"原価と目標粗利率を入力すると、推奨売価と端数候補を表示します。","EmptyError":"入力内容を見直すと、ここに結果が表示されます。","EmptyPriceToMargin":"原価と売価を入力すると、粗利・粗利率・マークアップを表示します。","FormulaTitle":"計算根拠","FormulaToggle":"式を見る","GrossProfit":"粗利","Margin":"粗利率","Markup":"マークアップ","NoValue":"-","PriceGap":"今の売価との差","PriceGapEmpty":"比較用の売価を入れると差分を表示します。","PriceGapHelp":"比較用の売価との差です。","RecommendedPrice":"推奨売価","RequiredPrice":"目標達成に必要な売価","RoundedNote":"丸め・端数調整後","ShareUrl":"共有リンクをコピー","ShareUrlDone":"共有リンクをコピーしました","TargetGap":"目標までの差","TargetGapEmpty":"目標粗利率を入れると必要売価を表示します。","TargetGapEmptySub":"任意で目標粗利率を入力してください。","TheoreticalNote":"理論値のまま","TheoreticalPrice":"理論売価","Title":"結果サマリー","breakdownBaseCost":"原価 + 固定費の合計","breakdownExtraCost":"追加コスト","breakdownFixedFee":"決済固定手数料","breakdownPaymentFee":"売価連動の手数料","breakdownTitle":"内訳","copied":"コピーしました","copyMargin":"粗利率をコピー","copyMarkup":"マークアップをコピー","copyPrimary":"推奨売価をコピー","currentPrice":"現在売価","currentPriceNote":"入力した売価をそのまま使用","emptyBulk":"CSVまたはTSVを貼り付けると、一括計算の結果をここに表示します。","emptyCostToPrice":"原価と目標粗利率を入力すると、推奨売価と端数候補を表示します。","emptyError":"入力内容を見直すと、ここに結果が表示されます。","emptyPriceToMargin":"原価と売価を入力すると、粗利・粗利率・マークアップを表示します。","formulaTitle":"計算根拠","formulaToggle":"式を見る","grossProfit":"粗利","margin":"粗利率","markup":"マークアップ","noValue":"-","priceGap":"今の売価との差","priceGapEmpty":"比較用の売価を入れると差分を表示します。","priceGapHelp":"比較用の売価との差です。","recommendedPrice":"推奨売価","requiredPrice":"目標達成に必要な売価","roundedNote":"丸め・端数調整後","shareUrl":"共有リンクをコピー","shareUrlDone":"共有リンクをコピーしました","targetGap":"目標までの差","targetGapEmpty":"目標粗利率を入れると必要売価を表示します。","targetGapEmptySub":"任意で目標粗利率を入力してください。","theoreticalNote":"理論値のまま","theoreticalPrice":"理論売価","title":"結果サマリー"},"Rounding":{"Apply":"採用する","Direction":"丸め方向","DirectionOptions":[{"Label":"四捨五入","URL":"#","Url":"#","Value":"round","label":"四捨五入","url":"#","value":"round"},{"Label":"切り上げ","URL":"#","Url":"#","Value":"ceil","label":"切り上げ","url":"#","value":"ceil"},{"Label":"切り捨て","URL":"#","Url":"#","Value":"floor","label":"切り捨て","url":"#","value":"floor"}],"EmptySuggestions":"候補価格は、原価と目標粗利率を入力すると表示されます。","EndingAuto":"通貨に合わせる","EndingNone":"なし","EndingOptionsDecimal":[{"Label":"… .00","URL":"#","Url":"#","Value":"00","label":"… .00","url":"#","value":"00"},{"Label":"… .95","URL":"#","Url":"#","Value":"95","label":"… .95","url":"#","value":"95"},{"Label":"… .99","URL":"#","Url":"#","Value":"99","label":"… .99","url":"#","value":"99"}],"EndingOptionsZero":[{"Label":"…80","URL":"#","Url":"#","Value":"80","label":"…80","url":"#","value":"80"},{"Label":"…90","URL":"#","Url":"#","Value":"90","label":"…90","url":"#","value":"90"},{"Label":"…98","URL":"#","Url":"#","Value":"98","label":"…98","url":"#","value":"98"},{"Label":"…99","URL":"#","Url":"#","Value":"99","label":"…99","url":"#","value":"99"}],"EndingPreset":"価格末尾プリセット","NoTargetDelta":"目標差はありません","SuggestionsTitle":"候補価格","TargetDelta":"目標との差 {value}","Title":"端数最適化","URL":"#","Unit":"丸め単位","UnitOptions":[{"Label":"なし","URL":"#","Url":"#","Value":"none","label":"なし","url":"#","value":"none"},{"Label":"1","URL":"#","Url":"#","Value":"1","label":"1","url":"#","value":"1"},{"Label":"10","URL":"#","Url":"#","Value":"10","label":"10","url":"#","value":"10"},{"Label":"100","URL":"#","Url":"#","Value":"100","label":"100","url":"#","value":"100"},{"Label":"1000","URL":"#","Url":"#","Value":"1000","label":"1000","url":"#","value":"1000"}],"Url":"#","apply":"採用する","direction":"丸め方向","directionOptions":[{"Label":"四捨五入","URL":"#","Url":"#","Value":"round","label":"四捨五入","url":"#","value":"round"},{"Label":"切り上げ","URL":"#","Url":"#","Value":"ceil","label":"切り上げ","url":"#","value":"ceil"},{"Label":"切り捨て","URL":"#","Url":"#","Value":"floor","label":"切り捨て","url":"#","value":"floor"}],"emptySuggestions":"候補価格は、原価と目標粗利率を入力すると表示されます。","endingAuto":"通貨に合わせる","endingNone":"なし","endingOptionsDecimal":[{"Label":"… .00","URL":"#","Url":"#","Value":"00","label":"… .00","url":"#","value":"00"},{"Label":"… .95","URL":"#","Url":"#","Value":"95","label":"… .95","url":"#","value":"95"},{"Label":"… .99","URL":"#","Url":"#","Value":"99","label":"… .99","url":"#","value":"99"}],"endingOptionsZero":[{"Label":"…80","URL":"#","Url":"#","Value":"80","label":"…80","url":"#","value":"80"},{"Label":"…90","URL":"#","Url":"#","Value":"90","label":"…90","url":"#","value":"90"},{"Label":"…98","URL":"#","Url":"#","Value":"98","label":"…98","url":"#","value":"98"},{"Label":"…99","URL":"#","Url":"#","Value":"99","label":"…99","url":"#","value":"99"}],"endingPreset":"価格末尾プリセット","noTargetDelta":"目標差はありません","suggestionsTitle":"候補価格","targetDelta":"目標との差 {value}","title":"端数最適化","unit":"丸め単位","unitOptions":[{"Label":"なし","URL":"#","Url":"#","Value":"none","label":"なし","url":"#","value":"none"},{"Label":"1","URL":"#","Url":"#","Value":"1","label":"1","url":"#","value":"1"},{"Label":"10","URL":"#","Url":"#","Value":"10","label":"10","url":"#","value":"10"},{"Label":"100","URL":"#","Url":"#","Value":"100","label":"100","url":"#","value":"100"},{"Label":"1000","URL":"#","Url":"#","Value":"1000","label":"1000","url":"#","value":"1000"}],"url":"#"},"Sample":{"Case1":{"Input":"入力例: 原価 1,200円 / 追加コスト 230円 / 目標粗利率 40%","Output":"出力例: 理論売価、粗利、粗利率、マークアップ、980・990・999 などの端数候補を表示","Title":"原価から推奨売価を出す","URL":"#","Url":"#","input":"入力例: 原価 1,200円 / 追加コスト 230円 / 目標粗利率 40%","output":"出力例: 理論売価、粗利、粗利率、マークアップ、980・990・999 などの端数候補を表示","title":"原価から推奨売価を出す","url":"#"},"Case2":{"Input":"入力例: 原価 600円 / 追加コスト 50円 / 売価 990円","Output":"出力例: 粗利、粗利率、マークアップ、目標粗利率との差を表示","Title":"今の売価を評価する","URL":"#","Url":"#","input":"入力例: 原価 600円 / 追加コスト 50円 / 売価 990円","output":"出力例: 粗利、粗利率、マークアップ、目標粗利率との差を表示","title":"今の売価を評価する","url":"#"},"Title":"サンプル","URL":"#","Url":"#","case1":{"Input":"入力例: 原価 1,200円 / 追加コスト 230円 / 目標粗利率 40%","Output":"出力例: 理論売価、粗利、粗利率、マークアップ、980・990・999 などの端数候補を表示","Title":"原価から推奨売価を出す","URL":"#","Url":"#","input":"入力例: 原価 1,200円 / 追加コスト 230円 / 目標粗利率 40%","output":"出力例: 理論売価、粗利、粗利率、マークアップ、980・990・999 などの端数候補を表示","title":"原価から推奨売価を出す","url":"#"},"case2":{"Input":"入力例: 原価 600円 / 追加コスト 50円 / 売価 990円","Output":"出力例: 粗利、粗利率、マークアップ、目標粗利率との差を表示","Title":"今の売価を評価する","URL":"#","Url":"#","input":"入力例: 原価 600円 / 追加コスト 50円 / 売価 990円","output":"出力例: 粗利、粗利率、マークアップ、目標粗利率との差を表示","title":"今の売価を評価する","url":"#"},"title":"サンプル","url":"#"},"Steps":{"Items":["原価→売価、売価→粗利率、一括計算の3モードから目的に合うものを選びます。","必要な原価、売価、目標粗利率、追加コストを入力します。","必要に応じて決済手数料や表示桁数を詳細オプションで調整します。","結果サマリー、内訳、計算式、端数候補を見てそのまま意思決定します。"],"Title":"使い方","URL":"#","Url":"#","items":["原価→売価、売価→粗利率、一括計算の3モードから目的に合うものを選びます。","必要な原価、売価、目標粗利率、追加コストを入力します。","必要に応じて決済手数料や表示桁数を詳細オプションで調整します。","結果サマリー、内訳、計算式、端数候補を見てそのまま意思決定します。"],"title":"使い方","url":"#"},"Tabs":{"AriaLabel":"計算モード","Bulk":"一括計算","CostToPrice":"原価→売価","PriceToMargin":"売価→粗利率","ariaLabel":"計算モード","bulk":"一括計算","costToPrice":"原価→売価","priceToMargin":"売価→粗利率"},"Topbar":{"Subtitle":"Retail Tools","Title":"Margin \u0026 Markup Calculator","URL":"#","Url":"#","subtitle":"Retail Tools","title":"Margin \u0026 Markup Calculator","url":"#"},"UseCases":{"Items":[{"Body":"原価、追加コスト、目標粗利率を入れると、理論値と端数候補をすぐに比較できます。","Eyebrow":"主要ユースケース 1","Title":"原価から推奨売価を決める","URL":"#","Url":"#","body":"原価、追加コスト、目標粗利率を入れると、理論値と端数候補をすぐに比較できます。","eyebrow":"主要ユースケース 1","title":"原価から推奨売価を決める","url":"#"},{"Body":"売価から粗利、粗利率、マークアップを逆算し、目標までの差もその場で把握できます。","Eyebrow":"主要ユースケース 2","Title":"今の価格が妥当か確認する","URL":"#","Url":"#","body":"売価から粗利、粗利率、マークアップを逆算し、目標までの差もその場で把握できます。","eyebrow":"主要ユースケース 2","title":"今の価格が妥当か確認する","url":"#"},{"Body":"CSV/TSVを貼り付けるだけで複数商品の試算ができ、CSVダウンロードやTSVコピーにも対応します。","Eyebrow":"主要ユースケース 3","Title":"複数商品をまとめて再計算する","URL":"#","Url":"#","body":"CSV/TSVを貼り付けるだけで複数商品の試算ができ、CSVダウンロードやTSVコピーにも対応します。","eyebrow":"主要ユースケース 3","title":"複数商品をまとめて再計算する","url":"#"}],"Title":"ページの狙い","URL":"#","Url":"#","items":[{"Body":"原価、追加コスト、目標粗利率を入れると、理論値と端数候補をすぐに比較できます。","Eyebrow":"主要ユースケース 1","Title":"原価から推奨売価を決める","URL":"#","Url":"#","body":"原価、追加コスト、目標粗利率を入れると、理論値と端数候補をすぐに比較できます。","eyebrow":"主要ユースケース 1","title":"原価から推奨売価を決める","url":"#"},{"Body":"売価から粗利、粗利率、マークアップを逆算し、目標までの差もその場で把握できます。","Eyebrow":"主要ユースケース 2","Title":"今の価格が妥当か確認する","URL":"#","Url":"#","body":"売価から粗利、粗利率、マークアップを逆算し、目標までの差もその場で把握できます。","eyebrow":"主要ユースケース 2","title":"今の価格が妥当か確認する","url":"#"},{"Body":"CSV/TSVを貼り付けるだけで複数商品の試算ができ、CSVダウンロードやTSVコピーにも対応します。","Eyebrow":"主要ユースケース 3","Title":"複数商品をまとめて再計算する","URL":"#","Url":"#","body":"CSV/TSVを貼り付けるだけで複数商品の試算ができ、CSVダウンロードやTSVコピーにも対応します。","eyebrow":"主要ユースケース 3","title":"複数商品をまとめて再計算する","url":"#"}],"title":"ページの狙い","url":"#"},"actions":{"OpenTool":"ツールを開く","openTool":"ツールを開く"},"advanced":{"DecimalAuto":"通貨に合わせる","DecimalOverride":"少数桁","PaymentFeeRate":"決済手数料（売価に対する%）","PaymentFixedFee":"決済固定手数料（1件あたり）","PriceBasis":"売価の基準","PriceBasisExclusive":"税抜","PriceBasisInclusive":"税込","Toggle":"詳細オプション","decimalAuto":"通貨に合わせる","decimalOverride":"少数桁","paymentFeeRate":"決済手数料（売価に対する%）","paymentFixedFee":"決済固定手数料（1件あたり）","priceBasis":"売価の基準","priceBasisExclusive":"税抜","priceBasisInclusive":"税込","toggle":"詳細オプション"},"breadcrumbs":[{"Label":"Tools","URL":"/tools/","Url":"/tools/","label":"Tools","url":"/tools/"},{"Label":"Retail","URL":"/tools/","Url":"/tools/","label":"Retail","url":"/tools/"},{"Label":"粗利率・マークアップ計算","URL":"#","Url":"#","label":"粗利率・マークアップ計算","url":"#"}],"bulk":{"Aliases":{"Cost":["原価","cost","仕入","unitcost"],"Extra":["追加コスト","extra","shipping","送料"],"Name":["商品名","name","sku","product"],"Price":["売価","price","sellingprice","販売価格"],"Target":["目標粗利率","targetmargin","margin","粗利率"],"cost":["原価","cost","仕入","unitcost"],"extra":["追加コスト","extra","shipping","送料"],"name":["商品名","name","sku","product"],"price":["売価","price","sellingprice","販売価格"],"target":["目標粗利率","targetmargin","margin","粗利率"]},"Clear":"クリア","ColumnLabel":"列 {index}","Columns":{"Cost":"原価","Extra":"追加コスト","GrossProfit":"粗利","Margin":"粗利率","Markup":"マークアップ","Name":"商品名","Price":"売価","RecommendedPrice":"推奨売価","Status":"状態","TargetMargin":"目標粗利率","cost":"原価","extra":"追加コスト","grossProfit":"粗利","margin":"粗利率","markup":"マークアップ","name":"商品名","price":"売価","recommendedPrice":"推奨売価","status":"状態","targetMargin":"目標粗利率"},"CopyDone":"TSVをコピーしました","CopyTsv":"結果をコピー（TSV）","DefaultName":"商品 {index}","DefaultTargetMargin":"既定目標粗利率（%）","DownloadCsv":"CSVダウンロード","DownloadDone":"CSVをダウンロードしました","HasHeader":"1行目を見出しとして扱う","InsertSample":"サンプルを挿入","MappingOptions":[{"Label":"使用しない","URL":"#","Url":"#","Value":"unused","label":"使用しない","url":"#","value":"unused"},{"Label":"商品名","URL":"#","Url":"#","Value":"name","label":"商品名","url":"#","value":"name"},{"Label":"原価","URL":"#","Url":"#","Value":"cost","label":"原価","url":"#","value":"cost"},{"Label":"売価","URL":"#","Url":"#","Value":"price","label":"売価","url":"#","value":"price"},{"Label":"追加コスト","URL":"#","Url":"#","Value":"extra","label":"追加コスト","url":"#","value":"extra"},{"Label":"目標粗利率","URL":"#","Url":"#","Value":"target","label":"目標粗利率","url":"#","value":"target"}],"MappingTitle":"列マッピング","PasteLabel":"CSV/TSVを貼り付け","PastePlaceholder":"例）商品名,原価,売価,追加コスト,目標粗利率\n定番A,1200,1980,80,40\nセットB,2400,,230,45","PreviewTitle":"プレビュー","Sample":"商品名,原価,売価,追加コスト,目標粗利率\n定番A,1200,1980,80,40\nセットB,2400,,230,45\nSKU-C,600,990,50,","StatusCalculated":"計算済み","StatusError":"エラー","StatusNotCalculated":"未計算","Summary":"全 {total} 行中 {calculated} 行を計算しました。","aliases":{"Cost":["原価","cost","仕入","unitcost"],"Extra":["追加コスト","extra","shipping","送料"],"Name":["商品名","name","sku","product"],"Price":["売価","price","sellingprice","販売価格"],"Target":["目標粗利率","targetmargin","margin","粗利率"],"cost":["原価","cost","仕入","unitcost"],"extra":["追加コスト","extra","shipping","送料"],"name":["商品名","name","sku","product"],"price":["売価","price","sellingprice","販売価格"],"target":["目標粗利率","targetmargin","margin","粗利率"]},"clear":"クリア","columnLabel":"列 {index}","columns":{"Cost":"原価","Extra":"追加コスト","GrossProfit":"粗利","Margin":"粗利率","Markup":"マークアップ","Name":"商品名","Price":"売価","RecommendedPrice":"推奨売価","Status":"状態","TargetMargin":"目標粗利率","cost":"原価","extra":"追加コスト","grossProfit":"粗利","margin":"粗利率","markup":"マークアップ","name":"商品名","price":"売価","recommendedPrice":"推奨売価","status":"状態","targetMargin":"目標粗利率"},"copyDone":"TSVをコピーしました","copyTsv":"結果をコピー（TSV）","defaultName":"商品 {index}","defaultTargetMargin":"既定目標粗利率（%）","downloadCsv":"CSVダウンロード","downloadDone":"CSVをダウンロードしました","hasHeader":"1行目を見出しとして扱う","insertSample":"サンプルを挿入","mappingOptions":[{"Label":"使用しない","URL":"#","Url":"#","Value":"unused","label":"使用しない","url":"#","value":"unused"},{"Label":"商品名","URL":"#","Url":"#","Value":"name","label":"商品名","url":"#","value":"name"},{"Label":"原価","URL":"#","Url":"#","Value":"cost","label":"原価","url":"#","value":"cost"},{"Label":"売価","URL":"#","Url":"#","Value":"price","label":"売価","url":"#","value":"price"},{"Label":"追加コスト","URL":"#","Url":"#","Value":"extra","label":"追加コスト","url":"#","value":"extra"},{"Label":"目標粗利率","URL":"#","Url":"#","Value":"target","label":"目標粗利率","url":"#","value":"target"}],"mappingTitle":"列マッピング","pasteLabel":"CSV/TSVを貼り付け","pastePlaceholder":"例）商品名,原価,売価,追加コスト,目標粗利率\n定番A,1200,1980,80,40\nセットB,2400,,230,45","previewTitle":"プレビュー","sample":"商品名,原価,売価,追加コスト,目標粗利率\n定番A,1200,1980,80,40\nセットB,2400,,230,45\nSKU-C,600,990,50,","statusCalculated":"計算済み","statusError":"エラー","statusNotCalculated":"未計算","summary":"全 {total} 行中 {calculated} 行を計算しました。"},"common":{"BrowserOnly":"","CurrencyHelp":"ページ言語と通貨は独立しています。必要な通貨を選んで試算できます。","browserOnly":"","currencyHelp":"ページ言語と通貨は独立しています。必要な通貨を選んで試算できます。"},"currencies":[{"Code":"JPY","Decimals":"0","Label":"日本円 (JPY)","Locale":"ja-JP","URL":"#","Url":"#","code":"JPY","decimals":"0","label":"日本円 (JPY)","locale":"ja-JP","url":"#"},{"Code":"USD","Decimals":"2","Label":"米ドル (USD)","Locale":"en-US","URL":"#","Url":"#","code":"USD","decimals":"2","label":"米ドル (USD)","locale":"en-US","url":"#"},{"Code":"EUR","Decimals":"2","Label":"ユーロ (EUR)","Locale":"de-DE","URL":"#","Url":"#","code":"EUR","decimals":"2","label":"ユーロ (EUR)","locale":"de-DE","url":"#"},{"Code":"GBP","Decimals":"2","Label":"英ポンド (GBP)","Locale":"en-GB","URL":"#","Url":"#","code":"GBP","decimals":"2","label":"英ポンド (GBP)","locale":"en-GB","url":"#"},{"Code":"CNY","Decimals":"2","Label":"中国人民元 (CNY)","Locale":"zh-CN","URL":"#","Url":"#","code":"CNY","decimals":"2","label":"中国人民元 (CNY)","locale":"zh-CN","url":"#"},{"Code":"KRW","Decimals":"0","Label":"韓国ウォン (KRW)","Locale":"ko-KR","URL":"#","Url":"#","code":"KRW","decimals":"0","label":"韓国ウォン (KRW)","locale":"ko-KR","url":"#"},{"Code":"INR","Decimals":"2","Label":"インドルピー (INR)","Locale":"en-IN","URL":"#","Url":"#","code":"INR","decimals":"2","label":"インドルピー (INR)","locale":"en-IN","url":"#"},{"Code":"AUD","Decimals":"2","Label":"豪ドル (AUD)","Locale":"en-AU","URL":"#","Url":"#","code":"AUD","decimals":"2","label":"豪ドル (AUD)","locale":"en-AU","url":"#"},{"Code":"CAD","Decimals":"2","Label":"カナダドル (CAD)","Locale":"en-CA","URL":"#","Url":"#","code":"CAD","decimals":"2","label":"カナダドル (CAD)","locale":"en-CA","url":"#"},{"Code":"SGD","Decimals":"2","Label":"シンガポールドル (SGD)","Locale":"en-SG","URL":"#","Url":"#","code":"SGD","decimals":"2","label":"シンガポールドル (SGD)","locale":"en-SG","url":"#"}],"defaults":{"Currency":"JPY","DecimalOverride":"auto","Mode":"cost_to_price","PriceBasis":"tax_exclusive","TargetMargin":"40","currency":"JPY","decimalOverride":"auto","mode":"cost_to_price","priceBasis":"tax_exclusive","targetMargin":"40"},"dialog":{"CloseAria":"閉じる","MobileInput":"入力","MobileOutput":"結果","MobileTabsAria":"入力と結果の切り替え","Title":"粗利率・マークアップ計算","URL":"#","Url":"#","closeAria":"閉じる","mobileInput":"入力","mobileOutput":"結果","mobileTabsAria":"入力と結果の切り替え","title":"粗利率・マークアップ計算","url":"#"},"errors":{"BatchCostRequired":"原価列をマッピングしてください。","BatchNoRows":"表データがありません。CSVまたはTSVを貼り付けてください。","BatchTooManyRows":"一括計算は500行まで対応しています。","FeeMarginRange":"手数料率と粗利率の合計が100%未満になるよう調整してください","FeeRateRange":"手数料率は0以上100%未満で入力してください","MarginRange":"粗利率は100%未満で入力してください","NonNegative":"0以上で入力してください","PricePositive":"売価は0より大きい値を入力してください","batchCostRequired":"原価列をマッピングしてください。","batchNoRows":"表データがありません。CSVまたはTSVを貼り付けてください。","batchTooManyRows":"一括計算は500行まで対応しています。","feeMarginRange":"手数料率と粗利率の合計が100%未満になるよう調整してください","feeRateRange":"手数料率は0以上100%未満で入力してください","marginRange":"粗利率は100%未満で入力してください","nonNegative":"0以上で入力してください","pricePositive":"売価は0より大きい値を入力してください"},"explain":{"Items":[{"Body":"粗利率は、売価に対してどれだけ粗利が残るかを見る指標です。売価基準で価格の健全性を判断したいときに使います。","Formula":"粗利率 = (売価 - 原価 - 追加コスト - 売価連動手数料) / 売価","Title":"粗利率（利益率）の計算","URL":"#","Url":"#","body":"粗利率は、売価に対してどれだけ粗利が残るかを見る指標です。売価基準で価格の健全性を判断したいときに使います。","formula":"粗利率 = (売価 - 原価 - 追加コスト - 売価連動手数料) / 売価","title":"粗利率（利益率）の計算","url":"#"},{"Body":"マークアップは、原価と固定追加コストに対してどれだけ上乗せしたかを見る指標です。原価基準で価格戦略を考えるときに向いています。","Formula":"マークアップ = 粗利 / (原価 + 追加コスト + 決済固定手数料)","Title":"マークアップの計算","URL":"#","Url":"#","body":"マークアップは、原価と固定追加コストに対してどれだけ上乗せしたかを見る指標です。原価基準で価格戦略を考えるときに向いています。","formula":"マークアップ = 粗利 / (原価 + 追加コスト + 決済固定手数料)","title":"マークアップの計算","url":"#"},{"Body":"目標粗利率から売価を決めるときは、追加コストと決済手数料も同じ式に含めます。実務ではこの差がそのまま価格のズレになります。","Formula":"推奨売価 = (原価 + 追加コスト + 決済固定手数料) / (1 - 決済手数料率 - 目標粗利率)","Title":"原価から売価を出す式","URL":"#","Url":"#","body":"目標粗利率から売価を決めるときは、追加コストと決済手数料も同じ式に含めます。実務ではこの差がそのまま価格のズレになります。","formula":"推奨売価 = (原価 + 追加コスト + 決済固定手数料) / (1 - 決済手数料率 - 目標粗利率)","title":"原価から売価を出す式","url":"#"}],"Title":"短く理解する","URL":"#","Url":"#","items":[{"Body":"粗利率は、売価に対してどれだけ粗利が残るかを見る指標です。売価基準で価格の健全性を判断したいときに使います。","Formula":"粗利率 = (売価 - 原価 - 追加コスト - 売価連動手数料) / 売価","Title":"粗利率（利益率）の計算","URL":"#","Url":"#","body":"粗利率は、売価に対してどれだけ粗利が残るかを見る指標です。売価基準で価格の健全性を判断したいときに使います。","formula":"粗利率 = (売価 - 原価 - 追加コスト - 売価連動手数料) / 売価","title":"粗利率（利益率）の計算","url":"#"},{"Body":"マークアップは、原価と固定追加コストに対してどれだけ上乗せしたかを見る指標です。原価基準で価格戦略を考えるときに向いています。","Formula":"マークアップ = 粗利 / (原価 + 追加コスト + 決済固定手数料)","Title":"マークアップの計算","URL":"#","Url":"#","body":"マークアップは、原価と固定追加コストに対してどれだけ上乗せしたかを見る指標です。原価基準で価格戦略を考えるときに向いています。","formula":"マークアップ = 粗利 / (原価 + 追加コスト + 決済固定手数料)","title":"マークアップの計算","url":"#"},{"Body":"目標粗利率から売価を決めるときは、追加コストと決済手数料も同じ式に含めます。実務ではこの差がそのまま価格のズレになります。","Formula":"推奨売価 = (原価 + 追加コスト + 決済固定手数料) / (1 - 決済手数料率 - 目標粗利率)","Title":"原価から売価を出す式","URL":"#","Url":"#","body":"目標粗利率から売価を決めるときは、追加コストと決済手数料も同じ式に含めます。実務ではこの差がそのまま価格のズレになります。","formula":"推奨売価 = (原価 + 追加コスト + 決済固定手数料) / (1 - 決済手数料率 - 目標粗利率)","title":"原価から売価を出す式","url":"#"}],"title":"短く理解する","url":"#"},"faq":{"Items":[{"Answer":"固定の費用は追加コスト欄に、売価に対する決済手数料は詳細オプションの「決済手数料（%）」に入力してください。固定手数料も別で加味できます。","Question":"手数料を加味したい。","answer":"固定の費用は追加コスト欄に、売価に対する決済手数料は詳細オプションの「決済手数料（%）」に入力してください。固定手数料も別で加味できます。","question":"手数料を加味したい。"},{"Answer":"はい。「原価→売価」タブで原価と目標粗利率を入れると、理論売価と端数候補をまとめて表示します。","Question":"目標粗利率から売価を出せますか？","answer":"はい。「原価→売価」タブで原価と目標粗利率を入れると、理論売価と端数候補をまとめて表示します。","question":"目標粗利率から売価を出せますか？"},{"Answer":"「一括計算」タブにCSVまたはTSVを貼り付けると、粗利率・マークアップ・推奨売価をまとめて計算できます。結果はCSVでダウンロードするか、TSVでコピーできます。","Question":"複数商品は？","answer":"「一括計算」タブにCSVまたはTSVを貼り付けると、粗利率・マークアップ・推奨売価をまとめて計算できます。結果はCSVでダウンロードするか、TSVでコピーできます。","question":"複数商品は？"}],"Title":"よくある質問","URL":"#","Url":"#","items":[{"Answer":"固定の費用は追加コスト欄に、売価に対する決済手数料は詳細オプションの「決済手数料（%）」に入力してください。固定手数料も別で加味できます。","Question":"手数料を加味したい。","answer":"固定の費用は追加コスト欄に、売価に対する決済手数料は詳細オプションの「決済手数料（%）」に入力してください。固定手数料も別で加味できます。","question":"手数料を加味したい。"},{"Answer":"はい。「原価→売価」タブで原価と目標粗利率を入れると、理論売価と端数候補をまとめて表示します。","Question":"目標粗利率から売価を出せますか？","answer":"はい。「原価→売価」タブで原価と目標粗利率を入れると、理論売価と端数候補をまとめて表示します。","question":"目標粗利率から売価を出せますか？"},{"Answer":"「一括計算」タブにCSVまたはTSVを貼り付けると、粗利率・マークアップ・推奨売価をまとめて計算できます。結果はCSVでダウンロードするか、TSVでコピーできます。","Question":"複数商品は？","answer":"「一括計算」タブにCSVまたはTSVを貼り付けると、粗利率・マークアップ・推奨売価をまとめて計算できます。結果はCSVでダウンロードするか、TSVでコピーできます。","question":"複数商品は？"}],"title":"よくある質問","url":"#"},"fields":{"ComparePrice":"売価（比較用）","Cost":"原価（1個あたり）","CostPlaceholder":"例）1200","Currency":"通貨","ExtraCost":"追加コスト（梱包・送料・固定手数料など）","ExtraCostPlaceholder":"例）230","Price":"売価","PricePlaceholder":"例）1980","TargetMargin":"目標粗利率（%）","TargetMarginOptional":"目標粗利率（任意）","TargetMarginPlaceholder":"例）40","comparePrice":"売価（比較用）","cost":"原価（1個あたり）","costPlaceholder":"例）1200","currency":"通貨","extraCost":"追加コスト（梱包・送料・固定手数料など）","extraCostPlaceholder":"例）230","price":"売価","pricePlaceholder":"例）1980","targetMargin":"目標粗利率（%）","targetMarginOptional":"目標粗利率（任意）","targetMarginPlaceholder":"例）40"},"formula":{"Lines":["粗利 = 売価 - (原価 + 追加コスト + 決済固定手数料 + 売価連動手数料)","粗利率 = 粗利 / 売価","マークアップ = 粗利 / (原価 + 追加コスト + 決済固定手数料)","推奨売価 = (原価 + 追加コスト + 決済固定手数料) / (1 - 決済手数料率 - 目標粗利率)"],"Title":"計算式","URL":"#","Url":"#","lines":["粗利 = 売価 - (原価 + 追加コスト + 決済固定手数料 + 売価連動手数料)","粗利率 = 粗利 / 売価","マークアップ = 粗利 / (原価 + 追加コスト + 決済固定手数料)","推奨売価 = (原価 + 追加コスト + 決済固定手数料) / (1 - 決済手数料率 - 目標粗利率)"],"title":"計算式","url":"#"},"glossary":{"Items":[{"Description":"売価に対する粗利の割合です。売価を基準に残る余白を表します。","Term":"粗利率","description":"売価に対する粗利の割合です。売価を基準に残る余白を表します。","term":"粗利率"},{"Description":"原価と固定追加コストに対する粗利の割合です。どれだけ上乗せしたかを示します。","Term":"マークアップ","description":"原価と固定追加コストに対する粗利の割合です。どれだけ上乗せしたかを示します。","term":"マークアップ"},{"Description":"梱包、送料、固定手数料など、1件ごとに乗る固定の費用です。","Term":"追加コスト","description":"梱包、送料、固定手数料など、1件ごとに乗る固定の費用です。","term":"追加コスト"}],"Title":"語句説明","URL":"#","Url":"#","items":[{"Description":"売価に対する粗利の割合です。売価を基準に残る余白を表します。","Term":"粗利率","description":"売価に対する粗利の割合です。売価を基準に残る余白を表します。","term":"粗利率"},{"Description":"原価と固定追加コストに対する粗利の割合です。どれだけ上乗せしたかを示します。","Term":"マークアップ","description":"原価と固定追加コストに対する粗利の割合です。どれだけ上乗せしたかを示します。","term":"マークアップ"},{"Description":"梱包、送料、固定手数料など、1件ごとに乗る固定の費用です。","Term":"追加コスト","description":"梱包、送料、固定手数料など、1件ごとに乗る固定の費用です。","term":"追加コスト"}],"title":"語句説明","url":"#"},"hero":{"Assurance":"※入力した数値はブラウザ内で計算され、サーバーへ送信されません。","Badges":["即時計算","ブラウザ内で計算","端数候補を提案","CSV/TSV一括計算"],"Lead":"原価から目標粗利率に合う売価を出し、今の売価から粗利率とマークアップを逆算できます。追加コスト、決済手数料、端数最適化、一括計算まで1ページで完結します。","Title":"粗利率・マークアップ計算ツール（原価↔売価）","URL":"#","Url":"#","assurance":"※入力した数値はブラウザ内で計算され、サーバーへ送信されません。","badges":["即時計算","ブラウザ内で計算","端数候補を提案","CSV/TSV一括計算"],"lead":"原価から目標粗利率に合う売価を出し、今の売価から粗利率とマークアップを逆算できます。追加コスト、決済手数料、端数最適化、一括計算まで1ページで完結します。","title":"粗利率・マークアップ計算ツール（原価↔売価）","url":"#"},"messages":{"TargetGapAmount":"必要売価との差 {value}","TargetGapPoints":"粗利率差 {value}","targetGapAmount":"必要売価との差 {value}","targetGapPoints":"粗利率差 {value}"},"meta":{"Description":"原価から目標粗利率の売価を計算し、売価から粗利率・マークアップを逆算。梱包・送料・決済手数料などの追加コストと端数最適化にも対応しています。","Lang":"ja","Lastmod":"2026-03-16","Title":"粗利率・マークアップ計算ツール（原価↔売価）｜追加コスト・端数最適化対応","URL":"#","Url":"#","description":"原価から目標粗利率の売価を計算し、売価から粗利率・マークアップを逆算。梱包・送料・決済手数料などの追加コストと端数最適化にも対応しています。","lang":"ja","lastmod":"2026-03-16","title":"粗利率・マークアップ計算ツール（原価↔売価）｜追加コスト・端数最適化対応","url":"#"},"mode":{"CostToPrice":{"Description":"最もよく使う価格決め用モードです。目標粗利率に合う理論値と端数候補を同時に見られます。","PriceHelp":"任意で現在売価を入れると、推奨売価との差を表示します。","ResultNote":"推奨売価を主役に、粗利率とマークアップをまとめて表示します。","TargetHelp":"目標粗利率は 100% 未満で入力してください。","Title":"原価から売価を決める","URL":"#","Url":"#","description":"最もよく使う価格決め用モードです。目標粗利率に合う理論値と端数候補を同時に見られます。","priceHelp":"任意で現在売価を入れると、推奨売価との差を表示します。","resultNote":"推奨売価を主役に、粗利率とマークアップをまとめて表示します。","targetHelp":"目標粗利率は 100% 未満で入力してください。","title":"原価から売価を決める","url":"#"},"PriceToMargin":{"Description":"いまの売価から粗利とマークアップを確認し、必要なら目標粗利率までの差も出します。","PriceHelp":"売価は 0 より大きい値を入力してください。","ResultNote":"現行売価の粗利構造を確認し、目標までの不足分を把握できます。","TargetHelp":"目標粗利率を入れると、必要売価との差分も計算します。","Title":"今の売価を逆算する","URL":"#","Url":"#","description":"いまの売価から粗利とマークアップを確認し、必要なら目標粗利率までの差も出します。","priceHelp":"売価は 0 より大きい値を入力してください。","resultNote":"現行売価の粗利構造を確認し、目標までの不足分を把握できます。","targetHelp":"目標粗利率を入れると、必要売価との差分も計算します。","title":"今の売価を逆算する","url":"#"},"costToPrice":{"Description":"最もよく使う価格決め用モードです。目標粗利率に合う理論値と端数候補を同時に見られます。","PriceHelp":"任意で現在売価を入れると、推奨売価との差を表示します。","ResultNote":"推奨売価を主役に、粗利率とマークアップをまとめて表示します。","TargetHelp":"目標粗利率は 100% 未満で入力してください。","Title":"原価から売価を決める","URL":"#","Url":"#","description":"最もよく使う価格決め用モードです。目標粗利率に合う理論値と端数候補を同時に見られます。","priceHelp":"任意で現在売価を入れると、推奨売価との差を表示します。","resultNote":"推奨売価を主役に、粗利率とマークアップをまとめて表示します。","targetHelp":"目標粗利率は 100% 未満で入力してください。","title":"原価から売価を決める","url":"#"},"priceToMargin":{"Description":"いまの売価から粗利とマークアップを確認し、必要なら目標粗利率までの差も出します。","PriceHelp":"売価は 0 より大きい値を入力してください。","ResultNote":"現行売価の粗利構造を確認し、目標までの不足分を把握できます。","TargetHelp":"目標粗利率を入れると、必要売価との差分も計算します。","Title":"今の売価を逆算する","URL":"#","Url":"#","description":"いまの売価から粗利とマークアップを確認し、必要なら目標粗利率までの差も出します。","priceHelp":"売価は 0 より大きい値を入力してください。","resultNote":"現行売価の粗利構造を確認し、目標までの不足分を把握できます。","targetHelp":"目標粗利率を入れると、必要売価との差分も計算します。","title":"今の売価を逆算する","url":"#"}},"notice":{"Lines":["本ツールは粗利ベースの計算です。販管費、人件費、広告費、税金などを含む会計上の利益とは定義が異なる場合があります。","税抜・税込の扱い、消費税、関税、地域ごとの商習慣や心理価格の常識は別途確認してください。","実際の価格決定では、競争環境、返品条件、キャンペーン、決済条件もあわせて確認してください。"],"Title":"注意事項","URL":"#","Url":"#","lines":["本ツールは粗利ベースの計算です。販管費、人件費、広告費、税金などを含む会計上の利益とは定義が異なる場合があります。","税抜・税込の扱い、消費税、関税、地域ごとの商習慣や心理価格の常識は別途確認してください。","実際の価格決定では、競争環境、返品条件、キャンペーン、決済条件もあわせて確認してください。"],"title":"注意事項","url":"#"},"results":{"BreakdownBaseCost":"原価 + 固定費の合計","BreakdownExtraCost":"追加コスト","BreakdownFixedFee":"決済固定手数料","BreakdownPaymentFee":"売価連動の手数料","BreakdownTitle":"内訳","Copied":"コピーしました","CopyMargin":"粗利率をコピー","CopyMarkup":"マークアップをコピー","CopyPrimary":"推奨売価をコピー","CurrentPrice":"現在売価","CurrentPriceNote":"入力した売価をそのまま使用","EmptyBulk":"CSVまたはTSVを貼り付けると、一括計算の結果をここに表示します。","EmptyCostToPrice":"原価と目標粗利率を入力すると、推奨売価と端数候補を表示します。","EmptyError":"入力内容を見直すと、ここに結果が表示されます。","EmptyPriceToMargin":"原価と売価を入力すると、粗利・粗利率・マークアップを表示します。","FormulaTitle":"計算根拠","FormulaToggle":"式を見る","GrossProfit":"粗利","Margin":"粗利率","Markup":"マークアップ","NoValue":"-","PriceGap":"今の売価との差","PriceGapEmpty":"比較用の売価を入れると差分を表示します。","PriceGapHelp":"比較用の売価との差です。","RecommendedPrice":"推奨売価","RequiredPrice":"目標達成に必要な売価","RoundedNote":"丸め・端数調整後","ShareUrl":"共有リンクをコピー","ShareUrlDone":"共有リンクをコピーしました","TargetGap":"目標までの差","TargetGapEmpty":"目標粗利率を入れると必要売価を表示します。","TargetGapEmptySub":"任意で目標粗利率を入力してください。","TheoreticalNote":"理論値のまま","TheoreticalPrice":"理論売価","Title":"結果サマリー","breakdownBaseCost":"原価 + 固定費の合計","breakdownExtraCost":"追加コスト","breakdownFixedFee":"決済固定手数料","breakdownPaymentFee":"売価連動の手数料","breakdownTitle":"内訳","copied":"コピーしました","copyMargin":"粗利率をコピー","copyMarkup":"マークアップをコピー","copyPrimary":"推奨売価をコピー","currentPrice":"現在売価","currentPriceNote":"入力した売価をそのまま使用","emptyBulk":"CSVまたはTSVを貼り付けると、一括計算の結果をここに表示します。","emptyCostToPrice":"原価と目標粗利率を入力すると、推奨売価と端数候補を表示します。","emptyError":"入力内容を見直すと、ここに結果が表示されます。","emptyPriceToMargin":"原価と売価を入力すると、粗利・粗利率・マークアップを表示します。","formulaTitle":"計算根拠","formulaToggle":"式を見る","grossProfit":"粗利","margin":"粗利率","markup":"マークアップ","noValue":"-","priceGap":"今の売価との差","priceGapEmpty":"比較用の売価を入れると差分を表示します。","priceGapHelp":"比較用の売価との差です。","recommendedPrice":"推奨売価","requiredPrice":"目標達成に必要な売価","roundedNote":"丸め・端数調整後","shareUrl":"共有リンクをコピー","shareUrlDone":"共有リンクをコピーしました","targetGap":"目標までの差","targetGapEmpty":"目標粗利率を入れると必要売価を表示します。","targetGapEmptySub":"任意で目標粗利率を入力してください。","theoreticalNote":"理論値のまま","theoreticalPrice":"理論売価","title":"結果サマリー"},"rounding":{"Apply":"採用する","Direction":"丸め方向","DirectionOptions":[{"Label":"四捨五入","URL":"#","Url":"#","Value":"round","label":"四捨五入","url":"#","value":"round"},{"Label":"切り上げ","URL":"#","Url":"#","Value":"ceil","label":"切り上げ","url":"#","value":"ceil"},{"Label":"切り捨て","URL":"#","Url":"#","Value":"floor","label":"切り捨て","url":"#","value":"floor"}],"EmptySuggestions":"候補価格は、原価と目標粗利率を入力すると表示されます。","EndingAuto":"通貨に合わせる","EndingNone":"なし","EndingOptionsDecimal":[{"Label":"… .00","URL":"#","Url":"#","Value":"00","label":"… .00","url":"#","value":"00"},{"Label":"… .95","URL":"#","Url":"#","Value":"95","label":"… .95","url":"#","value":"95"},{"Label":"… .99","URL":"#","Url":"#","Value":"99","label":"… .99","url":"#","value":"99"}],"EndingOptionsZero":[{"Label":"…80","URL":"#","Url":"#","Value":"80","label":"…80","url":"#","value":"80"},{"Label":"…90","URL":"#","Url":"#","Value":"90","label":"…90","url":"#","value":"90"},{"Label":"…98","URL":"#","Url":"#","Value":"98","label":"…98","url":"#","value":"98"},{"Label":"…99","URL":"#","Url":"#","Value":"99","label":"…99","url":"#","value":"99"}],"EndingPreset":"価格末尾プリセット","NoTargetDelta":"目標差はありません","SuggestionsTitle":"候補価格","TargetDelta":"目標との差 {value}","Title":"端数最適化","URL":"#","Unit":"丸め単位","UnitOptions":[{"Label":"なし","URL":"#","Url":"#","Value":"none","label":"なし","url":"#","value":"none"},{"Label":"1","URL":"#","Url":"#","Value":"1","label":"1","url":"#","value":"1"},{"Label":"10","URL":"#","Url":"#","Value":"10","label":"10","url":"#","value":"10"},{"Label":"100","URL":"#","Url":"#","Value":"100","label":"100","url":"#","value":"100"},{"Label":"1000","URL":"#","Url":"#","Value":"1000","label":"1000","url":"#","value":"1000"}],"Url":"#","apply":"採用する","direction":"丸め方向","directionOptions":[{"Label":"四捨五入","URL":"#","Url":"#","Value":"round","label":"四捨五入","url":"#","value":"round"},{"Label":"切り上げ","URL":"#","Url":"#","Value":"ceil","label":"切り上げ","url":"#","value":"ceil"},{"Label":"切り捨て","URL":"#","Url":"#","Value":"floor","label":"切り捨て","url":"#","value":"floor"}],"emptySuggestions":"候補価格は、原価と目標粗利率を入力すると表示されます。","endingAuto":"通貨に合わせる","endingNone":"なし","endingOptionsDecimal":[{"Label":"… .00","URL":"#","Url":"#","Value":"00","label":"… .00","url":"#","value":"00"},{"Label":"… .95","URL":"#","Url":"#","Value":"95","label":"… .95","url":"#","value":"95"},{"Label":"… .99","URL":"#","Url":"#","Value":"99","label":"… .99","url":"#","value":"99"}],"endingOptionsZero":[{"Label":"…80","URL":"#","Url":"#","Value":"80","label":"…80","url":"#","value":"80"},{"Label":"…90","URL":"#","Url":"#","Value":"90","label":"…90","url":"#","value":"90"},{"Label":"…98","URL":"#","Url":"#","Value":"98","label":"…98","url":"#","value":"98"},{"Label":"…99","URL":"#","Url":"#","Value":"99","label":"…99","url":"#","value":"99"}],"endingPreset":"価格末尾プリセット","noTargetDelta":"目標差はありません","suggestionsTitle":"候補価格","targetDelta":"目標との差 {value}","title":"端数最適化","unit":"丸め単位","unitOptions":[{"Label":"なし","URL":"#","Url":"#","Value":"none","label":"なし","url":"#","value":"none"},{"Label":"1","URL":"#","Url":"#","Value":"1","label":"1","url":"#","value":"1"},{"Label":"10","URL":"#","Url":"#","Value":"10","label":"10","url":"#","value":"10"},{"Label":"100","URL":"#","Url":"#","Value":"100","label":"100","url":"#","value":"100"},{"Label":"1000","URL":"#","Url":"#","Value":"1000","label":"1000","url":"#","value":"1000"}],"url":"#"},"sample":{"Case1":{"Input":"入力例: 原価 1,200円 / 追加コスト 230円 / 目標粗利率 40%","Output":"出力例: 理論売価、粗利、粗利率、マークアップ、980・990・999 などの端数候補を表示","Title":"原価から推奨売価を出す","URL":"#","Url":"#","input":"入力例: 原価 1,200円 / 追加コスト 230円 / 目標粗利率 40%","output":"出力例: 理論売価、粗利、粗利率、マークアップ、980・990・999 などの端数候補を表示","title":"原価から推奨売価を出す","url":"#"},"Case2":{"Input":"入力例: 原価 600円 / 追加コスト 50円 / 売価 990円","Output":"出力例: 粗利、粗利率、マークアップ、目標粗利率との差を表示","Title":"今の売価を評価する","URL":"#","Url":"#","input":"入力例: 原価 600円 / 追加コスト 50円 / 売価 990円","output":"出力例: 粗利、粗利率、マークアップ、目標粗利率との差を表示","title":"今の売価を評価する","url":"#"},"Title":"サンプル","URL":"#","Url":"#","case1":{"Input":"入力例: 原価 1,200円 / 追加コスト 230円 / 目標粗利率 40%","Output":"出力例: 理論売価、粗利、粗利率、マークアップ、980・990・999 などの端数候補を表示","Title":"原価から推奨売価を出す","URL":"#","Url":"#","input":"入力例: 原価 1,200円 / 追加コスト 230円 / 目標粗利率 40%","output":"出力例: 理論売価、粗利、粗利率、マークアップ、980・990・999 などの端数候補を表示","title":"原価から推奨売価を出す","url":"#"},"case2":{"Input":"入力例: 原価 600円 / 追加コスト 50円 / 売価 990円","Output":"出力例: 粗利、粗利率、マークアップ、目標粗利率との差を表示","Title":"今の売価を評価する","URL":"#","Url":"#","input":"入力例: 原価 600円 / 追加コスト 50円 / 売価 990円","output":"出力例: 粗利、粗利率、マークアップ、目標粗利率との差を表示","title":"今の売価を評価する","url":"#"},"title":"サンプル","url":"#"},"steps":{"Items":["原価→売価、売価→粗利率、一括計算の3モードから目的に合うものを選びます。","必要な原価、売価、目標粗利率、追加コストを入力します。","必要に応じて決済手数料や表示桁数を詳細オプションで調整します。","結果サマリー、内訳、計算式、端数候補を見てそのまま意思決定します。"],"Title":"使い方","URL":"#","Url":"#","items":["原価→売価、売価→粗利率、一括計算の3モードから目的に合うものを選びます。","必要な原価、売価、目標粗利率、追加コストを入力します。","必要に応じて決済手数料や表示桁数を詳細オプションで調整します。","結果サマリー、内訳、計算式、端数候補を見てそのまま意思決定します。"],"title":"使い方","url":"#"},"tabs":{"AriaLabel":"計算モード","Bulk":"一括計算","CostToPrice":"原価→売価","PriceToMargin":"売価→粗利率","ariaLabel":"計算モード","bulk":"一括計算","costToPrice":"原価→売価","priceToMargin":"売価→粗利率"},"topbar":{"Subtitle":"Retail Tools","Title":"Margin \u0026 Markup Calculator","URL":"#","Url":"#","subtitle":"Retail Tools","title":"Margin \u0026 Markup Calculator","url":"#"},"useCases":{"Items":[{"Body":"原価、追加コスト、目標粗利率を入れると、理論値と端数候補をすぐに比較できます。","Eyebrow":"主要ユースケース 1","Title":"原価から推奨売価を決める","URL":"#","Url":"#","body":"原価、追加コスト、目標粗利率を入れると、理論値と端数候補をすぐに比較できます。","eyebrow":"主要ユースケース 1","title":"原価から推奨売価を決める","url":"#"},{"Body":"売価から粗利、粗利率、マークアップを逆算し、目標までの差もその場で把握できます。","Eyebrow":"主要ユースケース 2","Title":"今の価格が妥当か確認する","URL":"#","Url":"#","body":"売価から粗利、粗利率、マークアップを逆算し、目標までの差もその場で把握できます。","eyebrow":"主要ユースケース 2","title":"今の価格が妥当か確認する","url":"#"},{"Body":"CSV/TSVを貼り付けるだけで複数商品の試算ができ、CSVダウンロードやTSVコピーにも対応します。","Eyebrow":"主要ユースケース 3","Title":"複数商品をまとめて再計算する","URL":"#","Url":"#","body":"CSV/TSVを貼り付けるだけで複数商品の試算ができ、CSVダウンロードやTSVコピーにも対応します。","eyebrow":"主要ユースケース 3","title":"複数商品をまとめて再計算する","url":"#"}],"Title":"ページの狙い","URL":"#","Url":"#","items":[{"Body":"原価、追加コスト、目標粗利率を入れると、理論値と端数候補をすぐに比較できます。","Eyebrow":"主要ユースケース 1","Title":"原価から推奨売価を決める","URL":"#","Url":"#","body":"原価、追加コスト、目標粗利率を入れると、理論値と端数候補をすぐに比較できます。","eyebrow":"主要ユースケース 1","title":"原価から推奨売価を決める","url":"#"},{"Body":"売価から粗利、粗利率、マークアップを逆算し、目標までの差もその場で把握できます。","Eyebrow":"主要ユースケース 2","Title":"今の価格が妥当か確認する","URL":"#","Url":"#","body":"売価から粗利、粗利率、マークアップを逆算し、目標までの差もその場で把握できます。","eyebrow":"主要ユースケース 2","title":"今の価格が妥当か確認する","url":"#"},{"Body":"CSV/TSVを貼り付けるだけで複数商品の試算ができ、CSVダウンロードやTSVコピーにも対応します。","Eyebrow":"主要ユースケース 3","Title":"複数商品をまとめて再計算する","URL":"#","Url":"#","body":"CSV/TSVを貼り付けるだけで複数商品の試算ができ、CSVダウンロードやTSVコピーにも対応します。","eyebrow":"主要ユースケース 3","title":"複数商品をまとめて再計算する","url":"#"}],"title":"ページの狙い","url":"#"}};
+      const page = typeof pageRaw === "string" ? JSON.parse(pageRaw) : pageRaw;
+      const root = document.getElementById("margin-markup-calculator-root");
+      if (!root) return;
+
+      const MODE_COST_TO_PRICE = "cost_to_price";
+      const MODE_PRICE_TO_MARGIN = "price_to_margin";
+      const MODE_BULK = "bulk";
+      const DEFAULT_MAX_BULK_ROWS = 500;
+      const COPY_FALLBACK_KEY = "__marginMarkupClipboard";
+
+      const el = {
+        openButton: document.getElementById("margin-markup-calculator-open-button"),
+        dialog: document.getElementById("margin-markup-calculator-fullscreen-dialog"),
+        closeButton: document.getElementById("margin-markup-calculator-close-button"),
+        modeTabs: Array.from(document.querySelectorAll("[data-mode-tab]")),
+        mobileTabs: Array.from(document.querySelectorAll("[data-mobile-tab]")),
+        panelInput: document.querySelector('[data-panel="input"]'),
+        panelOutput: document.querySelector('[data-panel="output"]'),
+        mobileSummary: document.getElementById("margin-markup-calculator-mobile-summary"),
+        mobileSummaryTitle: document.getElementById("mobile-summary-title"),
+        mobileSummaryValue: document.getElementById("mobile-summary-value"),
+        mobileSummarySub: document.getElementById("mobile-summary-sub"),
+        toast: document.getElementById("margin-markup-calculator-toast"),
+        toastText: document.getElementById("margin-markup-calculator-toast-text"),
+
+        singleModeTitle: document.getElementById("single-mode-title"),
+        singleModeDescription: document.getElementById("single-mode-description"),
+        costLabel: document.getElementById("cost-label"),
+        targetMarginLabel: document.getElementById("target-margin-label"),
+        targetMarginHelp: document.getElementById("target-margin-help"),
+        priceLabel: document.getElementById("price-label"),
+        priceHelp: document.getElementById("price-help"),
+        resultModeNote: document.getElementById("result-mode-note"),
+
+        currency: document.getElementById("field-currency"),
+        cost: document.getElementById("field-cost"),
+        targetMargin: document.getElementById("field-target-margin"),
+        extraCost: document.getElementById("field-extra-cost"),
+        price: document.getElementById("field-price"),
+        feeRate: document.getElementById("field-fee-rate"),
+        feeFixed: document.getElementById("field-fee-fixed"),
+        priceBasis: document.getElementById("field-price-basis"),
+        decimalOverride: document.getElementById("field-decimal-override"),
+        advanced: document.getElementById("margin-markup-calculator-settings"),
+        formulaDetails: document.getElementById("result-formula-details"),
+        roundingUnit: document.getElementById("rounding-unit"),
+        roundingDirection: document.getElementById("rounding-direction"),
+        roundingEnding: document.getElementById("rounding-ending"),
+
+        errorCost: document.getElementById("error-cost"),
+        errorTargetMargin: document.getElementById("error-target-margin"),
+        errorExtraCost: document.getElementById("error-extra-cost"),
+        errorPrice: document.getElementById("error-price"),
+        errorFeeRate: document.getElementById("error-fee-rate"),
+        errorFeeFixed: document.getElementById("error-fee-fixed"),
+        errorBulk: document.getElementById("error-bulk"),
+
+        singlePane: document.getElementById("single-mode-pane"),
+        bulkPane: document.getElementById("bulk-mode-pane"),
+        bulkPaste: document.getElementById("bulk-paste"),
+        bulkInsertSample: document.getElementById("bulk-insert-sample"),
+        bulkClear: document.getElementById("bulk-clear"),
+        bulkHasHeader: document.getElementById("bulk-has-header"),
+        bulkDefaultTarget: document.getElementById("bulk-default-target"),
+        bulkMapping: document.getElementById("bulk-mapping"),
+        bulkSummary: document.getElementById("bulk-summary"),
+        bulkPreviewBody: document.getElementById("bulk-preview-body"),
+        bulkDownloadCsv: document.getElementById("bulk-download-csv"),
+        bulkCopyTsv: document.getElementById("bulk-copy-tsv"),
+
+        resultError: document.getElementById("result-error"),
+        resultNote: document.getElementById("result-note"),
+        resultSingleWrap: document.getElementById("result-single-wrap"),
+        resultBulkWrap: document.getElementById("result-bulk-wrap"),
+        resultEmpty: document.getElementById("result-empty"),
+        resultPrimaryLabel: document.getElementById("result-primary-label"),
+        resultPrimaryValue: document.getElementById("result-primary-value"),
+        resultPrimarySub: document.getElementById("result-primary-sub"),
+        resultSecondaryLabel: document.getElementById("result-secondary-label"),
+        resultSecondaryValue: document.getElementById("result-secondary-value"),
+        resultGapLabel: document.getElementById("result-gap-label"),
+        resultGapValue: document.getElementById("result-gap-value"),
+        resultGapSub: document.getElementById("result-gap-sub"),
+        resultGrossProfit: document.getElementById("result-gross-profit"),
+        resultMargin: document.getElementById("result-margin"),
+        resultMarkup: document.getElementById("result-markup"),
+        resultBreakdown: document.getElementById("result-breakdown"),
+        resultFormula: document.getElementById("result-formula"),
+        resultRoundingWrap: document.getElementById("result-rounding-wrap"),
+        suggestionList: document.getElementById("suggestion-list"),
+
+        copyPrimary: document.getElementById("copy-primary"),
+        copyMargin: document.getElementById("copy-margin"),
+        copyMarkup: document.getElementById("copy-markup"),
+        copyShare: document.getElementById("copy-share-url"),
+      };
+
+      const currencyMap = new Map(
+        (page.currencies || []).map((item) => [item.code, {
+          code: item.code,
+          label: item.label,
+          locale: item.locale || "en-US",
+          decimals: Number(item.decimals == null ? 2 : item.decimals),
+        }])
+      );
+
+      const state = {
+        mode: page.defaults?.mode || (root.dataset.lang === "ja" ? MODE_COST_TO_PRICE : MODE_COST_TO_PRICE),
+        mobileTab: "input",
+        dialogOpen: false,
+        currency: page.defaults?.currency || (root.dataset.lang === "ja" ? "JPY" : "USD"),
+        cost: "",
+        price: "",
+        targetMargin: page.defaults?.targetMargin || "",
+        extraCost: "0",
+        feeRate: "0",
+        feeFixed: "0",
+        priceBasis: page.defaults?.priceBasis || "tax_exclusive",
+        decimalOverride: page.defaults?.decimalOverride || "auto",
+        roundingUnit: "none",
+        roundingDirection: "round",
+        endingPreset: "auto",
+        adoptedPrice: null,
+        bulkText: "",
+        bulkHasHeader: true,
+        bulkDefaultTarget: page.defaults?.targetMargin || "",
+        bulkMappings: [],
+        bulkMeta: null,
+        bulkResult: null,
+      };
+
+      let toastTimer = null;
+
+      function refreshIcons() {
+        if (window.lucide && typeof window.lucide.createIcons === "function") {
+          window.lucide.createIcons();
+        }
+      }
+
+      function showToast(message) {
+        if (!el.toast || !el.toastText) return;
+        el.toastText.textContent = message || "";
+        el.toast.classList.add("show");
+        if (toastTimer) window.clearTimeout(toastTimer);
+        toastTimer = window.setTimeout(() => {
+          el.toast.classList.remove("show");
+        }, 1800);
+      }
+
+      function trackEvent(name, detail) {
+        try {
+          window.dispatchEvent(new CustomEvent("ff-tool-event", {
+            detail: { tool: "margin-markup-calculator", name, detail: detail || {} },
+          }));
+        } catch (error) {
+          return;
+        }
+      }
+
+      function formatMessage(template, params) {
+        return String(template || "").replace(/\{(\w+)\}/g, (_, key) => {
+          return params && Object.prototype.hasOwnProperty.call(params, key) ? params[key] : "";
+        });
+      }
+
+      function toAsciiDigits(value) {
+        const map = {
+          "０": "0", "１": "1", "２": "2", "３": "3", "４": "4",
+          "５": "5", "６": "6", "７": "7", "８": "8", "９": "9",
+          "．": ".", "，": ",", "－": "-", "％": "%", "　": " ",
+        };
+        return String(value || "").replace(/[０-９．，－％　]/g, (char) => map[char] || char);
+      }
+
+      function normalizeNumberString(raw) {
+        let text = toAsciiDigits(raw).trim();
+        if (!text) return "";
+        text = text.replace(/[^\d.,\-]/g, "");
+        if (!text) return "";
+        const lastDot = text.lastIndexOf(".");
+        const lastComma = text.lastIndexOf(",");
+        let decimalSeparator = "";
+
+        if (lastDot !== -1 && lastComma !== -1) {
+          decimalSeparator = lastDot > lastComma ? "." : ",";
+        } else if (lastDot !== -1 || lastComma !== -1) {
+          const separator = lastDot !== -1 ? "." : ",";
+          const parts = text.split(separator);
+          if (parts.length === 2) {
+            decimalSeparator = parts[1].length === 3 ? "" : separator;
+          } else if (parts.length > 2) {
+            decimalSeparator = parts[parts.length - 1].length === 3 ? "" : separator;
+          } else {
+            decimalSeparator = separator;
+          }
+        }
+
+        if (decimalSeparator) {
+          const strip = decimalSeparator === "." ? /,/g : /\./g;
+          text = text.replace(strip, "");
+          if (decimalSeparator === ",") {
+            text = text.replace(/,/g, ".");
+          }
+          const first = text.indexOf(".");
+          if (first !== -1) {
+            text = text.slice(0, first + 1) + text.slice(first + 1).replace(/\./g, "");
+          }
+        } else {
+          text = text.replace(/[.,]/g, "");
+        }
+
+        text = text.replace(/(?!^)-/g, "");
+        return text;
+      }
+
+      function parseLooseNumber(raw) {
+        const normalized = normalizeNumberString(raw);
+        if (!normalized) return null;
+        const value = Number(normalized);
+        return Number.isFinite(value) ? value : Number.NaN;
+      }
+
+      function isZeroDecimalCurrency(code) {
+        const meta = currencyMap.get(code);
+        return Boolean(meta && Number(meta.decimals) === 0);
+      }
+
+      function getDecimals() {
+        if (state.decimalOverride !== "auto") {
+          return Number(state.decimalOverride);
+        }
+        const meta = currencyMap.get(state.currency);
+        return meta && meta.decimals != null ? meta.decimals : 2;
+      }
+
+      function formatMoney(value) {
+        if (!Number.isFinite(value)) return page.results?.noValue || "-";
+        const meta = currencyMap.get(state.currency) || {
+          code: state.currency,
+          locale: "en-US",
+          decimals: 2,
+        };
+        const digits = getDecimals();
+        try {
+          return new Intl.NumberFormat(meta.locale, {
+            style: "currency",
+            currency: meta.code,
+            minimumFractionDigits: digits,
+            maximumFractionDigits: digits,
+          }).format(value);
+        } catch (error) {
+          return `${meta.code} ${value.toFixed(digits)}`;
+        }
+      }
+
+      function formatPlain(value, digits) {
+        if (!Number.isFinite(value)) return page.results?.noValue || "-";
+        return new Intl.NumberFormat(currencyMap.get(state.currency)?.locale || "en-US", {
+          minimumFractionDigits: digits,
+          maximumFractionDigits: digits,
+        }).format(value);
+      }
+
+      function formatPercent(ratio) {
+        if (!Number.isFinite(ratio)) return page.results?.noValue || "-";
+        return `${formatPlain(ratio * 100, 1)}%`;
+      }
+
+      function formatSignedMoney(value) {
+        if (!Number.isFinite(value)) return page.results?.noValue || "-";
+        const prefix = value > 0 ? "+" : value < 0 ? "-" : "";
+        return `${prefix}${formatMoney(Math.abs(value))}`;
+      }
+
+      function formatSignedPoints(value) {
+        if (!Number.isFinite(value)) return page.results?.noValue || "-";
+        const prefix = value > 0 ? "+" : value < 0 ? "-" : "";
+        return `${prefix}${formatPlain(Math.abs(value), 1)} pt`;
+      }
+
+      function valueOrZero(raw) {
+        const value = parseLooseNumber(raw);
+        return value == null ? 0 : value;
+      }
+
+      function clearAdoptedPrice() {
+        state.adoptedPrice = null;
+      }
+
+      function getModeMeta() {
+        return state.mode === MODE_PRICE_TO_MARGIN ? page.mode?.priceToMargin : page.mode?.costToPrice;
+      }
+
+      function setDialogOpen(nextOpen) {
+        state.dialogOpen = Boolean(nextOpen);
+        el.dialog.classList.toggle("hidden", !state.dialogOpen);
+        el.mobileSummary.classList.toggle("hidden", !state.dialogOpen);
+        document.body.style.overflow = state.dialogOpen ? "hidden" : "";
+      }
+
+      function getSingleFieldErrors() {
+        const errors = {};
+
+        const cost = parseLooseNumber(state.cost);
+        if (cost != null && (!Number.isFinite(cost) || cost < 0)) {
+          errors.cost = page.errors.nonNegative;
+        }
+
+        const extraCost = parseLooseNumber(state.extraCost);
+        if (extraCost != null && (!Number.isFinite(extraCost) || extraCost < 0)) {
+          errors.extraCost = page.errors.nonNegative;
+        }
+
+        const feeRate = parseLooseNumber(state.feeRate);
+        if (feeRate != null && (!Number.isFinite(feeRate) || feeRate < 0 || feeRate >= 100)) {
+          errors.feeRate = page.errors.feeRateRange;
+        }
+
+        const feeFixed = parseLooseNumber(state.feeFixed);
+        if (feeFixed != null && (!Number.isFinite(feeFixed) || feeFixed < 0)) {
+          errors.feeFixed = page.errors.nonNegative;
+        }
+
+        const targetMargin = parseLooseNumber(state.targetMargin);
+        const price = parseLooseNumber(state.price);
+
+        if (state.mode === MODE_COST_TO_PRICE) {
+          if (targetMargin != null && (!Number.isFinite(targetMargin) || targetMargin < 0 || targetMargin >= 100)) {
+            errors.targetMargin = page.errors.marginRange;
+          }
+        }
+
+        if (state.mode === MODE_PRICE_TO_MARGIN) {
+          if (targetMargin != null && (!Number.isFinite(targetMargin) || targetMargin < 0 || targetMargin >= 100)) {
+            errors.targetMargin = page.errors.marginRange;
+          }
+          if (price != null && (!Number.isFinite(price) || price <= 0)) {
+            errors.price = page.errors.pricePositive;
+          }
+        }
+
+        const feeRateValue = feeRate == null ? 0 : feeRate;
+        if (targetMargin != null && Number.isFinite(targetMargin) && feeRateValue + targetMargin >= 100) {
+          errors.targetMargin = page.errors.feeMarginRange;
+        }
+
+        return errors;
+      }
+
+      function calculateMetrics(priceValue, baseCost, feeRateDecimal) {
+        const paymentFee = priceValue * feeRateDecimal;
+        const grossProfit = priceValue - (baseCost + paymentFee);
+        const margin = priceValue > 0 ? grossProfit / priceValue : Number.NaN;
+        const markup = baseCost > 0 ? grossProfit / baseCost : Number.NaN;
+        return { paymentFee, grossProfit, margin, markup };
+      }
+
+      function roundByUnit(value, unit, direction) {
+        if (!Number.isFinite(value)) return Number.NaN;
+        if (!unit || unit === "none") return value;
+        const numericUnit = Number(unit);
+        if (!Number.isFinite(numericUnit) || numericUnit <= 0) return value;
+        const scaled = value / numericUnit;
+        if (direction === "ceil") return Math.ceil(scaled) * numericUnit;
+        if (direction === "floor") return Math.floor(scaled) * numericUnit;
+        return Math.round(scaled) * numericUnit;
+      }
+
+      function buildEndingOptions() {
+        const isZero = isZeroDecimalCurrency(state.currency);
+        const options = isZero ? page.rounding?.endingOptionsZero || [] : page.rounding?.endingOptionsDecimal || [];
+        const values = [{ value: "auto", label: page.rounding?.endingAuto }, { value: "none", label: page.rounding?.endingNone }].concat(options);
+
+        const current = state.endingPreset;
+        el.roundingEnding.innerHTML = values.map((item) => {
+          return `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`;
+        }).join("");
+        const allowed = new Set(values.map((item) => item.value));
+        if (!allowed.has(current)) {
+          state.endingPreset = "auto";
+        }
+        el.roundingEnding.value = state.endingPreset;
+      }
+
+      function applyEndingPreset(baseValue, preset, direction) {
+        if (!Number.isFinite(baseValue)) return Number.NaN;
+        if (!preset || preset === "auto" || preset === "none") return baseValue;
+
+        if (isZeroDecimalCurrency(state.currency)) {
+          const endings = String(preset).replace(/[^\d]/g, "");
+          const width = endings.length;
+          const suffix = Number(endings);
+          const factor = 10 ** width;
+          const whole = Math.round(baseValue);
+          const prefix = Math.floor(whole / factor);
+          const candidates = [];
+          for (let offset = -2; offset <= 3; offset += 1) {
+            const candidate = (prefix + offset) * factor + suffix;
+            if (candidate > 0) candidates.push(candidate);
+          }
+          return pickByDirection(candidates, baseValue, direction);
+        }
+
+        const cents = Number(String(preset).replace(/[^\d]/g, ""));
+        const whole = Math.floor(baseValue);
+        const candidates = [];
+        for (let offset = -2; offset <= 3; offset += 1) {
+          const candidate = whole + offset + (cents / 100);
+          if (candidate > 0) candidates.push(candidate);
+        }
+        return pickByDirection(candidates, baseValue, direction);
+      }
+
+      function pickByDirection(candidates, baseValue, direction) {
+        const filtered = candidates.filter((candidate) => Number.isFinite(candidate));
+        if (!filtered.length) return baseValue;
+        if (direction === "ceil") {
+          const ceilCandidates = filtered.filter((candidate) => candidate >= baseValue);
+          return ceilCandidates.length ? Math.min(...ceilCandidates) : Math.max(...filtered);
+        }
+        if (direction === "floor") {
+          const floorCandidates = filtered.filter((candidate) => candidate <= baseValue);
+          return floorCandidates.length ? Math.max(...floorCandidates) : Math.min(...filtered);
+        }
+        let best = filtered[0];
+        let bestDistance = Math.abs(best - baseValue);
+        filtered.forEach((candidate) => {
+          const distance = Math.abs(candidate - baseValue);
+          if (distance < bestDistance) {
+            best = candidate;
+            bestDistance = distance;
+          }
+        });
+        return best;
+      }
+
+      function applySelectedRounding(rawPrice) {
+        const byUnit = roundByUnit(rawPrice, state.roundingUnit, state.roundingDirection);
+        const preset = state.endingPreset === "auto"
+          ? "none"
+          : state.endingPreset;
+        return applyEndingPreset(byUnit, preset, state.roundingDirection);
+      }
+
+      function buildSuggestions(rawPrice, baseCost, feeRateDecimal, targetMarginDecimal) {
+        const candidates = new Set();
+        if (Number.isFinite(rawPrice)) {
+          candidates.add(roundByUnit(rawPrice, state.roundingUnit, state.roundingDirection).toFixed(6));
+          candidates.add(applySelectedRounding(rawPrice).toFixed(6));
+          candidates.add(rawPrice.toFixed(6));
+        }
+
+        if (isZeroDecimalCurrency(state.currency)) {
+          const endings = page.rounding?.endingOptionsZero || [];
+          for (let index = 0; index < endings.length; index += 1) {
+            const preset = endings[index].value;
+            const price = applyEndingPreset(rawPrice, preset, state.roundingDirection);
+            candidates.add(price.toFixed(6));
+          }
+        } else {
+          const endings = page.rounding?.endingOptionsDecimal || [];
+          for (let index = 0; index < endings.length; index += 1) {
+            const preset = endings[index].value;
+            const price = applyEndingPreset(rawPrice, preset, state.roundingDirection);
+            candidates.add(price.toFixed(6));
+          }
+        }
+
+        const out = [];
+        const entries = Array.from(candidates);
+        for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
+          const entry = entries[entryIndex];
+          const priceValue = Number(entry);
+          if (!Number.isFinite(priceValue) || priceValue <= 0) continue;
+          const metrics = calculateMetrics(priceValue, baseCost, feeRateDecimal);
+          out.push({
+            price: priceValue,
+            margin: metrics.margin,
+            deltaPoints: Number.isFinite(targetMarginDecimal) ? (metrics.margin - targetMarginDecimal) * 100 : Number.NaN,
+          });
+        }
+        out.sort((a, b) => Math.abs(a.price - rawPrice) - Math.abs(b.price - rawPrice));
+        const deduped = [];
+        for (let index = 0; index < out.length; index += 1) {
+          let exists = false;
+          for (let otherIndex = 0; otherIndex < deduped.length; otherIndex += 1) {
+            if (Math.abs(deduped[otherIndex].price - out[index].price) < 0.0001) {
+              exists = true;
+              break;
+            }
+          }
+          if (!exists) {
+            deduped.push(out[index]);
+          }
+          if (deduped.length >= 5) {
+            break;
+          }
+        }
+        return deduped;
+      }
+
+      function computeSingleResult() {
+        const errors = getSingleFieldErrors();
+        if (Object.keys(errors).length) {
+          return { errors };
+        }
+
+        const cost = parseLooseNumber(state.cost);
+        const price = parseLooseNumber(state.price);
+        const targetMargin = parseLooseNumber(state.targetMargin);
+        const extraCost = valueOrZero(state.extraCost);
+        const feeRate = valueOrZero(state.feeRate) / 100;
+        const feeFixed = valueOrZero(state.feeFixed);
+        const baseCost = (cost == null ? Number.NaN : cost) + extraCost + feeFixed;
+
+        if (state.mode === MODE_COST_TO_PRICE) {
+          if (cost == null || targetMargin == null) {
+            return { empty: page.results.emptyCostToPrice, errors };
+          }
+          if (!Number.isFinite(baseCost)) {
+            return { empty: page.results.emptyCostToPrice, errors };
+          }
+          const marginDecimal = targetMargin / 100;
+          const denominator = 1 - feeRate - marginDecimal;
+          if (!(denominator > 0)) {
+            return { errors: { targetMargin: page.errors.feeMarginRange } };
+          }
+          const rawPrice = baseCost / denominator;
+          const adoptedPrice = Number.isFinite(state.adoptedPrice) ? state.adoptedPrice : applySelectedRounding(rawPrice);
+          const metrics = calculateMetrics(adoptedPrice, baseCost, feeRate);
+          const compareGap = price != null && Number.isFinite(price) ? price - adoptedPrice : Number.NaN;
+          const suggestions = buildSuggestions(rawPrice, baseCost, feeRate, marginDecimal);
+          return {
+            mode: MODE_COST_TO_PRICE,
+            baseCost,
+            rawPrice,
+            adoptedPrice,
+            feeRate,
+            feeFixed,
+            extraCost,
+            price,
+            targetMargin,
+            metrics,
+            compareGap,
+            suggestions,
+          };
+        }
+
+        if (cost == null || price == null) {
+          return { empty: page.results.emptyPriceToMargin, errors };
+        }
+        const metrics = calculateMetrics(price, baseCost, feeRate);
+        const hasTarget = targetMargin != null && Number.isFinite(targetMargin);
+        const requiredPrice = hasTarget ? baseCost / (1 - feeRate - targetMargin / 100) : Number.NaN;
+        const gapAmount = hasTarget ? requiredPrice - price : Number.NaN;
+        const gapPoints = hasTarget ? ((targetMargin / 100) - metrics.margin) * 100 : Number.NaN;
+
+        return {
+          mode: MODE_PRICE_TO_MARGIN,
+          baseCost,
+          currentPrice: price,
+          targetMargin,
+          metrics,
+          feeRate,
+          feeFixed,
+          extraCost,
+          requiredPrice,
+          gapAmount,
+          gapPoints,
+        };
+      }
+
+      function inferDelimiter(text) {
+        const lines = String(text || "").split(/\r?\n/).slice(0, 5);
+        const counts = {
+          "\t": 0,
+          ",": 0,
+          ";": 0,
+        };
+        lines.forEach((line) => {
+          counts["\t"] += (line.match(/\t/g) || []).length;
+          counts[","] += (line.match(/,/g) || []).length;
+          counts[";"] += (line.match(/;/g) || []).length;
+        });
+        let delimiter = ",";
+        let best = counts[","];
+        Object.entries(counts).forEach(([candidate, count]) => {
+          if (count > best) {
+            delimiter = candidate;
+            best = count;
+          }
+        });
+        return delimiter;
+      }
+
+      function parseDelimitedTable(text) {
+        const delimiter = inferDelimiter(text);
+        const rows = [];
+        let cell = "";
+        let row = [];
+        let inQuotes = false;
+
+        const pushCell = () => {
+          row.push(cell);
+          cell = "";
+        };
+
+        const pushRow = () => {
+          if (row.length || cell) {
+            pushCell();
+          }
+          const normalized = row.map((value) => value.trim());
+          const hasAny = normalized.some((value) => value !== "");
+          if (hasAny) rows.push(normalized);
+          row = [];
+        };
+
+        const input = String(text || "");
+        for (let index = 0; index < input.length; index += 1) {
+          const char = input[index];
+          const next = input[index + 1];
+          if (char === "\"") {
+            if (inQuotes && next === "\"") {
+              cell += "\"";
+              index += 1;
+            } else {
+              inQuotes = !inQuotes;
+            }
+            continue;
+          }
+          if (!inQuotes && char === delimiter) {
+            pushCell();
+            continue;
+          }
+          if (!inQuotes && (char === "\n" || char === "\r")) {
+            if (char === "\r" && next === "\n") {
+              index += 1;
+            }
+            pushRow();
+            continue;
+          }
+          cell += char;
+        }
+        pushRow();
+
+        return { delimiter, rows };
+      }
+
+      function normalizeHeader(text) {
+        return String(text || "")
+          .toLowerCase()
+          .replace(/\s+/g, "")
+          .replace(/[_\-()/]/g, "");
+      }
+
+      function inferBulkMappings(headers, rows, columnCount) {
+        const mappings = new Array(columnCount).fill("unused");
+        const aliasMap = page.bulk?.aliases || {};
+
+        if (headers) {
+          const normalizedHeaders = headers.map((value) => normalizeHeader(value));
+          ["name", "cost", "price", "extra", "target"].forEach((role) => {
+            const aliases = (aliasMap[role] || []).map((value) => normalizeHeader(value));
+            const index = normalizedHeaders.findIndex((header) => aliases.includes(header));
+            if (index >= 0) {
+              mappings[index] = role;
+            }
+          });
+        }
+
+        const firstData = rows.slice(0, Math.min(rows.length, 10));
+        const scoreNumeric = (columnIndex, predicate) => {
+          let hits = 0;
+          let total = 0;
+          firstData.forEach((row) => {
+            const value = parseLooseNumber(row[columnIndex] || "");
+            if (value == null || !Number.isFinite(value)) return;
+            total += 1;
+            if (!predicate || predicate(value)) hits += 1;
+          });
+          return total ? hits / total : 0;
+        };
+
+        for (let index = 0; index < columnCount; index += 1) {
+          if (mappings[index] !== "unused") continue;
+          const textSample = firstData.map((row) => row[index] || "");
+          const numericScore = scoreNumeric(index);
+          const targetScore = scoreNumeric(index, (value) => value >= 0 && value < 100);
+          const textScore = textSample.filter((value) => /[A-Za-z\u3040-\u30ff\u4e00-\u9faf]/.test(value)).length / Math.max(textSample.length, 1);
+
+          if (!mappings.includes("name") && textScore > 0.5) {
+            mappings[index] = "name";
+            continue;
+          }
+          if (!mappings.includes("target") && targetScore > 0.7) {
+            mappings[index] = "target";
+            continue;
+          }
+          if (!mappings.includes("cost") && numericScore > 0.7) {
+            mappings[index] = "cost";
+            continue;
+          }
+          if (!mappings.includes("price") && numericScore > 0.7) {
+            mappings[index] = "price";
+            continue;
+          }
+          if (!mappings.includes("extra") && numericScore > 0.7) {
+            mappings[index] = "extra";
+          }
+        }
+
+        return mappings;
+      }
+
+      function getMappedIndex(role) {
+        return state.bulkMappings.findIndex((value) => value === role);
+      }
+
+      function computeBulkResult() {
+        const errorText = page.errors?.batchNoRows || "";
+        if (!state.bulkText.trim()) {
+          return { empty: page.results.emptyBulk, error: "", rows: [] };
+        }
+
+        const parsed = parseDelimitedTable(state.bulkText);
+        if (!parsed.rows.length) {
+          return { empty: page.results.emptyBulk, error: errorText, rows: [] };
+        }
+
+        if (parsed.rows.length > DEFAULT_MAX_BULK_ROWS + 1) {
+          return { empty: "", error: page.errors.batchTooManyRows, rows: [] };
+        }
+
+        const headers = state.bulkHasHeader ? parsed.rows[0] : null;
+        const rows = state.bulkHasHeader ? parsed.rows.slice(1) : parsed.rows.slice();
+        const columnCount = Math.max(...parsed.rows.map((row) => row.length), 0);
+        if (!columnCount) {
+          return { empty: page.results.emptyBulk, error: errorText, rows: [] };
+        }
+
+        if (state.bulkMappings.length !== columnCount) {
+          state.bulkMappings = inferBulkMappings(headers, rows, columnCount);
+        }
+
+        if (getMappedIndex("cost") === -1) {
+          return {
+            empty: "",
+            error: page.errors.batchCostRequired,
+            rows: [],
+            headers,
+            columnCount,
+          };
+        }
+
+        const feeRate = valueOrZero(state.feeRate) / 100;
+        const feeFixed = valueOrZero(state.feeFixed);
+        const defaultTarget = parseLooseNumber(state.bulkDefaultTarget);
+        let calculated = 0;
+        const resultRows = rows.map((row, rowIndex) => {
+          const nameIndex = getMappedIndex("name");
+          const costIndex = getMappedIndex("cost");
+          const priceIndex = getMappedIndex("price");
+          const extraIndex = getMappedIndex("extra");
+          const targetIndex = getMappedIndex("target");
+
+          const name = nameIndex >= 0 && row[nameIndex] ? row[nameIndex] : formatMessage(page.bulk.defaultName, {
+            index: String(rowIndex + 1),
+          });
+          const cost = parseLooseNumber(costIndex >= 0 ? row[costIndex] : "");
+          const price = parseLooseNumber(priceIndex >= 0 ? row[priceIndex] : "");
+          const extra = valueOrZero(extraIndex >= 0 ? row[extraIndex] : "");
+          const parsedTarget = parseLooseNumber(targetIndex >= 0 ? row[targetIndex] : "");
+          const target = parsedTarget == null ? defaultTarget : parsedTarget;
+
+          if (cost == null || !Number.isFinite(cost) || cost < 0) {
+            return {
+              name,
+              cost: page.results.noValue,
+              price: page.results.noValue,
+              extra: formatMoney(extra),
+              target: target == null ? page.results.noValue : `${formatPlain(target, 1)}%`,
+              recommendedPrice: page.results.noValue,
+              grossProfit: page.results.noValue,
+              margin: page.results.noValue,
+              markup: page.results.noValue,
+              status: page.bulk.statusError,
+            };
+          }
+
+          const baseCost = cost + extra + feeFixed;
+          let recommendedPrice = Number.NaN;
+          let grossProfit = Number.NaN;
+          let margin = Number.NaN;
+          let markup = Number.NaN;
+          let status = page.bulk.statusNotCalculated;
+
+          if (price != null && Number.isFinite(price) && price > 0) {
+            const metrics = calculateMetrics(price, baseCost, feeRate);
+            grossProfit = metrics.grossProfit;
+            margin = metrics.margin;
+            markup = metrics.markup;
+            status = page.bulk.statusCalculated;
+            calculated += 1;
+          }
+
+          if (target != null && Number.isFinite(target) && target >= 0 && target < 100 && feeRate + target / 100 < 1) {
+            recommendedPrice = baseCost / (1 - feeRate - target / 100);
+            if (status !== page.bulk.statusCalculated) {
+              status = page.bulk.statusCalculated;
+              calculated += 1;
+            }
+          }
+
+          return {
+            name,
+            cost: formatMoney(cost),
+            price: price != null && Number.isFinite(price) && price > 0 ? formatMoney(price) : page.results.noValue,
+            extra: formatMoney(extra),
+            target: target == null ? page.results.noValue : `${formatPlain(target, 1)}%`,
+            recommendedPrice: Number.isFinite(recommendedPrice) ? formatMoney(recommendedPrice) : page.results.noValue,
+            grossProfit: Number.isFinite(grossProfit) ? formatMoney(grossProfit) : page.results.noValue,
+            margin: Number.isFinite(margin) ? formatPercent(margin) : page.results.noValue,
+            markup: Number.isFinite(markup) ? formatPercent(markup) : page.results.noValue,
+            status,
+          };
+        });
+
+        const summary = formatMessage(page.bulk.summary, {
+          total: String(resultRows.length),
+          calculated: String(calculated),
+        });
+
+        return {
+          headers,
+          columnCount,
+          rows: resultRows,
+          summary,
+          error: "",
+          empty: resultRows.length ? "" : page.results.emptyBulk,
+        };
+      }
+
+      function escapeHtml(value) {
+        return String(value == null ? "" : value)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function renderBulkMappings(meta) {
+        if (!meta || !meta.columnCount) {
+          el.bulkMapping.innerHTML = "";
+          return;
+        }
+        const options = page.bulk?.mappingOptions || [];
+        const cards = [];
+        for (let index = 0; index < meta.columnCount; index += 1) {
+          const label = meta.headers && meta.headers[index]
+            ? meta.headers[index]
+            : formatMessage(page.bulk.columnLabel, { index: String(index + 1) });
+          const current = state.bulkMappings[index] || "unused";
+          const optionHtml = options.map((item) => {
+            const selected = item.value === current ? " selected" : "";
+            return `<option value="${escapeHtml(item.value)}"${selected}>${escapeHtml(item.label)}</option>`;
+          }).join("");
+          cards.push(
+            `<label class="mapping-card">
+              <span class="mapping-head">${escapeHtml(label)}</span>
+              <select data-bulk-mapping-index="${index}">${optionHtml}</select>
+            </label>`
+          );
+        }
+        el.bulkMapping.innerHTML = cards.join("");
+      }
+
+      function renderBulkPreview(result) {
+        if (!result || !result.rows || !result.rows.length) {
+          el.bulkPreviewBody.innerHTML = "";
+          return;
+        }
+        el.bulkPreviewBody.innerHTML = result.rows.map((row) => {
+          return `<tr>
+            <td>${escapeHtml(row.name)}</td>
+            <td class="num">${escapeHtml(row.cost)}</td>
+            <td class="num">${escapeHtml(row.price)}</td>
+            <td class="num">${escapeHtml(row.extra)}</td>
+            <td class="num">${escapeHtml(row.target)}</td>
+            <td class="num">${escapeHtml(row.recommendedPrice)}</td>
+            <td class="num">${escapeHtml(row.grossProfit)}</td>
+            <td class="num">${escapeHtml(row.margin)}</td>
+            <td class="num">${escapeHtml(row.markup)}</td>
+            <td>${escapeHtml(row.status)}</td>
+          </tr>`;
+        }).join("");
+      }
+
+      function setText(node, value) {
+        if (node) node.textContent = value;
+      }
+
+      function setVisible(node, visible) {
+        if (node) node.classList.toggle("hidden", !visible);
+      }
+
+      function renderSingleResult(result) {
+        const modeMeta = getModeMeta();
+        setText(el.singleModeTitle, modeMeta?.Title || "");
+        setText(el.singleModeDescription, modeMeta?.Description || "");
+        setText(el.targetMarginLabel, state.mode === MODE_PRICE_TO_MARGIN ? page.fields.targetMarginOptional : page.fields.targetMargin);
+        setText(el.priceLabel, state.mode === MODE_PRICE_TO_MARGIN ? page.fields.price : page.fields.comparePrice);
+        setText(el.targetMarginHelp, state.mode === MODE_PRICE_TO_MARGIN ? page.mode?.priceToMargin?.targetHelp : page.mode?.costToPrice?.targetHelp);
+        setText(el.priceHelp, state.mode === MODE_PRICE_TO_MARGIN ? page.mode?.priceToMargin?.priceHelp : page.mode?.costToPrice?.priceHelp);
+        setText(el.resultModeNote, modeMeta?.ResultNote || "");
+
+        if (result.errors && Object.keys(result.errors).length) {
+          setText(el.resultError, Object.values(result.errors)[0] || "");
+          el.resultError.classList.add("show");
+          setText(el.resultEmpty, page.results.emptyError);
+          setSummaryPlaceholders();
+          renderBreakdown([]);
+          setText(el.resultFormula, "");
+          renderSuggestions([]);
+          return;
+        }
+
+        el.resultError.classList.remove("show");
+        setText(el.resultError, "");
+
+        if (result.empty) {
+          setText(el.resultEmpty, result.empty);
+          setSummaryPlaceholders();
+          renderBreakdown([]);
+          setText(el.resultFormula, "");
+          renderSuggestions([]);
+          return;
+        }
+
+        setText(el.resultEmpty, "");
+
+        if (result.mode === MODE_COST_TO_PRICE) {
+          setText(el.resultPrimaryLabel, page.results.recommendedPrice);
+          setText(el.resultPrimaryValue, formatMoney(result.adoptedPrice));
+          setText(el.resultPrimarySub, result.adoptedPrice === result.rawPrice ? page.results.theoreticalNote : page.results.roundedNote);
+          setText(el.resultSecondaryLabel, page.results.theoreticalPrice);
+          setText(el.resultSecondaryValue, formatMoney(result.rawPrice));
+          setText(el.resultGapLabel, page.results.priceGap);
+          if (Number.isFinite(result.compareGap)) {
+            setText(el.resultGapValue, formatSignedMoney(result.compareGap));
+            setText(el.resultGapSub, page.results.priceGapHelp);
+          } else {
+            setText(el.resultGapValue, page.results.noValue);
+            setText(el.resultGapSub, page.results.priceGapEmpty);
+          }
+          setVisible(el.resultRoundingWrap, true);
+          renderSuggestions(result.suggestions || []);
+          setText(el.mobileSummaryTitle, page.results.recommendedPrice);
+          setText(el.mobileSummaryValue, formatMoney(result.adoptedPrice));
+          setText(el.mobileSummarySub, `${page.results.margin}: ${formatPercent(result.metrics.margin)}`);
+        } else {
+          setText(el.resultPrimaryLabel, page.results.currentPrice);
+          setText(el.resultPrimaryValue, formatMoney(result.currentPrice));
+          setText(el.resultPrimarySub, page.results.currentPriceNote);
+          setText(el.resultSecondaryLabel, page.results.requiredPrice);
+          setText(el.resultSecondaryValue, Number.isFinite(result.requiredPrice) ? formatMoney(result.requiredPrice) : page.results.noValue);
+          setText(el.resultGapLabel, page.results.targetGap);
+          if (Number.isFinite(result.gapAmount)) {
+            setText(el.resultGapValue, formatMessage(page.messages.targetGapAmount, { value: formatSignedMoney(result.gapAmount) }));
+            setText(el.resultGapSub, formatMessage(page.messages.targetGapPoints, { value: formatSignedPoints(result.gapPoints) }));
+          } else {
+            setText(el.resultGapValue, page.results.targetGapEmpty);
+            setText(el.resultGapSub, page.results.targetGapEmptySub);
+          }
+          setVisible(el.resultRoundingWrap, false);
+          renderSuggestions([]);
+          setText(el.mobileSummaryTitle, page.results.currentPrice);
+          setText(el.mobileSummaryValue, formatMoney(result.currentPrice));
+          setText(el.mobileSummarySub, `${page.results.margin}: ${formatPercent(result.metrics.margin)}`);
+        }
+
+        setText(el.resultGrossProfit, formatMoney(result.metrics.grossProfit));
+        setText(el.resultMargin, formatPercent(result.metrics.margin));
+        setText(el.resultMarkup, formatPercent(result.metrics.markup));
+
+        renderBreakdown([
+          { label: page.results.breakdownBaseCost, value: formatMoney(result.baseCost) },
+          { label: page.results.breakdownExtraCost, value: formatMoney(result.extraCost || 0) },
+          { label: page.results.breakdownFixedFee, value: formatMoney(result.feeFixed || 0) },
+          {
+            label: page.results.breakdownPaymentFee,
+            value: result.mode === MODE_COST_TO_PRICE
+              ? formatMoney(result.metrics.paymentFee)
+              : formatMoney(result.metrics.paymentFee),
+          },
+        ]);
+
+        const formulaLines = [];
+        if (result.mode === MODE_COST_TO_PRICE) {
+          formulaLines.push(`B = ${formatMoney(result.baseCost)}`);
+          formulaLines.push(`P = B / (1 - f - m) = ${formatMoney(result.rawPrice)}`);
+          formulaLines.push(`GP = ${formatMoney(result.metrics.grossProfit)}`);
+          formulaLines.push(`GM = ${formatPercent(result.metrics.margin)}`);
+          formulaLines.push(`MU = ${formatPercent(result.metrics.markup)}`);
+        } else {
+          formulaLines.push(`B = ${formatMoney(result.baseCost)}`);
+          formulaLines.push(`GP = P - (B + fP) = ${formatMoney(result.metrics.grossProfit)}`);
+          formulaLines.push(`GM = ${formatPercent(result.metrics.margin)}`);
+          formulaLines.push(`MU = ${formatPercent(result.metrics.markup)}`);
+          if (Number.isFinite(result.requiredPrice)) {
+            formulaLines.push(`P_target = ${formatMoney(result.requiredPrice)}`);
+          }
+        }
+        setText(el.resultFormula, formulaLines.join("\n"));
+      }
+
+      function renderBreakdown(items) {
+        if (!items.length) {
+          el.resultBreakdown.innerHTML = `<div class="breakdown-row"><span>${escapeHtml(page.results.noValue)}</span><span>${escapeHtml(page.results.noValue)}</span></div>`;
+          return;
+        }
+        el.resultBreakdown.innerHTML = items.map((item) => {
+          return `<div class="breakdown-row"><span>${escapeHtml(item.label)}</span><span>${escapeHtml(item.value)}</span></div>`;
+        }).join("");
+      }
+
+      function renderSuggestions(items) {
+        if (!items.length) {
+          el.suggestionList.innerHTML = `<div class="suggestion-item"><div class="suggestion-main"><div class="suggestion-meta">${escapeHtml(page.rounding.emptySuggestions)}</div></div></div>`;
+          return;
+        }
+        el.suggestionList.innerHTML = items.map((item, index) => {
+          const delta = Number.isFinite(item.deltaPoints)
+            ? formatMessage(page.rounding.targetDelta, { value: formatSignedPoints(item.deltaPoints) })
+            : page.rounding.noTargetDelta;
+          return `<div class="suggestion-item">
+            <div class="suggestion-main">
+              <div class="suggestion-price">${escapeHtml(formatMoney(item.price))}</div>
+              <div class="suggestion-meta">${escapeHtml(page.results.margin)} ${escapeHtml(formatPercent(item.margin))} / ${escapeHtml(delta)}</div>
+            </div>
+            <button type="button" class="btn btn-soft" data-suggestion-price="${escapeHtml(String(item.price))}" data-suggestion-index="${index}">${escapeHtml(page.rounding.apply)}</button>
+          </div>`;
+        }).join("");
+      }
+
+      function setSummaryPlaceholders() {
+        setText(el.resultPrimaryValue, page.results.noValue);
+        setText(el.resultPrimarySub, page.results.noValue);
+        setText(el.resultSecondaryValue, page.results.noValue);
+        setText(el.resultGapValue, page.results.noValue);
+        setText(el.resultGapSub, page.results.noValue);
+        setText(el.resultGrossProfit, page.results.noValue);
+        setText(el.resultMargin, page.results.noValue);
+        setText(el.resultMarkup, page.results.noValue);
+        setText(el.mobileSummaryValue, page.results.noValue);
+        setText(el.mobileSummarySub, page.results.noValue);
+      }
+
+      function renderBulkResult(result) {
+        if (!result) {
+          setText(el.bulkSummary, page.results.emptyBulk);
+          el.bulkPreviewBody.innerHTML = "";
+          return;
+        }
+        if (result.error) {
+          setText(el.resultError, result.error);
+          el.resultError.classList.add("show");
+        } else {
+          el.resultError.classList.remove("show");
+          setText(el.resultError, "");
+        }
+        setText(el.bulkSummary, result.summary || result.empty || page.results.emptyBulk);
+        renderBulkMappings(result);
+        renderBulkPreview(result);
+      }
+
+      function renderFieldErrors(errors) {
+        setText(el.errorCost, errors.cost || "");
+        setText(el.errorTargetMargin, errors.targetMargin || "");
+        setText(el.errorExtraCost, errors.extraCost || "");
+        setText(el.errorPrice, errors.price || "");
+        setText(el.errorFeeRate, errors.feeRate || "");
+        setText(el.errorFeeFixed, errors.feeFixed || "");
+      }
+
+      function renderMode() {
+        const single = state.mode !== MODE_BULK;
+        setVisible(el.singlePane, single);
+        setVisible(el.bulkPane, !single);
+        setVisible(el.resultSingleWrap, single);
+        setVisible(el.resultBulkWrap, !single);
+        for (let index = 0; index < el.modeTabs.length; index += 1) {
+          const button = el.modeTabs[index];
+          button.classList.toggle("active", button.dataset.modeTab === state.mode);
+        }
+        refreshMobileTabs();
+      }
+
+      function refreshMobileTabs() {
+        for (let index = 0; index < el.mobileTabs.length; index += 1) {
+          const button = el.mobileTabs[index];
+          button.classList.toggle("active", button.dataset.mobileTab === state.mobileTab);
+        }
+        if (typeof window.matchMedia === "function" && window.matchMedia("(max-width: 1039px)").matches) {
+          el.panelInput.classList.toggle("mobile-hidden", state.mobileTab !== "input");
+          el.panelOutput.classList.toggle("mobile-hidden", state.mobileTab !== "output");
+        } else {
+          el.panelInput.classList.remove("mobile-hidden");
+          el.panelOutput.classList.remove("mobile-hidden");
+        }
+      }
+
+      function render() {
+        buildEndingOptions();
+        renderMode();
+        renderFieldErrors({});
+        el.resultError.classList.remove("show");
+        setText(el.resultError, "");
+        el.resultNote.classList.remove("show");
+
+        if (state.mode === MODE_BULK) {
+          const result = computeBulkResult();
+          state.bulkResult = result;
+          renderBulkResult(result);
+          setText(el.mobileSummaryTitle, page.bulk.previewTitle);
+          setText(el.mobileSummaryValue, result.rows && result.rows.length ? String(result.rows.length) : page.results.noValue);
+          setText(el.mobileSummarySub, result.summary || page.results.emptyBulk);
+          return;
+        }
+
+        const result = computeSingleResult();
+        renderFieldErrors(result.errors || {});
+        renderSingleResult(result);
+      }
+
+      function updateAddressBar() {
+        if (!window.history || typeof window.history.replaceState !== "function") return;
+        const url = new URL(window.location.href);
+        const params = url.searchParams;
+        params.set("qv", "1");
+        params.set("mode", state.mode);
+        params.set("currency", state.currency);
+        if (state.cost) params.set("cost", state.cost); else params.delete("cost");
+        if (state.price) params.set("price", state.price); else params.delete("price");
+        if (state.targetMargin) params.set("target", state.targetMargin); else params.delete("target");
+        if (state.extraCost) params.set("extra", state.extraCost); else params.delete("extra");
+        if (state.feeRate) params.set("feeRate", state.feeRate); else params.delete("feeRate");
+        if (state.feeFixed) params.set("feeFixed", state.feeFixed); else params.delete("feeFixed");
+        params.set("basis", state.priceBasis);
+        params.set("dec", state.decimalOverride);
+        params.set("ru", state.roundingUnit);
+        params.set("rd", state.roundingDirection);
+        params.set("ep", state.endingPreset);
+        if (Number.isFinite(state.adoptedPrice)) params.set("ap", String(state.adoptedPrice)); else params.delete("ap");
+        if (el.advanced.open) params.set("adv", "1"); else params.delete("adv");
+        if (el.formulaDetails.open) params.set("fo", "1"); else params.delete("fo");
+        if (state.mode === MODE_BULK) {
+          params.delete("mode");
+          params.set("mode", MODE_BULK);
+        }
+        const query = params.toString();
+        const next = `${url.pathname}${query ? `?${query}` : ""}${url.hash}`;
+        window.history.replaceState(null, "", next);
+      }
+
+      async function copyText(value, successMessage) {
+        const text = String(value || "");
+        try {
+          if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+            await navigator.clipboard.writeText(text);
+          } else {
+            window[COPY_FALLBACK_KEY] = text;
+          }
+          showToast(successMessage);
+        } catch (error) {
+          window[COPY_FALLBACK_KEY] = text;
+          showToast(successMessage);
+        }
+      }
+
+      function downloadFile(filename, content, mimeType) {
+        try {
+          if (!window.Blob || !window.URL || typeof window.URL.createObjectURL !== "function") {
+            return;
+          }
+          const blob = new Blob([content], { type: mimeType });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        } catch (error) {
+          return;
+        }
+      }
+
+      function serializeRows(rows, delimiter) {
+        return rows.map((row) => row.map((value) => {
+          const text = String(value == null ? "" : value);
+          if (text.includes(delimiter) || text.includes("\"") || text.includes("\n")) {
+            return `"${text.replace(/"/g, "\"\"")}"`;
+          }
+          return text;
+        }).join(delimiter)).join("\n");
+      }
+
+      function buildBulkExportRows() {
+        const result = state.bulkResult;
+        if (!result || !result.rows || !result.rows.length) return [];
+        const header = [
+          page.bulk.columns.name,
+          page.bulk.columns.cost,
+          page.bulk.columns.price,
+          page.bulk.columns.extra,
+          page.bulk.columns.targetMargin,
+          page.bulk.columns.recommendedPrice,
+          page.bulk.columns.grossProfit,
+          page.bulk.columns.margin,
+          page.bulk.columns.markup,
+          page.bulk.columns.status,
+        ];
+        const body = result.rows.map((row) => [
+          row.name,
+          row.cost,
+          row.price,
+          row.extra,
+          row.target,
+          row.recommendedPrice,
+          row.grossProfit,
+          row.margin,
+          row.markup,
+          row.status,
+        ]);
+        return [header].concat(body);
+      }
+
+      function restoreFromQuery() {
+        const params = new URLSearchParams(window.location.search);
+        const mode = params.get("mode");
+        if (mode === MODE_COST_TO_PRICE || mode === MODE_PRICE_TO_MARGIN || mode === MODE_BULK) {
+          state.mode = mode;
+        }
+        state.currency = params.get("currency") || state.currency;
+        state.cost = params.get("cost") || state.cost;
+        state.price = params.get("price") || state.price;
+        state.targetMargin = params.get("target") || state.targetMargin;
+        state.extraCost = params.get("extra") || state.extraCost;
+        state.feeRate = params.get("feeRate") || state.feeRate;
+        state.feeFixed = params.get("feeFixed") || state.feeFixed;
+        state.priceBasis = params.get("basis") || state.priceBasis;
+        state.decimalOverride = params.get("dec") || state.decimalOverride;
+        state.roundingUnit = params.get("ru") || state.roundingUnit;
+        state.roundingDirection = params.get("rd") || state.roundingDirection;
+        state.endingPreset = params.get("ep") || state.endingPreset;
+        const adopted = parseLooseNumber(params.get("ap") || "");
+        state.adoptedPrice = adopted != null && Number.isFinite(adopted) ? adopted : null;
+        if (params.get("adv") === "1") {
+          el.advanced.open = true;
+        }
+        if (params.get("fo") === "1") {
+          el.formulaDetails.open = true;
+        }
+      }
+
+      function syncInputsFromState() {
+        el.currency.value = state.currency;
+        el.cost.value = state.cost;
+        el.price.value = state.price;
+        el.targetMargin.value = state.targetMargin;
+        el.extraCost.value = state.extraCost === "0" ? "" : state.extraCost;
+        el.feeRate.value = state.feeRate === "0" ? "" : state.feeRate;
+        el.feeFixed.value = state.feeFixed === "0" ? "" : state.feeFixed;
+        el.priceBasis.value = state.priceBasis;
+        el.decimalOverride.value = state.decimalOverride;
+        el.roundingUnit.value = state.roundingUnit;
+        el.roundingDirection.value = state.roundingDirection;
+        el.bulkPaste.value = state.bulkText;
+        el.bulkHasHeader.checked = state.bulkHasHeader;
+        el.bulkDefaultTarget.value = state.bulkDefaultTarget;
+      }
+
+      function bindTextInput(node, key, options) {
+        if (!node) return;
+        const resetAdopted = options && options.resetAdopted;
+        node.addEventListener("input", () => {
+          state[key] = node.value;
+          if (resetAdopted) clearAdoptedPrice();
+          render();
+          updateAddressBar();
+        });
+      }
+
+      function bindSelect(node, key, options) {
+        if (!node) return;
+        const resetAdopted = options && options.resetAdopted;
+        node.addEventListener("change", () => {
+          state[key] = node.value;
+          if (resetAdopted) clearAdoptedPrice();
+          render();
+          updateAddressBar();
+        });
+      }
+
+      el.openButton.addEventListener("click", () => {
+        setDialogOpen(true);
+        trackEvent("open_tool");
+      });
+
+      el.closeButton.addEventListener("click", () => {
+        setDialogOpen(false);
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && state.dialogOpen) {
+          setDialogOpen(false);
+        }
+      });
+
+      el.mobileSummary.addEventListener("click", () => {
+        state.mobileTab = "output";
+        refreshMobileTabs();
+      });
+
+      el.modeTabs.forEach((button) => {
+        button.addEventListener("click", () => {
+          state.mode = button.dataset.modeTab;
+          clearAdoptedPrice();
+          render();
+          updateAddressBar();
+          trackEvent("tab_switch", { mode: state.mode });
+        });
+      });
+
+      el.mobileTabs.forEach((button) => {
+        button.addEventListener("click", () => {
+          state.mobileTab = button.dataset.mobileTab;
+          refreshMobileTabs();
+        });
+      });
+
+      bindSelect(el.currency, "currency", { resetAdopted: true });
+      bindTextInput(el.cost, "cost", { resetAdopted: true });
+      bindTextInput(el.price, "price", { resetAdopted: true });
+      bindTextInput(el.targetMargin, "targetMargin", { resetAdopted: true });
+      bindTextInput(el.extraCost, "extraCost", { resetAdopted: true });
+      bindTextInput(el.feeRate, "feeRate", { resetAdopted: true });
+      bindTextInput(el.feeFixed, "feeFixed", { resetAdopted: true });
+      bindSelect(el.priceBasis, "priceBasis");
+      bindSelect(el.decimalOverride, "decimalOverride", { resetAdopted: true });
+      bindSelect(el.roundingUnit, "roundingUnit", { resetAdopted: true });
+      bindSelect(el.roundingDirection, "roundingDirection", { resetAdopted: true });
+      bindSelect(el.roundingEnding, "endingPreset", { resetAdopted: true });
+
+      el.advanced.addEventListener("toggle", () => {
+        updateAddressBar();
+      });
+      el.formulaDetails.addEventListener("toggle", () => {
+        updateAddressBar();
+      });
+
+      el.bulkPaste.addEventListener("input", () => {
+        state.bulkText = el.bulkPaste.value;
+        state.bulkMappings = [];
+        render();
+      });
+      el.bulkHasHeader.addEventListener("change", () => {
+        state.bulkHasHeader = el.bulkHasHeader.checked;
+        state.bulkMappings = [];
+        render();
+      });
+      el.bulkDefaultTarget.addEventListener("input", () => {
+        state.bulkDefaultTarget = el.bulkDefaultTarget.value;
+        render();
+      });
+      el.bulkInsertSample.addEventListener("click", () => {
+        state.bulkText = page.bulk.sample;
+        el.bulkPaste.value = state.bulkText;
+        state.bulkMappings = [];
+        render();
+      });
+      el.bulkClear.addEventListener("click", () => {
+        state.bulkText = "";
+        el.bulkPaste.value = "";
+        state.bulkMappings = [];
+        render();
+      });
+
+      el.bulkMapping.addEventListener("change", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLSelectElement)) return;
+        const index = Number(target.dataset.bulkMappingIndex);
+        if (!Number.isInteger(index)) return;
+        const nextRole = target.value;
+        state.bulkMappings = state.bulkMappings.map((value, currentIndex) => {
+          if (currentIndex === index) return nextRole;
+          if (value === nextRole && nextRole !== "unused") return "unused";
+          return value;
+        });
+        render();
+      });
+
+      el.suggestionList.addEventListener("click", (event) => {
+        const button = event.target instanceof Element
+          ? event.target.closest("[data-suggestion-price]")
+          : null;
+        if (!(button instanceof HTMLElement)) return;
+        const priceValue = Number(button.dataset.suggestionPrice);
+        if (!Number.isFinite(priceValue)) return;
+        state.adoptedPrice = priceValue;
+        render();
+        updateAddressBar();
+        trackEvent("suggestion_apply", { price: priceValue });
+      });
+
+      el.copyPrimary.addEventListener("click", async () => {
+        await copyText(el.resultPrimaryValue.textContent || "", page.results.copied);
+      });
+      el.copyMargin.addEventListener("click", async () => {
+        await copyText(el.resultMargin.textContent || "", page.results.copied);
+      });
+      el.copyMarkup.addEventListener("click", async () => {
+        await copyText(el.resultMarkup.textContent || "", page.results.copied);
+      });
+      el.copyShare.addEventListener("click", async () => {
+        updateAddressBar();
+        await copyText(window.location.href, page.results.shareUrlDone);
+      });
+
+      el.bulkDownloadCsv.addEventListener("click", () => {
+        const rows = buildBulkExportRows();
+        if (!rows.length) return;
+        downloadFile("margin-markup-calculator.csv", serializeRows(rows, ","), "text/csv;charset=utf-8");
+        showToast(page.bulk.downloadDone);
+        trackEvent("bulk_download_csv");
+      });
+      el.bulkCopyTsv.addEventListener("click", async () => {
+        const rows = buildBulkExportRows();
+        if (!rows.length) return;
+        await copyText(serializeRows(rows, "\t"), page.bulk.copyDone);
+        trackEvent("bulk_copy_tsv");
+      });
+
+      restoreFromQuery();
+      syncInputsFromState();
+      buildEndingOptions();
+      refreshMobileTabs();
+      render();
+      refreshIcons();
+    })();
+  </script>
+</div>
+
+  <script>
+    (function ensureServerCtaPlacements() {
+      const path = window.location && window.location.pathname ? window.location.pathname : "";
+      const normalizeServerPath = (rawPath) => {
+        if (!rawPath) return "";
+        return rawPath.replace(/\/index\.html$/i, "").replace(/\/+$/, "");
+      };
+      const isServerDetailPage = (value) => {
+        if (!value) return false;
+        if (value === "/server") return false;
+        return /^\/(?:[a-z]{2,5}\/)?(?:server\/)?[^/]+$/.test(value);
+      };
+      const normalizedPath = normalizeServerPath(path);
+      if (!isServerDetailPage(normalizedPath)) return;
+
+      const root =
+        document.getElementById("hostinger-content") ||
+        document.querySelector("[data-article-content]") ||
+        document.querySelector("main article") ||
+        document.querySelector("article");
+      if (!root) return;
+      const disableServerCta =
+        ((root.getAttribute("data-disable-server-cta") || "").trim().toLowerCase() === "true");
+      if (disableServerCta) return;
+      const disableIntroCta =
+        ((root.getAttribute("data-disable-intro-cta") || "").trim().toLowerCase() === "true");
+
+      const fallbackImageSrc = (root.getAttribute("data-cta-fallback-image") || "").trim();
+      const fallbackImageAlt = (root.getAttribute("data-cta-fallback-image-alt") || "").trim();
+      const sidebarCtaSourceUrlFragment = (root.getAttribute("data-sidebar-cta-source-url-fragment") || "").trim();
+
+      const buttonAnchorSelector = ".btn-wrap a, .button-block a.btn, .button-block a";
+      const buttonWrapSelector = ".btn-wrap, .button-block";
+      const getCtaButton = (scope) => (scope ? scope.querySelector(buttonAnchorSelector) : null);
+      const getCtaButtonWrap = (scope) => (scope ? scope.querySelector(buttonWrapSelector) : null);
+      const hasVisibleImage = (scope) =>
+        Boolean(
+          scope &&
+          Array.from(scope.querySelectorAll("img")).find((img) => {
+            const src = (img.getAttribute("src") || "").trim();
+            const width = (img.getAttribute("width") || "").trim();
+            const height = (img.getAttribute("height") || "").trim();
+            if (!src) return false;
+            if ((width === "1" && height === "1") || /\/0\.gif(?:\?|$)/.test(src)) return false;
+            return true;
+          })
+        );
+      const ensureFallbackImage = (scope) => {
+        if (!scope || !fallbackImageSrc || hasVisibleImage(scope)) return;
+        const inner = scope.querySelector(":scope > .wp-block-cover__inner-container") || scope;
+        const figure = document.createElement("figure");
+        figure.className = "wp-block-image size-full";
+        const image = document.createElement("img");
+        image.loading = "lazy";
+        image.decoding = "async";
+        image.src = fallbackImageSrc;
+        image.alt = fallbackImageAlt;
+        figure.appendChild(image);
+        inner.insertAdjacentElement("afterbegin", figure);
+      };
+      const isOriginalCtaBlock = (block) =>
+        Boolean(block) &&
+        block.matches(".wp-block-cover.is-light") &&
+        Boolean(getCtaButton(block)) &&
+        !block.hasAttribute("data-summary-cta-clone") &&
+        !block.hasAttribute("data-sidebar-cta-clone");
+
+      const normalizeText = (value) => (value || "").replace(/\s+/g, " ").trim();
+      const findCtaDescriptionNode = (scope) => {
+        if (!scope) return null;
+        const container = scope.querySelector(":scope > .wp-block-cover__inner-container") || scope;
+        if (!container) return null;
+
+        const directParagraph = Array.from(container.children).find((child) => {
+          if (!child.matches("p")) return false;
+          if (child.closest(buttonWrapSelector)) return false;
+          if (child.closest(".micro-text")) return false;
+          return Boolean(normalizeText(child.textContent));
+        });
+        if (directParagraph) return directParagraph;
+
+        const nestedParagraph = Array.from(container.querySelectorAll(":scope > * p")).find((child) => {
+          if (child.closest(buttonWrapSelector)) return false;
+          if (child.closest(".micro-text")) return false;
+          return Boolean(normalizeText(child.textContent));
+        });
+        return nestedParagraph || null;
+      };
+
+      const ensureSidebarDescription = (sidebarClone, sourceCta) => {
+        const sourceDescriptionNode = findCtaDescriptionNode(sourceCta);
+        const sourceDescription = normalizeText(sourceDescriptionNode?.textContent);
+        if (!sourceDescription) return;
+
+        const sidebarDescriptionNode = findCtaDescriptionNode(sidebarClone);
+        if (sidebarDescriptionNode) {
+          sidebarDescriptionNode.textContent = sourceDescription;
+          return;
+        }
+
+        const container =
+          sidebarClone.querySelector(":scope > .wp-block-cover__inner-container") || sidebarClone;
+        const description = document.createElement("p");
+        description.className = "hostinger-sidebar-cta-description";
+        description.textContent = sourceDescription;
+        description.style.setProperty("margin", "0 0 0.55rem");
+        description.style.setProperty("text-align", "center");
+        description.style.setProperty("font-size", "0.875rem");
+        description.style.setProperty("line-height", "1.45");
+        description.style.setProperty("color", "#0f172a");
+
+        const buttonWrap = sidebarClone.querySelector(buttonAnchorSelector) || sidebarClone.querySelector(buttonWrapSelector);
+        if (buttonWrap && container && container.contains(buttonWrap)) {
+          buttonWrap.insertAdjacentElement("beforebegin", description);
+          return;
+        }
+
+        if (container) {
+          container.insertAdjacentElement("afterbegin", description);
+        }
+      };
+
+      const findSummaryCtaSource = (heading) => {
+        let node = heading ? heading.nextElementSibling : null;
+        while (node) {
+          if (node.matches("h2, h3, h4, .wp-block-heading")) break;
+
+          if (isOriginalCtaBlock(node)) return node;
+
+          const nestedCta = node.querySelector?.(".wp-block-cover.is-light");
+          if (isOriginalCtaBlock(nestedCta)) return nestedCta;
+
+          node = node.nextElementSibling;
+        }
+
+        return null;
+      };
+
+      const findCtaByUrlFragment = (urlFragment) => {
+        if (!urlFragment) return null;
+        return (
+          Array.from(root.querySelectorAll(".wp-block-cover.is-light")).find((block) => {
+            if (!isOriginalCtaBlock(block)) return false;
+            const button = getCtaButton(block);
+            const href = (button?.getAttribute("href") || "").trim();
+            return href.includes(urlFragment);
+          }) || null
+        );
+      };
+
+      const headings = Array.from(root.querySelectorAll("h2, .wp-block-heading"));
+      const summaryHeading =
+        headings.find((heading) => {
+          const text = (heading.textContent || "").replace(/\s+/g, "");
+          return text.includes("まとめ");
+        }) || headings[headings.length - 1];
+
+      const summaryCtaSource = findSummaryCtaSource(summaryHeading);
+      const sourceCta =
+        summaryCtaSource ||
+        Array.from(root.querySelectorAll(".wp-block-cover.is-light")).find((block) => isOriginalCtaBlock(block));
+      if (!sourceCta) return;
+      ensureFallbackImage(sourceCta);
+
+      const copyStyleProps = (sourceEl, targetEl, props) => {
+        if (!sourceEl || !targetEl || !props.length) return;
+        const computed = window.getComputedStyle(sourceEl);
+        props.forEach((prop) => {
+          const value = computed.getPropertyValue(prop);
+          if (value) targetEl.style.setProperty(prop, value);
+        });
+      };
+
+      const aside = document.querySelector("main aside");
+      if (aside) {
+        const sidebarTarget = aside.querySelector(".hostinger-sidebar-stack, [data-sidebar-stack]") || aside;
+        const hasSidebarCta = Boolean(sidebarTarget.querySelector("[data-sidebar-cta-card='true']"));
+        if (!hasSidebarCta) {
+          const sidebarSourceCta = findCtaByUrlFragment(sidebarCtaSourceUrlFragment) || sourceCta;
+          const sidebarClone = sidebarSourceCta.cloneNode(true);
+          sidebarClone.setAttribute("data-sidebar-cta-clone", "true");
+          ensureFallbackImage(sidebarClone);
+          const sidebarCard = document.createElement("section");
+          sidebarCard.setAttribute("data-sidebar-cta-card", "true");
+
+          const cardRef = sidebarTarget.firstElementChild;
+          if (cardRef) {
+            const cardStyle = window.getComputedStyle(cardRef);
+            sidebarCard.style.setProperty("background-color", cardStyle.getPropertyValue("background-color"));
+            sidebarCard.style.setProperty("border", cardStyle.getPropertyValue("border"));
+            sidebarCard.style.setProperty("border-radius", cardStyle.getPropertyValue("border-radius"));
+            sidebarCard.style.setProperty("padding", cardStyle.getPropertyValue("padding"));
+            sidebarCard.style.setProperty("box-shadow", cardStyle.getPropertyValue("box-shadow"));
+          } else {
+            sidebarCard.style.setProperty("background-color", "#ffffff");
+            sidebarCard.style.setProperty("border", "1px solid #e2e8f0");
+            sidebarCard.style.setProperty("border-radius", "0.75rem");
+            sidebarCard.style.setProperty("padding", "0.75rem");
+          }
+          sidebarCard.style.setProperty("padding-top", "0px");
+
+          sidebarClone.style.setProperty("margin", "0");
+          sidebarClone.style.setProperty("padding", "0");
+          sidebarClone.style.setProperty("background", "transparent");
+          sidebarClone.style.setProperty("border", "0");
+          sidebarClone.style.setProperty("border-radius", "0");
+          sidebarClone.style.setProperty("box-shadow", "none");
+          sidebarClone.style.setProperty("overflow", "visible");
+
+          const sidebarBackground = sidebarClone.querySelector(":scope > .wp-block-cover__background");
+          if (sidebarBackground) sidebarBackground.style.setProperty("display", "none");
+          const sidebarInner = sidebarClone.querySelector(":scope > .wp-block-cover__inner-container");
+          if (sidebarInner) sidebarInner.style.setProperty("padding", "0");
+
+          const sourceMicroWrap = sidebarSourceCta.querySelector(".micro-text");
+          const cloneMicroWrap = sidebarClone.querySelector(".micro-text");
+          copyStyleProps(sourceMicroWrap, cloneMicroWrap, ["margin", "text-align"]);
+          if (cloneMicroWrap) cloneMicroWrap.style.setProperty("display", "block");
+
+          const sourceChip = sidebarSourceCta.querySelector(".micro-text .micro-text-content");
+          const cloneChip = sidebarClone.querySelector(".micro-text .micro-text-content");
+          copyStyleProps(sourceChip, cloneChip, [
+            "display",
+            "padding",
+            "border-radius",
+            "background",
+            "color",
+            "font-size",
+            "font-weight",
+            "line-height",
+            "border",
+            "box-shadow"
+          ]);
+
+          const sourceBtnWrap = getCtaButtonWrap(sidebarSourceCta);
+          const cloneBtnWrap = getCtaButtonWrap(sidebarClone);
+          copyStyleProps(sourceBtnWrap, cloneBtnWrap, ["margin", "text-align"]);
+
+          const sourceBtn = getCtaButton(sidebarSourceCta);
+          const cloneBtn = getCtaButton(sidebarClone);
+          copyStyleProps(sourceBtn, cloneBtn, [
+            "padding",
+            "border-radius",
+            "background",
+            "color",
+            "text-decoration",
+            "font-weight",
+            "line-height",
+            "border",
+            "box-shadow"
+          ]);
+          if (cloneBtn) {
+            cloneBtn.style.setProperty("display", "block");
+            cloneBtn.style.setProperty("width", "100%");
+            cloneBtn.style.setProperty("box-sizing", "border-box");
+          }
+          ensureSidebarDescription(sidebarClone, sidebarSourceCta);
+
+          sidebarCard.appendChild(sidebarClone);
+          sidebarTarget.insertAdjacentElement("afterbegin", sidebarCard);
+        }
+      }
+
+      const firstHeading = headings[0];
+      if (!disableIntroCta && firstHeading) {
+        const previousElement = firstHeading.previousElementSibling;
+        const hasIntroCta = Boolean(
+          (previousElement &&
+            previousElement.matches(".wp-block-cover.is-light") &&
+            getCtaButton(previousElement)) ||
+            root.querySelector(".wp-block-cover[data-intro-cta-clone='true']")
+        );
+        if (!hasIntroCta) {
+          const introClone = sourceCta.cloneNode(true);
+          introClone.setAttribute("data-intro-cta-clone", "true");
+          ensureFallbackImage(introClone);
+          firstHeading.insertAdjacentElement("beforebegin", introClone);
+        }
+      }
+
+      if (!summaryHeading) return;
+
+      const next = summaryHeading.nextElementSibling;
+      const nextCtaSource =
+        summaryCtaSource ||
+        (next && next.matches(".wp-block-cover.is-light") && next) ||
+        (next && next.querySelector(".wp-block-cover.is-light"));
+      const hasInlineSummaryCta = Boolean(
+        (nextCtaSource && getCtaButton(nextCtaSource)) ||
+        root.querySelector(".wp-block-cover[data-summary-cta-clone='true']")
+      );
+      if (hasInlineSummaryCta) return;
+
+      const summaryClone = sourceCta.cloneNode(true);
+      summaryClone.setAttribute("data-summary-cta-clone", "true");
+      ensureFallbackImage(summaryClone);
+      summaryHeading.insertAdjacentElement("afterend", summaryClone);
+    })();
+  </script>
+</body>
+</html>

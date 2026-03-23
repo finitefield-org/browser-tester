@@ -2640,6 +2640,21 @@ fn eval_member<H: HostBindings>(
         }
         Value::Event(event) if property == "cancelable" => Ok(Value::Boolean(event.cancelable())),
         Value::Event(event) if property == "bubbles" => Ok(Value::Boolean(event.bubbles())),
+        Value::Event(event) if property == "key" => {
+            Ok(event.key().map(Value::String).unwrap_or(Value::Undefined))
+        }
+        Value::Event(event) if property == "code" => {
+            Ok(event.code().map(Value::String).unwrap_or(Value::Undefined))
+        }
+        Value::Event(event) if property == "ctrlKey" => Ok(Value::Boolean(event.ctrl_key())),
+        Value::Event(event) if property == "metaKey" => Ok(Value::Boolean(event.meta_key())),
+        Value::Event(event) if property == "shiftKey" => Ok(Value::Boolean(event.shift_key())),
+        Value::Event(event) if property == "altKey" => Ok(Value::Boolean(event.alt_key())),
+        Value::Event(event) if property == "repeat" => Ok(Value::Boolean(event.repeat())),
+        Value::Event(event) if property == "isComposing" => {
+            Ok(Value::Boolean(event.is_composing()))
+        }
+        Value::Event(event) if property == "isTrusted" => Ok(Value::Boolean(event.is_trusted())),
         Value::Event(event) if property == "eventPhase" => {
             Ok(Value::Number(event.event_phase() as u8 as f64))
         }

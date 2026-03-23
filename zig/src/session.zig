@@ -2152,6 +2152,9 @@ pub const Session = struct {
         }
 
         if (std.mem.eql(u8, element.tag_name, "a") or std.mem.eql(u8, element.tag_name, "area")) {
+            if (std.mem.eql(u8, element.tag_name, "area") and elementAttributeValue(element, "nohref") != null) {
+                return;
+            }
             const href = elementAttributeValue(element, "href") orelse return;
             const trimmed_href = std.mem.trim(u8, href, " \t\r\n");
             if (trimmed_href.len == 0) return;

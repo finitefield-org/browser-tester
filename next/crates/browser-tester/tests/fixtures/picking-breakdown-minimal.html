@@ -1,0 +1,29 @@
+<html lang="ja">
+  <body>
+    <dialog id="breakdown" hidden></dialog>
+    <div id="result"></div>
+    <script>
+      const seed = { openCase: 1 };
+      const name = "lot";
+      const lot = { ...seed, name };
+
+      "<>&\"'".replace(/[&<>"']/g, (ch) => ch);
+      if (!/^[0-9]+$/.test("abc")) {
+        Object.entries({ add: 1 }).forEach(([key, value]) => {
+          lot.openCase += value;
+        });
+      }
+
+      const isWindowFallback = window.lucide === undefined;
+      const isHidden = document.getElementById("breakdown").hidden;
+      document.getElementById("result").textContent =
+        document.documentElement.lang +
+        "|" +
+        String(isWindowFallback) +
+        "|" +
+        String(isHidden) +
+        "|" +
+        String(lot.openCase);
+    </script>
+  </body>
+</html>

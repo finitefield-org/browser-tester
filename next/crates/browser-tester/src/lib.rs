@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::fmt;
@@ -11,7 +12,7 @@ pub use bt_runtime::{
     MockRegistry, OpenCall, OpenMocks, PrintCall, PrintMocks, ScheduledTimer, Scheduler,
     ScrollCall, ScrollMethod, ScrollMocks, Session, SessionConfig, StorageSeeds,
 };
-pub use bt_script::{HostBindings, ScriptError, ScriptRuntime};
+pub use bt_script::{HostBindings, KeyboardEventInit, ScriptError, ScriptErrorKind, ScriptRuntime};
 
 macro_rules! message_error {
     ($name:ident) => {
@@ -29,6 +30,10 @@ macro_rules! message_error {
 
             pub fn message(&self) -> &str {
                 &self.message
+            }
+
+            pub fn contains(&self, needle: &str) -> bool {
+                self.message.contains(needle)
             }
         }
 
@@ -56,6 +61,8 @@ pub enum Error {
     HtmlParse(HtmlParseError),
     JsSetup(JsSetupError),
     Script(ScriptError),
+    ScriptParse(String),
+    ScriptRuntime(String),
     Selector(SelectorError),
     Dom(DomError),
     Event(EventError),
@@ -71,6 +78,8 @@ impl fmt::Display for Error {
             Self::HtmlParse(err) => write!(f, "HTML parse error: {err}"),
             Self::JsSetup(err) => write!(f, "JS setup error: {err}"),
             Self::Script(err) => write!(f, "Script error: {err}"),
+            Self::ScriptParse(message) => write!(f, "Script parse error: {message}"),
+            Self::ScriptRuntime(message) => write!(f, "Script runtime error: {message}"),
             Self::Selector(err) => write!(f, "Selector error: {err}"),
             Self::Dom(err) => write!(f, "DOM error: {err}"),
             Self::Event(err) => write!(f, "Event error: {err}"),
@@ -88,6 +97,7 @@ impl StdError for Error {
             Self::HtmlParse(err) => Some(err),
             Self::JsSetup(err) => Some(err),
             Self::Script(err) => Some(err),
+            Self::ScriptParse(_) | Self::ScriptRuntime(_) => None,
             Self::Selector(err) => Some(err),
             Self::Dom(err) => Some(err),
             Self::Event(err) => Some(err),
@@ -110,7 +120,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 fn map_session_error(error: SessionError) -> Error {
     match error {
         SessionError::HtmlParse(message) => Error::HtmlParse(HtmlParseError::new(message)),
-        SessionError::Script(error) => Error::Script(error),
+        SessionError::Script(error) => match error.kind() {
+            ScriptErrorKind::Parse => Error::ScriptParse(error.to_string()),
+            ScriptErrorKind::Runtime => Error::ScriptRuntime(error.to_string()),
+        },
         SessionError::Selector(message) => Error::Selector(SelectorError::new(message)),
         SessionError::Dom(message) => Error::Dom(DomError::new(message)),
         SessionError::Event(message) => Error::Event(EventError::new(message)),
@@ -147,13 +160,17 @@ impl HarnessBuilder {
 
     pub fn local_storage<I, K, V>(mut self, entries: I) -> Self
     where
-        I: IntoIterator<Item = (K, V)>,
-        K: Into<String>,
-        V: Into<String>,
+        I: IntoIterator,
+        I::Item: Borrow<(K, V)>,
+        K: ToString,
+        V: ToString,
     {
         self.local_storage = entries
             .into_iter()
-            .map(|(key, value)| (key.into(), value.into()))
+            .map(|entry| {
+                let (key, value): &(K, V) = entry.borrow();
+                (key.to_string(), value.to_string())
+            })
             .collect();
         self
     }
@@ -243,9 +260,10 @@ impl Harness {
         entries: I,
     ) -> Result<Self>
     where
-        I: IntoIterator<Item = (K, V)>,
-        K: Into<String>,
-        V: Into<String>,
+        I: IntoIterator,
+        I::Item: Borrow<(K, V)>,
+        K: ToString,
+        V: ToString,
     {
         Self::builder().html(html).local_storage(entries).build()
     }
@@ -256,9 +274,10 @@ impl Harness {
         entries: I,
     ) -> Result<Self>
     where
-        I: IntoIterator<Item = (K, V)>,
-        K: Into<String>,
-        V: Into<String>,
+        I: IntoIterator,
+        I::Item: Borrow<(K, V)>,
+        K: ToString,
+        V: ToString,
     {
         Self::builder()
             .url(url)
@@ -329,6 +348,17 @@ impl Harness {
             .map_err(map_session_error)
     }
 
+    pub fn dispatch_keyboard(
+        &mut self,
+        selector: &str,
+        event: &str,
+        init: KeyboardEventInit,
+    ) -> Result<()> {
+        self.session
+            .dispatch_keyboard(selector, event, init)
+            .map_err(map_session_error)
+    }
+
     pub fn submit(&mut self, selector: &str) -> Result<()> {
         let node_id = self.resolve_action_target(selector)?;
         self.session.submit_node(node_id).map_err(map_session_error)
@@ -382,6 +412,43 @@ impl Harness {
         self.session
             .capture_download(file_name, bytes)
             .map_err(map_session_error)
+    }
+
+    pub fn take_downloads(&mut self) -> Vec<DownloadCapture> {
+        self.session.take_downloads()
+    }
+
+    pub fn take_print_call_count(&mut self) -> usize {
+        self.session.mocks_mut().print_mut().take().len()
+    }
+
+    pub fn set_match_media_mock(&mut self, query: &str, matches: bool) {
+        self.session
+            .mocks_mut()
+            .match_media_mut()
+            .respond_matches(query.to_string(), matches);
+    }
+
+    pub fn take_match_media_calls(&mut self) -> Vec<String> {
+        self.session
+            .mocks_mut()
+            .match_media_mut()
+            .take_calls()
+            .into_iter()
+            .map(|call| call.query)
+            .collect()
+    }
+
+    pub fn clipboard_text(&self) -> String {
+        self.session.read_clipboard().unwrap_or_default()
+    }
+
+    pub fn pending_timers(&self) -> &[ScheduledTimer] {
+        self.session.scheduler().pending_timers()
+    }
+
+    pub fn run_due_timers(&mut self) -> Result<usize> {
+        Ok(self.session.scheduler_mut().run_due_timers().len())
     }
 
     pub fn fetch(&mut self, url: &str) -> Result<FetchResponse> {
@@ -515,6 +582,27 @@ impl Harness {
         DebugView {
             session: &self.session,
         }
+    }
+
+    pub fn dump_dom(&self, selector: &str) -> Result<String> {
+        let matches = self
+            .session
+            .dom()
+            .select(selector)
+            .map_err(|message| Error::Selector(SelectorError::new(message)))?;
+
+        let Some(node_id) = matches.first().copied() else {
+            return Err(Error::Assertion(AssertionError::new(format!(
+                "expected selector `{}` to match at least one node\nDOM:\n{}",
+                selector,
+                self.session.dom().dump_dom()
+            ))));
+        };
+
+        self.session
+            .dom()
+            .outer_html_for_node(node_id)
+            .map_err(|message| Error::Dom(DomError::new(message)))
     }
 
     fn resolve_action_target(&self, selector: &str) -> Result<NodeId> {

@@ -535,29 +535,24 @@ const MediaQueryList = struct {
 const MediaListState = struct {
     host: ?*anyopaque = null,
     node_id: ?dom.NodeId = null,
+    source_index: ?usize = null,
     media_text: []const u8,
-    current_media_text_fn: ?*const fn (*anyopaque, dom.NodeId) errors.Result([]const u8) = null,
-    set_media_text_fn: ?*const fn (*anyopaque, dom.NodeId, []const u8) errors.Result(void) = null,
+    current_media_text_fn: ?*const fn (*anyopaque, *const MediaListState, std.mem.Allocator) errors.Result([]const u8) = null,
+    set_media_text_fn: ?*const fn (*anyopaque, *MediaListState, []const u8, std.mem.Allocator) errors.Result(void) = null,
 
-    fn currentText(self: *const MediaListState) errors.Result([]const u8) {
+    fn currentText(self: *const MediaListState, allocator: std.mem.Allocator) errors.Result([]const u8) {
         if (self.current_media_text_fn) |current_media_text_fn| {
             const host = self.host orelse return error.ScriptRuntime;
-            const node_id = self.node_id orelse return error.ScriptRuntime;
-            return try current_media_text_fn(host, node_id);
+            return try current_media_text_fn(host, self, allocator);
         }
         return self.media_text;
     }
 
-    fn setText(self: *MediaListState, value: []const u8) errors.Result(void) {
+    fn setText(self: *MediaListState, allocator: std.mem.Allocator, value: []const u8) errors.Result(void) {
         if (self.set_media_text_fn) |set_media_text_fn| {
             const host = self.host orelse return error.ScriptRuntime;
-            const node_id = self.node_id orelse return error.ScriptRuntime;
-            try set_media_text_fn(host, node_id, value);
-            if (self.current_media_text_fn) |current_media_text_fn| {
-                self.media_text = try current_media_text_fn(host, node_id);
-            } else {
-                self.media_text = value;
-            }
+            try set_media_text_fn(host, self, value, allocator);
+            self.media_text = try self.currentText(allocator);
             return;
         }
         return error.ScriptRuntime;
@@ -1053,12 +1048,21 @@ const CssMediaRuleState = struct {
     condition_text: []const u8,
     css_text: []const u8,
     css_rules: []Value,
+    source_index: ?usize = null,
     parent_style_sheet: ?dom.NodeId = null,
     parent_rule: ?*const CssRuleState = null,
 };
 
 const CssSupportsRuleState = struct {
     condition_text: []const u8,
+    css_text: []const u8,
+    css_rules: []Value,
+    parent_style_sheet: ?dom.NodeId = null,
+    parent_rule: ?*const CssRuleState = null,
+};
+
+const CssSupportsConditionRuleState = struct {
+    name: []const u8,
     css_text: []const u8,
     css_rules: []Value,
     parent_style_sheet: ?dom.NodeId = null,
@@ -1079,6 +1083,11 @@ const CssContainerRuleState = struct {
     css_rules: []Value,
     parent_style_sheet: ?dom.NodeId = null,
     parent_rule: ?*const CssRuleState = null,
+};
+
+const CssContainerConditionParts = struct {
+    name: []const u8,
+    query: []const u8,
 };
 
 const CssStartingStyleRuleState = struct {
@@ -1105,6 +1114,7 @@ const CssKeyframeRuleState = struct {
 
 const CssFontFaceRuleState = struct {
     css_text: []const u8,
+    source_index: ?usize = null,
     parent_style_sheet: ?dom.NodeId = null,
     parent_rule: ?*const CssRuleState = null,
 };
@@ -1225,6 +1235,7 @@ const CssRuleState = union(enum) {
     style: CssStyleRuleState,
     media: CssMediaRuleState,
     supports: CssSupportsRuleState,
+    supports_condition: CssSupportsConditionRuleState,
     document: CssDocumentRuleState,
     container: CssContainerRuleState,
     starting_style: CssStartingStyleRuleState,
@@ -1363,7 +1374,7 @@ const StyleValueEntry = struct {
     important: bool,
 };
 
-const CssRuleStyleDeclarationKind = enum { style, page };
+const CssRuleStyleDeclarationKind = enum { style, page, font_face };
 
 const StyleDeclarationState = struct {
     host: *anyopaque,
@@ -1389,6 +1400,7 @@ const CssRuleStyleDeclarationState = struct {
 };
 
 const CssRuleStyleDeclarationLiveState = struct {
+    prefix_text: []const u8,
     selector_text: []const u8,
     css_text: []const u8,
 };
@@ -1409,17 +1421,30 @@ fn cssRuleStyleDeclarationLiveState(
     return switch (current_rule.css_rule) {
         .style => |current_style| switch (state.kind) {
             .style => CssRuleStyleDeclarationLiveState{
+                .prefix_text = "",
                 .selector_text = current_style.selector_text,
                 .css_text = try cssRuleStyleDeclarationText(current_style.css_text),
             },
             .page => null,
+            .font_face => null,
         },
         .page => |current_page| switch (state.kind) {
             .page => CssRuleStyleDeclarationLiveState{
+                .prefix_text = "@page ",
                 .selector_text = current_page.selector_text,
                 .css_text = try cssRuleStyleDeclarationText(current_page.css_text),
             },
             .style => null,
+            .font_face => null,
+        },
+        .font_face => |current_font_face| switch (state.kind) {
+            .font_face => CssRuleStyleDeclarationLiveState{
+                .prefix_text = "@font-face",
+                .selector_text = "",
+                .css_text = try cssRuleStyleDeclarationText(current_font_face.css_text),
+            },
+            .style => null,
+            .page => null,
         },
         else => null,
     };
@@ -1438,6 +1463,7 @@ fn cssRuleStyleDeclarationApply(
 
     var rule_text: std.ArrayList(u8) = .empty;
     defer rule_text.deinit(allocator);
+    try rule_text.appendSlice(allocator, live.prefix_text);
     try rule_text.appendSlice(allocator, live.selector_text);
     try rule_text.appendSlice(allocator, " { ");
     try rule_text.appendSlice(allocator, css_text);
@@ -1450,10 +1476,75 @@ fn cssRuleStyleDeclarationApply(
     switch (state.kind) {
         .style => if (parsed_rules[0].css_rule != .style) return error.ScriptRuntime,
         .page => if (parsed_rules[0].css_rule != .page) return error.ScriptRuntime,
+        .font_face => if (parsed_rules[0].css_rule != .font_face) return error.ScriptRuntime,
     }
 
     const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
     defer allocator.free(current_rules);
+
+    try styleSheetReplaceParsedRule(
+        allocator,
+        host,
+        sheet_id,
+        current_rules,
+        parsed_rules[0],
+        source_index,
+    );
+    return;
+}
+
+fn mediaListCurrentTextForRule(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    state: *const MediaListState,
+) errors.Result([]const u8) {
+    const sheet_id = state.node_id orelse return error.ScriptRuntime;
+    const source_index = state.source_index orelse return error.ScriptRuntime;
+    const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+    defer allocator.free(current_rules);
+    if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+    const current_rule = current_rules[source_index];
+    if (current_rule != .css_rule) return error.ScriptRuntime;
+    return switch (current_rule.css_rule) {
+        .media => |media| try allocator.dupe(u8, media.condition_text),
+        else => error.ScriptRuntime,
+    };
+}
+
+fn mediaListSetTextForRule(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    state: *MediaListState,
+    value: []const u8,
+) errors.Result(void) {
+    const sheet_id = state.node_id orelse return error.ScriptRuntime;
+    const source_index = state.source_index orelse return error.ScriptRuntime;
+    const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+    defer allocator.free(current_rules);
+    if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+    const current_rule = current_rules[source_index];
+    if (current_rule != .css_rule) return error.ScriptRuntime;
+    const media_rule = switch (current_rule.css_rule) {
+        .media => |media| media,
+        else => return error.ScriptRuntime,
+    };
+
+    const body_text = std.mem.trim(u8, try cssRuleStyleDeclarationText(media_rule.css_text), " \t\r\n\x0c");
+    var rule_text: std.ArrayList(u8) = .empty;
+    defer rule_text.deinit(allocator);
+    try rule_text.appendSlice(allocator, "@media ");
+    try rule_text.appendSlice(allocator, value);
+    try rule_text.appendSlice(allocator, " { ");
+    try rule_text.appendSlice(allocator, body_text);
+    try rule_text.appendSlice(allocator, " }");
+
+    const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text.items);
+    defer allocator.free(parsed_rules);
+    if (parsed_rules.len != 1) return error.ScriptRuntime;
+    if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+    if (parsed_rules[0].css_rule != .media) return error.ScriptRuntime;
 
     try styleSheetReplaceParsedRule(
         allocator,
@@ -2454,6 +2545,99 @@ fn evalAssignment(
             return;
         },
         .css_rule => |rule| {
+            if (std.mem.eql(u8, target.property, "cssText")) {
+                switch (rule) {
+                    .style => |style| {
+                        if (style.parent_rule != null or style.parent_style_sheet == null or style.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = style.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = style.source_index orelse return error.ScriptRuntime;
+                        const rule_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .style) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
+                    .media => |media| {
+                        if (media.parent_rule != null or media.parent_style_sheet == null or media.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = media.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = media.source_index orelse return error.ScriptRuntime;
+                        const rule_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .media) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
+                    .page => |page| {
+                        if (page.parent_rule != null or page.parent_style_sheet == null or page.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = page.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = page.source_index orelse return error.ScriptRuntime;
+                        const rule_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .page) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
+                    else => return error.ScriptRuntime,
+                }
+            }
+
             if (std.mem.eql(u8, target.property, "selectorText")) {
                 switch (rule) {
                     .style => |style| {
@@ -2500,6 +2684,51 @@ fn evalAssignment(
                         );
                         return;
                     },
+                    .page => |page| {
+                        if (page.parent_rule != null or page.parent_style_sheet == null or page.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = page.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = page.source_index orelse return error.ScriptRuntime;
+                        const selector_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const current_rule = current_rules[source_index];
+                        if (current_rule != .css_rule) return error.ScriptRuntime;
+                        const current_page = switch (current_rule.css_rule) {
+                            .page => |current_page| current_page,
+                            else => return error.ScriptRuntime,
+                        };
+
+                        const declarations = std.mem.trim(u8, try cssRuleStyleDeclarationText(current_page.css_text), " \t\r\n");
+                        var rule_text: std.ArrayList(u8) = .empty;
+                        defer rule_text.deinit(allocator);
+                        try rule_text.appendSlice(allocator, "@page ");
+                        try rule_text.appendSlice(allocator, selector_text);
+                        try rule_text.appendSlice(allocator, " { ");
+                        try rule_text.appendSlice(allocator, declarations);
+                        try rule_text.appendSlice(allocator, " }");
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text.items);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .page) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
                     else => return error.ScriptRuntime,
                 }
             }
@@ -2532,7 +2761,7 @@ fn evalAssignment(
         .media_list => |*media| {
             if (std.mem.eql(u8, target.property, "mediaText")) {
                 const text = try asString(allocator, value);
-                try media.setText(text);
+                try media.setText(allocator, text);
                 return;
             }
 
@@ -2912,6 +3141,49 @@ fn evalAssignment(
                 try host.domStoreMut().setAttribute(element, "rel", text);
                 return;
             }
+            if (std.mem.eql(u8, target.property, "ping")) {
+                if (!try elementSupportsHyperlinkPingProperty(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "ping", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "alt")) {
+                if (!try elementIsAreaElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "alt", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "coords")) {
+                if (!try elementIsAreaElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "coords", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "shape")) {
+                if (!try elementIsAreaElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "shape", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "noHref")) {
+                if (!try elementIsAreaElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "nohref", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "nohref");
+                }
+                return;
+            }
 
             if (std.mem.eql(u8, target.property, "as")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
@@ -2962,12 +3234,13 @@ fn evalAssignment(
                 return;
             }
             if (std.mem.eql(u8, target.property, "text")) {
-                if (!try elementIsScriptElement(host, element)) {
-                    return error.ScriptRuntime;
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "a") or std.ascii.eqlIgnoreCase(tag_name, "script")) {
+                    const text = try asString(allocator, value);
+                    try host.domStoreMut().setTextContent(element, text);
+                    return;
                 }
-                const text = try asString(allocator, value);
-                try host.domStoreMut().setTextContent(element, text);
-                return;
+                return error.ScriptRuntime;
             }
 
             if (std.mem.eql(u8, target.property, "async")) {
@@ -4181,9 +4454,12 @@ fn evalMember(
                 break :blk Value{ .string = src };
             }
             if (std.mem.eql(u8, member.property, "text")) {
-                if (!try elementIsScriptElement(host, element)) break :blk error.ScriptRuntime;
-                const text = try host.domStore().textContent(allocator, element);
-                break :blk Value{ .string = text };
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "a") or std.ascii.eqlIgnoreCase(tag_name, "script")) {
+                    const text = try host.domStore().textContent(allocator, element);
+                    break :blk Value{ .string = text };
+                }
+                break :blk error.ScriptRuntime;
             }
             if (std.mem.eql(u8, member.property, "async")) {
                 if (!try elementIsScriptElement(host, element)) break :blk error.ScriptRuntime;
@@ -4386,6 +4662,100 @@ fn evalMember(
                 if (!try elementSupportsHrefProperty(host, element)) break :blk error.ScriptRuntime;
                 const href_text = (try host.domStore().getAttribute(element, "href")) orelse "";
                 break :blk Value{ .string = href_text };
+            }
+            if (std.mem.eql(u8, member.property, "origin")) {
+                if (try elementSupportsHrefProperty(host, element)) {
+                    const url = try hyperlinkUrlValue(allocator, host, element);
+                    defer allocator.free(url);
+                    break :blk Value{ .string = try originFromUrl(allocator, url) };
+                }
+                if (try nodeLikeMember(allocator, host, element, "origin")) |value| {
+                    break :blk value;
+                }
+                break :blk error.ScriptRuntime;
+            }
+            if (std.mem.eql(u8, member.property, "protocol")) {
+                if (!try elementSupportsHrefProperty(host, element)) break :blk error.ScriptRuntime;
+                const url = try hyperlinkUrlValue(allocator, host, element);
+                defer allocator.free(url);
+                break :blk Value{ .string = try locationProtocolFromUrl(allocator, url) };
+            }
+            if (std.mem.eql(u8, member.property, "host")) {
+                if (!try elementSupportsHrefProperty(host, element)) break :blk error.ScriptRuntime;
+                const url = try hyperlinkUrlValue(allocator, host, element);
+                defer allocator.free(url);
+                break :blk Value{ .string = try locationHostFromUrl(allocator, url) };
+            }
+            if (std.mem.eql(u8, member.property, "hostname")) {
+                if (!try elementSupportsHrefProperty(host, element)) break :blk error.ScriptRuntime;
+                const url = try hyperlinkUrlValue(allocator, host, element);
+                defer allocator.free(url);
+                break :blk Value{ .string = try locationHostnameFromUrl(allocator, url) };
+            }
+            if (std.mem.eql(u8, member.property, "port")) {
+                if (!try elementSupportsHrefProperty(host, element)) break :blk error.ScriptRuntime;
+                const url = try hyperlinkUrlValue(allocator, host, element);
+                defer allocator.free(url);
+                const port = try locationPortFromUrl(url);
+                break :blk Value{ .string = try allocator.dupe(u8, port) };
+            }
+            if (std.mem.eql(u8, member.property, "username")) {
+                if (!try elementSupportsHrefProperty(host, element)) break :blk error.ScriptRuntime;
+                const url = try hyperlinkUrlValue(allocator, host, element);
+                defer allocator.free(url);
+                const username = try locationUsernameFromUrl(url);
+                break :blk Value{ .string = try allocator.dupe(u8, username) };
+            }
+            if (std.mem.eql(u8, member.property, "password")) {
+                if (!try elementSupportsHrefProperty(host, element)) break :blk error.ScriptRuntime;
+                const url = try hyperlinkUrlValue(allocator, host, element);
+                defer allocator.free(url);
+                const password = try locationPasswordFromUrl(url);
+                break :blk Value{ .string = try allocator.dupe(u8, password) };
+            }
+            if (std.mem.eql(u8, member.property, "pathname")) {
+                if (!try elementSupportsHrefProperty(host, element)) break :blk error.ScriptRuntime;
+                const url = try hyperlinkUrlValue(allocator, host, element);
+                defer allocator.free(url);
+                const pathname = try locationPathnameFromUrl(url);
+                break :blk Value{ .string = try allocator.dupe(u8, pathname) };
+            }
+            if (std.mem.eql(u8, member.property, "search")) {
+                if (!try elementSupportsHrefProperty(host, element)) break :blk error.ScriptRuntime;
+                const url = try hyperlinkUrlValue(allocator, host, element);
+                defer allocator.free(url);
+                break :blk Value{ .string = try locationSearchFromUrl(allocator, url) };
+            }
+            if (std.mem.eql(u8, member.property, "hash")) {
+                if (!try elementSupportsHrefProperty(host, element)) break :blk error.ScriptRuntime;
+                const url = try hyperlinkUrlValue(allocator, host, element);
+                defer allocator.free(url);
+                break :blk Value{ .string = try locationHashFromUrl(allocator, url) };
+            }
+            if (std.mem.eql(u8, member.property, "ping")) {
+                if (!try elementSupportsHyperlinkPingProperty(host, element)) break :blk error.ScriptRuntime;
+                const ping_text = (try host.domStore().getAttribute(element, "ping")) orelse "";
+                break :blk Value{ .string = ping_text };
+            }
+            if (std.mem.eql(u8, member.property, "alt")) {
+                if (!try elementIsAreaElement(host, element)) break :blk error.ScriptRuntime;
+                const alt_text = (try host.domStore().getAttribute(element, "alt")) orelse "";
+                break :blk Value{ .string = alt_text };
+            }
+            if (std.mem.eql(u8, member.property, "coords")) {
+                if (!try elementIsAreaElement(host, element)) break :blk error.ScriptRuntime;
+                const coords_text = (try host.domStore().getAttribute(element, "coords")) orelse "";
+                break :blk Value{ .string = coords_text };
+            }
+            if (std.mem.eql(u8, member.property, "shape")) {
+                if (!try elementIsAreaElement(host, element)) break :blk error.ScriptRuntime;
+                const shape_text = (try host.domStore().getAttribute(element, "shape")) orelse "";
+                break :blk Value{ .string = shape_text };
+            }
+            if (std.mem.eql(u8, member.property, "noHref")) {
+                if (!try elementIsAreaElement(host, element)) break :blk error.ScriptRuntime;
+                const no_href = try host.domStore().hasAttribute(element, "nohref");
+                break :blk Value{ .boolean = no_href };
             }
             if (std.mem.eql(u8, member.property, "relList")) {
                 if (!try elementSupportsRelProperty(host, element)) break :blk error.ScriptRuntime;
@@ -5020,16 +5390,20 @@ fn evalMember(
                     .node_id = sheet_id,
                     .media_text = media_text,
                     .current_media_text_fn = struct {
-                        fn call(ptr: *anyopaque, node_id: dom.NodeId) errors.Result([]const u8) {
+                        fn call(ptr: *anyopaque, state: *const MediaListState, alloc: std.mem.Allocator) errors.Result([]const u8) {
                             const typed: Host = @ptrCast(@alignCast(ptr));
+                            const node_id = state.node_id orelse return error.ScriptRuntime;
+                            _ = alloc;
                             const value = try typed.domStore().getAttribute(node_id, "media");
                             return value orelse "";
                         }
                     }.call,
                     .set_media_text_fn = struct {
-                        fn call(ptr: *anyopaque, node_id: dom.NodeId, value: []const u8) errors.Result(void) {
+                        fn call(ptr: *anyopaque, state: *MediaListState, value: []const u8, alloc: std.mem.Allocator) errors.Result(void) {
                             const typed: Host = @ptrCast(@alignCast(ptr));
+                            const node_id = state.node_id orelse return error.ScriptRuntime;
                             try typed.domStoreMut().setAttribute(node_id, "media", value);
+                            _ = alloc;
                             return;
                         }
                     }.call,
@@ -5088,7 +5462,35 @@ fn evalMember(
                         break :blk Value{ .string = media.condition_text };
                     }
                     if (std.mem.eql(u8, member.property, "media")) {
-                        break :blk Value{ .media_list = .{ .media_text = media.condition_text } };
+                        const Host = @TypeOf(host);
+                        break :blk Value{ .media_list = .{
+                            .host = @ptrCast(host),
+                            .node_id = media.parent_style_sheet orelse return error.ScriptRuntime,
+                            .source_index = media.source_index,
+                            .media_text = media.condition_text,
+                            .current_media_text_fn = struct {
+                                fn call(
+                                    ptr: *anyopaque,
+                                    state: *const MediaListState,
+                                    alloc: std.mem.Allocator,
+                                ) errors.Result([]const u8) {
+                                    const typed: Host = @ptrCast(@alignCast(ptr));
+                                    return try mediaListCurrentTextForRule(alloc, typed, state);
+                                }
+                            }.call,
+                            .set_media_text_fn = struct {
+                                fn call(
+                                    ptr: *anyopaque,
+                                    state: *MediaListState,
+                                    value: []const u8,
+                                    alloc: std.mem.Allocator,
+                                ) errors.Result(void) {
+                                    const typed: Host = @ptrCast(@alignCast(ptr));
+                                    try mediaListSetTextForRule(alloc, typed, state, value);
+                                    return;
+                                }
+                            }.call,
+                        } };
                     }
                     if (std.mem.eql(u8, member.property, "cssRules")) {
                         break :blk Value{ .css_rule_list = .{ .items = media.css_rules } };
@@ -5107,6 +5509,18 @@ fn evalMember(
                     }
                     break :blk error.ScriptRuntime;
                 },
+                .supports_condition => |supports_condition| {
+                    if (std.mem.eql(u8, member.property, "cssText")) {
+                        break :blk Value{ .string = supports_condition.css_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "name")) {
+                        break :blk Value{ .string = supports_condition.name };
+                    }
+                    if (std.mem.eql(u8, member.property, "cssRules")) {
+                        break :blk Value{ .css_rule_list = .{ .items = supports_condition.css_rules } };
+                    }
+                    break :blk error.ScriptRuntime;
+                },
                 .document => |document| {
                     if (std.mem.eql(u8, member.property, "cssText")) {
                         break :blk Value{ .string = document.css_text };
@@ -5122,6 +5536,14 @@ fn evalMember(
                 .container => |container| {
                     if (std.mem.eql(u8, member.property, "cssText")) {
                         break :blk Value{ .string = container.css_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "containerName")) {
+                        const parts = parseCssContainerConditionParts(container.condition_text);
+                        break :blk Value{ .string = parts.name };
+                    }
+                    if (std.mem.eql(u8, member.property, "containerQuery")) {
+                        const parts = parseCssContainerConditionParts(container.condition_text);
+                        break :blk Value{ .string = parts.query };
                     }
                     if (std.mem.eql(u8, member.property, "conditionText")) {
                         break :blk Value{ .string = container.condition_text };
@@ -5169,11 +5591,11 @@ fn evalMember(
                         break :blk try makeCssRuleStyleDeclarationValue(
                             allocator,
                             host,
-                            .style,
+                            .font_face,
                             try cssRuleStyleDeclarationText(font_face.css_text),
                             font_face.parent_style_sheet,
-                            null,
-                            false,
+                            font_face.source_index,
+                            true,
                         );
                     }
                     break :blk error.ScriptRuntime;
@@ -5491,10 +5913,10 @@ fn evalMember(
         },
         .media_list => |media| blk: {
             if (std.mem.eql(u8, member.property, "mediaText")) {
-                break :blk Value{ .string = try media.currentText() };
+                break :blk Value{ .string = try media.currentText(allocator) };
             }
             if (std.mem.eql(u8, member.property, "length")) {
-                const media_text = try media.currentText();
+                const media_text = try media.currentText(allocator);
                 break :blk Value{ .number = @floatFromInt(mediaListLength(media_text)) };
             }
             break :blk error.ScriptRuntime;
@@ -6079,6 +6501,12 @@ fn evalMethodCall(
         .navigator => if (std.mem.eql(u8, method, "javaEnabled")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk Value{ .boolean = host.windowNavigatorJavaEnabled() };
+        } else if (std.mem.eql(u8, method, "refresh")) blk: {
+            if (args.len > 1) return error.ScriptRuntime;
+            if (args.len == 1) {
+                _ = try evalExpr(allocator, host, bindings, args[0]);
+            }
+            break :blk Value{ .undefined_value = {} };
         } else if (std.mem.eql(u8, method, "toString")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk Value{ .string = "[object Navigator]" };
@@ -6100,6 +6528,17 @@ fn evalMethodCall(
         } else if (std.mem.eql(u8, method, "entries")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk try emptyCollectionEntries(allocator);
+        } else if (std.mem.eql(u8, method, "forEach")) blk: {
+            const empty_items = &[_][]const u8{};
+            break :blk try tokenListForEach(
+                allocator,
+                host,
+                bindings,
+                empty_items,
+                Value{ .mime_type_array = {} },
+                args,
+                "mimetypearray:forEach",
+            );
         } else if (std.mem.eql(u8, method, "toString")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk Value{ .string = "[object MimeTypeArray]" };
@@ -6126,6 +6565,16 @@ fn evalMethodCall(
         } else if (std.mem.eql(u8, method, "entries")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk try stringListEntries(allocator, object.string_list.items);
+        } else if (std.mem.eql(u8, method, "forEach")) blk: {
+            break :blk try tokenListForEach(
+                allocator,
+                host,
+                bindings,
+                object.string_list.items,
+                Value{ .string_list = object.string_list },
+                args,
+                "domstringlist:forEach",
+            );
         } else if (std.mem.eql(u8, method, "toString")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk Value{ .string = "[object DOMStringList]" };
@@ -7604,6 +8053,7 @@ fn evalMethodCall(
                 .charset => "[object CSSCharsetRule]",
                 .media => "[object CSSMediaRule]",
                 .supports => "[object CSSSupportsRule]",
+                .supports_condition => "[object CSSSupportsConditionRule]",
                 .document => "[object CSSDocumentRule]",
                 .container => "[object CSSContainerRule]",
                 .starting_style => "[object CSSStartingStyleRule]",
@@ -7787,7 +8237,7 @@ fn evalMethodCall(
             if (args.len != 1) return error.ScriptRuntime;
             const index_value = try evalExpr(allocator, host, bindings, args[0]);
             const index = try asNodeListIndex(index_value);
-            const media_text = try media.currentText();
+            const media_text = try media.currentText(allocator);
             if (try mediaListItem(allocator, media_text, index)) |text| {
                 break :media_item Value{ .string = text };
             }
@@ -7797,30 +8247,30 @@ fn evalMethodCall(
             var media_state = media;
             const medium_value = try evalExpr(allocator, host, bindings, args[0]);
             const medium = try mediaListNormalizeItem(try asString(allocator, medium_value));
-            const current_text = try media_state.currentText();
+            const current_text = try media_state.currentText(allocator);
             var items = try mediaListItems(allocator, current_text);
             defer items.deinit(allocator);
             if (!mediaListContains(items.items, medium)) {
                 try items.append(allocator, medium);
             }
-            try media_state.setText(try mediaListSerialize(allocator, items.items));
+            try media_state.setText(allocator, try mediaListSerialize(allocator, items.items));
             break :append_medium Value{ .undefined_value = {} };
         } else if (std.mem.eql(u8, method, "deleteMedium")) delete_medium: {
             if (args.len != 1) return error.ScriptRuntime;
             var media_state = media;
             const medium_value = try evalExpr(allocator, host, bindings, args[0]);
             const medium = try mediaListNormalizeItem(try asString(allocator, medium_value));
-            const current_text = try media_state.currentText();
+            const current_text = try media_state.currentText(allocator);
             var items = try mediaListItems(allocator, current_text);
             defer items.deinit(allocator);
             if (mediaListIndexOf(items.items, medium)) |index| {
                 _ = items.orderedRemove(index);
-                try media_state.setText(try mediaListSerialize(allocator, items.items));
+                try media_state.setText(allocator, try mediaListSerialize(allocator, items.items));
             }
             break :delete_medium Value{ .undefined_value = {} };
         } else if (std.mem.eql(u8, method, "toString")) media_to_string: {
             if (args.len != 0) return error.ScriptRuntime;
-            break :media_to_string Value{ .string = try media.currentText() };
+            break :media_to_string Value{ .string = try media.currentText(allocator) };
         } else error.ScriptRuntime,
         .date => |date| if (std.mem.eql(u8, method, "toISOString")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
@@ -7860,6 +8310,32 @@ fn evalMethodCall(
         } else if (std.mem.eql(u8, method, "cloneRange")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk Value{ .range = range };
+        } else if (std.mem.eql(u8, method, "cloneContents")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            const fragment = host.domStoreMut().createElementDetached("template") catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            if (range.selected_text.len > 0) {
+                host.domStoreMut().setTextContent(fragment, range.selected_text) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ScriptRuntime,
+                };
+            }
+            break :blk Value{ .template_content = fragment };
+        } else if (std.mem.eql(u8, method, "compareBoundaryPoints")) blk: {
+            if (args.len != 2) return error.ScriptRuntime;
+            const how_value = try evalExpr(allocator, host, bindings, args[0]);
+            const how = try asNodeListIndex(how_value);
+            if (how > 3) return error.ScriptRuntime;
+            const other_value = try evalExpr(allocator, host, bindings, args[1]);
+            const other = switch (other_value) {
+                .range => |other| other,
+                else => return error.ScriptRuntime,
+            };
+
+            const result = try compareRangeBoundaryPoints(host.domStore(), range, how, other);
+            break :blk Value{ .number = @floatFromInt(result) };
         } else if (std.mem.eql(u8, method, "comparePoint")) blk: {
             if (args.len != 2) return error.ScriptRuntime;
             const node_value = try evalExpr(allocator, host, bindings, args[0]);
@@ -7892,6 +8368,28 @@ fn evalMethodCall(
                 break :blk Value{ .number = 1 };
             }
             return error.ScriptRuntime;
+        } else if (std.mem.eql(u8, method, "extractContents")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            const fragment = host.domStoreMut().createElementDetached("template") catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            if (range.start_container) |node_id| {
+                const end_node_id = range.end_container orelse break :blk Value{ .template_content = fragment };
+                if (!sameNodeId(node_id, end_node_id)) return error.ScriptRuntime;
+                if (range.start_offset != range.end_offset) {
+                    host.domStoreMut().setTextContent(fragment, range.selected_text) catch |err| switch (err) {
+                        error.OutOfMemory => return error.OutOfMemory,
+                        else => return error.ScriptRuntime,
+                    };
+                    host.domStoreMut().setRangeText(node_id, "", range.start_offset, range.end_offset, .start) catch |err| switch (err) {
+                        error.OutOfMemory => return error.OutOfMemory,
+                        else => return error.ScriptRuntime,
+                    };
+                    try host.dispatchSelectionChange();
+                }
+            }
+            break :blk Value{ .template_content = fragment };
         } else if (std.mem.eql(u8, method, "deleteContents")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             const node_id = range.start_container orelse break :blk Value{ .undefined_value = {} };
@@ -9669,6 +10167,7 @@ fn cssRuleValueCloneForReturn(
                 .media => |*media| {
                     media.parent_style_sheet = parent_style_sheet;
                     media.parent_rule = parent_rule;
+                    media.source_index = source_index;
                     media.css_rules = try cssRuleValuesCloneForReturn(
                         allocator,
                         media.css_rules,
@@ -9682,6 +10181,16 @@ fn cssRuleValueCloneForReturn(
                     supports.css_rules = try cssRuleValuesCloneForReturn(
                         allocator,
                         supports.css_rules,
+                        parent_style_sheet,
+                        cloned,
+                    );
+                },
+                .supports_condition => |*supports_condition| {
+                    supports_condition.parent_style_sheet = parent_style_sheet;
+                    supports_condition.parent_rule = parent_rule;
+                    supports_condition.css_rules = try cssRuleValuesCloneForReturn(
+                        allocator,
+                        supports_condition.css_rules,
                         parent_style_sheet,
                         cloned,
                     );
@@ -9733,6 +10242,7 @@ fn cssRuleValueCloneForReturn(
                 .font_face => |*font_face| {
                     font_face.parent_style_sheet = parent_style_sheet;
                     font_face.parent_rule = parent_rule;
+                    font_face.source_index = source_index;
                 },
                 .font_feature_values => |*font_feature_values| {
                     font_feature_values.parent_style_sheet = parent_style_sheet;
@@ -9823,6 +10333,11 @@ fn cssRuleSetParents(
             supports.parent_rule = parent_rule;
             cssRuleValuesAnnotate(supports.css_rules, parent_style_sheet, rule);
         },
+        .supports_condition => |*supports_condition| {
+            supports_condition.parent_style_sheet = parent_style_sheet;
+            supports_condition.parent_rule = parent_rule;
+            cssRuleValuesAnnotate(supports_condition.css_rules, parent_style_sheet, rule);
+        },
         .document => |*document| {
             document.parent_style_sheet = parent_style_sheet;
             document.parent_rule = parent_rule;
@@ -9909,6 +10424,7 @@ fn cssRuleParentStyleSheet(rule: CssRuleState) ?dom.NodeId {
         .style => |style| style.parent_style_sheet,
         .media => |media| media.parent_style_sheet,
         .supports => |supports| supports.parent_style_sheet,
+        .supports_condition => |supports_condition| supports_condition.parent_style_sheet,
         .document => |document| document.parent_style_sheet,
         .container => |container| container.parent_style_sheet,
         .starting_style => |starting_style| starting_style.parent_style_sheet,
@@ -9935,6 +10451,7 @@ fn cssRuleParentRule(rule: CssRuleState) ?*const CssRuleState {
         .style => |style| style.parent_rule,
         .media => |media| media.parent_rule,
         .supports => |supports| supports.parent_rule,
+        .supports_condition => |supports_condition| supports_condition.parent_rule,
         .document => |document| document.parent_rule,
         .container => |container| container.parent_rule,
         .starting_style => |starting_style| starting_style.parent_rule,
@@ -9962,6 +10479,7 @@ fn cssRuleCssText(rule: Value) []const u8 {
             .style => |style| style.css_text,
             .media => |media| media.css_text,
             .supports => |supports| supports.css_text,
+            .supports_condition => |supports_condition| supports_condition.css_text,
             .document => |document| document.css_text,
             .container => |container| container.css_text,
             .starting_style => |starting_style| starting_style.css_text,
@@ -10369,6 +10887,8 @@ fn parseStyleSheetAtRuleValue(
         CssBlockAtRuleKind.media
     else if (std.ascii.eqlIgnoreCase(keyword, "supports"))
         CssBlockAtRuleKind.supports
+    else if (std.ascii.eqlIgnoreCase(keyword, "supports-condition"))
+        CssBlockAtRuleKind.supports_condition
     else if (std.ascii.eqlIgnoreCase(keyword, "document"))
         CssBlockAtRuleKind.document
     else if (std.ascii.eqlIgnoreCase(keyword, "container"))
@@ -10395,6 +10915,7 @@ fn parseStyleSheetAtRuleValue(
     const block_start = try parseCssRuleBlockStart(source, pos.*);
     const header_text = std.mem.trim(u8, source[pos.*..block_start], " \t\r\n\x0c");
     if (rule_kind != .font_face and rule_kind != .font_feature_values and rule_kind != .page and rule_kind != .counter_style and rule_kind != .starting_style and rule_kind != .position_try and header_text.len == 0) return error.ScriptRuntime;
+    if (rule_kind == .supports_condition and !isDashedIdent(header_text)) return error.ScriptRuntime;
     if (rule_kind == .font_palette_values and !std.mem.startsWith(u8, header_text, "--")) return error.ScriptRuntime;
 
     const block_end = try parseCssRuleBlockEnd(source, block_start + 1);
@@ -10414,6 +10935,13 @@ fn parseStyleSheetAtRuleValue(
                 .condition_text = header_text,
                 .css_text = css_text,
                 .css_rules = try parseStyleSheetRuleValues(allocator, source[block_start + 1 .. block_end - 1]),
+            },
+        } },
+        .supports_condition => Value{ .css_rule = .{
+            .supports_condition = .{
+                .name = header_text,
+                .css_text = css_text,
+                .css_rules = try allocator.alloc(Value, 0),
             },
         } },
         .document => Value{ .css_rule = .{
@@ -10505,6 +11033,7 @@ fn parseStyleSheetAtRuleValue(
 const CssBlockAtRuleKind = enum {
     media,
     supports,
+    supports_condition,
     document,
     container,
     starting_style,
@@ -11134,6 +11663,62 @@ fn isCssImportKeyword(prelude: []const u8, pos: usize, keyword: []const u8) bool
     return pos + keyword.len == prelude.len or !isIdentifierContinueByte(prelude[pos + keyword.len]);
 }
 
+fn parseCssContainerConditionParts(text: []const u8) CssContainerConditionParts {
+    const trimmed = std.mem.trim(u8, text, " \t\r\n\x0c");
+    if (trimmed.len == 0) return .{ .name = "", .query = "" };
+
+    if (cssContainerQueryStarts(trimmed)) {
+        return .{ .name = "", .query = trimmed };
+    }
+
+    const name_end = cssContainerNameEnd(trimmed) orelse return .{ .name = "", .query = trimmed };
+    const name = trimmed[0..name_end];
+    if (isCssContainerReservedName(name)) return .{ .name = "", .query = trimmed };
+
+    const query = std.mem.trim(u8, trimmed[name_end..], " \t\r\n\x0c");
+    if (query.len == 0) return .{ .name = name, .query = "" };
+    if (cssContainerQueryStarts(query)) return .{ .name = name, .query = query };
+
+    return .{ .name = "", .query = trimmed };
+}
+
+fn cssContainerNameEnd(text: []const u8) ?usize {
+    if (text.len == 0) return null;
+
+    var pos: usize = 0;
+    if (std.ascii.isAlphabetic(text[pos]) or text[pos] == '_') {
+        pos += 1;
+    } else if (text[pos] == '-') {
+        if (text.len < 2) return null;
+        const second = text[1];
+        if (!(std.ascii.isAlphabetic(second) or second == '_' or second == '-')) return null;
+        pos += 2;
+    } else {
+        return null;
+    }
+
+    while (pos < text.len and (isIdentifierContinueByte(text[pos]) or text[pos] == '-')) {
+        pos += 1;
+    }
+
+    return pos;
+}
+
+fn cssContainerQueryStarts(text: []const u8) bool {
+    if (text.len == 0) return false;
+    if (text[0] == '(') return true;
+    if (text.len >= 6 and std.ascii.eqlIgnoreCase(text[0..6], "style(")) return true;
+    if (text.len >= 13 and std.ascii.eqlIgnoreCase(text[0..13], "scroll-state(")) return true;
+    return text.len >= 3 and std.ascii.eqlIgnoreCase(text[0..3], "not") and (text.len == 3 or isWhitespaceByte(text[3]) or text[3] == '(');
+}
+
+fn isCssContainerReservedName(name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(name, "none") or
+        std.ascii.eqlIgnoreCase(name, "and") or
+        std.ascii.eqlIgnoreCase(name, "not") or
+        std.ascii.eqlIgnoreCase(name, "or");
+}
+
 fn parseStyleSheetNamespaceRuleValue(
     allocator: std.mem.Allocator,
     source: []const u8,
@@ -11232,7 +11817,7 @@ fn isDashedIdent(text: []const u8) bool {
     if (!std.mem.startsWith(u8, text, "--")) return false;
     if (text.len == 2) return false;
     for (text[2..]) |byte| {
-        if (!isIdentifierContinueByte(byte)) return false;
+        if (!isIdentifierContinueByte(byte) and byte != '-') return false;
     }
     return true;
 }
@@ -11714,6 +12299,16 @@ fn elementSupportsHyperlinkMetadataProperty(host: anytype, element_id: dom.NodeI
         std.ascii.eqlIgnoreCase(tag_name, "link");
 }
 
+fn elementSupportsHyperlinkPingProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.ascii.eqlIgnoreCase(tag_name, "a") or std.ascii.eqlIgnoreCase(tag_name, "area");
+}
+
+fn elementIsAreaElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.ascii.eqlIgnoreCase(tag_name, "area");
+}
+
 fn elementIsScriptElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
     return std.ascii.eqlIgnoreCase(tag_name, "script");
@@ -11863,6 +12458,14 @@ fn formActionValue(
     };
     defer allocator.free(buffer);
     return try std.fmt.allocPrint(allocator, "{f}", .{resolved});
+}
+
+fn hyperlinkUrlValue(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    element_id: dom.NodeId,
+) errors.Result([]const u8) {
+    return try formActionValue(allocator, host, element_id, "href");
 }
 
 fn formKeywordValue(
@@ -12867,6 +13470,56 @@ fn sameNodeId(left: dom.NodeId, right: dom.NodeId) bool {
     return left.index == right.index and left.generation == right.generation;
 }
 
+fn compareRangeBoundaryPoints(
+    store: *const dom.DomStore,
+    left: RangeSnapshot,
+    how: usize,
+    right: RangeSnapshot,
+) errors.Result(i8) {
+    const left_container = switch (how) {
+        0, 1 => left.start_container,
+        2, 3 => left.end_container,
+        else => return error.ScriptRuntime,
+    } orelse return error.ScriptRuntime;
+    const left_offset = switch (how) {
+        0, 1 => left.start_offset,
+        2, 3 => left.end_offset,
+        else => return error.ScriptRuntime,
+    };
+
+    const right_container = switch (how) {
+        0, 2 => right.start_container,
+        1, 3 => right.end_container,
+        else => return error.ScriptRuntime,
+    } orelse return error.ScriptRuntime;
+    const right_offset = switch (how) {
+        0, 2 => right.start_offset,
+        1, 3 => right.end_offset,
+        else => return error.ScriptRuntime,
+    };
+
+    if (sameNodeId(left_container, right_container)) {
+        return if (left_offset < right_offset) -1 else if (left_offset > right_offset) 1 else 0;
+    }
+
+    const relation = dom.compareDocumentPosition(store, left_container, right_container);
+    const DISCONNECTED: u16 = 0x01;
+    const PRECEDING: u16 = 0x02;
+    const FOLLOWING: u16 = 0x04;
+    const CONTAINS: u16 = 0x08;
+    const CONTAINED_BY: u16 = 0x10;
+    if ((relation & DISCONNECTED) != 0 or (relation & CONTAINS) != 0 or (relation & CONTAINED_BY) != 0) {
+        return error.ScriptRuntime;
+    }
+    if ((relation & FOLLOWING) != 0) {
+        return -1;
+    }
+    if ((relation & PRECEDING) != 0) {
+        return 1;
+    }
+    return error.ScriptRuntime;
+}
+
 fn compareDocumentPositionDisconnected(left_root: dom.NodeId, right_root: dom.NodeId) u16 {
     const DISCONNECTED: u16 = 0x01;
     const FOLLOWING: u16 = 0x04;
@@ -13082,14 +13735,18 @@ fn originFromUrl(allocator: std.mem.Allocator, url: []const u8) errors.Result([]
         return allocator.dupe(u8, "null");
     }
 
-    var out = try allocator.alloc(u8, scheme.len + 3 + authority.len);
+    const parts = locationAuthorityParts(authority) orelse return allocator.dupe(u8, "null");
+    const host = try locationAuthorityHostFromParts(allocator, parts);
+    defer allocator.free(host);
+
+    var out = try allocator.alloc(u8, scheme.len + 3 + host.len);
     for (scheme, 0..) |byte, index| {
         out[index] = std.ascii.toLower(byte);
     }
     out[scheme.len] = ':';
     out[scheme.len + 1] = '/';
     out[scheme.len + 2] = '/';
-    @memcpy(out[scheme.len + 3 ..], authority);
+    @memcpy(out[scheme.len + 3 ..], host);
     return out;
 }
 
@@ -13289,6 +13946,13 @@ fn locationSearchFromUrl(allocator: std.mem.Allocator, url: []const u8) errors.R
         @memcpy(out[1..], search);
     }
     return out;
+}
+
+fn locationHashFromUrl(allocator: std.mem.Allocator, url: []const u8) errors.Result([]const u8) {
+    const fragment_index = std.mem.indexOfScalar(u8, url, '#') orelse return allocator.dupe(u8, "");
+    const fragment = url[fragment_index + 1 ..];
+    if (fragment.len == 0) return allocator.dupe(u8, "");
+    return try std.fmt.allocPrint(allocator, "#{s}", .{fragment});
 }
 
 fn normalizeLocationHostnameForAuthority(
@@ -13642,6 +14306,7 @@ fn asString(allocator: std.mem.Allocator, value: Value) errors.Result([]const u8
             .charset => "[object CSSCharsetRule]",
             .media => "[object CSSMediaRule]",
             .supports => "[object CSSSupportsRule]",
+            .supports_condition => "[object CSSSupportsConditionRule]",
             .document => "[object CSSDocumentRule]",
             .container => "[object CSSContainerRule]",
             .starting_style => "[object CSSStartingStyleRule]",
@@ -13675,7 +14340,7 @@ fn asString(allocator: std.mem.Allocator, value: Value) errors.Result([]const u8
         .screen_orientation => "[object ScreenOrientation]",
         .storage => "[object Storage]",
         .history => "[object History]",
-        .media_list => |media| try media.currentText(),
+        .media_list => |media| try media.currentText(allocator),
         .dom_rect => "[object DOMRect]",
         .dom_rect_list => "[object DOMRectList]",
         .range => |range| range.selected_text,

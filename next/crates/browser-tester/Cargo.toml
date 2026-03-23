@@ -14,3 +14,5 @@ bt-dom = { path = "../bt-dom" }
 bt-runtime = { path = "../bt-runtime" }
 bt-script = { path = "../bt-script" }
 
+[dev-dependencies]
+proptest = "1.6"

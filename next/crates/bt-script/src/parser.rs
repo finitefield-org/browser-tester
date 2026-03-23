@@ -504,7 +504,7 @@ impl<'a> Parser<'a> {
     }
 
     fn error(&self, message: impl Into<String>) -> ScriptError {
-        ScriptError::new(message)
+        ScriptError::parse(message)
     }
 }
 

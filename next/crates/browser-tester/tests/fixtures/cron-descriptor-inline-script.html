@@ -1,0 +1,1380 @@
+<html><body>
+<script>
+    (() => {
+      const root = document.getElementById("cron-descriptor-tool-root");
+      if (!root) return;
+
+      const i18n = {
+        dialog: {"AutoInferLabel":"Auto-detect from input (recommended)","BreakdownField":"Field","BreakdownInterpretation":"Interpretation","BreakdownRange":"Range","BreakdownTitle":"Field Breakdown","BreakdownValue":"Value","ClearButton":"Clear","CloseAria":"Close","ConditionJoin":" / ","ConditionTemplate":"{label}: {value}","CopyNormalizedButton":"Copy normalized cron","CopyRunsButton":"Copy list","CopyRunsCsvButton":"Copy as CSV","CopyShareButton":"Copy URL","CopySummaryButton":"Copy description","CsvHeader":"index,run_at_local,run_at_iso,relative","DescribeButton":"Describe","DstNote":"Actual behavior may differ because of DST and runtime environment differences.","Examples":{"Items":[{"Expr":"*/5 * * * *","Format":"5","Label":"*/5 * * * * (Every 5 minutes)","URL":"#","Url":"#","expr":"*/5 * * * *","format":"5","label":"*/5 * * * * (Every 5 minutes)","url":"#"},{"Expr":"0 9 * * 1-5","Format":"5","Label":"0 9 * * 1-5 (Weekdays at 09:00)","URL":"#","Url":"#","expr":"0 9 * * 1-5","format":"5","label":"0 9 * * 1-5 (Weekdays at 09:00)","url":"#"},{"Expr":"0 0 1 * *","Format":"5","Label":"0 0 1 * * (Monthly on day 1 at 00:00)","URL":"#","Url":"#","expr":"0 0 1 * *","format":"5","label":"0 0 1 * * (Monthly on day 1 at 00:00)","url":"#"},{"Expr":"0 0 * * 0","Format":"5","Label":"0 0 * * 0 (Every Sunday at 00:00)","URL":"#","Url":"#","expr":"0 0 * * 0","format":"5","label":"0 0 * * 0 (Every Sunday at 00:00)","url":"#"},{"Expr":"0 30 2 * * *","Format":"6","Label":"0 30 2 * * * (With seconds: daily 02:30:00)","URL":"#","Url":"#","expr":"0 30 2 * * *","format":"6","label":"0 30 2 * * * (With seconds: daily 02:30:00)","url":"#"}],"items":[{"Expr":"*/5 * * * *","Format":"5","Label":"*/5 * * * * (Every 5 minutes)","URL":"#","Url":"#","expr":"*/5 * * * *","format":"5","label":"*/5 * * * * (Every 5 minutes)","url":"#"},{"Expr":"0 9 * * 1-5","Format":"5","Label":"0 9 * * 1-5 (Weekdays at 09:00)","URL":"#","Url":"#","expr":"0 9 * * 1-5","format":"5","label":"0 9 * * 1-5 (Weekdays at 09:00)","url":"#"},{"Expr":"0 0 1 * *","Format":"5","Label":"0 0 1 * * (Monthly on day 1 at 00:00)","URL":"#","Url":"#","expr":"0 0 1 * *","format":"5","label":"0 0 1 * * (Monthly on day 1 at 00:00)","url":"#"},{"Expr":"0 0 * * 0","Format":"5","Label":"0 0 * * 0 (Every Sunday at 00:00)","URL":"#","Url":"#","expr":"0 0 * * 0","format":"5","label":"0 0 * * 0 (Every Sunday at 00:00)","url":"#"},{"Expr":"0 30 2 * * *","Format":"6","Label":"0 30 2 * * * (With seconds: daily 02:30:00)","URL":"#","Url":"#","expr":"0 30 2 * * *","format":"6","label":"0 30 2 * * * (With seconds: daily 02:30:00)","url":"#"}]},"ExamplesLabel":"Input examples","Fields":{"Day":{"Label":"Day of Month","Range":"1-31","URL":"#","Unit":"d","Url":"#","label":"Day of Month","range":"1-31","unit":"d","url":"#"},"Hour":{"Label":"Hour","Range":"0-23","URL":"#","Unit":"h","Url":"#","label":"Hour","range":"0-23","unit":"h","url":"#"},"Minute":{"Label":"Minute","Range":"0-59","URL":"#","Unit":"m","Url":"#","label":"Minute","range":"0-59","unit":"m","url":"#"},"Month":{"Label":"Month","Range":"1-12","URL":"#","Unit":"mo","Url":"#","label":"Month","range":"1-12","unit":"mo","url":"#"},"Second":{"Label":"Second","Range":"0-59","URL":"#","Unit":"s","Url":"#","label":"Second","range":"0-59","unit":"s","url":"#"},"Weekday":{"Label":"Day of Week","Range":"0-7 (0/7=Sunday)","URL":"#","Unit":"d","Url":"#","label":"Day of Week","range":"0-7 (0/7=Sunday)","unit":"d","url":"#"},"Year":{"Label":"Year","Range":"1970-2099","URL":"#","Unit":"y","Url":"#","label":"Year","range":"1970-2099","unit":"y","url":"#"},"day":{"Label":"Day of Month","Range":"1-31","URL":"#","Unit":"d","Url":"#","label":"Day of Month","range":"1-31","unit":"d","url":"#"},"hour":{"Label":"Hour","Range":"0-23","URL":"#","Unit":"h","Url":"#","label":"Hour","range":"0-23","unit":"h","url":"#"},"minute":{"Label":"Minute","Range":"0-59","URL":"#","Unit":"m","Url":"#","label":"Minute","range":"0-59","unit":"m","url":"#"},"month":{"Label":"Month","Range":"1-12","URL":"#","Unit":"mo","Url":"#","label":"Month","range":"1-12","unit":"mo","url":"#"},"second":{"Label":"Second","Range":"0-59","URL":"#","Unit":"s","Url":"#","label":"Second","range":"0-59","unit":"s","url":"#"},"weekday":{"Label":"Day of Week","Range":"0-7 (0/7=Sunday)","URL":"#","Unit":"d","Url":"#","label":"Day of Week","range":"0-7 (0/7=Sunday)","unit":"d","url":"#"},"year":{"Label":"Year","Range":"1970-2099","URL":"#","Unit":"y","Url":"#","label":"Year","range":"1970-2099","unit":"y","url":"#"}},"Format5":"5 fields (min hour day month weekday)","Format6":"6 fields (sec min hour day month weekday)","Format7":"7 fields (sec min hour day month weekday year)","FormatHint":"If unsure, start with 5 fields (common in Linux cron).","FormatLabel":"Format","InferHint":"Detected: {format}","InputCardTitle":"Cron Input","InputHelp":"Input is auto-analyzed with a 300ms debounce.","InputLabel":"Cron Expression","InputPlaceholder":"Example: */5 * * * *","Months":["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"],"NextCardTitle":"Upcoming Runs","NextCountLabel":"Count","NextEmpty":"No upcoming runs available.","NextRunsLabel":"Show upcoming runs","NextTitle":"Next {n} runs","ParsingLabel":"Parsing...","Relative":{"Ago":"{duration} ago","DayUnit":"d","HourUnit":"h","In":"in {duration}","LessThanMinute":"in \u003c1m","MinuteUnit":"m","ago":"{duration} ago","dayUnit":"d","hourUnit":"h","in":"in {duration}","lessThanMinute":"in \u003c1m","minuteUnit":"m"},"ResultEmpty":"Enter a cron expression to see the summary.","ResultMeta":"Timezone: {timezone} / Format: {format}","ResultTitle":"Description","Summary":{"DailyAt":"Runs daily at {time}","Detail":"Condition: {conditions} ({timezone})","EveryMinute":"Runs every minute","EveryMinutes":"Runs every {step} minutes","Generic":"Runs on times matching the cron condition","MonthlyAt":"Runs on day {day} of each month at {time}","WeekdaysAt":"Runs at {time} on weekdays (Mon-Fri)","WeeklyAt":"Runs every {weekday} at {time}","YearSpecificAt":"Runs on {year}-{month}-{day} at {time}","YearlyAt":"Runs every year on {month}/{day} at {time}","dailyAt":"Runs daily at {time}","detail":"Condition: {conditions} ({timezone})","everyMinute":"Runs every minute","everyMinutes":"Runs every {step} minutes","generic":"Runs on times matching the cron condition","monthlyAt":"Runs on day {day} of each month at {time}","weekdaysAt":"Runs at {time} on weekdays (Mon-Fri)","weeklyAt":"Runs every {weekday} at {time}","yearSpecificAt":"Runs on {year}-{month}-{day} at {time}","yearlyAt":"Runs every year on {month}/{day} at {time}"},"TermAny":"all","TermJoin":", ","TermRange":"{from}-{to}","TermStepAny":"every {step}{unit}","TermStepFrom":"every {step}{unit} from {from}","TermStepRange":"every {step}{unit} in {from}-{to}","TimezoneLabel":"Timezone","TimezoneNote":"Displayed timing can differ if server timezone is different.","Title":"Cron Descriptor","TrustLine":"Input is parsed locally in your browser and is not sent to a server.","URL":"#","Url":"#","Warning":{"FormatBody":"Input appears to be {format}.","FormatTitle":"The selected format may be incorrect","ImplBody":"It contains implementation-dependent tokens such as `L`, `W`, `#`, `?`.","ImplEnv":"Check your runtime environment (Linux cron or app scheduler).","ImplRewrite":"If possible, rewrite using standard syntax (*, /, -, ,).","ImplTitle":"This cron may be interpreted differently across environments","InvalidCount":"Field count mismatch (expected: {expected}, got: {actual})","InvalidExample":"Example: */5 * * * *","InvalidRange":"Out-of-range value ({field}: {range})","InvalidTitle":"Invalid cron expression","SwitchFormat":"Switch to {format}","formatBody":"Input appears to be {format}.","formatTitle":"The selected format may be incorrect","implBody":"It contains implementation-dependent tokens such as `L`, `W`, `#`, `?`.","implEnv":"Check your runtime environment (Linux cron or app scheduler).","implRewrite":"If possible, rewrite using standard syntax (*, /, -, ,).","implTitle":"This cron may be interpreted differently across environments","invalidCount":"Field count mismatch (expected: {expected}, got: {actual})","invalidExample":"Example: */5 * * * *","invalidRange":"Out-of-range value ({field}: {range})","invalidTitle":"Invalid cron expression","switchFormat":"Switch to {format}"},"Weekdays":["Sun","Mon","Tue","Wed","Thu","Fri","Sat"],"autoInferLabel":"Auto-detect from input (recommended)","breakdownField":"Field","breakdownInterpretation":"Interpretation","breakdownRange":"Range","breakdownTitle":"Field Breakdown","breakdownValue":"Value","clearButton":"Clear","closeAria":"Close","conditionJoin":" / ","conditionTemplate":"{label}: {value}","copyNormalizedButton":"Copy normalized cron","copyRunsButton":"Copy list","copyRunsCsvButton":"Copy as CSV","copyShareButton":"Copy URL","copySummaryButton":"Copy description","csvHeader":"index,run_at_local,run_at_iso,relative","describeButton":"Describe","dstNote":"Actual behavior may differ because of DST and runtime environment differences.","examples":{"Items":[{"Expr":"*/5 * * * *","Format":"5","Label":"*/5 * * * * (Every 5 minutes)","URL":"#","Url":"#","expr":"*/5 * * * *","format":"5","label":"*/5 * * * * (Every 5 minutes)","url":"#"},{"Expr":"0 9 * * 1-5","Format":"5","Label":"0 9 * * 1-5 (Weekdays at 09:00)","URL":"#","Url":"#","expr":"0 9 * * 1-5","format":"5","label":"0 9 * * 1-5 (Weekdays at 09:00)","url":"#"},{"Expr":"0 0 1 * *","Format":"5","Label":"0 0 1 * * (Monthly on day 1 at 00:00)","URL":"#","Url":"#","expr":"0 0 1 * *","format":"5","label":"0 0 1 * * (Monthly on day 1 at 00:00)","url":"#"},{"Expr":"0 0 * * 0","Format":"5","Label":"0 0 * * 0 (Every Sunday at 00:00)","URL":"#","Url":"#","expr":"0 0 * * 0","format":"5","label":"0 0 * * 0 (Every Sunday at 00:00)","url":"#"},{"Expr":"0 30 2 * * *","Format":"6","Label":"0 30 2 * * * (With seconds: daily 02:30:00)","URL":"#","Url":"#","expr":"0 30 2 * * *","format":"6","label":"0 30 2 * * * (With seconds: daily 02:30:00)","url":"#"}],"items":[{"Expr":"*/5 * * * *","Format":"5","Label":"*/5 * * * * (Every 5 minutes)","URL":"#","Url":"#","expr":"*/5 * * * *","format":"5","label":"*/5 * * * * (Every 5 minutes)","url":"#"},{"Expr":"0 9 * * 1-5","Format":"5","Label":"0 9 * * 1-5 (Weekdays at 09:00)","URL":"#","Url":"#","expr":"0 9 * * 1-5","format":"5","label":"0 9 * * 1-5 (Weekdays at 09:00)","url":"#"},{"Expr":"0 0 1 * *","Format":"5","Label":"0 0 1 * * (Monthly on day 1 at 00:00)","URL":"#","Url":"#","expr":"0 0 1 * *","format":"5","label":"0 0 1 * * (Monthly on day 1 at 00:00)","url":"#"},{"Expr":"0 0 * * 0","Format":"5","Label":"0 0 * * 0 (Every Sunday at 00:00)","URL":"#","Url":"#","expr":"0 0 * * 0","format":"5","label":"0 0 * * 0 (Every Sunday at 00:00)","url":"#"},{"Expr":"0 30 2 * * *","Format":"6","Label":"0 30 2 * * * (With seconds: daily 02:30:00)","URL":"#","Url":"#","expr":"0 30 2 * * *","format":"6","label":"0 30 2 * * * (With seconds: daily 02:30:00)","url":"#"}]},"examplesLabel":"Input examples","fields":{"Day":{"Label":"Day of Month","Range":"1-31","URL":"#","Unit":"d","Url":"#","label":"Day of Month","range":"1-31","unit":"d","url":"#"},"Hour":{"Label":"Hour","Range":"0-23","URL":"#","Unit":"h","Url":"#","label":"Hour","range":"0-23","unit":"h","url":"#"},"Minute":{"Label":"Minute","Range":"0-59","URL":"#","Unit":"m","Url":"#","label":"Minute","range":"0-59","unit":"m","url":"#"},"Month":{"Label":"Month","Range":"1-12","URL":"#","Unit":"mo","Url":"#","label":"Month","range":"1-12","unit":"mo","url":"#"},"Second":{"Label":"Second","Range":"0-59","URL":"#","Unit":"s","Url":"#","label":"Second","range":"0-59","unit":"s","url":"#"},"Weekday":{"Label":"Day of Week","Range":"0-7 (0/7=Sunday)","URL":"#","Unit":"d","Url":"#","label":"Day of Week","range":"0-7 (0/7=Sunday)","unit":"d","url":"#"},"Year":{"Label":"Year","Range":"1970-2099","URL":"#","Unit":"y","Url":"#","label":"Year","range":"1970-2099","unit":"y","url":"#"},"day":{"Label":"Day of Month","Range":"1-31","URL":"#","Unit":"d","Url":"#","label":"Day of Month","range":"1-31","unit":"d","url":"#"},"hour":{"Label":"Hour","Range":"0-23","URL":"#","Unit":"h","Url":"#","label":"Hour","range":"0-23","unit":"h","url":"#"},"minute":{"Label":"Minute","Range":"0-59","URL":"#","Unit":"m","Url":"#","label":"Minute","range":"0-59","unit":"m","url":"#"},"month":{"Label":"Month","Range":"1-12","URL":"#","Unit":"mo","Url":"#","label":"Month","range":"1-12","unit":"mo","url":"#"},"second":{"Label":"Second","Range":"0-59","URL":"#","Unit":"s","Url":"#","label":"Second","range":"0-59","unit":"s","url":"#"},"weekday":{"Label":"Day of Week","Range":"0-7 (0/7=Sunday)","URL":"#","Unit":"d","Url":"#","label":"Day of Week","range":"0-7 (0/7=Sunday)","unit":"d","url":"#"},"year":{"Label":"Year","Range":"1970-2099","URL":"#","Unit":"y","Url":"#","label":"Year","range":"1970-2099","unit":"y","url":"#"}},"format5":"5 fields (min hour day month weekday)","format6":"6 fields (sec min hour day month weekday)","format7":"7 fields (sec min hour day month weekday year)","formatHint":"If unsure, start with 5 fields (common in Linux cron).","formatLabel":"Format","inferHint":"Detected: {format}","inputCardTitle":"Cron Input","inputHelp":"Input is auto-analyzed with a 300ms debounce.","inputLabel":"Cron Expression","inputPlaceholder":"Example: */5 * * * *","months":["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"],"nextCardTitle":"Upcoming Runs","nextCountLabel":"Count","nextEmpty":"No upcoming runs available.","nextRunsLabel":"Show upcoming runs","nextTitle":"Next {n} runs","parsingLabel":"Parsing...","relative":{"Ago":"{duration} ago","DayUnit":"d","HourUnit":"h","In":"in {duration}","LessThanMinute":"in \u003c1m","MinuteUnit":"m","ago":"{duration} ago","dayUnit":"d","hourUnit":"h","in":"in {duration}","lessThanMinute":"in \u003c1m","minuteUnit":"m"},"resultEmpty":"Enter a cron expression to see the summary.","resultMeta":"Timezone: {timezone} / Format: {format}","resultTitle":"Description","summary":{"DailyAt":"Runs daily at {time}","Detail":"Condition: {conditions} ({timezone})","EveryMinute":"Runs every minute","EveryMinutes":"Runs every {step} minutes","Generic":"Runs on times matching the cron condition","MonthlyAt":"Runs on day {day} of each month at {time}","WeekdaysAt":"Runs at {time} on weekdays (Mon-Fri)","WeeklyAt":"Runs every {weekday} at {time}","YearSpecificAt":"Runs on {year}-{month}-{day} at {time}","YearlyAt":"Runs every year on {month}/{day} at {time}","dailyAt":"Runs daily at {time}","detail":"Condition: {conditions} ({timezone})","everyMinute":"Runs every minute","everyMinutes":"Runs every {step} minutes","generic":"Runs on times matching the cron condition","monthlyAt":"Runs on day {day} of each month at {time}","weekdaysAt":"Runs at {time} on weekdays (Mon-Fri)","weeklyAt":"Runs every {weekday} at {time}","yearSpecificAt":"Runs on {year}-{month}-{day} at {time}","yearlyAt":"Runs every year on {month}/{day} at {time}"},"termAny":"all","termJoin":", ","termRange":"{from}-{to}","termStepAny":"every {step}{unit}","termStepFrom":"every {step}{unit} from {from}","termStepRange":"every {step}{unit} in {from}-{to}","timezoneLabel":"Timezone","timezoneNote":"Displayed timing can differ if server timezone is different.","title":"Cron Descriptor","trustLine":"Input is parsed locally in your browser and is not sent to a server.","url":"#","warning":{"FormatBody":"Input appears to be {format}.","FormatTitle":"The selected format may be incorrect","ImplBody":"It contains implementation-dependent tokens such as `L`, `W`, `#`, `?`.","ImplEnv":"Check your runtime environment (Linux cron or app scheduler).","ImplRewrite":"If possible, rewrite using standard syntax (*, /, -, ,).","ImplTitle":"This cron may be interpreted differently across environments","InvalidCount":"Field count mismatch (expected: {expected}, got: {actual})","InvalidExample":"Example: */5 * * * *","InvalidRange":"Out-of-range value ({field}: {range})","InvalidTitle":"Invalid cron expression","SwitchFormat":"Switch to {format}","formatBody":"Input appears to be {format}.","formatTitle":"The selected format may be incorrect","implBody":"It contains implementation-dependent tokens such as `L`, `W`, `#`, `?`.","implEnv":"Check your runtime environment (Linux cron or app scheduler).","implRewrite":"If possible, rewrite using standard syntax (*, /, -, ,).","implTitle":"This cron may be interpreted differently across environments","invalidCount":"Field count mismatch (expected: {expected}, got: {actual})","invalidExample":"Example: */5 * * * *","invalidRange":"Out-of-range value ({field}: {range})","invalidTitle":"Invalid cron expression","switchFormat":"Switch to {format}"},"weekdays":["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]},
+        messages: {"Copied":"Copied","CopyFailed":"Copy failed. Please copy manually.","CronerMissing":"Failed to load cron calculation library. Please reload the page.","PartialRuns":"Search limit reached. Showing partial upcoming runs.","RunCalcFailed":"Failed to calculate upcoming runs.","copied":"Copied","copyFailed":"Copy failed. Please copy manually.","cronerMissing":"Failed to load cron calculation library. Please reload the page.","partialRuns":"Search limit reached. Showing partial upcoming runs.","runCalcFailed":"Failed to calculate upcoming runs."},
+        defaults: {"AutoInfer":"true","DebounceMs":"300","Format":"5","NextCount":"10","QueryVersion":"1","ShowNext":"true","Timezone":"Asia/Tokyo","autoInfer":"true","debounceMs":"300","format":"5","nextCount":"10","queryVersion":"1","showNext":"true","timezone":"Asia/Tokyo"},
+      };
+
+      const dialogText = i18n.dialog || {};
+      const messages = i18n.messages || {};
+      const defaults = i18n.defaults || {};
+
+      const el = {
+        openButton: root.querySelector("#cron-descriptor-open-button"),
+        dialog: root.querySelector("#cron-descriptor-fullscreen-dialog"),
+        closeButton: root.querySelector("#cron-descriptor-close-button"),
+
+        toast: root.querySelector("#cron-descriptor-toast"),
+        toastText: root.querySelector("#cron-descriptor-toast-text"),
+
+        expr: root.querySelector("#cron-descriptor-expr-input"),
+        clearButton: root.querySelector("#cron-descriptor-clear-button"),
+        chipButtons: Array.from(root.querySelectorAll(".example-chip")),
+        sampleButtons: Array.from(root.querySelectorAll(".cron-descriptor-load-example")),
+
+        formatButtons: Array.from(root.querySelectorAll(".format-btn[data-format]")),
+        formatHint: root.querySelector("#cron-descriptor-format-hint"),
+        formatDefaultHint: root.querySelector("#cron-descriptor-format-default-hint"),
+        autoInferToggle: root.querySelector("#cron-descriptor-auto-infer-toggle"),
+
+        timezone: root.querySelector("#cron-descriptor-timezone-select"),
+        showNext: root.querySelector("#cron-descriptor-show-next-toggle"),
+        nextCount: root.querySelector("#cron-descriptor-next-count"),
+
+        describeButton: root.querySelector("#cron-descriptor-describe-button"),
+        parsingIndicator: root.querySelector("#cron-descriptor-parsing-indicator"),
+
+        warningCard: root.querySelector("#cron-descriptor-warning-card"),
+        warningTitle: root.querySelector("#cron-warning-title"),
+        warningLines: root.querySelector("#cron-warning-lines"),
+        warningSwitchButton: root.querySelector("#cron-warning-switch-format"),
+
+        resultCard: root.querySelector("#cron-descriptor-result-card"),
+        summaryShort: root.querySelector("#cron-summary-short"),
+        summaryDetail: root.querySelector("#cron-summary-detail"),
+        summaryMeta: root.querySelector("#cron-summary-meta"),
+
+        runsCard: root.querySelector("#cron-descriptor-runs-card"),
+        runsTitle: root.querySelector("#cron-runs-title"),
+        runsList: root.querySelector("#cron-runs-list"),
+        runsEmpty: root.querySelector("#cron-runs-empty"),
+
+        breakdownCard: root.querySelector("#cron-descriptor-breakdown-card"),
+        breakdownBody: root.querySelector("#cron-breakdown-body"),
+
+        copySummary: root.querySelector("#cron-copy-summary"),
+        copyUrl: root.querySelector("#cron-copy-url"),
+        copyNormalized: root.querySelector("#cron-copy-normalized"),
+        copyRuns: root.querySelector("#cron-copy-runs"),
+        copyRunsCsv: root.querySelector("#cron-copy-runs-csv"),
+      };
+
+      const locale = (root.dataset.lang || "en").toLowerCase();
+      const isJa = locale === "ja";
+      const numberFormatter = new Intl.NumberFormat(locale);
+
+      const monthNamesInput = {
+        JAN: 1,
+        FEB: 2,
+        MAR: 3,
+        APR: 4,
+        MAY: 5,
+        JUN: 6,
+        JUL: 7,
+        AUG: 8,
+        SEP: 9,
+        OCT: 10,
+        NOV: 11,
+        DEC: 12,
+      };
+      const weekdayNamesInput = {
+        SUN: 0,
+        MON: 1,
+        TUE: 2,
+        WED: 3,
+        THU: 4,
+        FRI: 5,
+        SAT: 6,
+      };
+
+      const state = {
+        format: normalizeFormat(root.dataset.defaultFormat || defaults.format),
+        autoInfer: boolOr(root.dataset.defaultAutoInfer ?? defaults.autoInfer, true),
+        timezone: (root.dataset.defaultTimezone || defaults.timezone || "Asia/Tokyo").trim(),
+        showNext: boolOr(root.dataset.defaultShowNext ?? defaults.showNext, true),
+        nextCount: normalizeNextCount(root.dataset.defaultNextCount || defaults.nextCount),
+        debounceMs: normalizePositiveInt(root.dataset.defaultDebounceMs || defaults.debounceMs, 300),
+        queryVersion: String(root.dataset.queryVersion || defaults.queryVersion || "1"),
+        parseTimer: null,
+        toastTimer: null,
+        isParsing: false,
+        warning: null,
+        result: null,
+        inferHint: "",
+      };
+
+      const fallbackTimezones = [
+        "Asia/Tokyo",
+        "UTC",
+        "America/Los_Angeles",
+        "America/New_York",
+        "Europe/London",
+        "Europe/Berlin",
+      ];
+
+      function refreshIcons() {
+        if (window.lucide && typeof window.lucide.createIcons === "function") {
+          window.lucide.createIcons();
+        }
+      }
+
+      function boolOr(value, fallback) {
+        if (typeof value === "boolean") return value;
+        if (typeof value === "string") {
+          const normalized = value.trim().toLowerCase();
+          if (normalized === "1" || normalized === "true") return true;
+          if (normalized === "0" || normalized === "false") return false;
+        }
+        return fallback;
+      }
+
+      function normalizeFormat(value) {
+        const n = Number(value);
+        return n === 6 || n === 7 ? n : 5;
+      }
+
+      function normalizeNextCount(value) {
+        const n = Number(value);
+        if (n === 5 || n === 20) return n;
+        return 10;
+      }
+
+      function normalizePositiveInt(value, fallback) {
+        const n = Number(value);
+        if (!Number.isFinite(n) || n <= 0) return fallback;
+        return Math.floor(n);
+      }
+
+      function showToast(message, isError = false) {
+        if (!message) return;
+        if (state.toastTimer) window.clearTimeout(state.toastTimer);
+        el.toastText.textContent = message;
+        el.toast.classList.toggle("error", !!isError);
+        el.toast.classList.add("show");
+        state.toastTimer = window.setTimeout(() => {
+          el.toast.classList.remove("show");
+        }, 1900);
+      }
+
+      function openDialog() {
+        el.dialog.classList.remove("hidden");
+        document.body.style.overflow = "hidden";
+        window.setTimeout(() => {
+          el.expr.focus();
+          el.expr.select();
+        }, 0);
+      }
+
+      function closeDialog() {
+        el.dialog.classList.add("hidden");
+        document.body.style.overflow = "";
+      }
+
+      function normalizeExpression(input) {
+        return (input || "")
+          .replace(/\u3000/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function splitFields(expr) {
+        const normalized = normalizeExpression(expr);
+        if (!normalized) return [];
+        return normalized.split(" ");
+      }
+
+      function inferFormatFromFieldCount(fields) {
+        const length = fields.length;
+        if (length === 5 || length === 6 || length === 7) return length;
+        return null;
+      }
+
+      function syncFormatButtons() {
+        el.formatButtons.forEach((button) => {
+          const value = Number(button.dataset.format || "5");
+          const active = value === state.format;
+          button.dataset.active = active ? "true" : "false";
+          button.setAttribute("aria-selected", active ? "true" : "false");
+          button.tabIndex = active ? 0 : -1;
+        });
+      }
+
+      function syncControlsFromState() {
+        syncFormatButtons();
+        el.autoInferToggle.checked = state.autoInfer;
+        el.showNext.checked = state.showNext;
+        el.nextCount.value = String(state.nextCount);
+        el.parsingIndicator.classList.toggle("hidden", !state.isParsing);
+        el.formatHint.classList.toggle("hidden", !state.inferHint);
+        el.formatHint.textContent = state.inferHint;
+      }
+
+      function getSupportedTimezones() {
+        if (Intl && typeof Intl.supportedValuesOf === "function") {
+          try {
+            const values = Intl.supportedValuesOf("timeZone");
+            if (Array.isArray(values) && values.length > 0) return values.slice();
+          } catch (_error) {
+            return fallbackTimezones.slice();
+          }
+        }
+        return fallbackTimezones.slice();
+      }
+
+      function populateTimezoneSelect() {
+        const values = getSupportedTimezones();
+        const pinned = ["Asia/Tokyo", "UTC", "America/Los_Angeles", "America/New_York", "Europe/London"];
+        const unique = new Set(values);
+        if (state.timezone && !unique.has(state.timezone)) {
+          unique.add(state.timezone);
+        }
+        const sorted = Array.from(unique).sort((a, b) => a.localeCompare(b));
+        const ordered = pinned.concat(sorted.filter((item) => !pinned.includes(item)));
+
+        el.timezone.innerHTML = "";
+        ordered.forEach((tz) => {
+          const option = document.createElement("option");
+          option.value = tz;
+          option.textContent = tz;
+          el.timezone.appendChild(option);
+        });
+
+        if (!ordered.includes(state.timezone)) {
+          state.timezone = "Asia/Tokyo";
+        }
+        el.timezone.value = state.timezone;
+      }
+
+      function formatFieldLabels() {
+        const fields = dialogText.fields || {};
+        return {
+          sec: fields.second || {},
+          min: fields.minute || {},
+          hour: fields.hour || {},
+          dom: fields.day || {},
+          mon: fields.month || {},
+          dow: fields.weekday || {},
+          year: fields.year || {},
+        };
+      }
+
+      const fieldLabels = formatFieldLabels();
+
+      function getWeekdayLabel(value) {
+        const weekdays = dialogText.weekdays || [];
+        if (Array.isArray(weekdays) && weekdays[value]) return weekdays[value];
+        return String(value);
+      }
+
+      function getMonthLabel(value) {
+        const months = dialogText.months || [];
+        if (Array.isArray(months) && months[value - 1]) return months[value - 1];
+        return String(value);
+      }
+
+      function parseValueToken(token, spec) {
+        const upper = token.toUpperCase();
+        let value;
+
+        if (spec.key === "mon" && Object.prototype.hasOwnProperty.call(monthNamesInput, upper)) {
+          value = monthNamesInput[upper];
+        } else if (spec.key === "dow" && Object.prototype.hasOwnProperty.call(weekdayNamesInput, upper)) {
+          value = weekdayNamesInput[upper];
+        } else if (/^\d+$/.test(upper)) {
+          value = Number(upper);
+        } else {
+          return { ok: false, reason: "token" };
+        }
+
+        if (spec.key === "dow" && value === 7) value = 0;
+        if (value < spec.min || value > spec.max) {
+          return { ok: false, reason: "range" };
+        }
+
+        return { ok: true, value };
+      }
+
+      function parseFieldTerm(part, spec) {
+        if (part === "*") {
+          return {
+            ok: true,
+            type: "any",
+            normalized: "*",
+            match: () => true,
+          };
+        }
+
+        if (part.includes("/")) {
+          const pieces = part.split("/");
+          if (pieces.length !== 2 || !pieces[1]) return { ok: false, reason: "token" };
+          const step = Number(pieces[1]);
+          if (!Number.isFinite(step) || step <= 0) return { ok: false, reason: "step" };
+
+          const base = pieces[0];
+          if (base === "*") {
+            return {
+              ok: true,
+              type: "stepAny",
+              start: spec.min,
+              end: spec.max,
+              step,
+              normalized: `*/${step}`,
+              match: (value) => (value - spec.min) % step === 0,
+            };
+          }
+
+          if (base.includes("-")) {
+            const rangeParts = base.split("-");
+            if (rangeParts.length !== 2) return { ok: false, reason: "token" };
+            const fromToken = parseValueToken(rangeParts[0], spec);
+            const toToken = parseValueToken(rangeParts[1], spec);
+            if (!fromToken.ok || !toToken.ok) return { ok: false, reason: "range" };
+            if (fromToken.value > toToken.value) return { ok: false, reason: "range" };
+            const start = fromToken.value;
+            const end = toToken.value;
+            return {
+              ok: true,
+              type: "stepRange",
+              start,
+              end,
+              step,
+              normalized: `${start}-${end}/${step}`,
+              match: (value) => value >= start && value <= end && (value - start) % step === 0,
+            };
+          }
+
+          const valueToken = parseValueToken(base, spec);
+          if (!valueToken.ok) return { ok: false, reason: valueToken.reason };
+          const start = valueToken.value;
+          return {
+            ok: true,
+            type: "stepFrom",
+            start,
+            end: spec.max,
+            step,
+            normalized: `${start}/${step}`,
+            match: (value) => value >= start && (value - start) % step === 0,
+          };
+        }
+
+        if (part.includes("-")) {
+          const rangeParts = part.split("-");
+          if (rangeParts.length !== 2) return { ok: false, reason: "token" };
+          const fromToken = parseValueToken(rangeParts[0], spec);
+          const toToken = parseValueToken(rangeParts[1], spec);
+          if (!fromToken.ok || !toToken.ok) return { ok: false, reason: "range" };
+          if (fromToken.value > toToken.value) return { ok: false, reason: "range" };
+          const start = fromToken.value;
+          const end = toToken.value;
+          return {
+            ok: true,
+            type: "range",
+            start,
+            end,
+            normalized: `${start}-${end}`,
+            match: (value) => value >= start && value <= end,
+          };
+        }
+
+        const valueToken = parseValueToken(part, spec);
+        if (!valueToken.ok) return { ok: false, reason: valueToken.reason };
+        const value = valueToken.value;
+        return {
+          ok: true,
+          type: "value",
+          value,
+          normalized: String(value),
+          match: (candidate) => candidate === value,
+        };
+      }
+
+      function labelValue(spec, value) {
+        if (spec.key === "dow") return getWeekdayLabel(value);
+        if (spec.key === "mon") return getMonthLabel(value);
+        return String(value);
+      }
+
+      function describeTerm(term, spec) {
+        const unit = spec.unit || "";
+
+        if (term.type === "any") {
+          return dialogText.termAny || "*";
+        }
+
+        if (term.type === "value") {
+          return labelValue(spec, term.value);
+        }
+
+        if (term.type === "range") {
+          return applyTemplate(dialogText.termRange || "{from}-{to}", {
+            from: labelValue(spec, term.start),
+            to: labelValue(spec, term.end),
+          });
+        }
+
+        if (term.type === "stepAny") {
+          return applyTemplate(dialogText.termStepAny || "*/{step}", {
+            step: String(term.step),
+            unit,
+          });
+        }
+
+        if (term.type === "stepRange") {
+          return applyTemplate(dialogText.termStepRange || "{from}-{to}/{step}", {
+            from: labelValue(spec, term.start),
+            to: labelValue(spec, term.end),
+            step: String(term.step),
+            unit,
+          });
+        }
+
+        if (term.type === "stepFrom") {
+          return applyTemplate(dialogText.termStepFrom || "{from}/{step}", {
+            from: labelValue(spec, term.start),
+            step: String(term.step),
+            unit,
+          });
+        }
+
+        return term.normalized;
+      }
+
+      function parseField(token, spec) {
+        if (!token || !token.trim()) {
+          return { ok: false, reason: "token" };
+        }
+        const pieces = token.toUpperCase().split(",").map((value) => value.trim()).filter(Boolean);
+        if (pieces.length === 0) return { ok: false, reason: "token" };
+
+        const terms = [];
+        for (const piece of pieces) {
+          const parsed = parseFieldTerm(piece, spec);
+          if (!parsed.ok) {
+            return { ok: false, reason: parsed.reason };
+          }
+          terms.push(parsed);
+        }
+
+        const normalized = terms.map((term) => term.normalized).join(",");
+        const description = terms.map((term) => describeTerm(term, spec)).join(dialogText.termJoin || ", ");
+
+        return {
+          ok: true,
+          raw: token,
+          normalized,
+          terms,
+          description,
+          matcher: (value) => terms.some((term) => term.match(value)),
+        };
+      }
+
+      function parseExpression(tokens, format) {
+        const specs = getSpecsForFormat(format);
+        const parsedFields = [];
+
+        for (let index = 0; index < specs.length; index += 1) {
+          const spec = specs[index];
+          const token = tokens[index] || "";
+          const parsed = parseField(token, spec);
+          if (!parsed.ok) {
+            const rangeText = spec.range || `${spec.min}-${spec.max}`;
+            return {
+              ok: false,
+              errorType: "range",
+              fieldLabel: spec.label,
+              rangeText,
+            };
+          }
+          parsedFields.push({
+            key: spec.key,
+            spec,
+            raw: token,
+            normalized: parsed.normalized,
+            description: parsed.description,
+            matcher: parsed.matcher,
+            terms: parsed.terms,
+          });
+        }
+
+        return { ok: true, fields: parsedFields };
+      }
+
+      function getSpecsForFormat(format) {
+        const base = [
+          { key: "min", min: 0, max: 59, ...(fieldLabels.min || {}) },
+          { key: "hour", min: 0, max: 23, ...(fieldLabels.hour || {}) },
+          { key: "dom", min: 1, max: 31, ...(fieldLabels.dom || {}) },
+          { key: "mon", min: 1, max: 12, ...(fieldLabels.mon || {}) },
+          { key: "dow", min: 0, max: 6, ...(fieldLabels.dow || {}) },
+        ];
+
+        if (format === 5) {
+          return base;
+        }
+
+        const withSec = [
+          { key: "sec", min: 0, max: 59, ...(fieldLabels.sec || {}) },
+          ...base,
+        ];
+
+        if (format === 6) {
+          return withSec;
+        }
+
+        return [
+          ...withSec,
+          { key: "year", min: 1970, max: 2099, ...(fieldLabels.year || {}) },
+        ];
+      }
+
+      function buildFieldMap(fields) {
+        const map = {};
+        fields.forEach((field) => {
+          map[field.key] = field;
+        });
+        return map;
+      }
+
+      function isSingleValue(field) {
+        return !!field && field.terms.length === 1 && field.terms[0].type === "value";
+      }
+
+      function singleValue(field) {
+        if (!isSingleValue(field)) return null;
+        return field.terms[0].value;
+      }
+
+      function isAny(field) {
+        return !!field && field.terms.length === 1 && field.terms[0].type === "any";
+      }
+
+      function isStepAny(field) {
+        return !!field && field.terms.length === 1 && field.terms[0].type === "stepAny";
+      }
+
+      function isWeekdayRange(field) {
+        if (!field || field.terms.length !== 1) return false;
+        const term = field.terms[0];
+        return term.type === "range" && term.start === 1 && term.end === 5;
+      }
+
+      function pad2(value) {
+        return String(value).padStart(2, "0");
+      }
+
+      function formatTimeText(hour, minute, second, includeSeconds) {
+        const sec = includeSeconds ? `:${pad2(second)}` : "";
+        return `${pad2(hour)}:${pad2(minute)}${sec}`;
+      }
+
+      function toConditionText(fields) {
+        return fields
+          .map((field) => {
+            const label = field.spec.label || field.key;
+            return applyTemplate(dialogText.conditionTemplate || "{label}: {value}", {
+              label,
+              value: field.description,
+            });
+          })
+          .join(dialogText.conditionJoin || " / ");
+      }
+
+      function buildSummary(fields, format, timezone) {
+        const map = buildFieldMap(fields);
+        const hasSeconds = format !== 5;
+        const secField = hasSeconds ? map.sec : null;
+        const minField = map.min;
+        const hourField = map.hour;
+        const domField = map.dom;
+        const monField = map.mon;
+        const dowField = map.dow;
+        const yearField = map.year;
+
+        const fixedMinute = singleValue(minField);
+        const fixedHour = singleValue(hourField);
+        const fixedSecond = hasSeconds ? singleValue(secField) : 0;
+        const fixedTime = fixedMinute !== null && fixedHour !== null && (!hasSeconds || fixedSecond !== null);
+        const timeText = fixedTime
+          ? formatTimeText(fixedHour, fixedMinute, fixedSecond || 0, hasSeconds)
+          : "";
+
+        const templates = dialogText.summary || {};
+
+        let shortText = templates.generic || "";
+        if (format === 5 && isStepAny(minField) && isAny(hourField) && isAny(domField) && isAny(monField) && isAny(dowField)) {
+          shortText = applyTemplate(templates.everyMinutes || "", {
+            step: String(minField.terms[0].step),
+          });
+        } else if (format === 5 && isAny(minField) && isAny(hourField) && isAny(domField) && isAny(monField) && isAny(dowField)) {
+          shortText = templates.everyMinute || shortText;
+        } else if (fixedTime && isAny(domField) && isAny(monField) && isWeekdayRange(dowField)) {
+          shortText = applyTemplate(templates.weekdaysAt || "", { time: timeText });
+        } else if (fixedTime && isAny(domField) && isAny(monField) && isSingleValue(dowField)) {
+          shortText = applyTemplate(templates.weeklyAt || "", {
+            weekday: getWeekdayLabel(singleValue(dowField)),
+            time: timeText,
+          });
+        } else if (fixedTime && isSingleValue(domField) && isAny(monField) && isAny(dowField)) {
+          shortText = applyTemplate(templates.monthlyAt || "", {
+            day: String(singleValue(domField)),
+            time: timeText,
+          });
+        } else if (fixedTime && isAny(domField) && isAny(monField) && isAny(dowField)) {
+          shortText = applyTemplate(templates.dailyAt || "", { time: timeText });
+        } else if (fixedTime && isSingleValue(domField) && isSingleValue(monField) && isAny(dowField) && yearField && isSingleValue(yearField)) {
+          shortText = applyTemplate(templates.yearSpecificAt || "", {
+            year: String(singleValue(yearField)),
+            month: String(singleValue(monField)),
+            day: String(singleValue(domField)),
+            time: timeText,
+          });
+        } else if (fixedTime && isSingleValue(domField) && isSingleValue(monField) && isAny(dowField)) {
+          shortText = applyTemplate(templates.yearlyAt || "", {
+            month: String(singleValue(monField)),
+            day: String(singleValue(domField)),
+            time: timeText,
+          });
+        }
+
+        if (!shortText) {
+          shortText = templates.generic || dialogText.resultEmpty || "";
+        }
+
+        const conditionText = toConditionText(fields);
+        const detailText = applyTemplate(templates.detail || "", {
+          conditions: conditionText,
+          timezone,
+        });
+
+        return {
+          shortText,
+          detailText,
+        };
+      }
+
+      function applyTemplate(template, values) {
+        if (!template) return "";
+        return template.replace(/\{([a-zA-Z0-9_]+)\}/g, (_, key) => {
+          if (Object.prototype.hasOwnProperty.call(values, key)) {
+            return String(values[key]);
+          }
+          return "";
+        });
+      }
+
+      function getZonedParts(date, timezone) {
+        const formatter = new Intl.DateTimeFormat("en-US", {
+          timeZone: timezone,
+          hour12: false,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          weekday: "short",
+        });
+
+        const parts = formatter.formatToParts(date);
+        const map = {};
+        parts.forEach((part) => {
+          if (part.type !== "literal") {
+            map[part.type] = part.value;
+          }
+        });
+
+        const dowMap = {
+          Sun: 0,
+          Mon: 1,
+          Tue: 2,
+          Wed: 3,
+          Thu: 4,
+          Fri: 5,
+          Sat: 6,
+        };
+
+        return {
+          year: Number(map.year),
+          month: Number(map.month),
+          day: Number(map.day),
+          hour: Number(map.hour),
+          minute: Number(map.minute),
+          second: Number(map.second),
+          dow: dowMap[map.weekday] ?? 0,
+        };
+      }
+
+      function formatRunDateTime(date, timezone) {
+        const parts = getZonedParts(date, timezone);
+        return `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)} ${pad2(parts.hour)}:${pad2(parts.minute)}:${pad2(parts.second)}`;
+      }
+
+      function formatRelative(deltaMs) {
+        const rel = dialogText.relative || {};
+        const abs = Math.abs(deltaMs);
+        if (abs < 60000) {
+          return rel.lessThanMinute || "";
+        }
+
+        let remaining = Math.floor(abs / 1000);
+        const days = Math.floor(remaining / 86400);
+        remaining -= days * 86400;
+        const hours = Math.floor(remaining / 3600);
+        remaining -= hours * 3600;
+        const minutes = Math.floor(remaining / 60);
+
+        const tokens = [];
+        const dayUnit = rel.dayUnit || "d";
+        const hourUnit = rel.hourUnit || "h";
+        const minuteUnit = rel.minuteUnit || "m";
+
+        if (days > 0) tokens.push(`${numberFormatter.format(days)}${dayUnit}`);
+        if (hours > 0) tokens.push(`${numberFormatter.format(hours)}${hourUnit}`);
+        if (minutes > 0) tokens.push(`${numberFormatter.format(minutes)}${minuteUnit}`);
+
+        const duration = tokens.join(isJa ? "" : " ");
+        if (deltaMs >= 0) {
+          return applyTemplate(rel.in || "", { duration });
+        }
+        return applyTemplate(rel.ago || "", { duration });
+      }
+
+      function containsImplementationDependentTokens(expr) {
+        return /[LW#?]/i.test(expr);
+      }
+
+      function getFormatLabel(format) {
+        if (format === 6) return dialogText.format6 || "6";
+        if (format === 7) return dialogText.format7 || "7";
+        return dialogText.format5 || "5";
+      }
+
+      function setParsing(flag) {
+        state.isParsing = !!flag;
+        el.parsingIndicator.classList.toggle("hidden", !state.isParsing);
+      }
+
+      function showWarning(type, options = {}) {
+        const warningText = dialogText.warning || {};
+        state.warning = { type, ...options };
+
+        el.warningCard.classList.remove("hidden", "error", "info");
+        el.warningLines.innerHTML = "";
+        el.warningSwitchButton.classList.add("hidden");
+        el.warningSwitchButton.textContent = "";
+
+        let title = "";
+        let lines = [];
+
+        if (type === "invalid") {
+          el.warningCard.classList.add("error");
+          title = warningText.invalidTitle || "";
+          lines = options.lines || [];
+        } else if (type === "impl") {
+          el.warningCard.classList.add("info");
+          title = warningText.implTitle || "";
+          lines = [
+            warningText.implBody || "",
+            warningText.implRewrite || "",
+            warningText.implEnv || "",
+          ].filter(Boolean);
+        } else if (type === "format") {
+          title = warningText.formatTitle || "";
+          lines = [applyTemplate(warningText.formatBody || "", { format: getFormatLabel(options.suggestedFormat || 5) })];
+          if (options.suggestedFormat) {
+            el.warningSwitchButton.textContent = applyTemplate(warningText.switchFormat || "", {
+              format: getFormatLabel(options.suggestedFormat),
+            });
+            el.warningSwitchButton.dataset.format = String(options.suggestedFormat);
+            el.warningSwitchButton.classList.remove("hidden");
+          }
+        }
+
+        el.warningTitle.textContent = title;
+        lines.filter(Boolean).forEach((line) => {
+          const p = document.createElement("p");
+          p.textContent = line;
+          el.warningLines.appendChild(p);
+        });
+
+        el.resultCard.classList.add("hidden");
+        el.runsCard.classList.add("hidden");
+        el.breakdownCard.classList.add("hidden");
+
+        disableCopyButtons();
+      }
+
+      function hideWarning() {
+        state.warning = null;
+        el.warningCard.classList.add("hidden");
+        el.warningCard.classList.remove("error", "info");
+      }
+
+      function disableCopyButtons() {
+        el.copySummary.disabled = true;
+        el.copyUrl.disabled = true;
+        el.copyNormalized.disabled = true;
+        el.copyRuns.disabled = true;
+        el.copyRunsCsv.disabled = true;
+      }
+
+      function renderEmptyResult() {
+        hideWarning();
+        state.result = null;
+
+        el.resultCard.classList.remove("hidden");
+        el.runsCard.classList.remove("hidden");
+        el.breakdownCard.classList.remove("hidden");
+
+        el.summaryShort.textContent = dialogText.resultEmpty || "";
+        el.summaryDetail.textContent = "";
+        el.summaryMeta.textContent = "";
+
+        el.runsTitle.textContent = dialogText.nextCardTitle || "";
+        el.runsList.innerHTML = "";
+        el.runsEmpty.classList.remove("hidden");
+        el.runsEmpty.textContent = dialogText.nextEmpty || "";
+        el.runsList.appendChild(el.runsEmpty);
+
+        el.breakdownBody.innerHTML = "";
+
+        disableCopyButtons();
+      }
+
+      function buildRuns(pattern, format, timezone, count, yearMatcher) {
+        const CronClass = window.Cron;
+        if (!CronClass) {
+          throw new Error(messages.cronerMissing || "");
+        }
+
+        const options = {
+          timezone,
+          legacyMode: true,
+          paused: true,
+        };
+        const cron = new CronClass(pattern, options);
+
+        if (format !== 7) {
+          const direct = cron.nextRuns(count, new Date());
+          return { runs: Array.isArray(direct) ? direct : [], partial: false };
+        }
+
+        const runs = [];
+        let cursor = new Date();
+        let guard = 0;
+        while (runs.length < count && guard < 20000) {
+          const next = cron.nextRun(cursor);
+          if (!next) break;
+          const year = getZonedParts(next, timezone).year;
+          if (yearMatcher(year)) {
+            runs.push(next);
+          }
+          cursor = new Date(next.getTime() + 1000);
+          guard += 1;
+        }
+
+        return {
+          runs,
+          partial: runs.length < count && guard >= 20000,
+        };
+      }
+
+      function renderBreakdown(fields) {
+        el.breakdownBody.innerHTML = "";
+        fields.forEach((field) => {
+          const tr = document.createElement("tr");
+          const rangeText = field.spec.range || "";
+          tr.innerHTML = `
+            <td>${escapeHtml(field.spec.label || field.key)}</td>
+            <td><code>${escapeHtml(field.raw)}</code></td>
+            <td>${escapeHtml(field.description)}</td>
+            <td>${escapeHtml(rangeText)}</td>
+          `;
+          el.breakdownBody.appendChild(tr);
+        });
+      }
+
+      function renderRuns(runs, timezone, partial) {
+        el.runsList.innerHTML = "";
+
+        if (!Array.isArray(runs) || runs.length === 0) {
+          el.runsEmpty.classList.remove("hidden");
+          el.runsEmpty.textContent = dialogText.nextEmpty || "";
+          el.runsList.appendChild(el.runsEmpty);
+          return;
+        }
+
+        const now = Date.now();
+
+        runs.forEach((date) => {
+          const item = document.createElement("article");
+          item.className = "run-item";
+
+          const absolute = formatRunDateTime(date, timezone);
+          const relative = formatRelative(date.getTime() - now);
+
+          const absEl = document.createElement("p");
+          absEl.className = "run-time";
+          absEl.textContent = absolute;
+
+          const relEl = document.createElement("p");
+          relEl.className = "run-relative";
+          relEl.textContent = relative;
+
+          item.appendChild(absEl);
+          item.appendChild(relEl);
+          el.runsList.appendChild(item);
+        });
+
+        if (partial) {
+          const hint = document.createElement("p");
+          hint.className = "empty-line";
+          hint.textContent = messages.partialRuns || "";
+          el.runsList.appendChild(hint);
+        }
+      }
+
+      function renderResult(data) {
+        hideWarning();
+        state.result = data;
+
+        el.resultCard.classList.remove("hidden");
+        el.runsCard.classList.remove("hidden");
+        el.breakdownCard.classList.remove("hidden");
+
+        el.summaryShort.textContent = data.shortSummary;
+        el.summaryDetail.textContent = data.detailSummary;
+        el.summaryMeta.textContent = applyTemplate(dialogText.resultMeta || "", {
+          timezone: data.timezone,
+          format: getFormatLabel(data.format),
+        });
+
+        el.runsTitle.textContent = applyTemplate(dialogText.nextTitle || "", {
+          n: String(data.nextCount),
+        });
+
+        renderRuns(data.runs, data.timezone, data.partialRuns);
+        renderBreakdown(data.breakdown);
+
+        el.copySummary.disabled = false;
+        el.copyUrl.disabled = false;
+        el.copyNormalized.disabled = false;
+
+        const hasRuns = data.showNext && Array.isArray(data.runs) && data.runs.length > 0;
+        el.copyRuns.disabled = !hasRuns;
+        el.copyRunsCsv.disabled = !hasRuns;
+
+        if (!data.showNext) {
+          el.runsCard.classList.add("hidden");
+        }
+      }
+
+      function escapeHtml(value) {
+        return String(value)
+          .replace(/&/g, "&")
+          .replace(/</g, "<")
+          .replace(/>/g, ">")
+          .replace(/"/g, """)
+          .replace(/'/g, "'");
+      }
+
+      function analyzeNow() {
+        if (state.parseTimer) {
+          window.clearTimeout(state.parseTimer);
+          state.parseTimer = null;
+        }
+
+        setParsing(true);
+
+        window.setTimeout(() => {
+          const expression = normalizeExpression(el.expr.value);
+          const fields = splitFields(expression);
+          const inferred = inferFormatFromFieldCount(fields);
+
+          state.inferHint = "";
+
+          if (!expression) {
+            renderEmptyResult();
+            syncQuery();
+            setParsing(false);
+            syncControlsFromState();
+            return;
+          }
+
+          if (state.autoInfer && inferred && inferred !== state.format) {
+            state.format = inferred;
+            state.inferHint = applyTemplate(dialogText.inferHint || "", {
+              format: getFormatLabel(inferred),
+            });
+          }
+
+          if (!state.autoInfer && inferred && inferred !== state.format) {
+            showWarning("format", { suggestedFormat: inferred });
+            syncQuery();
+            setParsing(false);
+            syncControlsFromState();
+            return;
+          }
+
+          const expectedCount = state.format;
+          if (fields.length !== expectedCount) {
+            const invalidLines = [
+              applyTemplate(dialogText.warning?.invalidCount || "", {
+                expected: String(expectedCount),
+                actual: String(fields.length),
+              }),
+              dialogText.warning?.invalidExample || "",
+            ].filter(Boolean);
+            showWarning("invalid", { lines: invalidLines });
+            syncQuery();
+            setParsing(false);
+            syncControlsFromState();
+            return;
+          }
+
+          if (containsImplementationDependentTokens(expression)) {
+            showWarning("impl");
+            syncQuery();
+            setParsing(false);
+            syncControlsFromState();
+            return;
+          }
+
+          const parsed = parseExpression(fields, state.format);
+          if (!parsed.ok) {
+            const invalidLines = [];
+            if (parsed.errorType === "range") {
+              invalidLines.push(applyTemplate(dialogText.warning?.invalidRange || "", {
+                field: parsed.fieldLabel || "",
+                range: parsed.rangeText || "",
+              }));
+            }
+            invalidLines.push(dialogText.warning?.invalidExample || "");
+            showWarning("invalid", { lines: invalidLines.filter(Boolean) });
+            syncQuery();
+            setParsing(false);
+            syncControlsFromState();
+            return;
+          }
+
+          const parsedFields = parsed.fields;
+          const fieldMap = buildFieldMap(parsedFields);
+
+          const normalizedCron = parsedFields.map((field) => field.normalized).join(" ");
+          const summary = buildSummary(parsedFields, state.format, state.timezone);
+
+          let runs = [];
+          let partialRuns = false;
+          if (state.showNext) {
+            try {
+              const patternTokens = state.format === 7 ? fields.slice(0, 6) : fields;
+              const cronPattern = patternTokens.join(" ");
+
+              const yearMatcher = state.format === 7 && fieldMap.year
+                ? fieldMap.year.matcher
+                : () => true;
+
+              const runResult = buildRuns(
+                cronPattern,
+                state.format,
+                state.timezone,
+                state.nextCount,
+                yearMatcher
+              );
+              runs = runResult.runs;
+              partialRuns = runResult.partial;
+            } catch (error) {
+              const invalidLines = [
+                error && error.message ? String(error.message) : (messages.runCalcFailed || ""),
+                dialogText.warning?.invalidExample || "",
+              ].filter(Boolean);
+              showWarning("invalid", { lines: invalidLines });
+              syncQuery();
+              setParsing(false);
+              syncControlsFromState();
+              return;
+            }
+          }
+
+          const resultData = {
+            expression,
+            format: state.format,
+            timezone: state.timezone,
+            normalizedCron,
+            shortSummary: summary.shortText,
+            detailSummary: summary.detailText,
+            breakdown: parsedFields,
+            runs,
+            partialRuns,
+            showNext: state.showNext,
+            nextCount: state.nextCount,
+          };
+
+          renderResult(resultData);
+          syncQuery();
+          setParsing(false);
+          syncControlsFromState();
+        }, 0);
+      }
+
+      function scheduleAnalyze() {
+        if (state.parseTimer) {
+          window.clearTimeout(state.parseTimer);
+        }
+        state.parseTimer = window.setTimeout(() => {
+          analyzeNow();
+        }, state.debounceMs);
+      }
+
+      function syncQuery() {
+        const params = new URLSearchParams();
+        params.set("qv", state.queryVersion || "1");
+
+        const expr = normalizeExpression(el.expr.value);
+        if (expr) {
+          params.set("expr", expr);
+        }
+
+        params.set("format", String(state.format));
+        params.set("af", state.autoInfer ? "1" : "0");
+        params.set("tZ", state.timezone);
+        params.set("sn", state.showNext ? "1" : "0");
+        params.set("n", String(state.nextCount));
+
+        const query = params.toString();
+        const nextUrl = query ? `${window.location.pathname}?${query}` : window.location.pathname;
+        history.replaceState(null, "", nextUrl);
+      }
+
+      function readQuery() {
+        const params = new URLSearchParams(window.location.search);
+
+        const expr = params.get("expr") || "";
+        const format = normalizeFormat(params.get("format") || state.format);
+        const autoInfer = boolOr(params.get("af"), state.autoInfer);
+        const tz = params.get("tZ") || params.get("tz") || state.timezone;
+        const showNext = boolOr(params.get("sn"), state.showNext);
+        const nextCount = normalizeNextCount(params.get("n") || state.nextCount);
+
+        if (expr) {
+          el.expr.value = expr;
+        }
+        state.format = format;
+        state.autoInfer = autoInfer;
+        state.timezone = tz;
+        state.showNext = showNext;
+        state.nextCount = nextCount;
+      }
+
+      async function copyText(text) {
+        if (!text) {
+          showToast(messages.copyFailed || "", true);
+          return;
+        }
+        try {
+          await navigator.clipboard.writeText(text);
+          showToast(messages.copied || "");
+        } catch (_error) {
+          showToast(messages.copyFailed || "", true);
+        }
+      }
+
+      function getShareUrl() {
+        const params = new URLSearchParams();
+        params.set("qv", state.queryVersion || "1");
+        params.set("expr", normalizeExpression(el.expr.value));
+        params.set("format", String(state.format));
+        params.set("af", state.autoInfer ? "1" : "0");
+        params.set("tZ", state.timezone);
+        params.set("sn", state.showNext ? "1" : "0");
+        params.set("n", String(state.nextCount));
+        return `${window.location.origin}${window.location.pathname}?${params.toString()}`;
+      }
+
+      function getRunsText() {
+        if (!state.result || !Array.isArray(state.result.runs) || state.result.runs.length === 0) return "";
+        return state.result.runs
+          .map((date) => {
+            const absolute = formatRunDateTime(date, state.result.timezone);
+            const relative = formatRelative(date.getTime() - Date.now());
+            return `${absolute} (${relative})`;
+          })
+          .join("\n");
+      }
+
+      function getRunsCsv() {
+        if (!state.result || !Array.isArray(state.result.runs) || state.result.runs.length === 0) return "";
+        const lines = [dialogText.csvHeader || "index,run_at_local,run_at_iso,relative"];
+        state.result.runs.forEach((date, index) => {
+          const absolute = formatRunDateTime(date, state.result.timezone);
+          const iso = date.toISOString();
+          const relative = formatRelative(date.getTime() - Date.now());
+          lines.push([
+            index + 1,
+            csvEscape(absolute),
+            csvEscape(iso),
+            csvEscape(relative),
+          ].join(","));
+        });
+        return lines.join("\n");
+      }
+
+      function csvEscape(value) {
+        const text = String(value ?? "");
+        if (!/[",\n]/.test(text)) return text;
+        return `"${text.replace(/"/g, '""')}"`;
+      }
+
+      function bindEvents() {
+        el.openButton?.addEventListener("click", () => {
+          openDialog();
+        });
+
+        el.closeButton?.addEventListener("click", () => {
+          closeDialog();
+        });
+
+        el.dialog?.addEventListener("click", (event) => {
+          if (event.target === el.dialog) {
+            closeDialog();
+          }
+        });
+
+        document.addEventListener("keydown", (event) => {
+          if (event.key === "Escape" && !el.dialog.classList.contains("hidden")) {
+            closeDialog();
+          }
+        });
+
+        el.expr?.addEventListener("input", () => {
+          scheduleAnalyze();
+        });
+
+        el.clearButton?.addEventListener("click", () => {
+          el.expr.value = "";
+          state.inferHint = "";
+          analyzeNow();
+          el.expr.focus();
+        });
+
+        el.chipButtons.forEach((button) => {
+          button.addEventListener("click", () => {
+            const expr = button.dataset.chipExpr || "";
+            const format = normalizeFormat(button.dataset.chipFormat || state.format);
+            el.expr.value = expr;
+            if (!state.autoInfer) {
+              state.format = format;
+            }
+            analyzeNow();
+          });
+        });
+
+        el.sampleButtons.forEach((button) => {
+          button.addEventListener("click", () => {
+            const expr = button.dataset.exampleExpr || "";
+            const format = normalizeFormat(button.dataset.exampleFormat || state.format);
+            el.expr.value = expr;
+            if (!state.autoInfer) {
+              state.format = format;
+            }
+            openDialog();
+            analyzeNow();
+          });
+        });
+
+        el.formatButtons.forEach((button) => {
+          button.addEventListener("click", () => {
+            const format = normalizeFormat(button.dataset.format || state.format);
+            state.format = format;
+            syncFormatButtons();
+            analyzeNow();
+          });
+        });
+
+        el.autoInferToggle?.addEventListener("change", () => {
+          state.autoInfer = !!el.autoInferToggle.checked;
+          analyzeNow();
+        });
+
+        el.timezone?.addEventListener("change", () => {
+          state.timezone = el.timezone.value;
+          analyzeNow();
+        });
+
+        el.showNext?.addEventListener("change", () => {
+          state.showNext = !!el.showNext.checked;
+          analyzeNow();
+        });
+
+        el.nextCount?.addEventListener("change", () => {
+          state.nextCount = normalizeNextCount(el.nextCount.value);
+          analyzeNow();
+        });
+
+        el.describeButton?.addEventListener("click", () => {
+          analyzeNow();
+        });
+
+        el.warningSwitchButton?.addEventListener("click", () => {
+          const nextFormat = normalizeFormat(el.warningSwitchButton.dataset.format || state.format);
+          state.format = nextFormat;
+          analyzeNow();
+        });
+
+        el.copySummary?.addEventListener("click", () => {
+          if (!state.result) return;
+          const text = [state.result.shortSummary, state.result.detailSummary].filter(Boolean).join("\n");
+          copyText(text);
+        });
+
+        el.copyUrl?.addEventListener("click", () => {
+          const url = getShareUrl();
+          copyText(url);
+        });
+
+        el.copyNormalized?.addEventListener("click", () => {
+          if (!state.result) return;
+          copyText(state.result.normalizedCron || "");
+        });
+
+        el.copyRuns?.addEventListener("click", () => {
+          copyText(getRunsText());
+        });
+
+        el.copyRunsCsv?.addEventListener("click", () => {
+          copyText(getRunsCsv());
+        });
+      }
+
+      function init() {
+        populateTimezoneSelect();
+        readQuery();
+        populateTimezoneSelect();
+
+        el.autoInferToggle.checked = state.autoInfer;
+        el.showNext.checked = state.showNext;
+        el.nextCount.value = String(state.nextCount);
+
+        syncControlsFromState();
+        bindEvents();
+
+        if (!window.Cron) {
+          showWarning("invalid", {
+            lines: [messages.cronerMissing || ""].filter(Boolean),
+          });
+        } else {
+          analyzeNow();
+        }
+
+        refreshIcons();
+      }
+
+      init();
+    })();
+</script>
+</body></html>

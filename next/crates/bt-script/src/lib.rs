@@ -20,6 +20,12 @@ pub struct ScriptHeap;
 #[derive(Clone, Debug, Default)]
 pub struct GlobalEnvironment;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScriptErrorKind {
+    Parse,
+    Runtime,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ElementHandle(u64);
 
@@ -51,6 +57,18 @@ pub enum ListenerTarget {
     Window,
     Document,
     Element(ElementHandle),
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KeyboardEventInit {
+    pub key: String,
+    pub code: Option<String>,
+    pub ctrl_key: bool,
+    pub meta_key: bool,
+    pub shift_key: bool,
+    pub alt_key: bool,
+    pub repeat: bool,
+    pub is_composing: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -387,6 +405,15 @@ struct ScriptEventState {
     propagation_stopped: bool,
     immediate_propagation_stopped: bool,
     phase: EventPhase,
+    key: Option<String>,
+    code: Option<String>,
+    ctrl_key: bool,
+    meta_key: bool,
+    shift_key: bool,
+    alt_key: bool,
+    repeat: bool,
+    is_composing: bool,
+    is_trusted: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -409,6 +436,44 @@ impl ScriptEventHandle {
             propagation_stopped: false,
             immediate_propagation_stopped: false,
             phase: EventPhase::None,
+            key: None,
+            code: None,
+            ctrl_key: false,
+            meta_key: false,
+            shift_key: false,
+            alt_key: false,
+            repeat: false,
+            is_composing: false,
+            is_trusted: false,
+        })))
+    }
+
+    pub fn new_keyboard(
+        event_type: impl Into<String>,
+        target: ListenerTarget,
+        bubbles: bool,
+        cancelable: bool,
+        init: &KeyboardEventInit,
+    ) -> Self {
+        Self(Rc::new(RefCell::new(ScriptEventState {
+            event_type: event_type.into(),
+            target,
+            current_target: None,
+            bubbles,
+            cancelable,
+            default_prevented: false,
+            propagation_stopped: false,
+            immediate_propagation_stopped: false,
+            phase: EventPhase::None,
+            key: Some(init.key.clone()),
+            code: init.code.clone(),
+            ctrl_key: init.ctrl_key,
+            meta_key: init.meta_key,
+            shift_key: init.shift_key,
+            alt_key: init.alt_key,
+            repeat: init.repeat,
+            is_composing: init.is_composing,
+            is_trusted: false,
         })))
     }
 
@@ -450,6 +515,42 @@ impl ScriptEventHandle {
 
     pub fn event_phase(&self) -> EventPhase {
         self.0.borrow().phase
+    }
+
+    pub fn key(&self) -> Option<String> {
+        self.0.borrow().key.clone()
+    }
+
+    pub fn code(&self) -> Option<String> {
+        self.0.borrow().code.clone()
+    }
+
+    pub fn ctrl_key(&self) -> bool {
+        self.0.borrow().ctrl_key
+    }
+
+    pub fn meta_key(&self) -> bool {
+        self.0.borrow().meta_key
+    }
+
+    pub fn shift_key(&self) -> bool {
+        self.0.borrow().shift_key
+    }
+
+    pub fn alt_key(&self) -> bool {
+        self.0.borrow().alt_key
+    }
+
+    pub fn repeat(&self) -> bool {
+        self.0.borrow().repeat
+    }
+
+    pub fn is_composing(&self) -> bool {
+        self.0.borrow().is_composing
+    }
+
+    pub fn is_trusted(&self) -> bool {
+        self.0.borrow().is_trusted
     }
 
     pub fn set_phase(&self, phase: EventPhase) {
@@ -527,12 +628,25 @@ impl ScriptFunction {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScriptError {
+    kind: ScriptErrorKind,
     message: String,
 }
 
 impl ScriptError {
     pub fn new(message: impl Into<String>) -> Self {
+        Self::runtime(message)
+    }
+
+    pub fn parse(message: impl Into<String>) -> Self {
         Self {
+            kind: ScriptErrorKind::Parse,
+            message: message.into(),
+        }
+    }
+
+    pub fn runtime(message: impl Into<String>) -> Self {
+        Self {
+            kind: ScriptErrorKind::Runtime,
             message: message.into(),
         }
     }
@@ -541,8 +655,12 @@ impl ScriptError {
         &self.message
     }
 
+    pub fn kind(&self) -> ScriptErrorKind {
+        self.kind
+    }
+
     pub fn phase_not_ready(capability: &str) -> Self {
-        Self::new(format!(
+        Self::runtime(format!(
             "{capability} is planned for a later phase of browser-tester-next"
         ))
     }

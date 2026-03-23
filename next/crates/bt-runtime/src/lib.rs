@@ -9,8 +9,9 @@ use bt_dom::{
 };
 use bt_script::{
     ElementHandle, EventPhase, HostBindings, HtmlCollectionScope, HtmlCollectionTarget,
-    ListenerTarget, MediaQueryListState, NodeHandle, RadioNodeListTarget, ScreenOrientationState,
-    ScriptError, ScriptEventHandle, ScriptFunction, ScriptRuntime, ScriptValue, StorageTarget,
+    KeyboardEventInit, ListenerTarget, MediaQueryListState, NodeHandle, RadioNodeListTarget,
+    ScreenOrientationState, ScriptError, ScriptEventHandle, ScriptFunction, ScriptRuntime,
+    ScriptValue, StorageTarget,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -374,6 +375,10 @@ impl MatchMediaMocks {
         &self.calls
     }
 
+    pub fn take_calls(&mut self) -> Vec<MatchMediaCall> {
+        std::mem::take(&mut self.calls)
+    }
+
     pub fn listener_calls(&self) -> &[MatchMediaListenerCall] {
         &self.listener_calls
     }
@@ -525,6 +530,10 @@ impl PrintMocks {
         &self.calls
     }
 
+    pub fn take(&mut self) -> Vec<PrintCall> {
+        std::mem::take(&mut self.calls)
+    }
+
     pub fn reset(&mut self) {
         self.failure = None;
         self.calls.clear();
@@ -585,6 +594,8 @@ impl ScrollMocks {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DownloadCapture {
     pub file_name: String,
+    pub filename: Option<String>,
+    pub mime_type: Option<String>,
     pub bytes: Vec<u8>,
 }
 
@@ -595,14 +606,21 @@ pub struct DownloadMocks {
 
 impl DownloadMocks {
     pub fn capture(&mut self, file_name: impl Into<String>, bytes: impl Into<Vec<u8>>) {
+        let file_name = file_name.into();
         self.artifacts.push(DownloadCapture {
-            file_name: file_name.into(),
+            filename: Some(file_name.clone()),
+            mime_type: None,
+            file_name,
             bytes: bytes.into(),
         });
     }
 
     pub fn artifacts(&self) -> &[DownloadCapture] {
         &self.artifacts
+    }
+
+    pub fn take(&mut self) -> Vec<DownloadCapture> {
+        std::mem::take(&mut self.artifacts)
     }
 
     pub fn reset(&mut self) {
@@ -1035,7 +1053,32 @@ impl Session {
             ));
         }
 
-        self.dispatch_dom_event(node_id, event_type, true, true)?;
+        self.dispatch_dom_event_for_target(
+            SessionEventTarget::Element(node_id),
+            event_type,
+            true,
+            true,
+            None,
+        )?;
+        Ok(())
+    }
+
+    pub fn dispatch_keyboard(
+        &mut self,
+        selector: &str,
+        event_type: &str,
+        init: KeyboardEventInit,
+    ) -> Result<(), SessionError> {
+        let event_type = event_type.trim();
+        if event_type.is_empty() {
+            return Err(SessionError::Event(
+                "event type must not be empty".to_string(),
+            ));
+        }
+
+        let target = self.resolve_keyboard_target(selector)?;
+        let bubbles = matches!(target, SessionEventTarget::Element(_));
+        self.dispatch_dom_event_for_target(target, event_type, bubbles, false, Some(&init))?;
         Ok(())
     }
 
@@ -1198,6 +1241,10 @@ impl Session {
             .downloads_mut()
             .capture(file_name.to_string(), bytes);
         Ok(())
+    }
+
+    pub fn take_downloads(&mut self) -> Vec<DownloadCapture> {
+        self.mocks.downloads_mut().take()
     }
 
     pub fn print(&mut self) -> Result<(), SessionError> {
@@ -1459,15 +1506,39 @@ impl Session {
         bubbles: bool,
         cancelable: bool,
     ) -> Result<DispatchOutcome, SessionError> {
-        self.ensure_element_node(node_id)?;
-
-        let event = ScriptEventHandle::new(
-            event_type.to_string(),
-            Self::script_listener_target(SessionEventTarget::Element(node_id)),
+        self.dispatch_dom_event_for_target(
+            SessionEventTarget::Element(node_id),
+            event_type,
             bubbles,
             cancelable,
-        );
-        let ancestors = self.event_ancestor_targets(node_id);
+            None,
+        )
+    }
+
+    fn dispatch_dom_event_for_target(
+        &mut self,
+        target: SessionEventTarget,
+        event_type: &str,
+        bubbles: bool,
+        cancelable: bool,
+        keyboard_init: Option<&KeyboardEventInit>,
+    ) -> Result<DispatchOutcome, SessionError> {
+        let event = match keyboard_init {
+            Some(init) => ScriptEventHandle::new_keyboard(
+                event_type.to_string(),
+                Self::script_listener_target(target),
+                bubbles,
+                cancelable,
+                init,
+            ),
+            None => ScriptEventHandle::new(
+                event_type.to_string(),
+                Self::script_listener_target(target),
+                bubbles,
+                cancelable,
+            ),
+        };
+        let ancestors = self.event_ancestor_targets_for_target(target);
 
         for target in ancestors.iter().rev() {
             self.run_event_listeners(*target, event_type, true, EventPhase::Capturing, &event)?;
@@ -1480,13 +1551,7 @@ impl Session {
             }
         }
 
-        self.run_event_listeners(
-            SessionEventTarget::Element(node_id),
-            event_type,
-            true,
-            EventPhase::AtTarget,
-            &event,
-        )?;
+        self.run_event_listeners(target, event_type, true, EventPhase::AtTarget, &event)?;
         if event.immediate_propagation_stopped() {
             event.set_current_target(None);
             event.set_phase(EventPhase::None);
@@ -1495,13 +1560,7 @@ impl Session {
             });
         }
 
-        self.run_event_listeners(
-            SessionEventTarget::Element(node_id),
-            event_type,
-            false,
-            EventPhase::AtTarget,
-            &event,
-        )?;
+        self.run_event_listeners(target, event_type, false, EventPhase::AtTarget, &event)?;
         if event.immediate_propagation_stopped() || event.propagation_stopped() {
             event.set_current_target(None);
             event.set_phase(EventPhase::None);
@@ -1638,6 +1697,41 @@ impl Session {
                 }
                 NodeKind::Document => return None,
             }
+        }
+    }
+
+    fn resolve_keyboard_target(&self, selector: &str) -> Result<SessionEventTarget, SessionError> {
+        let selector = selector.trim();
+        if selector.is_empty() {
+            return Err(SessionError::Selector(
+                "selector must not be empty".to_string(),
+            ));
+        }
+
+        match selector {
+            "window" => Ok(SessionEventTarget::Window),
+            "document" => Ok(SessionEventTarget::Document),
+            _ => {
+                let matches = self.dom.select(selector).map_err(SessionError::Selector)?;
+                let Some(node_id) = matches.first().copied() else {
+                    return Err(SessionError::Dom(format!(
+                        "selector `{selector}` did not match any elements"
+                    )));
+                };
+                self.ensure_element_node(node_id)?;
+                Ok(SessionEventTarget::Element(node_id))
+            }
+        }
+    }
+
+    fn event_ancestor_targets_for_target(
+        &self,
+        target: SessionEventTarget,
+    ) -> Vec<SessionEventTarget> {
+        match target {
+            SessionEventTarget::Window => Vec::new(),
+            SessionEventTarget::Document => vec![SessionEventTarget::Window],
+            SessionEventTarget::Element(node_id) => self.event_ancestor_targets(node_id),
         }
     }
 

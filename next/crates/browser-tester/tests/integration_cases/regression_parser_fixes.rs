@@ -1,0 +1,1902 @@
+use browser_tester::{Error, Harness, KeyboardEventInit};
+
+#[test]
+fn regex_charclass_quote_does_not_break_balancer() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      "<a&b>".replace(/[&<>"']/g, (ch) => ch);
+      document.getElementById("result").textContent = "ok";
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn unary_not_regex_test_condition_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const value = "abc";
+      if (!/^[0-9]+$/.test(value)) {
+        document.getElementById("result").textContent = "non-numeric";
+      } else {
+        document.getElementById("result").textContent = "numeric";
+      }
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "non-numeric")?;
+    Ok(())
+}
+
+#[test]
+fn window_unknown_property_falls_back_to_undefined() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const value = window.lucide;
+      document.getElementById("result").textContent = String(value === undefined);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true")?;
+    Ok(())
+}
+
+#[test]
+fn document_element_lang_is_readable() -> browser_tester::Result<()> {
+    let html = r#"
+    <html lang="ja">
+      <body>
+        <div id="result"></div>
+        <script>
+          document.getElementById("result").textContent = document.documentElement.lang;
+        </script>
+      </body>
+    </html>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ja")?;
+    Ok(())
+}
+
+#[test]
+fn object_literal_shorthand_and_spread_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const seed = { count: 1 };
+      const name = "lot";
+      const merged = { ...seed, name };
+      document.getElementById("result").textContent = merged.count + ":" + merged.name;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "1:lot")?;
+    Ok(())
+}
+
+#[test]
+fn object_map_property_and_index_access_parse_and_run() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const state = { unit: "mm" };
+      const stepOptionsByUnit = {
+        mm: ["0.1", "1"],
+        in: ["1/64", "1/32", "1/16", "1/8"]
+      };
+      const hasOne = stepOptionsByUnit.mm.includes("1");
+      const fromState = stepOptionsByUnit[state.unit][0];
+      document.getElementById("result").textContent = String(hasOne) + ":" + fromState;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true:0.1")?;
+    Ok(())
+}
+
+#[test]
+fn object_property_compound_assignment_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const obj = { count: 1 };
+      obj.count += 1;
+      document.getElementById("result").textContent = String(obj.count);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "2")?;
+    Ok(())
+}
+
+#[test]
+fn nested_object_property_assignment_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const state = { settings: { allowOpenCase: false } };
+      state.settings.allowOpenCase = true;
+      document.getElementById("result").textContent = String(state.settings.allowOpenCase);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true")?;
+    Ok(())
+}
+
+#[test]
+fn nested_object_property_compound_assignment_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const state = { settings: { count: 1 } };
+      state.settings.count += 2;
+      document.getElementById("result").textContent = String(state.settings.count);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "3")?;
+    Ok(())
+}
+
+#[test]
+fn logical_or_returns_operand_value_for_object_defaulting() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      function createLotRow(seed) {
+        seed = seed || {};
+        return seed.name;
+      }
+      document.getElementById("result").textContent = String(createLotRow() === undefined);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true")?;
+    Ok(())
+}
+
+#[test]
+fn logical_and_returns_last_truthy_operand_value() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const value = "x" && 7;
+      document.getElementById("result").textContent = String(value);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "7")?;
+    Ok(())
+}
+
+#[test]
+fn array_destructured_callback_params_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const obj = { a: "x", b: "y" };
+      const result = document.getElementById("result");
+      Object.entries(obj).forEach(([k, v]) => {
+        result.textContent = result.textContent + k + v;
+      });
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "axby")?;
+    Ok(())
+}
+
+#[test]
+fn nodelist_foreach_member_call_is_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <ul>
+      <li class="item">A</li>
+      <li class="item">B</li>
+    </ul>
+    <div id="result"></div>
+    <script>
+      let out = "";
+      document.querySelectorAll(".item").forEach((node, index) => {
+        out += node.textContent + String(index);
+      });
+      document.getElementById("result").textContent = out;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "A0B1")?;
+    Ok(())
+}
+
+#[test]
+fn array_member_calls_via_object_path_are_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const state = { lots: [{ qty: 2 }, { qty: 3 }] };
+      const total = state.lots
+        .map((lot) => lot.qty)
+        .reduce((sum, value) => sum + value, 0);
+      state.lots.push({ qty: 4 });
+      const filtered = state.lots.filter((lot) => lot.qty >= 3);
+      document.getElementById("result").textContent =
+        String(total) + "|" + String(filtered.length);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "5|2")?;
+    Ok(())
+}
+
+#[test]
+fn array_filter_boolean_is_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const values = [0, 1, "", 2, null, 3, false];
+      const filtered = values.filter(Boolean);
+      document.getElementById("result").textContent = filtered.join(",");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "1,2,3")?;
+    Ok(())
+}
+
+#[test]
+fn chained_filter_boolean_is_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const text = "a\n\n b \n";
+      const lines = text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      document.getElementById("result").textContent = lines.join("|");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "a|b")?;
+    Ok(())
+}
+
+#[test]
+fn function_declaration_default_parameters_parse_and_execute() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      function showToast(message, isError = false) {
+        return String(isError);
+      }
+
+      function showWarning(type, options = {}) {
+        return String(Object.keys(options).length);
+      }
+
+      window.__ok = showToast("x");
+      document.getElementById("result").textContent =
+        window.__ok + ":" + showWarning("warn");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "false:0")?;
+    Ok(())
+}
+
+#[test]
+fn add_event_listener_accepts_named_function_reference_callback() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="open-tool">open</button>
+    <div id="result"></div>
+    <script>
+      const el = {
+        openToolBtn: document.getElementById("open-tool"),
+      };
+      function openDialog() {
+        document.getElementById("result").textContent = "opened";
+      }
+      el.openToolBtn.addEventListener("click", openDialog);
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#open-tool")?;
+    harness.assert_text("#result", "opened")?;
+    Ok(())
+}
+
+#[test]
+fn object_entries_foreach_updates_outer_variable() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      function interpolate(template, params = {}) {
+        let out = String(template || "");
+        Object.entries(params).forEach(([key, value]) => {
+          out = out.replaceAll(`{${key}}`, String(value));
+        });
+        return out;
+      }
+      document.getElementById("result").textContent = interpolate("Shortage {value}", { value: 7 });
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "Shortage 7")?;
+    Ok(())
+}
+
+#[test]
+fn map_get_with_member_expression_argument_parses_without_formdata_conflict()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const allocations = new Map();
+      const base = new Map();
+      base.set("A", 1);
+      allocations.set("w", base);
+      const opt = { warehouse: "w" };
+      const sku = "A";
+      const alloc = 1;
+      allocations.get(opt.warehouse).set(sku, (allocations.get(opt.warehouse).get(sku) || 0) + alloc);
+      document.getElementById("result").textContent = String(allocations.get("w").get("A"));
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "2")?;
+    Ok(())
+}
+
+#[test]
+fn expression_foreach_listener_keeps_item_variable_scope() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="a">A</button>
+    <button id="b">B</button>
+    <div id="result"></div>
+    <script>
+      document.querySelectorAll("button").forEach((btn, idx) => {
+        btn.addEventListener("click", () => {
+          document.getElementById("result").textContent = btn.id + ":" + idx;
+        });
+      });
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#b")?;
+    harness.assert_text("#result", "b:1")?;
+    Ok(())
+}
+
+#[test]
+fn real_world_picking_breakdown_smoke() -> browser_tester::Result<()> {
+    let html = include_str!("../fixtures/picking-breakdown-minimal.html");
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ja|true|true|2")?;
+    Ok(())
+}
+
+#[test]
+fn array_push_trailing_comma_is_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='r'></div>
+    <script>
+      const lines = [];
+      lines.push("x",);
+      document.getElementById("r").textContent = lines.join(",");
+    </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#r", "x")?;
+    Ok(())
+}
+
+#[test]
+fn nested_call_with_trailing_commas_is_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='r'></div>
+    <script>
+      function interpolate(v, obj) { return v + ":" + obj.n; }
+      const lines = [];
+      lines.push(interpolate("total", { n: 1, },),);
+      document.getElementById("r").textContent = lines[0];
+    </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#r", "total:1")?;
+    Ok(())
+}
+
+#[test]
+fn empty_call_argument_is_still_rejected() {
+    let err = Harness::from_html("<script>const a=[]; a.push(1,,2);</script>").unwrap_err();
+    match err {
+        browser_tester::Error::ScriptParse(msg) => assert!(msg.contains("empty")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn lone_comma_argument_is_rejected() {
+    let err = Harness::from_html("<script>function f(x){} f(,);</script>").unwrap_err();
+    match err {
+        browser_tester::Error::ScriptParse(msg) => assert!(msg.contains("empty")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn function_call_spread_arguments_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='r'></div>
+    <script>
+      function sum(x, y, z) { return x + y + z; }
+      const numbers = [1, 2, 3];
+      document.getElementById("r").textContent = String(sum(...numbers));
+    </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#r", "6")?;
+    Ok(())
+}
+
+#[test]
+fn mixed_call_spread_arguments_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='r'></div>
+    <script>
+      function myFunction(v, w, x, y, z) { return v + "," + w + "," + x + "," + y + "," + z; }
+      const args = [0, 1];
+      document.getElementById("r").textContent = myFunction(-1, ...args, 2, ...[3]);
+    </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#r", "-1,0,1,2,3")?;
+    Ok(())
+}
+
+#[test]
+fn math_min_spread_in_ternary_expression_is_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='r'></div>
+    <script>
+      const widths = [5, 3];
+      let width = 0;
+      width = widths.length ? Math.min(...widths) : 0;
+      document.getElementById("r").textContent = String(width);
+    </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#r", "3")?;
+    Ok(())
+}
+
+#[test]
+fn if_else_block_with_math_min_spread_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='r'></div>
+    <script>
+      function indentWidth(v, options) { return v.length; }
+      function run(targetIndexes, parsedLines, options) {
+        let width = 0;
+        if (options.indentAlignMode === "2") width = 2;
+        else if (options.indentAlignMode === "4") width = 4;
+        else {
+          const widths = targetIndexes.map((index) => indentWidth(parsedLines[index].indentRaw, options));
+          width = widths.length ? Math.min(...widths) : 0;
+        }
+        return width;
+      }
+
+      const parsedLines = [{ indentRaw: "   " }, { indentRaw: " " }, { indentRaw: "  " }];
+      document.getElementById("r").textContent =
+        String(run([0, 1, 2], parsedLines, { indentAlignMode: "auto" }));
+    </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#r", "1")?;
+    Ok(())
+}
+
+#[test]
+fn numeric_separator_literals_parse_across_common_forms() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='r'></div>
+    <script>
+      const decimal = 1_000_000_000;
+      const float = 12_345.6_7;
+      const scientific = 1_2.3_4e5_6;
+      const hex = 0xAB_CD;
+      const binary = 0b1010_0001;
+      const bigint = 9_876_543_210n;
+      document.getElementById("r").textContent =
+        [
+          String(decimal),
+          String(float),
+          String(scientific === 1.234e57),
+          String(hex),
+          String(binary),
+          bigint.toString()
+        ].join("|");
+    </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#r", "1000000000|12345.67|true|43981|161|9876543210")?;
+    Ok(())
+}
+
+#[test]
+fn numeric_separator_after_legacy_leading_zero_is_rejected() {
+    let err = Harness::from_html("<script>const value = 0_1;</script>").unwrap_err();
+    match err {
+        browser_tester::Error::ScriptParse(msg) => assert!(msg.contains("invalid numeric literal")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn window_match_media_property_reference_is_callable() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id='run'>run</button>
+    <div id='r'></div>
+    <script>
+      const mediaFactory = window.matchMedia;
+      document.getElementById("run").addEventListener("click", () => {
+        const result = mediaFactory("(prefers-color-scheme: dark)");
+        document.getElementById("r").textContent =
+          typeof mediaFactory + ":" + String(result.matches);
+      });
+    </script>
+    "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_match_media_mock("(prefers-color-scheme: dark)", true);
+    h.click("#run")?;
+    h.assert_text("#r", "function:true")?;
+    assert_eq!(
+        h.take_match_media_calls(),
+        vec!["(prefers-color-scheme: dark)".to_string()]
+    );
+    Ok(())
+}
+
+#[test]
+fn document_member_reference_assignment_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='r'></div>
+    <script>
+      var createElement = document.createElement;
+      document.getElementById("r").textContent = typeof createElement;
+    </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#r", "function")?;
+    Ok(())
+}
+
+#[test]
+fn malformed_triple_quote_literal_in_replace_chain_is_tolerated() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='r'></div>
+    <script>
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&")
+          .replace(/</g, "<")
+          .replace(/>/g, ">")
+          .replace(/"/g, """)
+          .replace(/'/g, "'");
+      }
+
+      const id = `custom:${Date.now().toString(36)}`;
+      document.getElementById("r").textContent =
+        escapeHtml("\"") + "|" + String(id.startsWith("custom:"));
+    </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#r", "\"|true")?;
+    Ok(())
+}
+
+#[test]
+fn array_push_spread_arguments_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='r'></div>
+    <script>
+      const lines = ["a"];
+      const next = ["b", "c"];
+      lines.push(...next,);
+      document.getElementById("r").textContent = lines.join(",");
+    </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#r", "a,b,c")?;
+    Ok(())
+}
+
+#[test]
+fn object_spread_primitives_follow_js_behavior() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='r'></div>
+    <script>
+      const obj = { ...true, ..."test", ...10 };
+      document.getElementById("r").textContent =
+        obj["0"] + obj["1"] + obj["2"] + obj["3"] + "|" + String(obj["4"] === undefined);
+    </script>
+    "#;
+
+    let h = Harness::from_html(html)?;
+    h.assert_text("#r", "test|true")?;
+    Ok(())
+}
+
+#[test]
+fn non_iterable_spread_in_call_is_rejected() {
+    let err = Harness::from_html("<script>function f(a){} const obj={a:1}; f(...obj);</script>")
+        .unwrap_err();
+    match err {
+        browser_tester::Error::ScriptRuntime(msg) => assert!(msg.contains("iterable")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn non_iterable_spread_in_array_literal_is_rejected() {
+    let err =
+        Harness::from_html("<script>const obj={a:1}; const arr=[...obj];</script>").unwrap_err();
+    match err {
+        browser_tester::Error::ScriptRuntime(msg) => assert!(msg.contains("iterable")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn division_by_zero_follows_js_infinity_and_nan_semantics() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const pos = 1 / 0;
+      const neg = -1 / 0;
+      const nan = 0 / 0;
+      document.getElementById("result").textContent =
+        String(pos) + "|" + String(neg) + "|" + String(nan) + "|" + String(pos > 0);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "Infinity|-Infinity|NaN|true")?;
+    Ok(())
+}
+
+#[test]
+fn array_from_map_values_is_usable_with_array_map() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const state = { totalsMap: new Map() };
+      state.totalsMap.set("a", { n: 1 });
+      state.totalsMap.set("b", { n: 2 });
+
+      const totals = Array.from(state.totalsMap.values());
+      const rendered = totals.map((row) => `${row.n}`).join(",");
+      document.getElementById("result").textContent = rendered;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "1,2")?;
+    Ok(())
+}
+
+#[test]
+fn parenthesized_arrow_parameter_list_in_const_assignment_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const toCSV = (rows) => rows.map((r) => r).join(",");
+      document.getElementById("result").textContent = toCSV(["a", "b"]);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "a,b")?;
+    Ok(())
+}
+
+#[test]
+fn parenthesized_multi_parameter_arrow_callback_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const out = [1, 2].map((row, index) => row + index);
+      document.getElementById("result").textContent = out.join(",");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "1,3")?;
+    Ok(())
+}
+
+#[test]
+fn parenthesized_multi_parameter_arrow_callback_allows_harness_construction() {
+    let html = r#"<script>const out = [1, 2].map((row, index) => row + index);</script>"#;
+    Harness::from_html(html).expect("Harness::from_html should parse multi-parameter callbacks");
+}
+
+#[test]
+fn parenthesized_multi_parameter_arrow_callback_with_template_literal_body_parses()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const rows = [
+        { sku: "A", qty: 1 },
+        { sku: "B", qty: 2 },
+      ];
+      const rendered = rows.map((row, index) => `
+        <tr data-idx="${index}">
+          <td>${String(row.sku || "").replace(/"/g, "&quot;")}</td>
+          <td>${String(row.qty || "").replace(/"/g, "&quot;")}</td>
+        </tr>
+      `).join("");
+      document.getElementById("result").textContent = rendered.includes('data-idx="1"')
+        ? "ok"
+        : "ng";
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn parenthesized_multi_parameter_arrow_callback_in_dom_assignment_parses()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const rows = [
+        { sku: "A", qty: 1 },
+        { sku: "B", qty: 2 },
+      ];
+      const els = { orderBody: document.getElementById("result") };
+      els.orderBody.innerHTML = rows.map((row, index) => `
+        <tr data-order-index="${index}">
+          <td>${String(row.sku || "").replace(/"/g, "&quot;")}</td>
+          <td>${String(row.qty || "").replace(/"/g, "&quot;")}</td>
+        </tr>
+      `).join("");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    let dumped = harness.dump_dom("#result")?;
+    assert!(
+        dumped.contains("data-order-index=\"1\""),
+        "unexpected dom: {dumped}"
+    );
+    Ok(())
+}
+
+#[test]
+fn parenthesized_arrow_parameter_list_with_nested_callbacks_and_template_literal_parses()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const toCSV = (rows) => rows
+        .map((row) => row.map((cell) => {
+          const s = String(cell ?? "");
+          if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+          return s;
+        }).join(","))
+        .join("\n");
+      document.getElementById("result").textContent = toCSV([["a", "x,y"], ["b", "z"]]);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "a,\"x,y\"\nb,z")?;
+    Ok(())
+}
+
+#[test]
+fn regex_char_class_with_escaped_newline_in_test_call_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const s = "x,y";
+      document.getElementById("result").textContent = String(/[",\n]/.test(s));
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true")?;
+    Ok(())
+}
+
+#[test]
+fn template_literal_expression_with_regex_replace_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const s = "x,y";
+      document.getElementById("result").textContent = `"${s.replace(/"/g, '""')}"`;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "\"x,y\"")?;
+    Ok(())
+}
+
+#[test]
+fn parenthesized_arrow_parameter_list_with_multiline_replace_chain_parses()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const encodeSharePayload = (payload) => btoa(unescape(encodeURIComponent(JSON.stringify(payload))))
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/g, "");
+      document.getElementById("result").textContent = encodeSharePayload({ a: 1 });
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "eyJhIjoxfQ")?;
+    Ok(())
+}
+
+#[test]
+fn regex_with_escaped_slash_parses_in_replace_call() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      document.getElementById("result").textContent = "a/b".replace(/\//g, "_");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "a_b")?;
+    Ok(())
+}
+
+#[test]
+fn regex_with_end_anchor_quantifier_parses_in_replace_call() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      document.getElementById("result").textContent = "abc==".replace(/=+$/g, "");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "abc")?;
+    Ok(())
+}
+
+#[test]
+fn regex_lookahead_in_ternary_condition_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const input = "810000";
+      const out = /\B(?=(\d{3})+(?!\d))/.test(input)
+        ? input.replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+        : "ng";
+      document.getElementById("result").textContent = out;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "810,000")?;
+    Ok(())
+}
+
+#[test]
+fn object_literal_colon_detection_ignores_regex_lookahead() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const model = {
+        formatter: /\B(?=(\d{3})+(?!\d))/g,
+        formatted: "810000".replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+      };
+      document.getElementById("result").textContent = model.formatted;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "810,000")?;
+    Ok(())
+}
+
+#[test]
+fn nullish_coalescing_inside_ternary_condition_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const maybe = null;
+      const out = (maybe ?? "x") ? "ok" : "ng";
+      document.getElementById("result").textContent = out;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn for_and_while_allow_single_statement_bodies() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const values = [];
+      for (let i = 0; i < 3; i += 1) values.push(i);
+
+      let j = 0;
+      while (j < 3) j += 1;
+
+      document.getElementById("result").textContent = values.join(",") + "|" + String(j);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "0,1,2|3")?;
+    Ok(())
+}
+
+#[test]
+fn ternary_with_object_literal_branches_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const page = {
+        units: {
+          areaUs: "acre",
+          rateUs: "usd",
+          areaMetric: "ha",
+          rateMetric: "eur",
+        }
+      };
+      const snapshot = { unitSystem: "us" };
+      const labels = snapshot.unitSystem === "us"
+        ? { area: page.units.areaUs, rate: page.units.rateUs }
+        : { area: page.units.areaMetric, rate: page.units.rateMetric };
+      document.getElementById("result").textContent = labels.area + "|" + labels.rate;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "acre|usd")?;
+    Ok(())
+}
+
+#[test]
+fn ternary_false_branch_can_be_zero_arg_arrow_function() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const usePrimary = false;
+      const matcher = usePrimary ? (() => false) : () => true;
+      document.getElementById("result").textContent = String(matcher());
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true")?;
+    Ok(())
+}
+
+#[test]
+fn nested_parenthesized_division_in_multiplication_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const row = { valueNum: 2 };
+      const batchL = 100;
+      const x = batchL * (row.valueNum / 100);
+      document.getElementById("result").textContent = String(x);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "2")?;
+    Ok(())
+}
+
+#[test]
+fn if_else_with_regex_char_class_parens_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      let out = "";
+      if (true) out = /[(]/.test("(") ? "then" : "bad"; else out = "else";
+      document.getElementById("result").textContent = out;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "then")?;
+    Ok(())
+}
+
+#[test]
+fn if_else_with_regex_char_class_brace_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      let out = "";
+      if (true) out = /[{]/.test("{") ? "then" : "bad"; else out = "else";
+      document.getElementById("result").textContent = out;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "then")?;
+    Ok(())
+}
+
+#[test]
+fn parenthesized_regex_char_class_expression_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const ok = (/[(]/.test("("));
+      document.getElementById("result").textContent = ok ? "ok" : "ng";
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn for_of_header_ignores_in_inside_regex_literal() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const values = [];
+      for (const item of /in/.exec("in")) values.push(item);
+      document.getElementById("result").textContent = values.join(",");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "in")?;
+    Ok(())
+}
+
+#[test]
+fn scientific_notation_with_signed_exponent_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const a = 1e-3;
+      const b = 1e+3;
+      const c = 2 + 1e-3;
+      document.getElementById("result").textContent = [a, b, c].join("|");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "0.001|1000|2.001")?;
+    Ok(())
+}
+
+#[test]
+fn hex_literal_followed_by_minus_still_parses_as_subtraction() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const out = 0x1e-1;
+      document.getElementById("result").textContent = String(out);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "29")?;
+    Ok(())
+}
+
+#[test]
+fn if_block_allows_comment_before_else() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      let out = "init";
+      if (true) { out = "then"; } /* comment before else */ else { out = "else"; }
+      document.getElementById("result").textContent = out;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "then")?;
+    Ok(())
+}
+
+#[test]
+fn comments_stripper_does_not_break_return_regex_with_double_slash() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      function check() {
+        return /https?:\/\/example\.com/.test("https://example.com");
+      }
+      document.getElementById("result").textContent = check() ? "ok" : "ng";
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn comments_stripper_does_not_break_return_regex_char_class_with_double_slash()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      function check() {
+        return /[//]/.test("/");
+      }
+      document.getElementById("result").textContent = check() ? "ok" : "ng";
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn if_body_can_start_with_regex_literal() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      if (true) /[}]/.test("}");
+      document.getElementById("result").textContent = "ok";
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn return_regex_containing_script_end_marker_does_not_break_html_extractor()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      function check() {
+        return /<\/script>/.test("</script>");
+      }
+      document.getElementById("result").textContent = check() ? "ok" : "ng";
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn member_named_return_followed_by_division_is_not_treated_as_regex_start()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const obj = { return: 8 };
+      const out = obj.return / 2;
+      document.getElementById("result").textContent = String(out);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "4")?;
+    Ok(())
+}
+
+#[test]
+fn array_literal_map_callback_result_can_be_joined_after_assignment() -> browser_tester::Result<()>
+{
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const copy = { a: "A", b: "B", c: "C", d: "D" };
+      const head = [copy.a, copy.b, copy.c, copy.d].map((x) => `<th>${x}</th>`);
+      document.getElementById("result").textContent = head.join("");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "<th>A</th><th>B</th><th>C</th><th>D</th>")?;
+    Ok(())
+}
+
+#[test]
+fn concat_chain_with_nested_map_keeps_array_type_for_join() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const copy = { a: "SKU", b: "Qty", c: "Unfilled" };
+      const main = { usedWarehouses: ["W1", "W2"] };
+      const head = [`<th>${copy.a}</th>`, `<th>${copy.b}</th>`]
+        .concat(main.usedWarehouses.map((w) => `<th>${w}</th>`))
+        .concat([`<th>${copy.c}</th>`]);
+      document.getElementById("result").textContent = head.join("");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text(
+        "#result",
+        "<th>SKU</th><th>Qty</th><th>W1</th><th>W2</th><th>Unfilled</th>",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn array_literal_with_template_elements_can_be_joined() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const copy = { a: "SKU", b: "Qty" };
+      const head = [`<th>${copy.a}</th>`, `<th>${copy.b}</th>`];
+      document.getElementById("result").textContent = head.join("");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "<th>SKU</th><th>Qty</th>")?;
+    Ok(())
+}
+
+#[test]
+fn concat_chain_with_nested_map_keeps_array_runtime_type() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const copy = { a: "SKU", b: "Qty", c: "Unfilled" };
+      const main = { usedWarehouses: ["W1", "W2"] };
+      const head = [`<th>${copy.a}</th>`, `<th>${copy.b}</th>`]
+        .concat(main.usedWarehouses.map((w) => `<th>${w}</th>`))
+        .concat([`<th>${copy.c}</th>`]);
+      document.getElementById("result").textContent = Array.isArray(head) ? "array" : "not-array";
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "array")?;
+    Ok(())
+}
+
+#[test]
+fn identifier_starting_with_var_is_not_treated_as_var_declaration() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const variantList = [];
+      const original = "ok";
+      variantList.push(original);
+      document.getElementById("result").textContent = String(variantList.length);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "1")?;
+    Ok(())
+}
+
+#[test]
+fn dom_index_target_accepts_element_arrays_from_array_from_query_selector_all()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <button class="tab" id="t1">A</button>
+    <button class="tab" id="t2">B</button>
+    <div id="result"></div>
+    <script>
+      const el = { tabs: Array.from(document.querySelectorAll(".tab")) };
+      for (let i = 0; i < el.tabs.length; i += 1) {
+        el.tabs[i].setAttribute("data-idx", String(i));
+      }
+      document.getElementById("result").textContent = el.tabs[1].getAttribute("data-idx");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "1")?;
+    Ok(())
+}
+
+#[test]
+fn string_normalize_nfkc_is_supported_in_member_calls() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      document.getElementById("result").textContent = "ＡＢＣ１２３".normalize("NFKC");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ABC123")?;
+    Ok(())
+}
+
+#[test]
+fn string_replace_with_function_callback_is_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const normalized = "ＡＢＣ１２３".replace(/[Ａ-Ｚａ-ｚ０-９]/g, (c) =>
+        String.fromCharCode(c.charCodeAt(0) - 0xFEE0)
+      );
+      document.getElementById("result").textContent = normalized;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ABC123")?;
+    Ok(())
+}
+
+#[test]
+fn for_in_loop_supports_plain_object_keys() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const obj = { a: 1, b: 2, c: 3 };
+      let out = "";
+      for (const key in obj) {
+        out += key;
+      }
+      document.getElementById("result").textContent = out;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "abc")?;
+    Ok(())
+}
+
+#[test]
+fn let_declaration_without_initializer_defaults_to_undefined() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      let rows;
+      document.getElementById("result").textContent = String(rows === undefined);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true")?;
+    Ok(())
+}
+
+#[test]
+fn const_declaration_without_initializer_is_rejected() {
+    let err = Harness::from_html("<script>const rows;</script>").unwrap_err();
+    match err {
+        browser_tester::Error::ScriptParse(msg) => {
+            assert!(msg.contains("const declaration requires initializer"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn object_length_property_is_not_treated_as_array_length() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const seed = {};
+      const withLength = { length: 7 };
+      document.getElementById("result").textContent =
+        String(seed.length === undefined) + "|" + String(withLength.length);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true|7")?;
+    Ok(())
+}
+
+#[test]
+fn optional_chained_add_event_listener_on_node_member_call_is_supported()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id="root"></div>
+    <div id="result"></div>
+    <script>
+      const root = document.getElementById("root");
+      root.innerHTML = `<button data-act="x">X</button>`;
+      root.querySelector("[data-act='x']")?.addEventListener("click", () => {
+        document.getElementById("result").textContent = "ok";
+      });
+      root.querySelector("[data-act='x']").click();
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn single_line_else_if_chain_parses_without_duplicate_else_error() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      function roundStep(value, step, direction) { return value; }
+      function psychRound(value, mode, direction, decimals) { return value; }
+      function applyRounding(value, mode, direction, decimals) {
+        let out = value;
+        if (mode === "step_1") out = roundStep(value, 1, direction);
+        else if (mode === "step_10") out = roundStep(value, 10, direction);
+        else if (mode === "step_100") out = roundStep(value, 100, direction);
+        else if (mode === "psych_99" || mode === "psych_95" || mode === "psych_90") out = psychRound(value, mode, direction, decimals);
+
+        if (mode === "none") return Number(out);
+        if (decimals > 0) return Number(out.toFixed(decimals));
+        return Math.round(out);
+      }
+      document.getElementById("result").textContent = String(applyRounding(12.3, "step_100", 1, 0));
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "12")?;
+    Ok(())
+}
+
+#[test]
+fn url_search_params_foreach_two_params_arrow_callback_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const params = new URLSearchParams("a=1&b=2");
+      const out = {};
+      params.forEach((value, key) => {
+        out[key] = value;
+      });
+      document.getElementById("result").textContent = out.a + ":" + out.b;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "1:2")?;
+    Ok(())
+}
+
+#[test]
+fn array_literal_foreach_accepts_function_reference_callback() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const seen = [];
+      const collect = (value) => {
+        seen.push(String(value));
+      };
+      ["x", "y", "z"].forEach(collect);
+      document.getElementById("result").textContent = seen.join("|");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "x|y|z")?;
+    Ok(())
+}
+
+#[test]
+fn new_array_fill_join_chain_is_supported() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const visibleCount = 3;
+      const cells = new Array(visibleCount).fill("<span></span>").join("");
+      document.getElementById("result").textContent = cells;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "<span></span><span></span><span></span>")?;
+    Ok(())
+}
+
+#[test]
+fn template_literal_with_member_access_in_dom_assignments_parses() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="output" class="strength-meter-output"></div>
+    <div id="strengthFill"></div>
+    <div id="strengthText"></div>
+    <div id="resultClass"></div>
+    <script>
+      const meta = { percent: 78, label: "Strong", levelClass: "is-strong" };
+      const el = {
+        output: document.getElementById("output"),
+        strengthFill: document.getElementById("strengthFill"),
+        strengthText: document.getElementById("strengthText"),
+      };
+
+      el.strengthFill.style.width = `${meta.percent}%`;
+      el.strengthText.textContent = `${meta.label} (${meta.percent}%)`;
+      el.output.className = `strength-meter-output ${meta.levelClass}`;
+      document.getElementById("resultClass").textContent = el.output.className;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#strengthText", "Strong (78%)")?;
+    harness.assert_text("#resultClass", "strength-meter-output is-strong")?;
+    Ok(())
+}
+
+#[test]
+fn focus_accepts_optional_options_argument() -> browser_tester::Result<()> {
+    let html = r#"
+    <input id="name">
+    <p id="result"></p>
+    <script>
+      const name = document.getElementById("name");
+      name.focus({ preventScroll: true });
+      document.getElementById("result").textContent =
+        document.activeElement === name ? "focused" : "not-focused";
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "focused")?;
+    Ok(())
+}
+
+#[test]
+fn fetch_with_options_object_parses_in_async_function() -> browser_tester::Result<()> {
+    let html = r#"
+    <div>
+      <button id="run">run</button>
+      <script>
+        async function run() {
+          const response = await fetch("https://example.com", {
+            method: "GET",
+            headers: { "Accept": "text/html" }
+          });
+          void response;
+        }
+        document.getElementById("run").addEventListener("click", run);
+      </script>
+    </div>
+    "#;
+
+    let _harness = Harness::from_html(html)?;
+    Ok(())
+}
+
+#[test]
+fn class_list_add_accepts_member_expression_argument() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="out" class="base"></div>
+    <div id="result"></div>
+    <script>
+      const out = document.getElementById("out");
+      const meta = { levelClass: "strong" };
+      out.classList.add(meta.levelClass);
+      document.getElementById("result").textContent = out.className;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "base strong")?;
+    Ok(())
+}
+
+#[test]
+fn class_list_add_accepts_identifier_argument_after_includes_guard() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="out"></div>
+    <div id="result"></div>
+    <script>
+      const kind = "success";
+      const out = document.getElementById("out");
+      if (["success", "warn", "error"].includes(kind)) {
+        out.classList.add(kind);
+      }
+      document.getElementById("result").textContent =
+        String(out.classList.contains("success")) + ":" + out.className;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true:success")?;
+    Ok(())
+}
+
+#[test]
+fn dom_parser_body_child_nodes_is_array_like() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const parser = new DOMParser();
+      const doc = parser.parseFromString("<article><p>A</p><p>B</p></article>", "text/html");
+      const hasChildNodes = !!(doc.body && doc.body.childNodes);
+      const len = doc.body.childNodes.length;
+      const arr = Array.from(doc.body.childNodes);
+      document.getElementById("result").textContent =
+        String(hasChildNodes) + "|" + String(len > 0) + "|" + String(arr.length === len);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "true|true|true")?;
+    Ok(())
+}
+
+#[test]
+fn dispatch_keyboard_populates_key_and_modifier_fields() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      window.addEventListener("keydown", (event) => {
+        document.getElementById("result").textContent = [
+          event.type,
+          event.key,
+          event.code,
+          event.ctrlKey,
+          event.metaKey,
+          event.shiftKey,
+          event.altKey,
+          event.repeat,
+          event.isComposing,
+          event.isTrusted,
+          event.bubbles,
+          event.cancelable
+        ].join(":");
+      });
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.dispatch_keyboard(
+        "window",
+        "keydown",
+        KeyboardEventInit {
+            key: "Enter".into(),
+            code: Some("Enter".into()),
+            ctrl_key: true,
+            shift_key: true,
+            repeat: true,
+            ..Default::default()
+        },
+    )?;
+    harness.assert_text(
+        "#result",
+        "keydown:Enter:Enter:true:false:true:false:true:false:false:false:false",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn dispatch_keyboard_targets_selected_element_and_bubbles_by_default() -> browser_tester::Result<()>
+{
+    let html = r#"
+    <div id="root">
+      <input id="field">
+    </div>
+    <div id="result"></div>
+    <script>
+      const logs = [];
+      document.getElementById("root").addEventListener("keydown", () => {
+        logs.push("root");
+        document.getElementById("result").textContent = logs.join("|");
+      });
+      document.getElementById("field").addEventListener("keydown", (event) => {
+        logs.push(event.target.id + ":" + event.currentTarget.id + ":" + event.key);
+        document.getElementById("result").textContent = logs.join("|");
+      });
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.dispatch_keyboard(
+        "#field",
+        "keydown",
+        KeyboardEventInit {
+            key: "Escape".into(),
+            ..Default::default()
+        },
+    )?;
+    harness.assert_text("#result", "field:field:Escape|root")?;
+    Ok(())
+}
+
+#[test]
+fn add_event_listener_accepts_dynamic_event_type_expression() -> browser_tester::Result<()> {
+    let html = r#"
+    <button id="btn">run</button>
+    <div id="result"></div>
+    <script>
+      const eventName = "click";
+      const btn = document.getElementById("btn");
+      btn.addEventListener(eventName, () => {
+        document.getElementById("result").textContent = "ok";
+      });
+    </script>
+    "#;
+
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#btn")?;
+    harness.assert_text("#result", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn parse_error_reports_line_column_and_nearby_source_for_string_literal_expectation() {
+    let html = r#"
+    <script type="module">
+      import value from someModule;
+    </script>
+    "#;
+
+    let err = Harness::from_html(html).expect_err("invalid module specifier should fail parsing");
+    match err {
+        Error::ScriptParse(msg) => {
+            assert!(msg.contains("expected string literal"));
+            assert!(msg.contains("line"));
+            assert!(msg.contains("column"));
+            assert!(msg.contains("near `"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn create_text_node_accepts_member_expression_argument() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='root'></div>
+    <script>
+      const part = { text: 'abc' };
+      const node = document.createTextNode(part.text);
+      document.getElementById('root').appendChild(node);
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#root", "abc")?;
+    Ok(())
+}
+
+#[test]
+fn decode_uri_function_references_in_ternary_expression_parse_and_run() -> browser_tester::Result<()>
+{
+    let html = r#"
+    <div id="result"></div>
+    <script>
+      const decodeSimple = true ? decodeURI : decodeURIComponent;
+      const decodeComponent = false ? decodeURI : decodeURIComponent;
+      document.getElementById("result").textContent =
+        decodeSimple("a%20b") + "|" + decodeComponent("a%2Fb");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#result", "a b|a/b")?;
+    Ok(())
+}
+
+#[test]
+fn member_access_with_reserved_property_name_parses_and_runs() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='out'></div>
+    <script>
+      const relativeText = { in: "in {duration}", ago: "{duration} ago" };
+      const label = String(relativeText.in || "");
+      document.getElementById('out').textContent = label;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#out", "in {duration}")?;
+    Ok(())
+}
+
+#[test]
+fn member_call_on_nested_object_path_with_class_list_toggle_parses_in_function_body()
+-> browser_tester::Result<()> {
+    let html = r#"
+    <div id='panel' class='hidden'></div>
+    <div id='out'></div>
+    <script>
+      const el = { settingsPanel: document.getElementById('panel') };
+      function toggleSettings() {
+        const hidden = el.settingsPanel.classList.toggle('hidden');
+        return hidden;
+      }
+      document.getElementById('out').textContent = 'parsed';
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#out", "parsed")?;
+    Ok(())
+}
+
+#[test]
+fn string_from_char_code_accepts_spread_subarray_argument() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='out'></div>
+    <script>
+      const bytes = new Uint8Array([65, 66, 67]);
+      const chunk = 2;
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+      }
+      document.getElementById('out').textContent = binary;
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#out", "ABC")?;
+    Ok(())
+}
+
+#[test]
+fn array_literal_accepts_spread_of_filter_result() -> browser_tester::Result<()> {
+    let html = r#"
+    <div id='out'></div>
+    <script>
+      const state = { history: ["c", "b", "a"] };
+      const value = "b";
+      const next = [value, ...state.history.filter((item) => item !== value)];
+      document.getElementById('out').textContent = next.join(",");
+    </script>
+    "#;
+
+    let harness = Harness::from_html(html)?;
+    harness.assert_text("#out", "b,c,a")?;
+    Ok(())
+}
