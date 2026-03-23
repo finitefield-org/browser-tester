@@ -802,6 +802,48 @@ pub const DomStore = struct {
         try self.setNodeValue(node_id, merged);
     }
 
+    pub fn wholeText(self: *const DomStore, allocator: std.mem.Allocator, node_id: NodeId) errors.Result([]const u8) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        const text = switch (node.kind) {
+            .text => |value| value,
+            else => return error.DomError,
+        };
+
+        const parent_id = node.parent orelse return allocator.dupe(u8, text);
+        const parent = self.nodeAt(parent_id) orelse return error.DomError;
+        const index = try self.childIndex(parent_id, node_id);
+        var start_index = index;
+        while (start_index > 0) {
+            const sibling_id = parent.children.items[start_index - 1];
+            const sibling = self.nodeAt(sibling_id) orelse return error.DomError;
+            switch (sibling.kind) {
+                .text => start_index -= 1,
+                else => break,
+            }
+        }
+
+        var end_index = index;
+        while (end_index + 1 < parent.children.items.len) {
+            const sibling_id = parent.children.items[end_index + 1];
+            const sibling = self.nodeAt(sibling_id) orelse return error.DomError;
+            switch (sibling.kind) {
+                .text => end_index += 1,
+                else => break,
+            }
+        }
+
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(allocator);
+        for (parent.children.items[start_index .. end_index + 1]) |sibling_id| {
+            const sibling = self.nodeAt(sibling_id) orelse return error.DomError;
+            switch (sibling.kind) {
+                .text => |value| try out.appendSlice(allocator, value),
+                else => return error.DomError,
+            }
+        }
+        return try out.toOwnedSlice(allocator);
+    }
+
     pub fn splitTextNode(self: *DomStore, node_id: NodeId, offset: usize) errors.Result(NodeId) {
         const node = self.nodeAt(node_id) orelse return error.DomError;
         const text_value = switch (node.kind) {
@@ -1057,12 +1099,19 @@ pub const DomStore = struct {
             return;
         }
 
+        if (std.mem.eql(u8, element.tag_name, "option")) {
+            const arena_alloc = self.arena.allocator();
+            try upsertAttribute(arena_alloc, &element.attributes, "value", try duplicateString(self, value));
+            return;
+        }
+
         if (std.mem.eql(u8, element.tag_name, "input") and isCheckableInputType(elementAttributeValue(element.*, "type"))) {
             return error.DomError;
         }
 
         if (std.mem.eql(u8, element.tag_name, "select")) {
-            return error.DomError;
+            try self.setSelectValue(node_id, value);
+            return;
         }
 
         return error.DomError;
@@ -1707,7 +1756,7 @@ pub const DomStore = struct {
             if (first_option == null) {
                 first_option = try allocator.dupe(u8, option_value);
             }
-            if (self.isOptionSelected(descendant_id)) {
+            if (self.optionSelectedForNode(descendant_id) == true) {
                 return allocator.dupe(u8, option_value);
             }
         }
@@ -1720,13 +1769,38 @@ pub const DomStore = struct {
         return allocator.dupe(u8, "");
     }
 
-    fn isOptionSelected(self: *const DomStore, node_id: NodeId) bool {
-        const node = self.nodeAt(node_id) orelse return false;
+    pub fn selectedIndexForNode(self: *const DomStore, node_id: NodeId) errors.Result(isize) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
         const element = switch (node.kind) {
             .element => |element| element,
-            else => return false,
+            else => return error.DomError,
         };
-        return std.mem.eql(u8, element.tag_name, "option") and elementAttributeValue(element, "selected") != null;
+        if (!std.mem.eql(u8, element.tag_name, "select")) return error.DomError;
+
+        var descendants: std.ArrayList(NodeId) = .empty;
+        defer descendants.deinit(self.allocator);
+        try self.collectSubtreeNodes(node_id, &descendants, self.allocator);
+
+        var option_index: isize = 0;
+        for (descendants.items) |descendant_id| {
+            if (!self.isOptionNode(descendant_id)) continue;
+            if (self.optionSelectedForNode(descendant_id) == true) {
+                return option_index;
+            }
+            option_index += 1;
+        }
+
+        return -1;
+    }
+
+    pub fn optionSelectedForNode(self: *const DomStore, node_id: NodeId) ?bool {
+        const node = self.nodeAt(node_id) orelse return null;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return null,
+        };
+        if (!std.mem.eql(u8, element.tag_name, "option")) return null;
+        return elementAttributeValue(element, "selected") != null;
     }
 
     fn isOptionNode(self: *const DomStore, node_id: NodeId) bool {
@@ -1734,7 +1808,7 @@ pub const DomStore = struct {
         return std.mem.eql(u8, tag_name, "option");
     }
 
-    fn setOptionSelected(self: *DomStore, node_id: NodeId, selected: bool) errors.Result(void) {
+    pub fn setOptionSelected(self: *DomStore, node_id: NodeId, selected: bool) errors.Result(void) {
         const node = self.nodeAtMut(node_id) orelse return error.HtmlParse;
         const element = switch (node.kind) {
             .element => |*element| element,
@@ -1751,6 +1825,29 @@ pub const DomStore = struct {
         } else {
             removeAttributeByName(&element.attributes, "selected");
         }
+        return;
+    }
+
+    pub fn setSelectSelectedIndex(self: *DomStore, node_id: NodeId, selected_index: isize) errors.Result(void) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return error.DomError,
+        };
+        if (!std.mem.eql(u8, element.tag_name, "select")) return error.DomError;
+        if (selected_index < -1) return error.DomError;
+
+        var descendants: std.ArrayList(NodeId) = .empty;
+        defer descendants.deinit(self.allocator);
+        try self.collectSubtreeNodes(node_id, &descendants, self.allocator);
+
+        var option_index: isize = 0;
+        for (descendants.items) |descendant_id| {
+            if (!self.isOptionNode(descendant_id)) continue;
+            try self.setOptionSelected(descendant_id, selected_index >= 0 and option_index == selected_index);
+            option_index += 1;
+        }
+
         return;
     }
 
@@ -3885,7 +3982,7 @@ fn isCheckedPseudo(self: *const DomStore, node_id: NodeId) bool {
     if (self.checkedForNode(node_id)) |checked| {
         return checked;
     }
-    return self.isOptionSelected(node_id);
+    return self.optionSelectedForNode(node_id) == true;
 }
 
 fn isDisabledPseudo(self: *const DomStore, node_id: NodeId) bool {
@@ -4004,7 +4101,7 @@ fn isDefaultPseudoClass(self: *const DomStore, node_id: NodeId) bool {
     };
 
     if (std.mem.eql(u8, element.tag_name, "option")) {
-        return self.isOptionSelected(node_id);
+        return self.optionSelectedForNode(node_id) == true;
     }
 
     if (std.mem.eql(u8, element.tag_name, "input")) {

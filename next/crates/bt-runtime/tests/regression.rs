@@ -1059,6 +1059,179 @@ fn session_reflects_attributes_through_inline_script_regression() {
 }
 
 #[test]
+fn session_reflects_option_selected_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><select id='mode'><option id='first' value='a'>A</option><option id='second' value='b'>B</option></select><div id='out'></div><script>const second = document.getElementById('second'); const before = second.selected; second.selected = true; const selected = document.getElementById('mode').selectedOptions; document.getElementById('out').textContent = String(before) + ':' + String(second.selected) + ':' + String(selected.length) + ':' + selected.item(0).getAttribute('id') + ':' + document.querySelector('option:checked').getAttribute('id');</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("option.selected reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false:true:1:second:second"
+    );
+    assert_eq!(session.dom().select("option:checked").unwrap().len(), 1);
+    assert_eq!(session.dom().select("#second[selected]").unwrap().len(), 1);
+}
+
+#[test]
+fn session_reflects_option_default_selected_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><select id='mode'><option id='first' value='a'>A</option><option id='second' value='b'>B</option></select><div id='out'></div><script>const second = document.getElementById('second'); const before = second.defaultSelected; second.defaultSelected = true; const selected = document.getElementById('mode').selectedOptions; document.getElementById('out').textContent = String(before) + ':' + String(second.defaultSelected) + ':' + String(selected.length) + ':' + selected.item(0).getAttribute('id') + ':' + document.querySelector('option:checked').getAttribute('id');</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("option.defaultSelected reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false:true:1:second:second"
+    );
+    assert_eq!(session.dom().select("option:checked").unwrap().len(), 1);
+    assert_eq!(session.dom().select("#second[selected]").unwrap().len(), 1);
+}
+
+#[test]
+fn session_reflects_select_selected_index_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><select id='mode'><option id='first' value='a' selected>A</option><option id='second' value='b'>B</option><option id='third' value='c'>C</option></select><div id='out'></div><script>const select = document.getElementById('mode'); const before = select.selectedIndex; select.selectedIndex = 2; document.getElementById('out').textContent = String(before) + ':' + String(select.selectedIndex) + ':' + String(document.querySelector('option:checked').getAttribute('id'));</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("select.selectedIndex reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "0:2:third");
+    assert_eq!(session.dom().select("option:checked").unwrap().len(), 1);
+    assert_eq!(session.dom().select("#third[selected]").unwrap().len(), 1);
+}
+
+#[test]
+fn session_reflects_option_index_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><select id='mode'><option id='first' value='a'>A</option><option id='second' value='b'>B</option></select><div id='out'></div><script>const select = document.getElementById('mode'); const second = document.getElementById('second'); const before = second.index; select.insertAdjacentHTML('afterbegin', '<option id=\"zero\" value=\"z\">Z</option>'); document.getElementById('out').textContent = String(before) + ':' + String(second.index) + ':' + String(document.getElementById('zero').index);</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("option.index reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "1:2:0");
+    assert_eq!(session.dom().select("#zero").unwrap().len(), 1);
+}
+
+#[test]
+fn session_reflects_option_form_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><form id='owner'><select id='mode'><option id='first' value='a'>A</option><option id='second' value='b'>B</option></select></form><div id='out'></div><script>const second = document.getElementById('second'); const before = second.form; document.getElementById('mode').remove(); document.getElementById('out').textContent = before.getAttribute('id') + ':' + String(second.form);</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("option.form reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "owner:null");
+}
+
+#[test]
+fn session_reflects_option_disabled_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><select id='mode'><option id='second' value='b'>B</option></select><div id='out'></div><script>const second = document.getElementById('second'); const before = second.disabled; second.disabled = true; const afterSet = second.disabled; second.disabled = false; const afterClear = second.disabled; document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(afterClear) + ':' + String(document.querySelector('option:disabled'));</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("option.disabled reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "false:true:false:null");
+}
+
+#[test]
+fn session_reflects_option_label_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><select id='mode'><option id='second' value='b'>B</option></select><div id='out'></div><script>const second = document.getElementById('second'); const before = second.label; second.label = 'Bee'; const afterSet = second.label; document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(second.textContent) + ':' + String(document.querySelector('option[label=Bee]').getAttribute('id'));</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("option.label reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "B:Bee:B:second");
+}
+
+#[test]
+fn session_reflects_option_text_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><select id='mode'><option id='second' value='b'>B</option></select><div id='out'></div><script>const second = document.getElementById('second'); const before = second.text; second.text = 'Bee'; const afterSet = second.text; document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(second.textContent) + ':' + String(second.label);</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("option.text reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "B:Bee:Bee:Bee");
+}
+
+#[test]
+fn session_reflects_select_multiple_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><select id='mode'><option id='second' value='b'>B</option></select><div id='out'></div><script>const select = document.getElementById('mode'); const before = select.multiple; select.multiple = true; const afterSet = select.multiple; const afterSetAttr = select.getAttribute('multiple'); select.multiple = false; const afterClear = select.multiple; document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(afterSetAttr) + ':' + String(afterClear);</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("select.multiple reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "false:true::false");
+}
+
+#[test]
+fn session_reflects_select_size_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><select id='mode'></select><div id='out'></div><script>const select = document.getElementById('mode'); const before = select.size; select.size = 3; const afterSet = select.size; const afterSetAttr = select.getAttribute('size'); select.size = 0; const afterZero = select.size; const afterZeroAttr = select.getAttribute('size'); document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(afterSetAttr) + ':' + String(afterZero) + ':' + String(afterZeroAttr);</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("select.size reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "0:3:3:0:0");
+}
+
+#[test]
 fn session_reflects_class_views_through_inline_script_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -1402,6 +1575,23 @@ fn session_resolves_node_remove_regression() {
 }
 
 #[test]
+fn session_rejects_element_remove_child_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><span id='child'>Child</span></main><div id='out'></div><script>const root = document.getElementById('root'); const orphan = document.createElement('span'); root.removeChild(orphan);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("Element.removeChild should reject children from another parent");
+
+    let message = error.to_string();
+    assert!(message.contains("removeChild()"));
+    assert!(message.contains("expects the child to belong to the parent"));
+}
+
+#[test]
 fn session_resolves_node_clone_node_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -1513,6 +1703,124 @@ fn session_resolves_document_applets_regression() {
         session.dom().text_content_for_node(out_id),
         "2:0:[object Element]:null"
     );
+}
+
+#[test]
+fn session_resolves_element_tag_name_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'></main><div id='out'></div><script>document.getElementById('out').textContent = document.getElementById('root').tagName;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("element.tagName should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "main");
+}
+
+#[test]
+fn session_resolves_element_local_name_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'></main><div id='out'></div><script>document.getElementById('out').textContent = document.getElementById('root').localName;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("element.localName should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "main");
+}
+
+#[test]
+fn session_resolves_element_namespace_uri_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'></main><div id='out'></div><script>document.getElementById('out').textContent = document.getElementById('root').namespaceURI;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("element.namespaceURI should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "http://www.w3.org/1999/xhtml"
+    );
+}
+
+#[test]
+fn session_resolves_element_name_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root' name='root'></main><div id='out'></div><script>const root = document.getElementById('root'); const before = document.getElementsByName('root').length; root.name = 'next'; const next = document.getElementsByName('next'); document.getElementById('out').textContent = String(before) + ':' + String(document.getElementsByName('root').length) + ':' + String(next.length) + ':' + next.item(0).getAttribute('id');</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("element.name should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "1:0:1:root");
+}
+
+#[test]
+fn session_rejects_element_tag_name_assignment_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'></main><script>document.getElementById('root').tagName = 'MAIN';</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("element.tagName should be read-only");
+
+    let message = error.to_string();
+    assert!(message.contains("unsupported assignment target"));
+    assert!(message.contains("tagName"));
+}
+
+#[test]
+fn session_rejects_element_namespace_uri_assignment_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'></main><script>document.getElementById('root').namespaceURI = 'http://www.w3.org/1999/xhtml';</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("element.namespaceURI should be read-only");
+
+    let message = error.to_string();
+    assert!(message.contains("unsupported assignment target"));
+    assert!(message.contains("namespaceURI"));
+}
+
+#[test]
+fn session_rejects_element_local_name_assignment_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'></main><script>document.getElementById('root').localName = 'MAIN';</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("element.localName should be read-only");
+
+    let message = error.to_string();
+    assert!(message.contains("unsupported assignment target"));
+    assert!(message.contains("localName"));
 }
 
 #[test]

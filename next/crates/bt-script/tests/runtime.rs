@@ -252,6 +252,8 @@ struct RecordingHost {
     node_text_content_calls: Vec<NodeHandle>,
     node_type_calls: Vec<NodeHandle>,
     node_name_calls: Vec<NodeHandle>,
+    node_namespace_uri_calls: Vec<NodeHandle>,
+    node_namespace_uri_results: BTreeMap<NodeHandle, Option<String>>,
     table_rows_items_calls: Vec<ElementHandle>,
     row_cells_items_calls: Vec<ElementHandle>,
     html_collection_named_item_calls: Vec<(ElementHandle, String)>,
@@ -476,6 +478,11 @@ impl RecordingHost {
 
     fn seed_node_name(&mut self, node: NodeHandle, result: impl Into<String>) {
         self.node_name_results.insert(node, result.into());
+    }
+
+    fn seed_node_namespace_uri(&mut self, node: NodeHandle, result: impl Into<String>) {
+        self.node_namespace_uri_results
+            .insert(node, Some(result.into()));
     }
 
     fn seed_table_rows_items(&mut self, element: ElementHandle, result: Vec<ElementHandle>) {
@@ -2194,6 +2201,15 @@ impl HostBindings for RecordingHost {
             .unwrap_or_default())
     }
 
+    fn node_namespace_uri(&mut self, node: NodeHandle) -> bt_script::Result<Option<String>> {
+        self.node_namespace_uri_calls.push(node);
+        Ok(self
+            .node_namespace_uri_results
+            .get(&node)
+            .cloned()
+            .unwrap_or(None))
+    }
+
     fn element_query_selector(
         &mut self,
         element: ElementHandle,
@@ -2738,6 +2754,168 @@ fn runtime_rejects_first_element_child_assignment() {
 
     assert!(error.to_string().contains("unsupported assignment target"));
     assert!(error.to_string().contains("firstElementChild"));
+}
+
+#[test]
+fn runtime_resolves_element_tag_name_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "main");
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = document.getElementById('root').tagName;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element.tagName should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("main")
+    );
+    assert_eq!(host.element_tag_name_calls, vec![ElementHandle::new(1)]);
+}
+
+#[test]
+fn runtime_resolves_element_local_name_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "main");
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = document.getElementById('root').localName;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element.localName should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("main")
+    );
+    assert_eq!(host.element_tag_name_calls, vec![ElementHandle::new(1)]);
+}
+
+#[test]
+fn runtime_rejects_element_local_name_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('root').localName = 'MAIN';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("element.localName should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("localName"));
+}
+
+#[test]
+fn runtime_resolves_element_namespace_uri_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_node_namespace_uri(
+        NodeHandle::new(1),
+        "http://www.w3.org/1999/xhtml",
+    );
+
+    runtime
+        .eval_program(
+            "document.getElementById('out').textContent = document.getElementById('root').namespaceURI;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element.namespaceURI should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("http://www.w3.org/1999/xhtml")
+    );
+    assert_eq!(host.node_namespace_uri_calls, vec![NodeHandle::new(1)]);
+}
+
+#[test]
+fn runtime_resolves_element_name_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "name", "root");
+
+    runtime
+        .eval_program(
+            "const root = document.getElementById('root'); const before = root.name; root.name = 'next'; document.getElementById('out').textContent = before + ':' + root.name;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element.name should resolve through the script runtime");
+
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "name".to_string()))
+            .map(String::as_str),
+        Some("next")
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("root:next")
+    );
+}
+
+#[test]
+fn runtime_rejects_element_namespace_uri_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('root').namespaceURI = 'http://www.w3.org/1999/xhtml';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("element.namespaceURI should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("namespaceURI"));
+}
+
+#[test]
+fn runtime_rejects_element_tag_name_assignment() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('root').tagName = 'MAIN';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("element.tagName should be read-only");
+
+    assert!(error.to_string().contains("unsupported assignment target"));
+    assert!(error.to_string().contains("tagName"));
 }
 
 #[test]
@@ -6041,6 +6219,553 @@ fn runtime_resolves_select_selected_options_access() {
 }
 
 #[test]
+fn runtime_resolves_option_selected_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("mode", ElementHandle::new(1), "mode");
+    host.seed_element("first", ElementHandle::new(2), "A");
+    host.seed_element("second", ElementHandle::new(3), "B");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "select");
+    host.seed_element_tag_name(ElementHandle::new(2), "option");
+    host.seed_element_tag_name(ElementHandle::new(3), "option");
+
+    runtime
+        .eval_program(
+            "const second = document.getElementById('second'); const before = second.selected; second.selected = true; const afterTrue = second.selected; second.selected = false; const afterFalse = second.selected; document.getElementById('out').textContent = String(before) + ':' + String(afterTrue) + ':' + String(afterFalse);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("option.selected should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("false:true:false")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(3), "selected".to_string())),
+        None
+    );
+}
+
+#[test]
+fn runtime_resolves_option_default_selected_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("mode", ElementHandle::new(1), "mode");
+    host.seed_element("first", ElementHandle::new(2), "A");
+    host.seed_element("second", ElementHandle::new(3), "B");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "select");
+    host.seed_element_tag_name(ElementHandle::new(2), "option");
+    host.seed_element_tag_name(ElementHandle::new(3), "option");
+
+    runtime
+        .eval_program(
+            "const second = document.getElementById('second'); const before = second.defaultSelected; second.defaultSelected = true; const afterTrue = second.defaultSelected; second.defaultSelected = false; const afterFalse = second.defaultSelected; document.getElementById('out').textContent = String(before) + ':' + String(afterTrue) + ':' + String(afterFalse);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("option.defaultSelected should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("false:true:false")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(3), "selected".to_string())),
+        None
+    );
+}
+
+#[test]
+fn runtime_resolves_select_selected_index_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("mode", ElementHandle::new(1), "mode");
+    host.seed_element("first", ElementHandle::new(2), "A");
+    host.seed_element("second", ElementHandle::new(3), "B");
+    host.seed_element("third", ElementHandle::new(4), "C");
+    host.seed_element("out", ElementHandle::new(5), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "select");
+    host.seed_element_tag_name(ElementHandle::new(2), "option");
+    host.seed_element_tag_name(ElementHandle::new(3), "option");
+    host.seed_element_tag_name(ElementHandle::new(4), "option");
+    host.seed_node_type(NodeHandle::new(1), 1);
+    host.seed_attribute(ElementHandle::new(2), "id", "first");
+    host.seed_attribute(ElementHandle::new(3), "id", "second");
+    host.seed_attribute(ElementHandle::new(4), "id", "third");
+    host.seed_attribute(ElementHandle::new(2), "selected", "");
+    host.seed_html_collection_select_options_items(
+        ElementHandle::new(1),
+        vec![
+            ElementHandle::new(2),
+            ElementHandle::new(3),
+            ElementHandle::new(4),
+        ],
+    );
+
+    runtime
+        .eval_program(
+            "const select = document.getElementById('mode'); const before = select.selectedIndex; select.selectedIndex = 2; const after = select.selectedIndex; document.getElementById('out').textContent = String(before) + ':' + String(after);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("select.selectedIndex should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(5))
+            .map(String::as_str),
+        Some("0:2")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(2), "selected".to_string())),
+        None
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(4), "selected".to_string())),
+        Some(&String::new())
+    );
+}
+
+#[test]
+fn runtime_resolves_select_multiple_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("mode", ElementHandle::new(1), "mode");
+    host.seed_element("first", ElementHandle::new(2), "A");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "select");
+    host.seed_element_tag_name(ElementHandle::new(2), "option");
+    host.seed_node_type(NodeHandle::new(1), 1);
+    host.seed_node_parent(NodeHandle::new(2), Some(NodeHandle::new(1)));
+    host.seed_html_collection_select_options_items(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2)],
+    );
+
+    runtime
+        .eval_program(
+            "const select = document.getElementById('mode'); const before = select.multiple; select.multiple = true; const afterSet = select.multiple; const afterSetAttr = select.getAttribute('multiple'); select.multiple = false; const afterClear = select.multiple; document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(afterSetAttr) + ':' + String(afterClear);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("select.multiple should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("false:true::false")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "multiple".to_string())),
+        None
+    );
+}
+
+#[test]
+fn runtime_resolves_select_size_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("mode", ElementHandle::new(1), "mode");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "select");
+
+    runtime
+        .eval_program(
+            "const select = document.getElementById('mode'); const before = select.size; select.size = 3; const afterSet = select.size; const afterSetAttr = select.getAttribute('size'); select.size = 0; const afterZero = select.size; const afterZeroAttr = select.getAttribute('size'); document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(afterSetAttr) + ':' + String(afterZero) + ':' + String(afterZeroAttr);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("select.size should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("0:3:3:0:0")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "size".to_string()))
+            .map(String::as_str),
+        Some("0")
+    );
+}
+
+#[test]
+fn runtime_resolves_option_index_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("mode", ElementHandle::new(1), "mode");
+    host.seed_element("first", ElementHandle::new(2), "A");
+    host.seed_element("second", ElementHandle::new(3), "B");
+    host.seed_element("third", ElementHandle::new(4), "C");
+    host.seed_element("out", ElementHandle::new(5), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "select");
+    host.seed_element_tag_name(ElementHandle::new(2), "option");
+    host.seed_element_tag_name(ElementHandle::new(3), "option");
+    host.seed_element_tag_name(ElementHandle::new(4), "option");
+    host.seed_node_type(NodeHandle::new(1), 1);
+    host.seed_node_parent(NodeHandle::new(2), Some(NodeHandle::new(1)));
+    host.seed_node_parent(NodeHandle::new(3), Some(NodeHandle::new(1)));
+    host.seed_node_parent(NodeHandle::new(4), Some(NodeHandle::new(1)));
+    host.seed_html_collection_select_options_items(
+        ElementHandle::new(1),
+        vec![
+            ElementHandle::new(2),
+            ElementHandle::new(3),
+            ElementHandle::new(4),
+        ],
+    );
+
+    runtime
+        .eval_program(
+            "const select = document.getElementById('mode'); const second = document.getElementById('second'); const before = second.index; select.selectedIndex = 2; const after = second.index; document.getElementById('out').textContent = String(before) + ':' + String(after);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("option.index should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(5))
+            .map(String::as_str),
+        Some("1:1")
+    );
+}
+
+#[test]
+fn runtime_resolves_option_form_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("owner", ElementHandle::new(1), "");
+    host.seed_element("mode", ElementHandle::new(2), "mode");
+    host.seed_element("second", ElementHandle::new(3), "B");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_attribute(ElementHandle::new(1), "id", "owner");
+    host.seed_element_tag_name(ElementHandle::new(1), "form");
+    host.seed_element_tag_name(ElementHandle::new(2), "select");
+    host.seed_element_tag_name(ElementHandle::new(3), "option");
+    host.seed_node_type(NodeHandle::new(1), 1);
+    host.seed_node_type(NodeHandle::new(2), 1);
+    host.seed_node_parent(NodeHandle::new(2), Some(NodeHandle::new(1)));
+    host.seed_node_parent(NodeHandle::new(3), Some(NodeHandle::new(2)));
+    host.seed_html_collection_select_options_items(
+        ElementHandle::new(2),
+        vec![ElementHandle::new(3)],
+    );
+
+    runtime
+        .eval_program(
+            "const second = document.getElementById('second'); document.getElementById('out').textContent = second.form.getAttribute('id');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("option.form should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("owner")
+    );
+}
+
+#[test]
+fn runtime_resolves_option_disabled_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("mode", ElementHandle::new(1), "A");
+    host.seed_element("second", ElementHandle::new(2), "B");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "select");
+    host.seed_element_tag_name(ElementHandle::new(2), "option");
+    host.seed_node_type(NodeHandle::new(1), 1);
+    host.seed_node_parent(NodeHandle::new(2), Some(NodeHandle::new(1)));
+    host.seed_html_collection_select_options_items(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2)],
+    );
+
+    runtime
+        .eval_program(
+            "const second = document.getElementById('second'); const before = second.disabled; second.disabled = true; const afterSet = second.disabled; second.disabled = false; const afterClear = second.disabled; document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(afterClear) + ':' + String(document.querySelector('option:disabled'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("option.disabled should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("false:true:false:null")
+    );
+}
+
+#[test]
+fn runtime_resolves_option_label_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("mode", ElementHandle::new(1), "A");
+    host.seed_element("second", ElementHandle::new(2), "B");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "select");
+    host.seed_element_tag_name(ElementHandle::new(2), "option");
+    host.seed_node_type(NodeHandle::new(1), 1);
+    host.seed_node_parent(NodeHandle::new(2), Some(NodeHandle::new(1)));
+    host.seed_html_collection_select_options_items(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2)],
+    );
+
+    runtime
+        .eval_program(
+            "const second = document.getElementById('second'); const before = second.label; second.label = 'Bee'; const afterSet = second.label; document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(second.textContent);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("option.label should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("B:Bee:B")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(2), "label".to_string()))
+            .map(String::as_str),
+        Some("Bee")
+    );
+}
+
+#[test]
+fn runtime_resolves_option_text_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("mode", ElementHandle::new(1), "A");
+    host.seed_element("second", ElementHandle::new(2), "B");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "select");
+    host.seed_element_tag_name(ElementHandle::new(2), "option");
+    host.seed_node_type(NodeHandle::new(1), 1);
+    host.seed_node_parent(NodeHandle::new(2), Some(NodeHandle::new(1)));
+    host.seed_html_collection_select_options_items(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2)],
+    );
+
+    runtime
+        .eval_program(
+            "const second = document.getElementById('second'); const before = second.text; second.text = 'Bee'; const afterSet = second.text; document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(second.textContent) + ':' + String(second.label);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("option.text should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("B:Bee:Bee:Bee")
+    );
+}
+
+#[test]
+fn runtime_rejects_non_option_disabled_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("button", ElementHandle::new(1), "Button");
+    host.seed_element_tag_name(ElementHandle::new(1), "button");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('button').disabled;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-option disabled access should fail");
+
+    assert!(error.to_string().contains("disabled"));
+}
+
+#[test]
+fn runtime_rejects_non_option_text_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("button", ElementHandle::new(1), "Button");
+    host.seed_element_tag_name(ElementHandle::new(1), "button");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('button').text;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-option text access should fail");
+
+    assert!(error.to_string().contains("text"));
+}
+
+#[test]
+fn runtime_rejects_non_option_label_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("button", ElementHandle::new(1), "Button");
+    host.seed_element_tag_name(ElementHandle::new(1), "button");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('button').label;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-option label access should fail");
+
+    assert!(error.to_string().contains("label"));
+}
+
+#[test]
+fn runtime_rejects_non_option_form_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("button", ElementHandle::new(1), "Button");
+    host.seed_element_tag_name(ElementHandle::new(1), "button");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('button').form;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-option form access should fail");
+
+    assert!(error.to_string().contains("form"));
+}
+
+#[test]
+fn runtime_rejects_non_option_selected_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("button", ElementHandle::new(1), "Button");
+    host.seed_element_tag_name(ElementHandle::new(1), "button");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('button').selected;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-option selected access should fail");
+
+    assert!(error.to_string().contains("selected"));
+}
+
+#[test]
+fn runtime_rejects_non_option_default_selected_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("button", ElementHandle::new(1), "Button");
+    host.seed_element_tag_name(ElementHandle::new(1), "button");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('button').defaultSelected;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-option defaultSelected access should fail");
+
+    assert!(error.to_string().contains("defaultSelected"));
+}
+
+#[test]
+fn runtime_rejects_non_select_selected_index_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("button", ElementHandle::new(1), "Button");
+    host.seed_element_tag_name(ElementHandle::new(1), "button");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('button').selectedIndex;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-select selectedIndex access should fail");
+
+    assert!(error.to_string().contains("selectedIndex"));
+}
+
+#[test]
+fn runtime_rejects_non_select_multiple_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("button", ElementHandle::new(1), "Button");
+    host.seed_element_tag_name(ElementHandle::new(1), "button");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('button').multiple;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-select multiple access should fail");
+
+    assert!(error.to_string().contains("multiple"));
+}
+
+#[test]
+fn runtime_rejects_non_select_size_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("button", ElementHandle::new(1), "Button");
+    host.seed_element_tag_name(ElementHandle::new(1), "button");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('button').size;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-select size access should fail");
+
+    assert!(error.to_string().contains("size"));
+}
+
+#[test]
+fn runtime_rejects_non_option_index_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("button", ElementHandle::new(1), "Button");
+    host.seed_element_tag_name(ElementHandle::new(1), "button");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('button').index;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-option index access should fail");
+
+    assert!(error.to_string().contains("index"));
+}
+
+#[test]
 fn runtime_resolves_element_labels_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -8916,6 +9641,145 @@ fn runtime_resolves_node_remove_access() {
     assert_eq!(
         host.node_replace_with_calls,
         vec![(NodeHandle::new(12), Vec::new())]
+    );
+}
+
+#[test]
+fn runtime_resolves_template_content_remove_child_access() {
+    struct RemoveChildHost {
+        elements: BTreeMap<String, ElementHandle>,
+        text_content: BTreeMap<ElementHandle, String>,
+        node_parent_results: BTreeMap<NodeHandle, Option<NodeHandle>>,
+        node_replace_with_calls: Vec<(NodeHandle, Vec<NodeHandle>)>,
+    }
+
+    impl HostBindings for RemoveChildHost {
+        fn document_get_element_by_id(
+            &mut self,
+            id: &str,
+        ) -> bt_script::Result<Option<ElementHandle>> {
+            Ok(self.elements.get(id).copied())
+        }
+
+        fn element_tag_name(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+            Ok(match element.raw() {
+                11 => "template".to_string(),
+                13 => "div".to_string(),
+                _ => "span".to_string(),
+            })
+        }
+
+        fn element_set_text_content(
+            &mut self,
+            element: ElementHandle,
+            value: &str,
+        ) -> bt_script::Result<()> {
+            self.text_content.insert(element, value.to_string());
+            Ok(())
+        }
+
+        fn node_parent(&mut self, node: NodeHandle) -> bt_script::Result<Option<NodeHandle>> {
+            Ok(self.node_parent_results.get(&node).copied().unwrap_or(None))
+        }
+
+        fn node_replace_with(
+            &mut self,
+            node: NodeHandle,
+            children: Vec<NodeHandle>,
+        ) -> bt_script::Result<()> {
+            self.node_replace_with_calls.push((node, children));
+            self.node_parent_results.insert(node, None);
+            Ok(())
+        }
+
+        fn node_type(&mut self, node: NodeHandle) -> bt_script::Result<u8> {
+            Ok(match node.raw() {
+                12 => 1,
+                _ => 1,
+            })
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RemoveChildHost {
+        elements: BTreeMap::from([
+            ("tpl".to_string(), ElementHandle::new(11)),
+            ("inner".to_string(), ElementHandle::new(12)),
+            ("out".to_string(), ElementHandle::new(13)),
+        ]),
+        text_content: BTreeMap::new(),
+        node_parent_results: BTreeMap::from([(NodeHandle::new(12), Some(NodeHandle::new(11)))]),
+        node_replace_with_calls: Vec::new(),
+    };
+
+    runtime
+        .eval_program(
+            "const tpl = document.getElementById('tpl'); const inner = document.getElementById('inner'); document.getElementById('out').textContent = String(tpl.content.removeChild(inner));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("template.content.removeChild should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(13))
+            .map(String::as_str),
+        Some("[object Element]")
+    );
+    assert_eq!(
+        host.node_replace_with_calls,
+        vec![(NodeHandle::new(12), Vec::new())]
+    );
+}
+
+#[test]
+fn runtime_rejects_template_content_remove_child_on_wrong_parent() {
+    struct RemoveChildHost {
+        elements: BTreeMap<String, ElementHandle>,
+        node_parent_results: BTreeMap<NodeHandle, Option<NodeHandle>>,
+    }
+
+    impl HostBindings for RemoveChildHost {
+        fn document_get_element_by_id(
+            &mut self,
+            id: &str,
+        ) -> bt_script::Result<Option<ElementHandle>> {
+            Ok(self.elements.get(id).copied())
+        }
+
+        fn element_tag_name(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+            Ok(match element.raw() {
+                11 => "template".to_string(),
+                _ => "span".to_string(),
+            })
+        }
+
+        fn node_parent(&mut self, node: NodeHandle) -> bt_script::Result<Option<NodeHandle>> {
+            Ok(self.node_parent_results.get(&node).copied().unwrap_or(None))
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RemoveChildHost {
+        elements: BTreeMap::from([
+            ("tpl".to_string(), ElementHandle::new(11)),
+            ("orphan".to_string(), ElementHandle::new(12)),
+        ]),
+        node_parent_results: BTreeMap::from([(NodeHandle::new(12), Some(NodeHandle::new(99)))]),
+    };
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('tpl').content.removeChild(document.getElementById('orphan'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("removeChild should validate the parent relationship");
+
+    assert!(
+        error
+            .to_string()
+            .contains("removeChild() expects the child to belong to the parent")
     );
 }
 

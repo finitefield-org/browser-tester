@@ -239,6 +239,78 @@ fn value_for_child_element_count(children: Vec<ElementHandle>) -> Value {
     Value::Number(children.len() as f64)
 }
 
+fn selected_index_from_value(value: &Value) -> Result<i64> {
+    match value {
+        Value::Number(number)
+            if number.is_finite()
+                && number.fract() == 0.0
+                && *number >= i64::MIN as f64
+                && *number <= i64::MAX as f64 =>
+        {
+            Ok(*number as i64)
+        }
+        Value::String(value) => value
+            .parse::<i64>()
+            .map_err(|_| ScriptError::new("selectedIndex expects an integer")),
+        _ => Err(ScriptError::new("selectedIndex expects an integer")),
+    }
+}
+
+fn option_index_for_element<H: HostBindings>(
+    option: ElementHandle,
+    host: &mut H,
+) -> Result<i64> {
+    if host.element_tag_name(option)? != "option" {
+        return Err(unsupported_member_access("index", "element"));
+    }
+
+    let mut current = NodeHandle::new(option.raw());
+    let select = loop {
+        let Some(parent) = host.node_parent(current)? else {
+            return Ok(-1);
+        };
+
+        if host.node_type(parent)? == 1 {
+            let parent_element = ElementHandle::new(parent.raw());
+            if host.element_tag_name(parent_element)? == "select" {
+                break parent_element;
+            }
+        }
+
+        current = parent;
+    };
+
+    let options = host.html_collection_select_options_items(select)?;
+    Ok(options
+        .iter()
+        .position(|candidate| candidate.raw() == option.raw())
+        .map(|index| index as i64)
+        .unwrap_or(-1))
+}
+
+fn option_form_for_element<H: HostBindings>(
+    option: ElementHandle,
+    host: &mut H,
+) -> Result<Value> {
+    if host.element_tag_name(option)? != "option" {
+        return Err(unsupported_member_access("form", "element"));
+    }
+
+    let mut current = NodeHandle::new(option.raw());
+    while let Some(parent) = host.node_parent(current)? {
+        if host.node_type(parent)? == 1 {
+            let parent_element = ElementHandle::new(parent.raw());
+            if host.element_tag_name(parent_element)? == "form" {
+                return Ok(Value::Element(parent_element));
+            }
+        }
+
+        current = parent;
+    }
+
+    Ok(Value::Null)
+}
+
 fn value_for_node_handle<H: HostBindings>(node: NodeHandle, host: &mut H) -> Result<Value> {
     Ok(match host.node_type(node)? {
         9 => Value::Document,
@@ -329,6 +401,29 @@ fn node_remove<H: HostBindings>(
 
     host.node_replace_with(node, Vec::new())?;
     Ok(Value::Undefined)
+}
+
+fn node_remove_child<H: HostBindings>(
+    parent: NodeHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [child_expr] = args else {
+        return Err(ScriptError::new(
+            "removeChild() expects exactly one argument",
+        ));
+    };
+
+    let child = eval_node_handle(child_expr, env, host, "removeChild")?;
+    if host.node_parent(child)? != Some(parent) {
+        return Err(ScriptError::new(
+            "removeChild() expects the child to belong to the parent",
+        ));
+    }
+
+    host.node_replace_with(child, Vec::new())?;
+    value_for_node_handle(child, host)
 }
 
 fn node_before<H: HostBindings>(
@@ -640,8 +735,111 @@ fn eval_assignment<H: HostBindings>(
                 (Value::Element(element), "checked") => {
                     host.element_set_checked(element, is_truthy(&value))
                 }
+                (Value::Element(element), "selected") => {
+                    if host.element_tag_name(element)? != "option" {
+                        return Err(unsupported_member_access(property, "element"));
+                    }
+
+                    if is_truthy(&value) {
+                        host.element_set_attribute(element, "selected", "")
+                    } else {
+                        host.element_remove_attribute(element, "selected")?;
+                        Ok(())
+                    }
+                }
+                (Value::Element(element), "defaultSelected") => {
+                    if host.element_tag_name(element)? != "option" {
+                        return Err(unsupported_member_access(property, "element"));
+                    }
+
+                    if is_truthy(&value) {
+                        host.element_set_attribute(element, "selected", "")
+                    } else {
+                        host.element_remove_attribute(element, "selected")?;
+                        Ok(())
+                    }
+                }
+                (Value::Element(element), "disabled") => {
+                    if host.element_tag_name(element)? != "option" {
+                        return Err(unsupported_member_access(property, "element"));
+                    }
+
+                    if is_truthy(&value) {
+                        host.element_set_attribute(element, "disabled", "")
+                    } else {
+                        host.element_remove_attribute(element, "disabled")?;
+                        Ok(())
+                    }
+                }
+                (Value::Element(element), "label") => {
+                    if host.element_tag_name(element)? != "option" {
+                        return Err(unsupported_member_access(property, "element"));
+                    }
+
+                    host.element_set_attribute(element, "label", &as_string(&value))
+                }
+                (Value::Element(element), "text") => {
+                    if host.element_tag_name(element)? != "option" {
+                        return Err(unsupported_member_access(property, "element"));
+                    }
+
+                    host.element_set_text_content(element, &as_string(&value))
+                }
+                (Value::Element(element), "selectedIndex") => {
+                    if host.element_tag_name(element)? != "select" {
+                        return Err(unsupported_member_access(property, "element"));
+                    }
+
+                    let selected_index = selected_index_from_value(&value)?;
+                    if selected_index < -1 {
+                        return Err(ScriptError::new(
+                            "selectedIndex expects an integer greater than or equal to -1",
+                        ));
+                    }
+
+                    let options = host.html_collection_select_options_items(element)?;
+                    for (index, option) in options.into_iter().enumerate() {
+                        if index as i64 == selected_index {
+                            host.element_set_attribute(option, "selected", "")?;
+                        } else if host.element_get_attribute(option, "selected")?.is_some() {
+                            host.element_remove_attribute(option, "selected")?;
+                        }
+                    }
+                    Ok(())
+                }
+                (Value::Element(element), "multiple") => {
+                    if host.element_tag_name(element)? != "select" {
+                        return Err(unsupported_member_access(property, "element"));
+                    }
+
+                    if is_truthy(&value) {
+                        host.element_set_attribute(element, "multiple", "")
+                    } else {
+                        host.element_remove_attribute(element, "multiple")?;
+                        Ok(())
+                    }
+                }
+                (Value::Element(element), "size") => {
+                    if host.element_tag_name(element)? != "select" {
+                        return Err(unsupported_member_access(property, "element"));
+                    }
+
+                    let Some(size) = index_from_value(&value) else {
+                        return Err(ScriptError::new(
+                            "size expects a non-negative integer",
+                        ));
+                    };
+
+                    host.element_set_attribute(element, "size", &size.to_string())
+                }
                 (Value::Element(element), "className") => {
                     host.element_set_attribute(element, "class", &as_string(&value))
+                }
+                (Value::Element(element), "id") => {
+                    host.element_set_attribute(element, "id", &as_string(&value))
+                }
+                (Value::Element(element), "name") => {
+                    host.element_set_attribute(element, "name", &as_string(&value))
                 }
                 (Value::Element(element), "contentEditable") => {
                     let value = as_string(&value);
@@ -895,6 +1093,7 @@ fn eval_member<H: HostBindings>(
         Value::Document if property == "isConnected" => Ok(Value::Boolean(true)),
         Value::Document if property == "ownerDocument" => Ok(Value::Null),
         Value::Document if property == "parentNode" => Ok(Value::Null),
+        Value::Document if property == "namespaceURI" => Ok(Value::Null),
         Value::Document if property == "title" => Ok(Value::String(host.document_title()?)),
         Value::Document if property == "location" => Ok(Value::String(host.document_location()?)),
         Value::Document if property == "URL" => Ok(Value::String(host.document_url()?)),
@@ -1197,6 +1396,24 @@ fn eval_member<H: HostBindings>(
         Value::Element(element) if property == "outerHTML" => {
             Ok(Value::String(host.element_outer_html(element)?))
         }
+        Value::Element(element) if property == "tagName" => {
+            Ok(Value::String(host.element_tag_name(element)?))
+        }
+        Value::Element(element) if property == "localName" => {
+            Ok(Value::String(host.element_tag_name(element)?))
+        }
+        Value::Element(element) if property == "namespaceURI" => {
+            Ok(match host.node_namespace_uri(NodeHandle::new(element.raw()))? {
+                Some(value) => Value::String(value),
+                None => Value::Null,
+            })
+        }
+        Value::Element(element) if property == "id" => {
+            Ok(Value::String(host.element_get_attribute(element, "id")?.unwrap_or_default()))
+        }
+        Value::Element(element) if property == "name" => {
+            Ok(Value::String(host.element_get_attribute(element, "name")?.unwrap_or_default()))
+        }
         Value::Element(_) if property == "ownerDocument" => Ok(Value::Document),
         Value::Element(element) if property == "baseURI" => {
             Ok(Value::String(host.element_base_uri(element)?))
@@ -1218,6 +1435,102 @@ fn eval_member<H: HostBindings>(
         },
         Value::Element(element) if property == "checked" => {
             Ok(Value::Boolean(host.element_checked(element)?))
+        }
+        Value::Element(element) if property == "selected" => {
+            if host.element_tag_name(element)? != "option" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            Ok(Value::Boolean(
+                host.element_get_attribute(element, "selected")?.is_some(),
+            ))
+        }
+        Value::Element(element) if property == "defaultSelected" => {
+            if host.element_tag_name(element)? != "option" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            Ok(Value::Boolean(
+                host.element_get_attribute(element, "selected")?.is_some(),
+            ))
+        }
+        Value::Element(element) if property == "selectedIndex" => {
+            if host.element_tag_name(element)? != "select" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            let options = host.html_collection_select_options_items(element)?;
+            let index = options.iter().enumerate().find_map(|(index, option)| {
+                match host.element_get_attribute(*option, "selected") {
+                    Ok(Some(_)) => Some(Ok(index as i64)),
+                    Ok(None) => None,
+                    Err(error) => Some(Err(error)),
+                }
+            });
+
+            Ok(Value::Number(match index {
+                Some(Ok(index)) => index as f64,
+                Some(Err(error)) => return Err(error),
+                None => -1.0,
+            }))
+        }
+        Value::Element(element) if property == "multiple" => {
+            if host.element_tag_name(element)? != "select" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            Ok(Value::Boolean(
+                host.element_get_attribute(element, "multiple")?.is_some(),
+            ))
+        }
+        Value::Element(element) if property == "required" => {
+            match host.element_tag_name(element)?.as_str() {
+                "input" | "textarea" | "select" => Ok(Value::Boolean(
+                    host.element_get_attribute(element, "required")?.is_some(),
+                )),
+                _ => Err(unsupported_member_access(property, "element")),
+            }
+        }
+        Value::Element(element) if property == "size" => {
+            if host.element_tag_name(element)? != "select" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            Ok(Value::Number(
+                host.element_get_attribute(element, "size")?
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(0) as f64,
+            ))
+        }
+        Value::Element(element) if property == "index" => Ok(Value::Number(
+            option_index_for_element(element, host)? as f64,
+        )),
+        Value::Element(element) if property == "form" => option_form_for_element(element, host),
+        Value::Element(element) if property == "disabled" => {
+            if host.element_tag_name(element)? != "option" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            Ok(Value::Boolean(
+                host.element_get_attribute(element, "disabled")?.is_some(),
+            ))
+        }
+        Value::Element(element) if property == "label" => {
+            if host.element_tag_name(element)? != "option" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            Ok(Value::String(
+                host.element_get_attribute(element, "label")?
+                    .unwrap_or(host.element_text_content(element)?),
+            ))
+        }
+        Value::Element(element) if property == "text" => {
+            if host.element_tag_name(element)? != "option" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            Ok(Value::String(host.element_text_content(element)?))
         }
         Value::Element(element) if property == "className" => Ok(Value::String(
             host.element_get_attribute(element, "class")?
@@ -1358,6 +1671,12 @@ fn eval_member<H: HostBindings>(
             Ok(Value::Number(host.node_type(node)? as f64))
         }
         Value::Node(node) if property == "nodeName" => Ok(Value::String(host.node_name(node)?)),
+        Value::Node(node) if property == "namespaceURI" => {
+            Ok(match host.node_namespace_uri(node)? {
+                Some(value) => Value::String(value),
+                None => Value::Null,
+            })
+        }
         Value::HtmlCollection(collection) if property == "length" => {
             let length = html_collection_items(&collection, host)?.len();
             Ok(Value::Number(length as f64))
@@ -1456,6 +1775,7 @@ fn eval_member<H: HostBindings>(
         Value::TemplateContent(element) if property == "innerHTML" => {
             Ok(Value::String(host.element_inner_html(element)?))
         }
+        Value::TemplateContent(_) if property == "namespaceURI" => Ok(Value::Null),
         Value::TemplateContent(_) if property == "ownerDocument" => Ok(Value::Document),
         Value::Document => Err(unsupported_member_access(property, "document")),
         Value::Window => Err(unsupported_member_access(property, "window")),
@@ -2222,6 +2542,7 @@ fn eval_method_call<H: HostBindings>(
                 host.document_normalize()?;
                 Ok(Value::Undefined)
             }
+            "removeChild" => node_remove_child(NodeHandle::new(0), args, env, host),
             "contains" => document_contains(args, env, host),
             "isSameNode" => same_node(Value::Document, args, env, host),
             "isEqualNode" => equal_node(Value::Document, args, env, host),
@@ -2380,6 +2701,7 @@ fn eval_method_call<H: HostBindings>(
             "appendChild" => element_append_child(element, args, env, host),
             "insertBefore" => element_insert_before(element, args, env, host),
             "replaceChild" => element_replace_child(element, args, env, host),
+            "removeChild" => node_remove_child(NodeHandle::new(element.raw()), args, env, host),
             "replaceChildren" => element_replace_children(element, args, env, host),
             "append" => element_append(element, args, env, host),
             "prepend" => element_prepend(element, args, env, host),
@@ -2468,6 +2790,7 @@ fn eval_method_call<H: HostBindings>(
             "appendChild" => element_append_child(element, args, env, host),
             "insertBefore" => element_insert_before(element, args, env, host),
             "replaceChild" => element_replace_child(element, args, env, host),
+            "removeChild" => node_remove_child(NodeHandle::new(element.raw()), args, env, host),
             "replaceChildren" => element_replace_children(element, args, env, host),
             "append" => element_append(element, args, env, host),
             "prepend" => element_prepend(element, args, env, host),

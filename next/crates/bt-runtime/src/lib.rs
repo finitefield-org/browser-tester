@@ -4290,6 +4290,20 @@ impl HostBindings for Session {
         Ok(node_name)
     }
 
+    fn node_namespace_uri(&mut self, node: NodeHandle) -> bt_script::Result<Option<String>> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let Some(record) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid node handle"));
+        };
+
+        let namespace_uri = match &record.kind {
+            NodeKind::Document => None,
+            NodeKind::Element(element) => Some(element.namespace_uri.clone()),
+            NodeKind::Text(_) | NodeKind::Comment(_) => None,
+        };
+        Ok(namespace_uri)
+    }
+
     fn html_collection_tag_name_items(
         &mut self,
         collection: HtmlCollectionTarget,

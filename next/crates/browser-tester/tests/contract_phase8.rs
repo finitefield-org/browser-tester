@@ -17,6 +17,118 @@ fn attribute_reflection_updates_selectors_and_form_state_end_to_end()
 }
 
 #[test]
+fn option_selected_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><select id='mode'><option id='first' value='a'>A</option><option id='second' value='b'>B</option></select><div id='out'></div><script>const second = document.getElementById('second'); const before = second.selected; second.selected = true; const selected = document.getElementById('mode').selectedOptions; document.getElementById('out').textContent = String(before) + ':' + String(second.selected) + ':' + String(selected.length) + ':' + selected.item(0).getAttribute('id') + ':' + document.querySelector('option:checked').getAttribute('id');</script></main>",
+    )?;
+
+    harness.assert_text("#out", "false:true:1:second:second")?;
+    harness.assert_exists("option:checked")?;
+    harness.assert_exists("#second[selected]")?;
+    Ok(())
+}
+
+#[test]
+fn option_default_selected_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><select id='mode'><option id='first' value='a'>A</option><option id='second' value='b'>B</option></select><div id='out'></div><script>const second = document.getElementById('second'); const before = second.defaultSelected; second.defaultSelected = true; const selected = document.getElementById('mode').selectedOptions; document.getElementById('out').textContent = String(before) + ':' + String(second.defaultSelected) + ':' + String(selected.length) + ':' + selected.item(0).getAttribute('id') + ':' + document.querySelector('option:checked').getAttribute('id');</script></main>",
+    )?;
+
+    harness.assert_text("#out", "false:true:1:second:second")?;
+    harness.assert_exists("option:checked")?;
+    harness.assert_exists("#second[selected]")?;
+    Ok(())
+}
+
+#[test]
+fn select_selected_index_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><select id='mode'><option id='first' value='a' selected>A</option><option id='second' value='b'>B</option><option id='third' value='c'>C</option></select><div id='out'></div><script>const select = document.getElementById('mode'); const before = select.selectedIndex; select.selectedIndex = 2; document.getElementById('out').textContent = String(before) + ':' + String(select.selectedIndex) + ':' + String(document.querySelector('option:checked').getAttribute('id'));</script></main>",
+    )?;
+
+    harness.assert_text("#out", "0:2:third")?;
+    harness.assert_exists("option:checked")?;
+    harness.assert_exists("#third[selected]")?;
+    Ok(())
+}
+
+#[test]
+fn option_index_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><select id='mode'><option id='first' value='a'>A</option><option id='second' value='b'>B</option></select><div id='out'></div><script>const select = document.getElementById('mode'); const second = document.getElementById('second'); const before = second.index; select.insertAdjacentHTML('afterbegin', '<option id=\"zero\" value=\"z\">Z</option>'); document.getElementById('out').textContent = String(before) + ':' + String(second.index) + ':' + String(document.getElementById('zero').index);</script></main>",
+    )?;
+
+    harness.assert_text("#out", "1:2:0")?;
+    harness.assert_exists("#zero")?;
+    Ok(())
+}
+
+#[test]
+fn option_form_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><form id='owner'><select id='mode'><option id='first' value='a'>A</option><option id='second' value='b'>B</option></select></form><div id='out'></div><script>const second = document.getElementById('second'); const before = second.form; document.getElementById('mode').remove(); document.getElementById('out').textContent = before.getAttribute('id') + ':' + String(second.form);</script></main>",
+    )?;
+
+    harness.assert_text("#out", "owner:null")?;
+    Ok(())
+}
+
+#[test]
+fn option_disabled_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><select id='mode'><option id='second' value='b'>B</option></select><div id='out'></div><script>const second = document.getElementById('second'); const before = second.disabled; second.disabled = true; const afterSet = second.disabled; second.disabled = false; const afterClear = second.disabled; document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(afterClear) + ':' + String(document.querySelector('option:disabled'));</script></main>",
+    )?;
+
+    harness.assert_text("#out", "false:true:false:null")?;
+    harness.assert_exists("#second")?;
+    Ok(())
+}
+
+#[test]
+fn option_label_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><select id='mode'><option id='second' value='b'>B</option></select><div id='out'></div><script>const second = document.getElementById('second'); const before = second.label; second.label = 'Bee'; const afterSet = second.label; document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(second.textContent) + ':' + String(document.querySelector('option[label=Bee]').getAttribute('id'));</script></main>",
+    )?;
+
+    harness.assert_text("#out", "B:Bee:B:second")?;
+    harness.assert_exists("#second")?;
+    Ok(())
+}
+
+#[test]
+fn option_text_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><select id='mode'><option id='second' value='b'>B</option></select><div id='out'></div><script>const second = document.getElementById('second'); const before = second.text; second.text = 'Bee'; const afterSet = second.text; document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(second.textContent) + ':' + String(second.label);</script></main>",
+    )?;
+
+    harness.assert_text("#out", "B:Bee:Bee:Bee")?;
+    harness.assert_exists("#second")?;
+    Ok(())
+}
+
+#[test]
+fn select_multiple_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><select id='mode'><option id='second' value='b'>B</option></select><div id='out'></div><script>const select = document.getElementById('mode'); const before = select.multiple; select.multiple = true; const afterSet = select.multiple; const afterSetAttr = select.getAttribute('multiple'); select.multiple = false; const afterClear = select.multiple; document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(afterSetAttr) + ':' + String(afterClear);</script></main>",
+    )?;
+
+    harness.assert_text("#out", "false:true::false")?;
+    harness.assert_exists("#mode")?;
+    Ok(())
+}
+
+#[test]
+fn select_size_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><select id='mode'></select><div id='out'></div><script>const select = document.getElementById('mode'); const before = select.size; select.size = 3; const afterSet = select.size; const afterSetAttr = select.getAttribute('size'); select.size = 0; const afterZero = select.size; const afterZeroAttr = select.getAttribute('size'); document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(afterSetAttr) + ':' + String(afterZero) + ':' + String(afterZeroAttr);</script></main>",
+    )?;
+
+    harness.assert_text("#out", "0:3:3:0:0")?;
+    harness.assert_exists("#mode")?;
+    Ok(())
+}
+
+#[test]
 fn attribute_reflection_rejects_empty_attribute_names_end_to_end() -> browser_tester_next::Result<()>
 {
     let error = Harness::from_html(
@@ -114,6 +226,47 @@ fn node_same_node_and_equal_node_are_available_end_to_end() -> browser_tester_ne
     )?;
 
     harness.assert_text("#out", "true:false:false:true:false:true")?;
+    Ok(())
+}
+
+#[test]
+fn element_tag_name_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'></main><div id='out'></div><script>document.getElementById('out').textContent = document.getElementById('root').tagName;</script>",
+    )?;
+
+    harness.assert_text("#out", "main")?;
+    Ok(())
+}
+
+#[test]
+fn element_local_name_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'></main><div id='out'></div><script>document.getElementById('out').textContent = document.getElementById('root').localName;</script>",
+    )?;
+
+    harness.assert_text("#out", "main")?;
+    Ok(())
+}
+
+#[test]
+fn element_namespace_uri_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'></main><div id='out'></div><script>document.getElementById('out').textContent = document.getElementById('root').namespaceURI;</script>",
+    )?;
+
+    harness.assert_text("#out", "http://www.w3.org/1999/xhtml")?;
+    Ok(())
+}
+
+#[test]
+fn element_name_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root' name='root'></main><div id='out'></div><script>const root = document.getElementById('root'); const before = document.getElementsByName('root').length; root.name = 'next'; const next = document.getElementsByName('next'); document.getElementById('out').textContent = String(before) + ':' + String(document.getElementsByName('root').length) + ':' + String(next.length) + ':' + next.item(0).getAttribute('id');</script>",
+    )?;
+
+    harness.assert_text("#out", "1:0:1:root")?;
+    harness.assert_exists("[name=next]")?;
     Ok(())
 }
 
@@ -437,6 +590,17 @@ fn tree_mutation_primitives_support_append_prepend_and_remove_end_to_end()
     harness.assert_text("#out", "2:Third:Second:null")?;
     harness.assert_exists("#target > #third")?;
     harness.assert_exists("#target > #second")?;
+    Ok(())
+}
+
+#[test]
+fn tree_mutation_primitives_support_remove_child_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><span id='first'>First</span><span id='second'>Second</span></main><div id='out'></div><script>const out = document.getElementById('out'); const root = document.getElementById('root'); const child = document.getElementById('first'); out.textContent = String(root.removeChild(child)) + ':' + String(root.children.length) + ':' + String(child.parentNode);</script>",
+    )?;
+
+    harness.assert_text("#out", "[object Element]:1:null")?;
+    harness.assert_exists("#root > #second")?;
     Ok(())
 }
 

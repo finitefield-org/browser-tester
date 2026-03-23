@@ -1102,6 +1102,10 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("Node.nodeName"))
     }
 
+    fn node_namespace_uri(&mut self, _node: NodeHandle) -> Result<Option<String>> {
+        Err(ScriptError::phase_not_ready("Node.namespaceURI"))
+    }
+
     fn element_children(&mut self, _element: ElementHandle) -> Result<Vec<ElementHandle>> {
         Err(ScriptError::phase_not_ready("element.children"))
     }

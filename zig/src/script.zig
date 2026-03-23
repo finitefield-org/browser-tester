@@ -1834,6 +1834,151 @@ fn evalAssignment(
             if (std.mem.eql(u8, target.property, "nodeValue")) {
                 return;
             }
+            if (std.mem.eql(u8, target.property, "id")) {
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "id", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "title")) {
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "title", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "lang")) {
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "lang", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "dir")) {
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "dir", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "hidden")) {
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "hidden", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "hidden");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "inert")) {
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "inert", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "inert");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "disabled")) {
+                if (!try elementSupportsDisabledProperty(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "disabled", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "disabled");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "required")) {
+                if (!try elementSupportsRequiredProperty(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "required", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "required");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "translate")) {
+                const text = if (isTruthy(value)) "yes" else "no";
+                try host.domStoreMut().setAttribute(element, "translate", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "spellcheck")) {
+                const text = if (isTruthy(value)) "true" else "false";
+                try host.domStoreMut().setAttribute(element, "spellcheck", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "draggable")) {
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "draggable", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "draggable");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "nonce")) {
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "nonce", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "autocapitalize")) {
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "autocapitalize", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "autofocus")) {
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "autofocus", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "autofocus");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "autocomplete")) {
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "autocomplete", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "name")) {
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "name", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "placeholder")) {
+                if (!try elementSupportsPlaceholderProperty(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "placeholder", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "inputMode")) {
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "inputmode", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "readOnly")) {
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "readonly", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "readonly");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "accessKey")) {
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "accesskey", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "contentEditable")) {
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "contenteditable", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "isContentEditable")) {
+                return error.ScriptRuntime;
+            }
+            if (std.mem.eql(u8, target.property, "tabIndex")) {
+                const tab_index = try tabIndexFromValue(allocator, value);
+                const text = try std.fmt.allocPrint(allocator, "{d}", .{tab_index});
+                defer allocator.free(text);
+                try host.domStoreMut().setAttribute(element, "tabindex", text);
+                return;
+            }
             if (std.mem.eql(u8, target.property, "innerHTML")) {
                 const html = try asString(allocator, value);
                 try host.domStoreMut().setInnerHtml(element, html);
@@ -1865,6 +2010,24 @@ fn evalAssignment(
             if (std.mem.eql(u8, target.property, "value")) {
                 const text = try asString(allocator, value);
                 host.domStoreMut().setFormControlValue(element, text) catch return error.ScriptRuntime;
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "selectedIndex")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "select")) {
+                    return error.ScriptRuntime;
+                }
+                const selected_index = try historyDeltaFromValue(allocator, value);
+                host.domStoreMut().setSelectSelectedIndex(element, selected_index) catch return error.ScriptRuntime;
+                return;
+            }
+
+            if (std.mem.eql(u8, target.property, "selected")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "option")) {
+                    return error.ScriptRuntime;
+                }
+                try host.domStoreMut().setOptionSelected(element, isTruthy(value));
                 return;
             }
 
@@ -2547,6 +2710,101 @@ fn evalMember(
                 const class_name = (try host.domStore().getAttribute(element, "class")) orelse "";
                 break :blk Value{ .string = class_name };
             }
+            if (std.mem.eql(u8, member.property, "id")) {
+                const id = (try host.domStore().getAttribute(element, "id")) orelse "";
+                break :blk Value{ .string = id };
+            }
+            if (std.mem.eql(u8, member.property, "title")) {
+                const title = (try host.domStore().getAttribute(element, "title")) orelse "";
+                break :blk Value{ .string = title };
+            }
+            if (std.mem.eql(u8, member.property, "lang")) {
+                const lang = (try host.domStore().getAttribute(element, "lang")) orelse "";
+                break :blk Value{ .string = lang };
+            }
+            if (std.mem.eql(u8, member.property, "dir")) {
+                const dir = (try host.domStore().getAttribute(element, "dir")) orelse "";
+                break :blk Value{ .string = dir };
+            }
+            if (std.mem.eql(u8, member.property, "hidden")) {
+                const hidden = try host.domStore().hasAttribute(element, "hidden");
+                break :blk Value{ .boolean = hidden };
+            }
+            if (std.mem.eql(u8, member.property, "inert")) {
+                const inert = try host.domStore().hasAttribute(element, "inert");
+                break :blk Value{ .boolean = inert };
+            }
+            if (std.mem.eql(u8, member.property, "disabled")) {
+                if (!try elementSupportsDisabledProperty(host, element)) break :blk error.ScriptRuntime;
+                const disabled = try host.domStore().hasAttribute(element, "disabled");
+                break :blk Value{ .boolean = disabled };
+            }
+            if (std.mem.eql(u8, member.property, "required")) {
+                if (!try elementSupportsRequiredProperty(host, element)) break :blk error.ScriptRuntime;
+                const required = try host.domStore().hasAttribute(element, "required");
+                break :blk Value{ .boolean = required };
+            }
+            if (std.mem.eql(u8, member.property, "translate")) {
+                const translate = try elementTranslateValue(host, element);
+                break :blk Value{ .boolean = translate };
+            }
+            if (std.mem.eql(u8, member.property, "spellcheck")) {
+                const spellcheck = try elementSpellcheckValue(host, element);
+                break :blk Value{ .boolean = spellcheck };
+            }
+            if (std.mem.eql(u8, member.property, "draggable")) {
+                const draggable = try host.domStore().hasAttribute(element, "draggable");
+                break :blk Value{ .boolean = draggable };
+            }
+            if (std.mem.eql(u8, member.property, "nonce")) {
+                const nonce = (try host.domStore().getAttribute(element, "nonce")) orelse "";
+                break :blk Value{ .string = nonce };
+            }
+            if (std.mem.eql(u8, member.property, "autocapitalize")) {
+                const autocapitalize = (try host.domStore().getAttribute(element, "autocapitalize")) orelse "";
+                break :blk Value{ .string = autocapitalize };
+            }
+            if (std.mem.eql(u8, member.property, "autofocus")) {
+                const autofocus = try host.domStore().hasAttribute(element, "autofocus");
+                break :blk Value{ .boolean = autofocus };
+            }
+            if (std.mem.eql(u8, member.property, "autocomplete")) {
+                const autocomplete = (try host.domStore().getAttribute(element, "autocomplete")) orelse "";
+                break :blk Value{ .string = autocomplete };
+            }
+            if (std.mem.eql(u8, member.property, "name")) {
+                const name = (try host.domStore().getAttribute(element, "name")) orelse "";
+                break :blk Value{ .string = name };
+            }
+            if (std.mem.eql(u8, member.property, "placeholder")) {
+                if (!try elementSupportsPlaceholderProperty(host, element)) break :blk error.ScriptRuntime;
+                const placeholder = (try host.domStore().getAttribute(element, "placeholder")) orelse "";
+                break :blk Value{ .string = placeholder };
+            }
+            if (std.mem.eql(u8, member.property, "inputMode")) {
+                const input_mode = (try host.domStore().getAttribute(element, "inputmode")) orelse "";
+                break :blk Value{ .string = input_mode };
+            }
+            if (std.mem.eql(u8, member.property, "readOnly")) {
+                const readonly = try host.domStore().hasAttribute(element, "readonly");
+                break :blk Value{ .boolean = readonly };
+            }
+            if (std.mem.eql(u8, member.property, "accessKey")) {
+                const access_key = (try host.domStore().getAttribute(element, "accesskey")) orelse "";
+                break :blk Value{ .string = access_key };
+            }
+            if (std.mem.eql(u8, member.property, "contentEditable")) {
+                const content_editable = try elementContentEditableText(allocator, host, element);
+                break :blk Value{ .string = content_editable };
+            }
+            if (std.mem.eql(u8, member.property, "isContentEditable")) {
+                const content_editable = try elementIsContentEditable(host, element);
+                break :blk Value{ .boolean = content_editable };
+            }
+            if (std.mem.eql(u8, member.property, "tabIndex")) {
+                const tab_index = try elementTabIndexValue(allocator, host, element);
+                break :blk Value{ .number = @floatFromInt(tab_index) };
+            }
             if (std.mem.eql(u8, member.property, "style")) {
                 break :blk try makeStyleDeclarationValue(allocator, host, element);
             }
@@ -2563,6 +2821,17 @@ fn evalMember(
             if (std.mem.eql(u8, member.property, "value")) {
                 const value = try host.domStore().valueForNode(allocator, element);
                 break :blk Value{ .string = value };
+            }
+            if (std.mem.eql(u8, member.property, "selected")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "option")) break :blk error.ScriptRuntime;
+                break :blk Value{ .boolean = host.domStore().optionSelectedForNode(element) orelse false };
+            }
+            if (std.mem.eql(u8, member.property, "selectedIndex")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "select")) break :blk error.ScriptRuntime;
+                const selected_index = try host.domStore().selectedIndexForNode(element);
+                break :blk Value{ .number = @floatFromInt(selected_index) };
             }
             if (std.mem.eql(u8, member.property, "selectionStart")) {
                 const selection = host.domStore().selectionStateForNode(element) catch |err| switch (err) {
@@ -3976,6 +4245,19 @@ fn evalMethodCall(
                 .kind = .class_name,
                 .query = class_names,
             } };
+        } else if (std.mem.eql(u8, method, "getAttributeNS")) blk: {
+            if (args.len != 2) return error.ScriptRuntime;
+            _ = try evalExpr(allocator, host, bindings, args[0]);
+            const local_name_value = try evalExpr(allocator, host, bindings, args[1]);
+            const local_name = try asString(allocator, local_name_value);
+            const value = host.domStore().getAttribute(element, local_name) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            if (value) |text| {
+                break :blk Value{ .string = text };
+            }
+            break :blk Value{ .null_value = {} };
         } else if (std.mem.eql(u8, method, "getAttribute")) blk: {
             if (args.len != 1) return error.ScriptRuntime;
             const name_value = try evalExpr(allocator, host, bindings, args[0]);
@@ -3988,6 +4270,18 @@ fn evalMethodCall(
                 break :blk Value{ .string = text };
             }
             break :blk Value{ .null_value = {} };
+        } else if (std.mem.eql(u8, method, "setAttributeNS")) blk: {
+            if (args.len != 3) return error.ScriptRuntime;
+            _ = try evalExpr(allocator, host, bindings, args[0]);
+            const local_name_value = try evalExpr(allocator, host, bindings, args[1]);
+            const local_name = try asString(allocator, local_name_value);
+            const value_value = try evalExpr(allocator, host, bindings, args[2]);
+            const value = try asString(allocator, value_value);
+            host.domStoreMut().setAttribute(element, local_name, value) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            break :blk Value{ .undefined_value = {} };
         } else if (std.mem.eql(u8, method, "setAttribute")) blk: {
             if (args.len != 2) return error.ScriptRuntime;
             const name_value = try evalExpr(allocator, host, bindings, args[0]);
@@ -3995,6 +4289,16 @@ fn evalMethodCall(
             const value_value = try evalExpr(allocator, host, bindings, args[1]);
             const value = try asString(allocator, value_value);
             host.domStoreMut().setAttribute(element, name, value) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "removeAttributeNS")) blk: {
+            if (args.len != 2) return error.ScriptRuntime;
+            _ = try evalExpr(allocator, host, bindings, args[0]);
+            const local_name_value = try evalExpr(allocator, host, bindings, args[1]);
+            const local_name = try asString(allocator, local_name_value);
+            host.domStoreMut().removeAttribute(element, local_name) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => return error.ScriptRuntime,
             };
@@ -4008,6 +4312,16 @@ fn evalMethodCall(
                 else => return error.ScriptRuntime,
             };
             break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "hasAttributeNS")) blk: {
+            if (args.len != 2) return error.ScriptRuntime;
+            _ = try evalExpr(allocator, host, bindings, args[0]);
+            const local_name_value = try evalExpr(allocator, host, bindings, args[1]);
+            const local_name = try asString(allocator, local_name_value);
+            const present = host.domStore().hasAttribute(element, local_name) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            break :blk Value{ .boolean = present };
         } else if (std.mem.eql(u8, method, "hasAttribute")) blk: {
             if (args.len != 1) return error.ScriptRuntime;
             const name_value = try evalExpr(allocator, host, bindings, args[0]);
@@ -4017,6 +4331,27 @@ fn evalMethodCall(
                 else => return error.ScriptRuntime,
             };
             break :blk Value{ .boolean = present };
+        } else if (std.mem.eql(u8, method, "hasAttributes")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            const node = host.domStore().nodeAt(element) orelse break :blk error.ScriptRuntime;
+            switch (node.kind) {
+                .element => |element_node| break :blk Value{ .boolean = element_node.attributes.items.len > 0 },
+                else => break :blk error.ScriptRuntime,
+            }
+        } else if (std.mem.eql(u8, method, "getAttributeNames")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            const node = host.domStore().nodeAt(element) orelse break :blk error.ScriptRuntime;
+            switch (node.kind) {
+                .element => |element_node| {
+                    var names: std.ArrayList([]const u8) = .empty;
+                    errdefer names.deinit(allocator);
+                    for (element_node.attributes.items) |attribute| {
+                        try names.append(allocator, attribute.name);
+                    }
+                    break :blk Value{ .string_list = .{ .items = try names.toOwnedSlice(allocator) } };
+                },
+                else => break :blk error.ScriptRuntime,
+            }
         } else if (std.mem.eql(u8, method, "toggleAttribute")) blk: {
             if (args.len != 1 and args.len != 2) return error.ScriptRuntime;
             const name_value = try evalExpr(allocator, host, bindings, args[0]);
@@ -5067,6 +5402,13 @@ fn nodeLikeMember(
         return switch (node.kind) {
             .text => |text| Value{ .number = @floatFromInt(text.len) },
             .comment => |comment| Value{ .number = @floatFromInt(comment.len) },
+            else => error.ScriptRuntime,
+        };
+    }
+
+    if (std.mem.eql(u8, property, "wholeText")) {
+        return switch (node.kind) {
+            .text => Value{ .string = try host.domStore().wholeText(allocator, node_id) },
             else => error.ScriptRuntime,
         };
     }
@@ -7750,6 +8092,55 @@ fn isLabelableElement(host: anytype, element_id: dom.NodeId) errors.Result(bool)
         std.mem.eql(u8, tag_name, "textarea");
 }
 
+fn elementSupportsPlaceholderProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.mem.eql(u8, tag_name, "input") or
+        std.mem.eql(u8, tag_name, "textarea");
+}
+
+fn elementSupportsDisabledProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.mem.eql(u8, tag_name, "button") or
+        std.mem.eql(u8, tag_name, "fieldset") or
+        std.mem.eql(u8, tag_name, "input") or
+        std.mem.eql(u8, tag_name, "optgroup") or
+        std.mem.eql(u8, tag_name, "option") or
+        std.mem.eql(u8, tag_name, "select") or
+        std.mem.eql(u8, tag_name, "textarea");
+}
+
+fn elementSupportsRequiredProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.mem.eql(u8, tag_name, "input") or
+        std.mem.eql(u8, tag_name, "select") or
+        std.mem.eql(u8, tag_name, "textarea");
+}
+
+fn isTabIndexFocusableElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    if (std.mem.eql(u8, tag_name, "input")) {
+        const input_type = (try host.domStore().getAttribute(element_id, "type")) orelse "";
+        return !std.ascii.eqlIgnoreCase(input_type, "hidden");
+    }
+
+    if (std.mem.eql(u8, tag_name, "button") or
+        std.mem.eql(u8, tag_name, "select") or
+        std.mem.eql(u8, tag_name, "textarea") or
+        std.mem.eql(u8, tag_name, "iframe") or
+        std.mem.eql(u8, tag_name, "object") or
+        std.mem.eql(u8, tag_name, "embed") or
+        std.mem.eql(u8, tag_name, "summary"))
+    {
+        return true;
+    }
+
+    if (std.mem.eql(u8, tag_name, "a") or std.mem.eql(u8, tag_name, "area")) {
+        return (try host.domStore().getAttribute(element_id, "href")) != null;
+    }
+
+    return false;
+}
+
 fn isDescendantOf(host: anytype, node_id: dom.NodeId, ancestor_id: dom.NodeId) bool {
     var current = host.domStore().nodeAt(node_id) orelse return false;
     var parent_id = current.parent;
@@ -7761,6 +8152,88 @@ fn isDescendantOf(host: anytype, node_id: dom.NodeId, ancestor_id: dom.NodeId) b
         parent_id = current.parent;
     }
     return false;
+}
+
+fn elementTabIndexValue(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    element_id: dom.NodeId,
+) errors.Result(i64) {
+    const attr = try host.domStore().getAttribute(element_id, "tabindex");
+    if (attr) |text| {
+        const trimmed = std.mem.trim(u8, text, " \t\r\n");
+        if (trimmed.len == 0) return -1;
+        return std.fmt.parseInt(i64, trimmed, 10) catch return -1;
+    }
+    if (try isTabIndexFocusableElement(host, element_id)) return 0;
+    _ = allocator;
+    return -1;
+}
+
+fn elementContentEditableText(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    element_id: dom.NodeId,
+) errors.Result([]const u8) {
+    const attr = try host.domStore().getAttribute(element_id, "contenteditable");
+    if (attr) |text| {
+        if (text.len == 0) return "true";
+        return text;
+    }
+    _ = allocator;
+    return "inherit";
+}
+
+fn elementIsContentEditable(
+    host: anytype,
+    element_id: dom.NodeId,
+) errors.Result(bool) {
+    var current_id: ?dom.NodeId = element_id;
+    while (current_id) |id| {
+        const node = host.domStore().nodeAt(id) orelse return false;
+        const attr = try host.domStore().getAttribute(id, "contenteditable");
+        if (attr) |text| {
+            if (text.len == 0 or std.ascii.eqlIgnoreCase(text, "true")) return true;
+            if (std.ascii.eqlIgnoreCase(text, "false")) return false;
+            if (std.ascii.eqlIgnoreCase(text, "inherit")) {
+                current_id = node.parent;
+                continue;
+            }
+            return true;
+        }
+        current_id = node.parent;
+    }
+    return false;
+}
+
+fn elementTranslateValue(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    var current_id: ?dom.NodeId = element_id;
+    while (current_id) |id| {
+        const node = host.domStore().nodeAt(id) orelse return true;
+        const attr = try host.domStore().getAttribute(id, "translate");
+        if (attr) |text| {
+            if (std.ascii.eqlIgnoreCase(text, "no")) return false;
+            if (std.ascii.eqlIgnoreCase(text, "yes")) return true;
+            return true;
+        }
+        current_id = node.parent;
+    }
+    return true;
+}
+
+fn elementSpellcheckValue(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    var current_id: ?dom.NodeId = element_id;
+    while (current_id) |id| {
+        const node = host.domStore().nodeAt(id) orelse return true;
+        const attr = try host.domStore().getAttribute(id, "spellcheck");
+        if (attr) |text| {
+            if (std.ascii.eqlIgnoreCase(text, "false")) return false;
+            if (std.ascii.eqlIgnoreCase(text, "true")) return true;
+            return true;
+        }
+        current_id = node.parent;
+    }
+    return true;
 }
 
 fn elementLabelsIds(
@@ -10074,6 +10547,25 @@ fn selectionIndexFromValue(allocator: std.mem.Allocator, value: Value) errors.Re
             const parsed = std.fmt.parseInt(i64, trimmed, 10) catch return error.ScriptRuntime;
             if (parsed < 0) return error.ScriptRuntime;
             break :blk @as(usize, @intCast(parsed));
+        },
+    };
+}
+
+fn tabIndexFromValue(allocator: std.mem.Allocator, value: Value) errors.Result(i64) {
+    return switch (value) {
+        .number => |number| blk: {
+            if (!std.math.isFinite(number)) return error.ScriptRuntime;
+            if (std.math.round(number) != number) return error.ScriptRuntime;
+            const min_index: f64 = @floatFromInt(std.math.minInt(i64));
+            const max_index: f64 = @floatFromInt(std.math.maxInt(i64));
+            if (number < min_index or number > max_index) return error.ScriptRuntime;
+            break :blk @as(i64, @intFromFloat(number));
+        },
+        else => blk: {
+            const text = try asString(allocator, value);
+            const trimmed = std.mem.trim(u8, text, " \t\r\n");
+            if (trimmed.len == 0) return error.ScriptRuntime;
+            break :blk std.fmt.parseInt(i64, trimmed, 10) catch error.ScriptRuntime;
         },
     };
 }

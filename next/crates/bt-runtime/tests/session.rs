@@ -130,6 +130,73 @@ fn session_resolves_parent_node_through_inline_scripts() {
 }
 
 #[test]
+fn session_resolves_element_tag_name_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'></main><div id='out'></div><script>document.getElementById('out').textContent = document.getElementById('root').tagName;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should expose element.tagName");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "main");
+}
+
+#[test]
+fn session_resolves_element_local_name_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'></main><div id='out'></div><script>document.getElementById('out').textContent = document.getElementById('root').localName;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should expose element.localName");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "main");
+}
+
+#[test]
+fn session_resolves_element_namespace_uri_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'></main><div id='out'></div><script>document.getElementById('out').textContent = document.getElementById('root').namespaceURI;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should expose element.namespaceURI");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "http://www.w3.org/1999/xhtml"
+    );
+}
+
+#[test]
+fn session_resolves_element_name_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root' name='root'></main><div id='out'></div><script>const root = document.getElementById('root'); const before = document.getElementsByName('root').length; root.name = 'next'; const next = document.getElementsByName('next'); document.getElementById('out').textContent = String(before) + ':' + String(document.getElementsByName('root').length) + ':' + String(next.length) + ':' + next.item(0).getAttribute('id');</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should expose element.name");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "1:0:1:root");
+}
+
+#[test]
 fn session_rejects_parent_node_assignment_through_inline_scripts() {
     let error = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -1219,6 +1286,325 @@ fn session_resolves_select_selected_options_through_inline_scripts() {
 }
 
 #[test]
+fn session_resolves_option_selected_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><select id='mode'><option id='first' value='a'>A</option><option id='second' value='b'>B</option></select></div><div id='out'></div><script>const second = document.getElementById('second'); const before = second.selected; second.selected = true; const selected = document.getElementById('mode').selectedOptions; document.getElementById('out').textContent = String(before) + ':' + String(second.selected) + ':' + String(selected.length) + ':' + selected.item(0).getAttribute('id') + ':' + document.querySelector('option:checked').getAttribute('id');</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute option.selected scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false:true:1:second:second"
+    );
+}
+
+#[test]
+fn session_resolves_option_default_selected_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><select id='mode'><option id='first' value='a'>A</option><option id='second' value='b'>B</option></select></div><div id='out'></div><script>const second = document.getElementById('second'); const before = second.defaultSelected; second.defaultSelected = true; const selected = document.getElementById('mode').selectedOptions; document.getElementById('out').textContent = String(before) + ':' + String(second.defaultSelected) + ':' + String(selected.length) + ':' + selected.item(0).getAttribute('id') + ':' + document.querySelector('option:checked').getAttribute('id');</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute option.defaultSelected scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false:true:1:second:second"
+    );
+}
+
+#[test]
+fn session_resolves_select_selected_index_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><select id='mode'><option id='first' value='a' selected>A</option><option id='second' value='b'>B</option><option id='third' value='c'>C</option></select></div><div id='out'></div><script>const select = document.getElementById('mode'); const before = select.selectedIndex; select.selectedIndex = 2; document.getElementById('out').textContent = String(before) + ':' + String(select.selectedIndex) + ':' + String(document.querySelector('option:checked').getAttribute('id'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute select.selectedIndex scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "0:2:third");
+}
+
+#[test]
+fn session_resolves_option_index_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><select id='mode'><option id='first' value='a'>A</option><option id='second' value='b'>B</option></select></div><div id='out'></div><script>const select = document.getElementById('mode'); const second = document.getElementById('second'); const before = second.index; select.insertAdjacentHTML('afterbegin', '<option id=\"zero\" value=\"z\">Z</option>'); document.getElementById('out').textContent = String(before) + ':' + String(second.index) + ':' + String(document.getElementById('zero').index);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute option.index scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "1:2:0");
+}
+
+#[test]
+fn session_resolves_option_form_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><form id='owner'><select id='mode'><option id='first' value='a'>A</option><option id='second' value='b'>B</option></select></form></div><div id='out'></div><script>const second = document.getElementById('second'); const before = second.form; document.getElementById('mode').remove(); document.getElementById('out').textContent = before.getAttribute('id') + ':' + String(second.form);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute option.form scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "owner:null");
+}
+
+#[test]
+fn session_resolves_option_disabled_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><select id='mode'><option id='second' value='b'>B</option></select></div><div id='out'></div><script>const second = document.getElementById('second'); const before = second.disabled; second.disabled = true; const afterSet = second.disabled; second.disabled = false; const afterClear = second.disabled; document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(afterClear) + ':' + String(document.querySelector('option:disabled'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute option.disabled scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "false:true:false:null");
+}
+
+#[test]
+fn session_resolves_option_label_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><select id='mode'><option id='second' value='b'>B</option></select></div><div id='out'></div><script>const second = document.getElementById('second'); const before = second.label; second.label = 'Bee'; const afterSet = second.label; document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(second.textContent) + ':' + String(document.querySelector('option[label=Bee]').getAttribute('id'));</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute option.label scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "B:Bee:B:second");
+}
+
+#[test]
+fn session_resolves_option_text_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><select id='mode'><option id='second' value='b'>B</option></select><div id='out'></div><script>const second = document.getElementById('second'); const before = second.text; second.text = 'Bee'; const afterSet = second.text; document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(second.textContent) + ':' + String(second.label);</script></div>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute option.text scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "B:Bee:Bee:Bee");
+}
+
+#[test]
+fn session_resolves_select_multiple_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><select id='mode'><option id='second' value='b'>B</option></select><div id='out'></div><script>const select = document.getElementById('mode'); const before = select.multiple; select.multiple = true; const afterSet = select.multiple; const afterSetAttr = select.getAttribute('multiple'); select.multiple = false; const afterClear = select.multiple; document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(afterSetAttr) + ':' + String(afterClear);</script></div>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute select.multiple scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false:true::false"
+    );
+}
+
+#[test]
+fn session_resolves_select_size_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><select id='mode'></select></div><div id='out'></div><script>const select = document.getElementById('mode'); const before = select.size; select.size = 3; const afterSet = select.size; const afterSetAttr = select.getAttribute('size'); select.size = 0; const afterZero = select.size; const afterZeroAttr = select.getAttribute('size'); document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(afterSetAttr) + ':' + String(afterZero) + ':' + String(afterZeroAttr);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute select.size scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "0:3:3:0:0");
+}
+
+#[test]
+fn session_rejects_non_option_selected_access_explicitly() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><button id='button'>Button</button></div><script>document.getElementById('button').selected;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-option selected access should fail explicitly");
+
+    assert!(session.to_string().contains("selected"));
+}
+
+#[test]
+fn session_rejects_non_select_multiple_access_explicitly() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><button id='button'>Button</button></div><script>document.getElementById('button').multiple;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-select multiple access should fail explicitly");
+
+    assert!(session.to_string().contains("multiple"));
+}
+
+#[test]
+fn session_rejects_non_select_size_access_explicitly() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><button id='button'>Button</button></div><script>document.getElementById('button').size;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-select size access should fail explicitly");
+
+    assert!(session.to_string().contains("size"));
+}
+
+#[test]
+fn session_rejects_non_option_label_access_explicitly() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><button id='button'>Button</button></div><script>document.getElementById('button').label;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-option label access should fail explicitly");
+
+    assert!(session.to_string().contains("label"));
+}
+
+#[test]
+fn session_rejects_non_option_text_access_explicitly() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><button id='button'>Button</button></div><script>document.getElementById('button').text;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-option text access should fail explicitly");
+
+    assert!(session.to_string().contains("text"));
+}
+
+#[test]
+fn session_rejects_non_option_form_access_explicitly() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><button id='button'>Button</button></div><script>document.getElementById('button').form;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-option form access should fail explicitly");
+
+    assert!(session.to_string().contains("form"));
+}
+
+#[test]
+fn session_rejects_non_option_disabled_access_explicitly() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><button id='button'>Button</button></div><script>document.getElementById('button').disabled;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-option disabled access should fail explicitly");
+
+    assert!(session.to_string().contains("disabled"));
+}
+
+#[test]
+fn session_rejects_non_select_selected_index_access_explicitly() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><button id='button'>Button</button></div><script>document.getElementById('button').selectedIndex;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-select selectedIndex access should fail explicitly");
+
+    assert!(session.to_string().contains("selectedIndex"));
+}
+
+#[test]
+fn session_rejects_non_option_index_access_explicitly() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><button id='button'>Button</button></div><script>document.getElementById('button').index;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-option index access should fail explicitly");
+
+    assert!(session.to_string().contains("index"));
+}
+
+#[test]
+fn session_rejects_non_option_default_selected_access_explicitly() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><button id='button'>Button</button></div><script>document.getElementById('button').defaultSelected;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-option defaultSelected access should fail explicitly");
+
+    assert!(session.to_string().contains("defaultSelected"));
+}
+
+#[test]
 fn session_resolves_element_labels_through_inline_scripts() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -1513,6 +1899,25 @@ fn session_resolves_node_remove_through_inline_scripts() {
 
     let out_id = session.dom().select("#out").unwrap()[0];
     assert_eq!(session.dom().text_content_for_node(out_id), "null:0");
+}
+
+#[test]
+fn session_resolves_element_remove_child_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><span id='first'>First</span><span id='second'>Second</span></main><div id='out'></div><script>const out = document.getElementById('out'); const root = document.getElementById('root'); const child = document.getElementById('first'); out.textContent = String(root.removeChild(child)) + ':' + String(root.children.length) + ':' + String(child.parentNode);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("Element.removeChild should parse");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "[object Element]:1:null"
+    );
 }
 
 #[test]
