@@ -10455,6 +10455,8 @@ fn runtime_resolves_document_applets_access() {
     host.seed_element("first-applet", ElementHandle::new(1), "First");
     host.seed_element("second-applet", ElementHandle::new(2), "Second");
     host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_attribute(ElementHandle::new(1), "id", "first-applet");
+    host.seed_attribute(ElementHandle::new(2), "id", "second-applet");
     let applets_collection = HtmlCollectionTarget::ByTagName {
         scope: HtmlCollectionScope::Document,
         tag_name: "applet".to_string(),
@@ -10493,6 +10495,49 @@ fn runtime_resolves_document_applets_access() {
         vec![
             (applets_collection.clone(), "first-applet".to_string()),
             (applets_collection, "missing".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn runtime_supports_document_applets_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("first-applet", ElementHandle::new(1), "First");
+    host.seed_element("second-applet", ElementHandle::new(2), "Second");
+    host.seed_element("out", ElementHandle::new(3), "");
+    let applets_collection = HtmlCollectionTarget::ByTagName {
+        scope: HtmlCollectionScope::Document,
+        tag_name: "applet".to_string(),
+    };
+    host.seed_html_collection_tag_name_items(
+        applets_collection.clone(),
+        vec![ElementHandle::new(1), ElementHandle::new(2)],
+    );
+
+    runtime
+        .eval_program(
+            "const applets = document.applets; const keys = applets.keys(); const values = applets.values(); const entries = applets.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; applets.forEach((element, index, list) => { out += String(index) + ':' + element.textContent + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.textContent + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.textContent + ':' + out;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.applets iterator helpers should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("0:First:0:First:0:First:2;1:Second:2;")
+    );
+    assert_eq!(
+        host.html_collection_tag_name_items_calls,
+        vec![
+            applets_collection.clone(),
+            applets_collection.clone(),
+            applets_collection.clone(),
+            applets_collection.clone(),
+            applets_collection.clone(),
+            applets_collection,
         ]
     );
 }

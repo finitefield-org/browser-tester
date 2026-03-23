@@ -48,11 +48,11 @@ What exists today:
 - script-side `map.areas` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
 - script-side `table.tBodies` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
 - script-side `element.labels` is available on labelable form controls / fieldset with live `NodeList` support (`length`, `item`)
-- script-side `document.images` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
-- script-side `document.links` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
-- script-side `document.embeds` / `document.plugins` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
-- script-side `document.anchors` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
-- script-side `document.all` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`)
+- script-side `document.images` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`, `keys`, `values`, `entries`, `forEach`)
+- script-side `document.links` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`, `keys`, `values`, `entries`, `forEach`)
+- script-side `document.embeds` / `document.plugins` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`, `keys`, `values`, `entries`, `forEach`)
+- script-side `document.anchors` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`, `keys`, `values`, `entries`, `forEach`)
+- script-side `document.all` is available with live `HTMLCollection` support (`length`, `item`, `namedItem`, `keys`, `values`, `entries`, `forEach`)
 - script-side `document.styleSheets` is available with live `StyleSheetList` support (`length`, `item`, `namedItem`, `forEach`)
 - script-side live `HTMLCollection` surfaces also expose legacy named property access on non-reserved names through the same `namedItem()` semantics; built-in member names remain method-only
 - script-side `className`, `classList` (including `value`, `toString()`, `replace()`, `item()`, `forEach()`, and iterator helpers), and `dataset` are available on `Element`

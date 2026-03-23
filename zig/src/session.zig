@@ -161,6 +161,8 @@ pub const Session = struct {
     scroll_y: i64 = 0,
     window_name: []const u8 = "",
     window_load_handler: ?script.ScriptFunction = null,
+    window_beforeunload_handler: ?script.ScriptFunction = null,
+    window_unload_handler: ?script.ScriptFunction = null,
     window_focus_handler: ?script.ScriptFunction = null,
     window_blur_handler: ?script.ScriptFunction = null,
     window_pageshow_handler: ?script.ScriptFunction = null,
@@ -260,6 +262,8 @@ pub const Session = struct {
         var document_write_buffer: std.ArrayListUnmanaged(u8) = .{};
         var next_timer_id: u64 = 1;
         var window_load_handler: ?script.ScriptFunction = null;
+        var window_beforeunload_handler: ?script.ScriptFunction = null;
+        var window_unload_handler: ?script.ScriptFunction = null;
         var window_focus_handler: ?script.ScriptFunction = null;
         var window_blur_handler: ?script.ScriptFunction = null;
         var window_pageshow_handler: ?script.ScriptFunction = null;
@@ -287,6 +291,8 @@ pub const Session = struct {
             .allocator = arena.allocator(),
             .window_name = &window_name,
             .window_load_handler = &window_load_handler,
+            .window_beforeunload_handler = &window_beforeunload_handler,
+            .window_unload_handler = &window_unload_handler,
             .window_focus_handler = &window_focus_handler,
             .window_blur_handler = &window_blur_handler,
             .window_pageshow_handler = &window_pageshow_handler,
@@ -380,6 +386,8 @@ pub const Session = struct {
             .scroll_y = scroll_y,
             .window_name = window_name,
             .window_load_handler = window_load_handler,
+            .window_beforeunload_handler = window_beforeunload_handler,
+            .window_unload_handler = window_unload_handler,
             .window_focus_handler = window_focus_handler,
             .window_blur_handler = window_blur_handler,
             .window_pageshow_handler = window_pageshow_handler,
@@ -561,10 +569,26 @@ pub const Session = struct {
             try self.script_runtime.dispatchWindowEvent(
                 std.heap.page_allocator,
                 self,
+                "beforeunload",
+                self.scriptEventListeners(),
+                self.windowBeforeUnload(),
+                "onbeforeunload",
+            );
+            try self.script_runtime.dispatchWindowEvent(
+                std.heap.page_allocator,
+                self,
                 "pagehide",
                 self.scriptEventListeners(),
                 self.windowPageHide(),
                 "onpagehide",
+            );
+            try self.script_runtime.dispatchWindowEvent(
+                std.heap.page_allocator,
+                self,
+                "unload",
+                self.scriptEventListeners(),
+                self.windowUnload(),
+                "onunload",
             );
         }
         try syncLocationState(self.mock_registry.location(), &self.dom_store, target, true);
@@ -594,10 +618,26 @@ pub const Session = struct {
             try self.script_runtime.dispatchWindowEvent(
                 std.heap.page_allocator,
                 self,
+                "beforeunload",
+                self.scriptEventListeners(),
+                self.windowBeforeUnload(),
+                "onbeforeunload",
+            );
+            try self.script_runtime.dispatchWindowEvent(
+                std.heap.page_allocator,
+                self,
                 "pagehide",
                 self.scriptEventListeners(),
                 self.windowPageHide(),
                 "onpagehide",
+            );
+            try self.script_runtime.dispatchWindowEvent(
+                std.heap.page_allocator,
+                self,
+                "unload",
+                self.scriptEventListeners(),
+                self.windowUnload(),
+                "onunload",
             );
         }
         try syncLocationState(self.mock_registry.location(), &self.dom_store, target, true);
@@ -621,10 +661,26 @@ pub const Session = struct {
         try self.script_runtime.dispatchWindowEvent(
             std.heap.page_allocator,
             self,
+            "beforeunload",
+            self.scriptEventListeners(),
+            self.windowBeforeUnload(),
+            "onbeforeunload",
+        );
+        try self.script_runtime.dispatchWindowEvent(
+            std.heap.page_allocator,
+            self,
             "pagehide",
             self.scriptEventListeners(),
             self.windowPageHide(),
             "onpagehide",
+        );
+        try self.script_runtime.dispatchWindowEvent(
+            std.heap.page_allocator,
+            self,
+            "unload",
+            self.scriptEventListeners(),
+            self.windowUnload(),
+            "onunload",
         );
         try syncLocationState(self.mock_registry.location(), &self.dom_store, target, true);
         self.resetScrollPosition();
@@ -833,6 +889,32 @@ pub const Session = struct {
             return;
         }
         self.window_load_handler = null;
+        return;
+    }
+
+    pub fn windowBeforeUnload(self: *const Session) ?script.ScriptFunction {
+        return self.window_beforeunload_handler;
+    }
+
+    pub fn setWindowBeforeUnload(self: *Session, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_beforeunload_handler = try duplicateScriptFunction(self.arena.allocator(), function);
+            return;
+        }
+        self.window_beforeunload_handler = null;
+        return;
+    }
+
+    pub fn windowUnload(self: *const Session) ?script.ScriptFunction {
+        return self.window_unload_handler;
+    }
+
+    pub fn setWindowUnload(self: *Session, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_unload_handler = try duplicateScriptFunction(self.arena.allocator(), function);
+            return;
+        }
+        self.window_unload_handler = null;
         return;
     }
 
@@ -2014,6 +2096,8 @@ const BootstrapHost = struct {
     allocator: std.mem.Allocator,
     window_name: *[]const u8,
     window_load_handler: *?script.ScriptFunction,
+    window_beforeunload_handler: *?script.ScriptFunction,
+    window_unload_handler: *?script.ScriptFunction,
     window_focus_handler: *?script.ScriptFunction,
     window_blur_handler: *?script.ScriptFunction,
     window_pageshow_handler: *?script.ScriptFunction,
@@ -2156,6 +2240,32 @@ const BootstrapHost = struct {
             return;
         }
         self.window_load_handler.* = null;
+        return;
+    }
+
+    pub fn windowBeforeUnload(self: *const BootstrapHost) ?script.ScriptFunction {
+        return self.window_beforeunload_handler.*;
+    }
+
+    pub fn setWindowBeforeUnload(self: *BootstrapHost, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_beforeunload_handler.* = try duplicateScriptFunction(self.allocator, function);
+            return;
+        }
+        self.window_beforeunload_handler.* = null;
+        return;
+    }
+
+    pub fn windowUnload(self: *const BootstrapHost) ?script.ScriptFunction {
+        return self.window_unload_handler.*;
+    }
+
+    pub fn setWindowUnload(self: *BootstrapHost, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_unload_handler.* = try duplicateScriptFunction(self.allocator, function);
+            return;
+        }
+        self.window_unload_handler.* = null;
         return;
     }
 
@@ -2716,10 +2826,26 @@ const BootstrapHost = struct {
             try runtime.dispatchWindowEvent(
                 self.allocator,
                 self,
+                "beforeunload",
+                self.listeners.items,
+                self.windowBeforeUnload(),
+                "onbeforeunload",
+            );
+            try runtime.dispatchWindowEvent(
+                self.allocator,
+                self,
                 "pagehide",
                 self.listeners.items,
                 self.windowPageHide(),
                 "onpagehide",
+            );
+            try runtime.dispatchWindowEvent(
+                self.allocator,
+                self,
+                "unload",
+                self.listeners.items,
+                self.windowUnload(),
+                "onunload",
             );
         }
         try syncLocationState(self.location, self.dom_store, target, true);
@@ -2750,10 +2876,26 @@ const BootstrapHost = struct {
             try runtime.dispatchWindowEvent(
                 self.allocator,
                 self,
+                "beforeunload",
+                self.listeners.items,
+                self.windowBeforeUnload(),
+                "onbeforeunload",
+            );
+            try runtime.dispatchWindowEvent(
+                self.allocator,
+                self,
                 "pagehide",
                 self.listeners.items,
                 self.windowPageHide(),
                 "onpagehide",
+            );
+            try runtime.dispatchWindowEvent(
+                self.allocator,
+                self,
+                "unload",
+                self.listeners.items,
+                self.windowUnload(),
+                "onunload",
             );
         }
         try syncLocationState(self.location, self.dom_store, target, true);
@@ -2778,10 +2920,26 @@ const BootstrapHost = struct {
         try runtime.dispatchWindowEvent(
             self.allocator,
             self,
+            "beforeunload",
+            self.listeners.items,
+            self.windowBeforeUnload(),
+            "onbeforeunload",
+        );
+        try runtime.dispatchWindowEvent(
+            self.allocator,
+            self,
             "pagehide",
             self.listeners.items,
             self.windowPageHide(),
             "onpagehide",
+        );
+        try runtime.dispatchWindowEvent(
+            self.allocator,
+            self,
+            "unload",
+            self.listeners.items,
+            self.windowUnload(),
+            "onunload",
         );
         try syncLocationState(self.location, self.dom_store, target, true);
         self.resetScrollPosition();

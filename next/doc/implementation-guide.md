@@ -544,7 +544,7 @@ Do not add yet:
 
 Goal:
 
-- make `document.children`, `document.images`, `document.links`, `document.embeds` / `document.plugins`, and `document.anchors` available in inline scripts through minimal live HTMLCollection surfaces
+- make `document.children`, `document.images`, `document.links`, `document.embeds` / `document.plugins`, and `document.anchors` available in inline scripts through minimal live HTMLCollection surfaces with iterator helpers
 
 Primary owners:
 

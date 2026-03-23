@@ -2085,6 +2085,26 @@ fn evalAssignment(
                 return;
             }
 
+            if (std.mem.eql(u8, target.property, "onbeforeunload")) {
+                const next_handler = switch (value) {
+                    .function => |function| function,
+                    .null_value, .undefined_value => null,
+                    else => return error.ScriptRuntime,
+                };
+                try host.setWindowBeforeUnload(next_handler);
+                return;
+            }
+
+            if (std.mem.eql(u8, target.property, "onunload")) {
+                const next_handler = switch (value) {
+                    .function => |function| function,
+                    .null_value, .undefined_value => null,
+                    else => return error.ScriptRuntime,
+                };
+                try host.setWindowUnload(next_handler);
+                return;
+            }
+
             if (std.mem.eql(u8, target.property, "onfocus")) {
                 const next_handler = switch (value) {
                     .function => |function| function,
@@ -3416,6 +3436,18 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "onload")) {
                 if (host.windowLoad()) |handler| {
+                    break :blk Value{ .function = handler };
+                }
+                break :blk Value{ .null_value = {} };
+            }
+            if (std.mem.eql(u8, member.property, "onbeforeunload")) {
+                if (host.windowBeforeUnload()) |handler| {
+                    break :blk Value{ .function = handler };
+                }
+                break :blk Value{ .null_value = {} };
+            }
+            if (std.mem.eql(u8, member.property, "onunload")) {
+                if (host.windowUnload()) |handler| {
                     break :blk Value{ .function = handler };
                 }
                 break :blk Value{ .null_value = {} };

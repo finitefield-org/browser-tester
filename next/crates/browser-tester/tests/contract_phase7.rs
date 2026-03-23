@@ -199,6 +199,20 @@ fn script_document_applets_are_live_end_to_end() -> browser_tester_next::Result<
 }
 
 #[test]
+fn script_document_applets_iterator_helpers_are_live_end_to_end() -> browser_tester_next::Result<()>
+{
+    let harness = Harness::from_html(
+        "<div id='root'><applet id='first-applet' name='first-applet'>First</applet><applet id='second-applet' name='second-applet'>Second</applet></div><div id='out'></div><script>const applets = document.applets; const keys = applets.keys(); const values = applets.values(); const entries = applets.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; applets.forEach((element, index, list) => { out += String(index) + ':' + element.textContent + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.textContent + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.textContent + ':' + out;</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "0:First:0:First:0:First:2;1:Second:2;",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn script_document_all_is_live_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<div id='root'><span id='first'>First</span><span id='second'>Second</span></div><div id='out'></div><script>const all = document.all; const before = all.length; const named = all.namedItem('second'); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(all.length) + ':' + String(named) + ':' + String(all.namedItem('missing'));</script>",

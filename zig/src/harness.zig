@@ -3348,6 +3348,23 @@ test "regression: phase 28c5b pagehide and pageshow listeners resolve on the cop
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: phase 28c5c beforeunload, pagehide, unload, and pageshow listeners resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='out'></main><button id='nav'>Go</button><script>window.addEventListener('beforeunload', () => { document.getElementById('out').textContent += 'before|'; }); window.onbeforeunload = () => { document.getElementById('out').textContent += 'property-before|'; }; window.addEventListener('pagehide', () => { document.getElementById('out').textContent += 'hide|'; }); window.onpagehide = () => { document.getElementById('out').textContent += 'property-hide|'; }; window.addEventListener('unload', () => { document.getElementById('out').textContent += 'unload|'; }); window.onunload = () => { document.getElementById('out').textContent += 'property-unload|'; }; window.addEventListener('pageshow', () => { document.getElementById('out').textContent += 'show|'; }); window.onpageshow = () => { document.getElementById('out').textContent += 'property-show|'; }; document.getElementById('nav').addEventListener('click', () => { document.getElementById('out').textContent = ''; document.location = 'https://example.test:8443/next'; });</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.click("#nav");
+    try subject.assertValue("#out", "before|property-before|hide|property-hide|unload|property-unload|show|property-show|");
+    try std.testing.expectEqualStrings("https://example.test:8443/next", subject.mocksMut().location().currentUrl().?);
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
 test "regression: phase 28c6 storage listeners and onstorage handlers resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<main id='out'></main><script>window.addEventListener('storage', () => { document.getElementById('out').textContent += 'listener:' + window.localStorage.getItem('theme') + '|'; }); window.onstorage = () => { document.getElementById('out').textContent += 'property:' + window.localStorage.getItem('theme'); }; window.localStorage.setItem('theme', 'light');</script>";

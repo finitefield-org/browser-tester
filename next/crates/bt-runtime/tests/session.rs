@@ -3099,6 +3099,25 @@ fn session_resolves_document_applets_through_inline_scripts() {
 }
 
 #[test]
+fn session_resolves_document_applets_iterator_helpers_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><applet id='first-applet' name='first-applet'>First</applet><applet id='second-applet' name='second-applet'>Second</applet></div><div id='out'></div><script>const applets = document.applets; const keys = applets.keys(); const values = applets.values(); const entries = applets.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; applets.forEach((element, index, list) => { out += String(index) + ':' + element.textContent + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.textContent + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.textContent + ':' + out;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute document.applets iterator helper scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:First:0:First:0:First:2;1:Second:2;"
+    );
+}
+
+#[test]
 fn session_resolves_has_child_nodes_through_inline_scripts() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),

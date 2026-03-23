@@ -6189,6 +6189,22 @@ test "contract: Harness.click dispatches pagehide and pageshow handlers on navig
     );
 }
 
+test "contract: Harness.click dispatches beforeunload, pagehide, unload, and pageshow handlers on navigation" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='out'></main><button id='nav'>Go</button><script>window.addEventListener('beforeunload', () => { document.getElementById('out').textContent += 'before|'; }); window.onbeforeunload = () => { document.getElementById('out').textContent += 'property-before|'; }; window.addEventListener('pagehide', () => { document.getElementById('out').textContent += 'hide|'; }); window.onpagehide = () => { document.getElementById('out').textContent += 'property-hide|'; }; window.addEventListener('unload', () => { document.getElementById('out').textContent += 'unload|'; }); window.onunload = () => { document.getElementById('out').textContent += 'property-unload|'; }; window.addEventListener('pageshow', () => { document.getElementById('out').textContent += 'show|'; }); window.onpageshow = () => { document.getElementById('out').textContent += 'property-show|'; }; document.getElementById('nav').addEventListener('click', () => { document.getElementById('out').textContent = ''; document.location = 'https://example.test:8443/next'; });</script>",
+    );
+    defer subject.deinit();
+
+    try subject.click("#nav");
+    try subject.assertValue("#out", "before|property-before|hide|property-hide|unload|property-unload|show|property-show|");
+    try std.testing.expectEqualStrings(
+        "https://example.test:8443/next",
+        subject.mocksMut().location().currentUrl().?,
+    );
+}
+
 test "contract: Harness.fromHtmlWithUrl dispatches popstate listeners and onpopstate handlers" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtmlWithUrl(
@@ -6325,6 +6341,28 @@ test "failure: Harness.fromHtml rejects non-callable window.onpagehide assignmen
         Harness.fromHtml(
             allocator,
             "<main id='out'></main><script>window.onpagehide = 123;</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects non-callable window.onbeforeunload assignments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='out'></main><script>window.onbeforeunload = 123;</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects non-callable window.onunload assignments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='out'></main><script>window.onunload = 123;</script>",
         ),
     );
 }
