@@ -1,5 +1,6 @@
 必要に応じ、テスト用途にAPIをモックできる作りにしてください。
 その場合、README.md と doc/mock-guide.md にそのモックの使い方を記載してください。
+HTMLの仕様は `html-standard` フォルダにあるので適宜参照してください。
 
 新しい test-only mock を追加するときは、必ず次をセットで行ってください。
 
@@ -22,3 +23,4 @@
 - regression test を追加または更新したか
 
 公開 API の置き場は、実装前に `doc/subsystem-map.md` を見て決めてください。
+

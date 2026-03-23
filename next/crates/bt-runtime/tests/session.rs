@@ -1507,6 +1507,25 @@ fn session_resolves_html_collection_named_property_access_through_inline_scripts
 }
 
 #[test]
+fn session_resolves_radio_node_list_iterator_helpers() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><form id='signup'><input type='radio' name='mode' id='mode-a' value='a'><input type='radio' name='mode' id='mode-b' value='b'></form></div><div id='out'></div><script>const elements = document.getElementById('signup').elements; const named = elements.namedItem('mode'); const keys = named.keys(); const values = named.values(); const entries = named.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; named.forEach((element, index, list) => { out += String(index) + ':' + element.value + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(named.length) + ':' + String(firstKey.value) + ':' + firstValue.value.value + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.value + ':' + out;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("radio node list iterator helpers should remain available");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "2:0:a:0:a:0:a:2;1:b:2;"
+    );
+}
+
+#[test]
 fn session_sets_radio_node_list_value_through_inline_scripts() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -1539,6 +1558,25 @@ fn session_resolves_select_options_through_inline_scripts() {
 
     let out_id = session.dom().select("#out").unwrap()[0];
     assert_eq!(session.dom().text_content_for_node(out_id), "2:0:A:B:null");
+}
+
+#[test]
+fn session_resolves_select_options_iterator_helpers_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><select id='mode'><option id='first' value='a'>A</option><option id='second' value='b'>B</option></select></div><div id='out'></div><script>const options = document.getElementById('mode').options; const keys = options.keys(); const values = options.values(); const entries = options.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; options.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute select.options iterator helper scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:first:0:first:0:first:2;1:second:2;"
+    );
 }
 
 #[test]
@@ -1578,6 +1616,25 @@ fn session_resolves_select_selected_options_through_inline_scripts() {
     assert_eq!(
         session.dom().text_content_for_node(out_id),
         "1:2:A:C:D:[object Element]:null"
+    );
+}
+
+#[test]
+fn session_resolves_select_selected_options_iterator_helpers_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><select id='mode'><option id='first' value='a' selected>A</option><option id='second' value='b' selected>B</option></select></div><div id='out'></div><script>const selected = document.getElementById('mode').selectedOptions; const keys = selected.keys(); const values = selected.values(); const entries = selected.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; selected.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute select.selectedOptions iterator helper scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:first:0:first:0:first:2;1:second:2;"
     );
 }
 
@@ -2574,6 +2631,25 @@ fn session_resolves_document_images_and_links_through_inline_scripts() {
 }
 
 #[test]
+fn session_resolves_document_links_iterator_helpers_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><img id='hero' name='hero' alt='Hero'><img name='thumb' alt='Thumb'><a id='docs' href='/docs'>Docs</a><a id='plain'>Plain</a><area id='map' name='map' href='/map'></div><div id='out'></div><script>const links = document.links; const keys = links.keys(); const values = links.values(); const entries = links.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; links.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute document.links iterator helper scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:docs:0:docs:0:docs:2;1:map:2;"
+    );
+}
+
+#[test]
 fn session_resolves_document_images_iterator_helpers_through_inline_scripts() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -2869,6 +2945,25 @@ fn session_resolves_table_rows_and_row_cells_through_inline_scripts() {
 }
 
 #[test]
+fn session_resolves_table_rows_and_row_cells_iterator_helpers_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<table id='table'><thead id='head'><tr id='head-row'><th id='head-cell'>H</th></tr></thead><tbody id='body'><tr id='first-row'><td id='first-cell'>A</td></tr></tbody><tfoot id='foot'><tr id='foot-row'><td id='foot-cell'>F</td></tr></tfoot></table><div id='out'></div><script>const table = document.getElementById('table'); const row = document.getElementById('first-row'); const tableKeys = table.rows.keys(); const tableValues = table.rows.values(); const tableEntries = table.rows.entries(); const rowKeys = row.cells.keys(); const rowValues = row.cells.values(); const rowEntries = row.cells.entries(); const firstTableKey = tableKeys.next(); const firstTableValue = tableValues.next(); const firstTableEntry = tableEntries.next(); const firstRowKey = rowKeys.next(); const firstRowValue = rowValues.next(); const firstRowEntry = rowEntries.next(); let out = ''; table.rows.forEach((element, index, list) => { out += 'T' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); row.cells.forEach((element, index, list) => { out += 'R' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstTableKey.value) + ':' + firstTableValue.value.getAttribute('id') + ':' + String(firstTableEntry.value.index) + ':' + firstTableEntry.value.value.getAttribute('id') + ':' + String(firstRowKey.value) + ':' + firstRowValue.value.getAttribute('id') + ':' + String(firstRowEntry.value.index) + ':' + firstRowEntry.value.value.getAttribute('id') + ':' + out;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute table.rows and row.cells iterator helper scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:head-row:0:head-row:0:first-cell:0:first-cell:T0:head-row:3;T1:first-row:3;T2:foot-row:3;R0:first-cell:1;"
+    );
+}
+
+#[test]
 fn session_resolves_document_scripts_through_inline_scripts() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -2884,6 +2979,25 @@ fn session_resolves_document_scripts_through_inline_scripts() {
     assert_eq!(
         session.dom().text_content_for_node(out_id),
         "2:1:[object Element]:null"
+    );
+}
+
+#[test]
+fn session_resolves_document_scripts_iterator_helpers_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><script id='first-script'></script></div><div id='out'></div><script id='current-script'>const out = document.getElementById('out'); const scripts = document.scripts; const keys = scripts.keys(); const values = scripts.values(); const entries = scripts.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let serial = ''; scripts.forEach((element, index, list) => { serial += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('root').textContent = 'gone'; out.textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + serial + ':' + String(scripts.length);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute document.scripts iterator helper scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:first-script:0:first-script:0:first-script:2;1:current-script:2;:1"
     );
 }
 
@@ -3213,6 +3327,25 @@ fn session_resolves_document_embeds_through_inline_scripts() {
 }
 
 #[test]
+fn session_resolves_document_embeds_iterator_helpers_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><embed id='first-embed'><embed name='second-embed'></div><div id='out'></div><script>const embeds = document.embeds; const keys = embeds.keys(); const values = embeds.values(); const entries = embeds.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let serial = ''; embeds.forEach((element, index, list) => { serial += String(index) + ':' + String(element) + ':' + String(list.length) + ';'; }); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(firstKey.value) + ':' + String(firstValue.value) + ':' + String(firstEntry.value.index) + ':' + String(firstEntry.value.value) + ':' + serial + ':' + String(embeds.length);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute document.embeds iterator helper scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:[object Element]:0:[object Element]:0:[object Element]:2;1:[object Element]:2;:1"
+    );
+}
+
+#[test]
 fn session_resolves_document_plugins_through_inline_scripts() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -3359,6 +3492,25 @@ fn session_resolves_window_children_through_default_view() {
     assert_eq!(
         session.dom().text_content_for_node(out_id),
         "3:FirstSecond::null:null"
+    );
+}
+
+#[test]
+fn session_resolves_window_children_iterator_helpers_through_default_view() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><span id='first'>First</span><span id='second'>Second</span></div><div id='out'></div><script id='script'>const children = document.defaultView.children; const keys = children.keys(); const values = children.values(); const entries = children.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; children.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("window.children iterator helpers should resolve through defaultView");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:root:0:root:0:root:3;1:out:3;2:script:3;"
     );
 }
 

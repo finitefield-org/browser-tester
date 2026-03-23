@@ -420,6 +420,19 @@ test "contract: Harness.open, Harness.close, and Harness.print record calls thro
     try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().print().calls().len);
 }
 
+test "contract: Harness.print dispatches beforeprint and afterprint handlers" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='out'></main><script>window.onbeforeprint = () => { document.getElementById('out').textContent += 'before|'; }; window.onafterprint = () => { document.getElementById('out').textContent += 'after|'; };</script>",
+    );
+    defer subject.deinit();
+
+    try subject.print();
+    try subject.assertValue("#out", "before|after|");
+    try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().print().calls().len);
+}
+
 test "contract: Harness.scrollTo and Harness.scrollBy record calls through the registry" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(allocator, "<main></main>");
@@ -3029,6 +3042,17 @@ test "contract: Harness.fromHtml runs checkValidity and reportValidity during bo
     try subject.assertValue("#out", "false:false:false:false:true:true:false:false|true:true:true:true:true:true:true:true");
 }
 
+test "contract: Harness.fromHtml dispatches invalid during reportValidity" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><form id='form'><input id='short' minlength='4' value='abc'></form><div id='out'></div><script>const form = document.getElementById('form'); const input = document.getElementById('short'); form.addEventListener('invalid', () => { document.getElementById('out').textContent += 'form|'; }, true); input.addEventListener('invalid', () => { document.getElementById('out').textContent += 'input|'; }); const inputResult = String(input.reportValidity()); const inputEvents = document.getElementById('out').textContent; document.getElementById('out').textContent = ''; const formResult = String(form.reportValidity()); const formEvents = document.getElementById('out').textContent; document.getElementById('out').textContent = inputResult + ':' + inputEvents + '|' + formResult + ':' + formEvents;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "false:form|input||false:form|input|");
+}
+
 test "contract: Harness.fromHtml runs Element.setCustomValidity and validationMessage during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -3340,6 +3364,17 @@ test "contract: Harness.fromHtml runs readystatechange handlers during bootstrap
     try subject.assertValue("#out", "loading:complete");
 }
 
+test "contract: Harness.fromHtml dispatches DOMContentLoaded during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><div id='out'></div><script>document.addEventListener('DOMContentLoaded', () => { document.getElementById('out').textContent += ':dom:' + document.readyState; }); document.onreadystatechange = () => { document.getElementById('out').textContent += ':ready:' + document.readyState; }; document.getElementById('out').textContent = document.readyState;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "loading:dom:loading:ready:complete");
+}
+
 test "failure: Harness.fromHtml rejects readystatechange handlers on unsupported targets" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -3373,6 +3408,17 @@ test "contract: Harness.fromHtml runs stepUp and stepDown on numeric inputs duri
     try subject.assertValue("#out", "2:false|4:false|2:false");
 }
 
+test "contract: Harness.fromHtml runs stepUp and stepDown on date and month controls during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='date' type='date' value='2017-06-01'><input id='month' type='month' step='2' value='2017-06'><input id='time' type='time' step='1800' value='09:00'><input id='week' type='week' value='2017-W01'><div id='out'></div><script>const date = document.getElementById('date'); const month = document.getElementById('month'); const time = document.getElementById('time'); const week = document.getElementById('week'); date.stepUp(2); month.stepUp(); time.stepDown(); week.stepUp(); document.getElementById('out').textContent = date.value + '|' + month.value + '|' + time.value + '|' + week.value;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "2017-06-03|2017-08|08:30|2017-W02");
+}
+
 test "contract: Harness.fromHtml runs input.valueAsNumber getters and setters during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -3398,6 +3444,17 @@ test "contract: Harness.fromHtml runs input.valueAsDate getters and setters duri
     try subject.assertValue(
         "#out",
         "2017-06-01T00:00:00.000Z:1496275200000|2017-06-01T08:30:05.006Z:1496305805006|1970-01-01T09:00:05.006Z:32405006|2017-06-01T00:00:00.000Z:1496275200000|null|2017-06-01:2017-06-01T00:00:00.000Z|2017-06-01T08:30:05.006:2017-06-01T08:30:05.006Z|09:00:05.006:1970-01-01T09:00:05.006Z|2017-06:2017-06-01T00:00:00.000Z|[]:null|[]:null|[]:null|[]:null",
+    );
+}
+
+test "failure: Harness.fromHtml rejects stepUp on unsupported controls" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>document.createElement('div').stepUp();</script>",
+        ),
     );
 }
 
@@ -3430,17 +3487,6 @@ test "failure: Harness.fromHtml rejects setRangeText on unsupported controls" {
         Harness.fromHtml(
             allocator,
             "<main id='root'></main><script>document.createElement('div').setRangeText('x');</script>",
-        ),
-    );
-}
-
-test "failure: Harness.fromHtml rejects stepUp on unsupported controls" {
-    const allocator = std.testing.allocator;
-    try std.testing.expectError(
-        error.ScriptRuntime,
-        Harness.fromHtml(
-            allocator,
-            "<main id='root'></main><script>document.createElement('div').stepUp();</script>",
         ),
     );
 }
@@ -4550,6 +4596,74 @@ test "failure: Harness.fromHtml rejects non-document anchors access" {
     );
 }
 
+test "contract: Harness.fromHtml exposes anchor and area download reflection" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><a id='anchor' href='https://example.test/files/report.csv'>Anchor</a><map name='map'><area id='area' download='area.bin' href='https://example.test/files/diagram.png'></map><div id='out'></div><script>const anchor = document.getElementById('anchor'); const before = String(anchor.download); anchor.download = 'anchor.txt'; document.getElementById('out').textContent = before + '|' + anchor.download;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "|anchor.txt");
+    try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().downloads().artifacts().len);
+
+    try subject.click("#anchor");
+    try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().downloads().artifacts().len);
+    try std.testing.expectEqualStrings(
+        "anchor.txt",
+        subject.mocksMut().downloads().artifacts()[0].file_name,
+    );
+    try std.testing.expectEqualStrings(
+        "https://example.test/files/report.csv",
+        subject.mocksMut().downloads().artifacts()[0].bytes,
+    );
+
+    try subject.click("#area");
+    try std.testing.expectEqual(@as(usize, 2), subject.mocksMut().downloads().artifacts().len);
+    try std.testing.expectEqualStrings(
+        "area.bin",
+        subject.mocksMut().downloads().artifacts()[1].file_name,
+    );
+    try std.testing.expectEqualStrings(
+        "https://example.test/files/diagram.png",
+        subject.mocksMut().downloads().artifacts()[1].bytes,
+    );
+}
+
+test "contract: Harness.fromHtml exposes anchor target reflection and area target click observation" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><a id='anchor' href='https://example.test/next' target='_blank'>Anchor</a><map name='map'><area id='area' target='popup' href='https://example.test/files/diagram.png'></map><div id='out'></div><script>const anchor = document.getElementById('anchor'); const before = String(anchor.target); anchor.target = 'reports'; document.getElementById('out').textContent = before + '|' + anchor.target;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "_blank|reports");
+    try std.testing.expectEqual(@as(usize, 0), subject.mocksMut().open().calls().len);
+
+    try subject.click("#anchor");
+    try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().open().calls().len);
+    try std.testing.expectEqualStrings(
+        "https://example.test/next",
+        subject.mocksMut().open().calls()[0].url.?,
+    );
+    try std.testing.expectEqualStrings(
+        "reports",
+        subject.mocksMut().open().calls()[0].target.?,
+    );
+
+    try subject.click("#area");
+    try std.testing.expectEqual(@as(usize, 2), subject.mocksMut().open().calls().len);
+    try std.testing.expectEqualStrings(
+        "https://example.test/files/diagram.png",
+        subject.mocksMut().open().calls()[1].url.?,
+    );
+    try std.testing.expectEqualStrings(
+        "popup",
+        subject.mocksMut().open().calls()[1].target.?,
+    );
+}
+
 test "failure: Harness.fromHtml rejects non-document forms access" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -4557,6 +4671,28 @@ test "failure: Harness.fromHtml rejects non-document forms access" {
         Harness.fromHtml(
             allocator,
             "<main id='root'><form name='signup'>Signup</form></main><script>document.getElementById('root').forms.length;</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects non-anchor download access" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<div id='box'></div><script>document.getElementById('box').download;</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects non-anchor target access" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<div id='box'></div><script>document.getElementById('box').target;</script>",
         ),
     );
 }
@@ -5213,6 +5349,17 @@ test "failure: Harness.fromHtml rejects validity on unsupported elements" {
     );
 }
 
+test "failure: Harness.fromHtml rejects reportValidity on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>document.createElement('div').reportValidity();</script>",
+        ),
+    );
+}
+
 test "failure: Harness.fromHtml rejects min on unsupported elements" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -5752,6 +5899,14 @@ test "failure: HarnessBuilder.printFailure rejects bootstrap window.print" {
     _ = builder.printFailure("print blocked");
 
     try std.testing.expectError(error.MockError, builder.build());
+}
+
+test "failure: window.onbeforeprint rejects non-function assignments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<script>window.onbeforeprint = 1;</script>"),
+    );
 }
 
 test "failure: HarnessBuilder.scrollFailure rejects bootstrap window.scrollTo" {

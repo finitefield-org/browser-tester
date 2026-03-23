@@ -2085,6 +2085,26 @@ fn evalAssignment(
                 return;
             }
 
+            if (std.mem.eql(u8, target.property, "onbeforeprint")) {
+                const next_handler = switch (value) {
+                    .function => |function| function,
+                    .null_value, .undefined_value => null,
+                    else => return error.ScriptRuntime,
+                };
+                try host.setWindowBeforePrint(next_handler);
+                return;
+            }
+
+            if (std.mem.eql(u8, target.property, "onafterprint")) {
+                const next_handler = switch (value) {
+                    .function => |function| function,
+                    .null_value, .undefined_value => null,
+                    else => return error.ScriptRuntime,
+                };
+                try host.setWindowAfterPrint(next_handler);
+                return;
+            }
+
             if (std.mem.eql(u8, target.property, "onbeforeunload")) {
                 const next_handler = switch (value) {
                     .function => |function| function,
@@ -2455,12 +2475,12 @@ fn evalAssignment(
                 return;
             }
             if (std.mem.eql(u8, target.property, "target")) {
-                if (!try elementSupportsFormProperty(host, element)) {
-                    return error.ScriptRuntime;
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "form")) {
+                    const text = try asString(allocator, value);
+                    try host.domStoreMut().setAttribute(element, "target", text);
+                    return;
                 }
-                const text = try asString(allocator, value);
-                try host.domStoreMut().setAttribute(element, "target", text);
-                return;
             }
             if (std.mem.eql(u8, target.property, "acceptCharset")) {
                 if (!try elementSupportsFormProperty(host, element)) {
@@ -2800,6 +2820,23 @@ fn evalAssignment(
                     return;
                 }
                 return error.ScriptRuntime;
+            }
+            if (std.mem.eql(u8, target.property, "download")) {
+                if (!try elementSupportsDownloadProperty(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "download", text);
+                return;
+            }
+
+            if (std.mem.eql(u8, target.property, "target")) {
+                if (!try elementSupportsHyperlinkTargetProperty(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "target", text);
+                return;
             }
 
             if (std.mem.eql(u8, target.property, "href")) {
@@ -3440,6 +3477,18 @@ fn evalMember(
                 }
                 break :blk Value{ .null_value = {} };
             }
+            if (std.mem.eql(u8, member.property, "onbeforeprint")) {
+                if (host.windowBeforePrint()) |handler| {
+                    break :blk Value{ .function = handler };
+                }
+                break :blk Value{ .null_value = {} };
+            }
+            if (std.mem.eql(u8, member.property, "onafterprint")) {
+                if (host.windowAfterPrint()) |handler| {
+                    break :blk Value{ .function = handler };
+                }
+                break :blk Value{ .null_value = {} };
+            }
             if (std.mem.eql(u8, member.property, "onbeforeunload")) {
                 if (host.windowBeforeUnload()) |handler| {
                     break :blk Value{ .function = handler };
@@ -3833,9 +3882,11 @@ fn evalMember(
                 break :blk Value{ .string = encoding };
             }
             if (std.mem.eql(u8, member.property, "target")) {
-                if (!try elementSupportsFormProperty(host, element)) break :blk error.ScriptRuntime;
-                const target_value = (try host.domStore().getAttribute(element, "target")) orelse "";
-                break :blk Value{ .string = target_value };
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "form")) {
+                    const target_value = (try host.domStore().getAttribute(element, "target")) orelse "";
+                    break :blk Value{ .string = target_value };
+                }
             }
             if (std.mem.eql(u8, member.property, "acceptCharset")) {
                 if (!try elementSupportsFormProperty(host, element)) break :blk error.ScriptRuntime;
@@ -4061,6 +4112,16 @@ fn evalMember(
                     break :blk Value{ .string = hreflang_text };
                 }
                 break :blk error.ScriptRuntime;
+            }
+            if (std.mem.eql(u8, member.property, "download")) {
+                if (!try elementSupportsDownloadProperty(host, element)) break :blk error.ScriptRuntime;
+                const download_text = (try host.domStore().getAttribute(element, "download")) orelse "";
+                break :blk Value{ .string = download_text };
+            }
+            if (std.mem.eql(u8, member.property, "target")) {
+                if (!try elementSupportsHyperlinkTargetProperty(host, element)) break :blk error.ScriptRuntime;
+                const target_text = (try host.domStore().getAttribute(element, "target")) orelse "";
+                break :blk Value{ .string = target_text };
             }
             if (std.mem.eql(u8, member.property, "href")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
@@ -6160,11 +6221,12 @@ fn evalMethodCall(
         } else if (std.mem.eql(u8, method, "reportValidity")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-            if (std.mem.eql(u8, tag_name, "form")) {
-                break :blk Value{ .boolean = dom.formCheckValidity(host.domStore(), element) };
-            }
-            if (std.mem.eql(u8, tag_name, "input") or std.mem.eql(u8, tag_name, "textarea") or std.mem.eql(u8, tag_name, "select")) {
-                break :blk Value{ .boolean = dom.formControlCheckValidity(host.domStore(), element) };
+            if (std.mem.eql(u8, tag_name, "form") or
+                std.mem.eql(u8, tag_name, "input") or
+                std.mem.eql(u8, tag_name, "textarea") or
+                std.mem.eql(u8, tag_name, "select"))
+            {
+                break :blk Value{ .boolean = try host.reportValidityNode(element) };
             }
             break :blk error.ScriptRuntime;
         } else if (std.mem.eql(u8, method, "submit")) blk: {
@@ -10787,6 +10849,16 @@ fn elementSupportsTypeProperty(host: anytype, element_id: dom.NodeId) errors.Res
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
     return std.mem.eql(u8, tag_name, "input") or
         std.mem.eql(u8, tag_name, "button");
+}
+
+fn elementSupportsDownloadProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.ascii.eqlIgnoreCase(tag_name, "a");
+}
+
+fn elementSupportsHyperlinkTargetProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.ascii.eqlIgnoreCase(tag_name, "a");
 }
 
 fn elementSupportsMultipleProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {

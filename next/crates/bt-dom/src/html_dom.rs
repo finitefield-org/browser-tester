@@ -1637,15 +1637,7 @@ impl DomStore {
                 continue;
             }
 
-            if !value.contains('\"') {
-                parts.push(format!(r#"{name}="{}""#, value));
-            } else if !value.contains('\'') {
-                parts.push(format!("{name}='{value}'"));
-            } else {
-                return Err(format!(
-                    "cannot serialize attribute `{name}` because the value contains both quote types"
-                ));
-            }
+            parts.push(format!(r#"{name}="{}""#, escape_html_attribute(value)));
         }
 
         Ok(parts.join(" "))
@@ -4879,11 +4871,11 @@ impl<'a> HtmlParser<'a> {
     fn parse_text(&mut self, store: &mut DomStore, parent: NodeId) -> Result<(), String> {
         let rest = &self.input[self.pos..];
         let next_tag = rest.find('<').unwrap_or(rest.len());
-        let value = &rest[..next_tag];
+        let value = decode_html_entities(&rest[..next_tag]);
         self.pos += next_tag;
 
         if !value.is_empty() {
-            store.add_text(parent, value.to_string());
+            store.add_text(parent, value);
         }
 
         Ok(())
@@ -5054,9 +5046,9 @@ impl<'a> HtmlParser<'a> {
                     .iter()
                     .position(|byte| *byte == quote)
                     .ok_or_else(|| format!("unterminated quoted attribute at byte {}", self.pos))?;
-                let value = &self.input[self.pos..self.pos + end];
+                let value = decode_html_entities(&self.input[self.pos..self.pos + end]);
                 self.pos += end + 1;
-                Ok(value.to_string())
+                Ok(value)
             }
             Some(_) => {
                 let start = self.pos;
@@ -5071,7 +5063,7 @@ impl<'a> HtmlParser<'a> {
                     return Err(format!("expected attribute value at byte {}", start));
                 }
 
-                Ok(self.input[start..self.pos].to_string())
+                Ok(decode_html_entities(&self.input[start..self.pos]))
             }
             None => Err("unexpected end of input while parsing attribute value".to_string()),
         }
@@ -5101,6 +5093,70 @@ fn escape_html_text(value: &str) -> String {
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+fn escape_html_attribute(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('\"', "&quot;")
+}
+
+fn decode_html_entities(value: &str) -> String {
+    let mut output = String::new();
+    let mut rest = value;
+
+    while let Some(amp_index) = rest.find('&') {
+        output.push_str(&rest[..amp_index]);
+        let candidate = &rest[amp_index + 1..];
+        let Some(semi_index) = candidate.find(';') else {
+            output.push('&');
+            rest = candidate;
+            continue;
+        };
+
+        let entity = &candidate[..semi_index];
+        let decoded = match entity {
+            "amp" => Some("&".to_string()),
+            "lt" => Some("<".to_string()),
+            "gt" => Some(">".to_string()),
+            "quot" => Some("\"".to_string()),
+            "apos" => Some("'".to_string()),
+            "nbsp" => Some("\u{a0}".to_string()),
+            _ if entity.starts_with("#x") || entity.starts_with("#X") => {
+                u32::from_str_radix(&entity[2..], 16)
+                    .ok()
+                    .and_then(char::from_u32)
+                    .map(|ch| {
+                        let mut buf = String::new();
+                        buf.push(ch);
+                        buf
+                    })
+            }
+            _ if entity.starts_with('#') => entity[1..]
+                .parse::<u32>()
+                .ok()
+                .and_then(char::from_u32)
+                .map(|ch| {
+                    let mut buf = String::new();
+                    buf.push(ch);
+                    buf
+                }),
+            _ => None,
+        };
+
+        if let Some(decoded) = decoded {
+            output.push_str(&decoded);
+            rest = &candidate[semi_index + 1..];
+        } else {
+            output.push('&');
+            rest = candidate;
+        }
+    }
+
+    output.push_str(rest);
+    output
 }
 
 fn escape_text(value: &str) -> String {

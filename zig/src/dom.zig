@@ -1573,45 +1573,75 @@ pub const DomStore = struct {
         };
 
         const input_type = elementAttributeValue(element, "type");
-        if (!isRangeInputType(input_type)) return error.DomError;
+        const kind = inputValueAsNumberKind(input_type) orelse return error.DomError;
 
-        const limits = numericRangeLimits(self, node_id);
-        const raw_value = elementAttributeValue(element, "value") orelse "";
-        const trimmed_value = std.mem.trim(u8, raw_value, " \t\r\n\x0c");
-        const current_value = if (trimmed_value.len > 0) blk: {
-            break :blk std.fmt.parseFloat(f64, trimmed_value) catch return error.DomError;
-        } else blk: {
-            if (std.mem.eql(u8, input_type orelse "text", "range")) {
-                const min = limits.?.min orelse 0.0;
-                const max = limits.?.max orelse 100.0;
-                break :blk (min + max) / 2.0;
-            }
-            break :blk if (limits) |bounds| bounds.min orelse 0.0 else 0.0;
-        };
+        switch (kind) {
+            .number, .range => {
+                const limits = numericRangeLimits(self, node_id);
+                const raw_value = elementAttributeValue(element, "value") orelse "";
+                const trimmed_value = std.mem.trim(u8, raw_value, " \t\r\n\x0c");
+                const current_value = if (trimmed_value.len > 0) blk: {
+                    break :blk std.fmt.parseFloat(f64, trimmed_value) catch return error.DomError;
+                } else blk: {
+                    if (std.mem.eql(u8, input_type orelse "text", "range")) {
+                        const min = limits.?.min orelse 0.0;
+                        const max = limits.?.max orelse 100.0;
+                        break :blk (min + max) / 2.0;
+                    }
+                    break :blk if (limits) |bounds| bounds.min orelse 0.0 else 0.0;
+                };
 
-        const step_value = if (elementAttributeValue(element, "step")) |value| blk: {
-            const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
-            if (trimmed.len == 0) break :blk 1.0;
-            if (std.ascii.eqlIgnoreCase(trimmed, "any")) return error.DomError;
-            const parsed = std.fmt.parseFloat(f64, trimmed) catch return error.DomError;
-            if (!std.math.isFinite(parsed) or parsed <= 0) return error.DomError;
-            break :blk parsed;
-        } else 1.0;
+                const step_value = if (elementAttributeValue(element, "step")) |value| blk: {
+                    const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+                    if (trimmed.len == 0) break :blk 1.0;
+                    if (std.ascii.eqlIgnoreCase(trimmed, "any")) return error.DomError;
+                    const parsed = std.fmt.parseFloat(f64, trimmed) catch return error.DomError;
+                    if (!std.math.isFinite(parsed) or parsed <= 0) return error.DomError;
+                    break :blk parsed;
+                } else 1.0;
 
-        var next_value = current_value + (step_value * @as(f64, @floatFromInt(delta_steps)));
-        if (limits) |bounds| {
-            if (bounds.min) |min| {
-                if (next_value < min) next_value = min;
-            }
-            if (bounds.max) |max| {
-                if (next_value > max) next_value = max;
-            }
+                var next_value = current_value + (step_value * @as(f64, @floatFromInt(delta_steps)));
+                if (limits) |bounds| {
+                    if (bounds.min) |min| {
+                        if (next_value < min) next_value = min;
+                    }
+                    if (bounds.max) |max| {
+                        if (next_value > max) next_value = max;
+                    }
+                }
+
+                const text = try std.fmt.allocPrint(self.allocator, "{d}", .{next_value});
+                defer self.allocator.free(text);
+                try self.setFormControlValue(node_id, text);
+                return;
+            },
+            .date, .datetime_local, .week, .time => {
+                const current_value = try inputStepCurrentValue(self, node_id, kind);
+                const step_value = try inputStepScaleValue(self, node_id, kind);
+                const next_value = current_value + (step_value * @as(f64, @floatFromInt(delta_steps)));
+                const text = try inputValueTextFromNumber(self, node_id, kind, next_value);
+                defer self.allocator.free(text);
+                try self.setFormControlValue(node_id, text);
+                return;
+            },
+            .month => {
+                const current_value = try inputStepCurrentValue(self, node_id, kind);
+                const step_value = try inputStepScaleValue(self, node_id, kind);
+                const calendar = calendarFromMilliseconds(current_value);
+                const current_month_index = (@as(i64, calendar.year) * 12) + @as(i64, calendar.month) - 1;
+                const stepped_months = @as(f64, @floatFromInt(current_month_index)) +
+                    (step_value * @as(f64, @floatFromInt(delta_steps)));
+                const next_month_index = @as(i64, @intFromFloat(std.math.round(stepped_months)));
+                const year = @divFloor(next_month_index, 12);
+                const month = @as(u8, @intCast(@mod(next_month_index, 12) + 1));
+                const days = daysFromCivil(year, month, 1);
+                const next_value = @as(f64, @floatFromInt(days)) * @as(f64, @floatFromInt(millisPerDay()));
+                const text = try inputValueTextFromNumber(self, node_id, kind, next_value);
+                defer self.allocator.free(text);
+                try self.setFormControlValue(node_id, text);
+                return;
+            },
         }
-
-        const text = try std.fmt.allocPrint(self.allocator, "{d}", .{next_value});
-        defer self.allocator.free(text);
-        try self.setFormControlValue(node_id, text);
-        return;
     }
 
     pub fn appendChild(self: *DomStore, parent: NodeId, child: NodeId) errors.Result(NodeId) {
@@ -2303,6 +2333,22 @@ pub const DomStore = struct {
         const node = self.nodeAt(node_id) orelse return error.HtmlParse;
         for (node.children.items) |child_id| {
             try self.collectSubtreeNodes(child_id, output, allocator);
+        }
+    }
+
+    pub fn collectInvalidSubtreeNodes(
+        self: *const DomStore,
+        node_id: NodeId,
+        output: *std.ArrayList(NodeId),
+        allocator: std.mem.Allocator,
+    ) errors.Result(void) {
+        if (isInvalidPseudoClass(self, node_id)) {
+            try output.append(allocator, node_id);
+        }
+
+        const node = self.nodeAt(node_id) orelse return error.HtmlParse;
+        for (node.children.items) |child_id| {
+            try self.collectInvalidSubtreeNodes(child_id, output, allocator);
         }
     }
 
@@ -5291,6 +5337,71 @@ fn inputValueAsNumberFromText(self: *const DomStore, node_id: NodeId, kind: Inpu
         .month => parseMonthValue(text) orelse std.math.nan(f64),
         .week => parseWeekValue(text) orelse std.math.nan(f64),
         .time => parseTimeValue(text) orelse std.math.nan(f64),
+    };
+}
+
+fn inputStepCurrentValue(self: *const DomStore, node_id: NodeId, kind: InputValueAsNumberKind) errors.Result(f64) {
+    const node = self.nodeAt(node_id) orelse return error.DomError;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return error.DomError,
+    };
+
+    if (elementAttributeValue(element, "min")) |value| {
+        const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+        if (trimmed.len != 0) {
+            if (inputValueAsNumberFromText(self, node_id, kind, trimmed)) |parsed| {
+                if (std.math.isFinite(parsed)) return parsed;
+            }
+        }
+    }
+
+    if (self.inputValueAsNumber(node_id)) |current| {
+        if (std.math.isFinite(current)) return current;
+    }
+
+    return 0.0;
+}
+
+fn inputStepScaleValue(self: *const DomStore, node_id: NodeId, kind: InputValueAsNumberKind) errors.Result(f64) {
+    const node = self.nodeAt(node_id) orelse return error.DomError;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return error.DomError,
+    };
+
+    const default_step: f64 = switch (kind) {
+        .number, .range, .date, .month, .week => 1.0,
+        .datetime_local, .time => 60.0,
+    };
+
+    const raw_step = if (elementAttributeValue(element, "step")) |value| value else return switch (kind) {
+        .number, .range => default_step,
+        .date => default_step * @as(f64, @floatFromInt(millisPerDay())),
+        .datetime_local, .time => default_step * 1000.0,
+        .month => default_step,
+        .week => default_step * @as(f64, @floatFromInt(millisPerDay())) * 7.0,
+    };
+    const trimmed = std.mem.trim(u8, raw_step, " \t\r\n\x0c");
+    if (trimmed.len == 0) {
+        return switch (kind) {
+            .number, .range => default_step,
+            .date => default_step * @as(f64, @floatFromInt(millisPerDay())),
+            .datetime_local, .time => default_step * 1000.0,
+            .month => default_step,
+            .week => default_step * @as(f64, @floatFromInt(millisPerDay())) * 7.0,
+        };
+    }
+    if (std.ascii.eqlIgnoreCase(trimmed, "any")) return error.DomError;
+    const parsed = std.fmt.parseFloat(f64, trimmed) catch return error.DomError;
+    if (!std.math.isFinite(parsed) or parsed <= 0) return error.DomError;
+
+    return switch (kind) {
+        .number, .range => parsed,
+        .date => parsed * @as(f64, @floatFromInt(millisPerDay())),
+        .datetime_local, .time => parsed * 1000.0,
+        .month => parsed,
+        .week => parsed * @as(f64, @floatFromInt(millisPerDay())) * 7.0,
     };
 }
 

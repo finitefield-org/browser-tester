@@ -676,6 +676,19 @@ fn document_scripts_are_live_end_to_end() -> browser_tester_next::Result<()> {
 }
 
 #[test]
+fn document_scripts_iterator_helpers_are_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><script id='first-script'></script></main><div id='out'></div><script id='current-script'>const out = document.getElementById('out'); const scripts = document.scripts; const keys = scripts.keys(); const values = scripts.values(); const entries = scripts.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let serial = ''; scripts.forEach((element, index, list) => { serial += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('root').textContent = 'gone'; out.textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + serial + ':' + String(scripts.length);</script>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "0:first-script:0:first-script:0:first-script:2;1:current-script:2;:1",
+    )?;
+    Ok(())
+}
+
+#[test]
 fn document_style_sheets_are_live_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><style id='first-style'>.primary { color: red; }</style><link id='first-link' rel='stylesheet' href='a.css'><link id='ignored-link' rel='preload' href='b.css'></main><div id='out'></div><script>const sheets = document.styleSheets; const before = sheets.length; const first = sheets.item(0); document.getElementById('root').textContent = 'gone'; document.getElementById('out').textContent = String(before) + ':' + String(sheets.length) + ':' + String(first) + ':' + String(sheets.item(1));</script>",
@@ -786,6 +799,16 @@ fn document_children_are_live_end_to_end() -> browser_tester_next::Result<()> {
     harness.assert_text("#out", "3:2:[object Element]:[object Element]:null")?;
     harness.assert_exists("#out")?;
     assert!(harness.assert_exists("#root").is_err());
+    Ok(())
+}
+
+#[test]
+fn window_children_iterator_helpers_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<div id='root'><span id='first'>First</span><span id='second'>Second</span></div><div id='out'></div><script id='script'>const children = document.defaultView.children; const keys = children.keys(); const values = children.values(); const entries = children.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; children.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;</script>",
+    )?;
+
+    harness.assert_text("#out", "0:root:0:root:0:root:3;1:out:3;2:script:3;")?;
     Ok(())
 }
 
@@ -950,6 +973,16 @@ fn table_rows_and_cells_are_live_end_to_end() -> browser_tester_next::Result<()>
         "3:1:1:[object Element]:[object Element]|4:2:2:[object Element]:[object Element]:[object Element]",
     )?;
     harness.assert_exists("#second-row")?;
+    Ok(())
+}
+
+#[test]
+fn table_rows_and_cells_iterator_helpers_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<table id='table'><thead id='head'><tr id='head-row'><th id='head-cell'>H</th></tr></thead><tbody id='body'><tr id='first-row'><td id='first-cell'>A</td></tr></tbody><tfoot id='foot'><tr id='foot-row'><td id='foot-cell'>F</td></tr></tfoot></table><div id='out'></div><script>const table = document.getElementById('table'); const row = document.getElementById('first-row'); const tableKeys = table.rows.keys(); const tableValues = table.rows.values(); const tableEntries = table.rows.entries(); const rowKeys = row.cells.keys(); const rowValues = row.cells.values(); const rowEntries = row.cells.entries(); const firstTableKey = tableKeys.next(); const firstTableValue = tableValues.next(); const firstTableEntry = tableEntries.next(); const firstRowKey = rowKeys.next(); const firstRowValue = rowValues.next(); const firstRowEntry = rowEntries.next(); let out = ''; table.rows.forEach((element, index, list) => { out += 'T' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); row.cells.forEach((element, index, list) => { out += 'R' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstTableKey.value) + ':' + firstTableValue.value.getAttribute('id') + ':' + String(firstTableEntry.value.index) + ':' + firstTableEntry.value.value.getAttribute('id') + ':' + String(firstRowKey.value) + ':' + firstRowValue.value.getAttribute('id') + ':' + String(firstRowEntry.value.index) + ':' + firstRowEntry.value.value.getAttribute('id') + ':' + out;</script>",
+    )?;
+
+    harness.assert_text("#out", "0:head-row:0:head-row:0:first-cell:0:first-cell:T0:head-row:3;T1:first-row:3;T2:foot-row:3;R0:first-cell:1;")?;
     Ok(())
 }
 
@@ -1355,6 +1388,27 @@ fn select_selected_options_are_live_end_to_end() -> browser_tester_next::Result<
 }
 
 #[test]
+fn select_options_iterator_helpers_are_live_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><select id='mode'><option id='first' value='a'>A</option><option id='second' value='b'>B</option></select><div id='out'></div><script>const options = document.getElementById('mode').options; const keys = options.keys(); const values = options.values(); const entries = options.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; options.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;</script></main>",
+    )?;
+
+    harness.assert_text("#out", "0:first:0:first:0:first:2;1:second:2;")?;
+    Ok(())
+}
+
+#[test]
+fn select_selected_options_iterator_helpers_are_live_end_to_end() -> browser_tester_next::Result<()>
+{
+    let harness = Harness::from_html(
+        "<main id='root'><select id='mode'><option id='first' value='a' selected>A</option><option id='second' value='b' selected>B</option></select><div id='out'></div><script>const selected = document.getElementById('mode').selectedOptions; const keys = selected.keys(); const values = selected.values(); const entries = selected.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; selected.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;</script></main>",
+    )?;
+
+    harness.assert_text("#out", "0:first:0:first:0:first:2;1:second:2;")?;
+    Ok(())
+}
+
+#[test]
 fn select_options_collection_add_and_remove_are_live_end_to_end() -> browser_tester_next::Result<()>
 {
     let harness = Harness::from_html(
@@ -1510,14 +1564,44 @@ fn table_t_bodies_reject_non_table_elements_end_to_end() -> browser_tester_next:
 }
 
 #[test]
-fn html_serialization_surfaces_reject_lossy_attribute_serialization_end_to_end()
+fn html_serialization_surfaces_escape_mixed_quote_attribute_serialization_end_to_end()
 -> browser_tester_next::Result<()> {
-    let error = Harness::from_html(
+    let harness = Harness::from_html(
         "<main id='root'><div id='target'></div><div id='out'></div><script>const target = document.getElementById('target'); target.setAttribute('data-label', \"a'b\\\"c\"); document.getElementById('out').textContent = String(target.outerHTML);</script></main>",
-    )
-    .expect_err("lossy serialization should fail explicitly");
+    )?;
 
-    assert!(error.to_string().contains("contains both quote types"));
+    harness.assert_text(
+        "#out",
+        "<div data-label=\"a'b&quot;c\" id=\"target\"></div>",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn html_serialization_surfaces_escape_mixed_quote_attribute_values_in_document_write_end_to_end()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><div id='out'></div><script>document.write('<div id=\"target\" data-label=\"a\\'b&quot;c\"></div>'); document.getElementById('out').textContent = document.getElementById('target').outerHTML;</script></main>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "<div data-label=\"a'b&quot;c\" id=\"target\"></div>",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn html_serialization_surfaces_common_named_character_entities_in_document_write_end_to_end()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><div id='out'></div><script>document.write('<div id=\"target\" data-label=\"a&nbsp;b\">A&nbsp;B</div>'); const target = document.getElementById('target'); document.getElementById('out').textContent = target.getAttribute('data-label') + ':' + target.textContent + ':' + target.outerHTML;</script></main>",
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "a\u{a0}b:A\u{a0}B:<div data-label=\"a\u{a0}b\" id=\"target\">A\u{a0}B</div>",
+    )?;
     Ok(())
 }
 

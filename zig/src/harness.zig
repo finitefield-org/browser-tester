@@ -2168,6 +2168,21 @@ test "regression: phase 3 checkValidity and reportValidity resolve on the copied
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: phase 3 reportValidity dispatches invalid on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><form id='form'><input id='short' minlength='4' value='abc'></form><div id='out'></div><script>const form = document.getElementById('form'); const input = document.getElementById('short'); form.addEventListener('invalid', () => { document.getElementById('out').textContent += 'form|'; }, true); input.addEventListener('invalid', () => { document.getElementById('out').textContent += 'input|'; }); const inputResult = String(input.reportValidity()); const inputEvents = document.getElementById('out').textContent; document.getElementById('out').textContent = ''; const formResult = String(form.reportValidity()); const formEvents = document.getElementById('out').textContent; document.getElementById('out').textContent = inputResult + ':' + inputEvents + '|' + formResult + ':' + formEvents;</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "false:form|input||false:form|input|");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
 test "regression: phase 3 setCustomValidity and validationMessage resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<main id='root'><div id='out'></div><script>const input = document.createElement('input'); input.value = 'abc'; document.getElementById('root').appendChild(input); document.getElementById('out').textContent = String(input.checkValidity()) + ':' + input.validationMessage; input.setCustomValidity('bad'); document.getElementById('out').textContent += '|' + String(input.checkValidity()) + ':' + input.validationMessage + ':' + String(input.reportValidity()); input.setCustomValidity(''); document.getElementById('out').textContent += '|' + String(input.checkValidity()) + ':' + input.validationMessage;</script></main>";
@@ -3898,6 +3913,74 @@ test "regression: phase 39 anchor click default actions navigate and capture dow
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: phase 50 anchor and area download reflection resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><a id='anchor' href='https://example.test/files/report.csv'>Anchor</a><map name='map'><area id='area' download='area.bin' href='https://example.test/files/diagram.png'></map><div id='out'></div><script>const anchor = document.getElementById('anchor'); const before = String(anchor.download); anchor.download = 'anchor.txt'; document.getElementById('out').textContent = before + '|' + anchor.download;</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "|anchor.txt");
+    try subject.click("#anchor");
+    try subject.click("#area");
+    try std.testing.expectEqual(@as(usize, 2), subject.mocksMut().downloads().artifacts().len);
+    try std.testing.expectEqualStrings(
+        "anchor.txt",
+        subject.mocksMut().downloads().artifacts()[0].file_name,
+    );
+    try std.testing.expectEqualStrings(
+        "https://example.test/files/report.csv",
+        subject.mocksMut().downloads().artifacts()[0].bytes,
+    );
+    try std.testing.expectEqualStrings(
+        "area.bin",
+        subject.mocksMut().downloads().artifacts()[1].file_name,
+    );
+    try std.testing.expectEqualStrings(
+        "https://example.test/files/diagram.png",
+        subject.mocksMut().downloads().artifacts()[1].bytes,
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 50 anchor target reflection and area target click observation resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><a id='anchor' href='https://example.test/next' target='_blank'>Anchor</a><map name='map'><area id='area' target='popup' href='https://example.test/files/diagram.png'></map><div id='out'></div><script>const anchor = document.getElementById('anchor'); const before = String(anchor.target); anchor.target = 'reports'; document.getElementById('out').textContent = before + '|' + anchor.target;</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtmlWithUrl(allocator, "https://app.local/start", html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "_blank|reports");
+    try subject.click("#anchor");
+    try subject.click("#area");
+    try std.testing.expectEqual(@as(usize, 2), subject.mocksMut().open().calls().len);
+    try std.testing.expectEqualStrings(
+        "https://example.test/next",
+        subject.mocksMut().open().calls()[0].url.?,
+    );
+    try std.testing.expectEqualStrings(
+        "reports",
+        subject.mocksMut().open().calls()[0].target.?,
+    );
+    try std.testing.expectEqualStrings(
+        "https://example.test/files/diagram.png",
+        subject.mocksMut().open().calls()[1].url.?,
+    );
+    try std.testing.expectEqualStrings(
+        "popup",
+        subject.mocksMut().open().calls()[1].target.?,
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
 test "regression: phase 40 typeText updates textarea selection on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<main id='root'><textarea id='bio'>Hello</textarea><div id='out'></div><script>document.getElementById('bio').addEventListener('input', () => { const bio = document.getElementById('bio'); document.getElementById('out').textContent = String(bio.selectionStart) + ':' + String(bio.selectionEnd) + ':' + bio.selectionDirection; });</script></main>";
@@ -4055,6 +4138,21 @@ test "regression: phase 48 scroll handlers resolve on the copied html snapshot" 
 
     try subject.assertValue("#doc", "7:25");
     try subject.assertValue("#win", "7:25");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 49 stepUp and stepDown resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><input id='date' type='date' value='2017-06-01'><input id='month' type='month' step='2' value='2017-06'><input id='time' type='time' step='1800' value='09:00'><input id='week' type='week' value='2017-W01'><div id='out'></div><script>const date = document.getElementById('date'); const month = document.getElementById('month'); const time = document.getElementById('time'); const week = document.getElementById('week'); date.stepUp(2); month.stepUp(); time.stepDown(); week.stepUp(); document.getElementById('out').textContent = date.value + '|' + month.value + '|' + time.value + '|' + week.value;</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "2017-06-03|2017-08|08:30|2017-W02");
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
@@ -4274,6 +4372,22 @@ test "regression: open, close, and print mocks resolve on the copied html snapsh
         subject.mocksMut().open().calls()[0].features.?,
     );
     try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().close().calls().len);
+    try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().print().calls().len);
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: print lifecycle handlers resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><div id='out'></div><script>window.onbeforeprint = () => { document.getElementById('out').textContent += 'before|'; }; window.onafterprint = () => { document.getElementById('out').textContent += 'after|'; }; window.print(); document.getElementById('out').textContent += 'done';</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "before|after|done");
     try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().print().calls().len);
     try std.testing.expectEqualStrings(original, subject.html().?);
 }

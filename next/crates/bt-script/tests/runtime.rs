@@ -7429,6 +7429,58 @@ fn runtime_resolves_form_elements_radio_node_list_entries_access() {
 }
 
 #[test]
+fn runtime_resolves_form_elements_radio_node_list_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("signup", ElementHandle::new(1), "Signup");
+    host.seed_element("radio-a", ElementHandle::new(2), "");
+    host.seed_element("radio-b", ElementHandle::new(3), "");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_value(ElementHandle::new(2), "a");
+    host.seed_value(ElementHandle::new(3), "b");
+    host.seed_checked(ElementHandle::new(2), true);
+    host.seed_checked(ElementHandle::new(3), false);
+
+    host.seed_html_collection_form_elements_items(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2), ElementHandle::new(3)],
+    );
+    host.seed_html_collection_form_elements_named_items(
+        ElementHandle::new(1),
+        "mode",
+        vec![ElementHandle::new(2), ElementHandle::new(3)],
+    );
+
+    runtime
+        .eval_program(
+            "const elements = document.getElementById('signup').elements; const named = elements.namedItem('mode'); const keys = named.keys(); const values = named.values(); const entries = named.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; named.forEach((element, index, list) => { out += String(index) + ':' + element.value + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(named.length) + ':' + String(firstKey.value) + ':' + firstValue.value.value + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.value + ':' + out;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("radio node list iterator helpers should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("2:0:a:0:a:0:a:2;1:b:2;")
+    );
+    assert_eq!(
+        host.html_collection_form_elements_named_items_calls,
+        vec![
+            (ElementHandle::new(1), "mode".to_string()),
+            (ElementHandle::new(1), "mode".to_string()),
+            (ElementHandle::new(1), "mode".to_string()),
+            (ElementHandle::new(1), "mode".to_string()),
+            (ElementHandle::new(1), "mode".to_string()),
+            (ElementHandle::new(1), "mode".to_string()),
+            (ElementHandle::new(1), "mode".to_string()),
+            (ElementHandle::new(1), "mode".to_string()),
+        ]
+    );
+}
+
+#[test]
 fn runtime_sets_form_elements_radio_node_list_value() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -7534,6 +7586,44 @@ fn runtime_resolves_select_options_access() {
             (ElementHandle::new(1), "second".to_string()),
             (ElementHandle::new(1), "missing".to_string()),
         ]
+    );
+}
+
+#[test]
+fn runtime_resolves_select_options_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("mode", ElementHandle::new(1), "mode");
+    host.seed_element("first", ElementHandle::new(2), "A");
+    host.seed_element("second", ElementHandle::new(3), "B");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_attribute(ElementHandle::new(2), "id", "first");
+    host.seed_attribute(ElementHandle::new(3), "id", "second");
+    host.seed_html_collection_select_options_items(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2), ElementHandle::new(3)],
+    );
+    runtime
+        .eval_program(
+            "const options = document.getElementById('mode').options; const keys = options.keys(); const values = options.values(); const entries = options.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; options.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("select.options iterator helpers should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("0:first:0:first:0:first:2;1:second:2;")
+    );
+    assert_eq!(
+        host.html_collection_select_options_items_calls,
+        vec![ElementHandle::new(1); 6]
+    );
+    assert_eq!(
+        host.html_collection_select_options_named_item_calls,
+        Vec::new()
     );
 }
 
@@ -7663,6 +7753,44 @@ fn runtime_resolves_select_selected_options_access() {
             (ElementHandle::new(1), "second".to_string()),
             (ElementHandle::new(1), "missing".to_string()),
         ]
+    );
+}
+
+#[test]
+fn runtime_resolves_select_selected_options_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("mode", ElementHandle::new(1), "mode");
+    host.seed_element("first", ElementHandle::new(2), "A");
+    host.seed_element("second", ElementHandle::new(3), "B");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_attribute(ElementHandle::new(2), "id", "first");
+    host.seed_attribute(ElementHandle::new(3), "id", "second");
+    host.seed_html_collection_select_selected_options_items(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(2), ElementHandle::new(3)],
+    );
+    runtime
+        .eval_program(
+            "const selected = document.getElementById('mode').selectedOptions; const keys = selected.keys(); const values = selected.values(); const entries = selected.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; selected.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("select.selectedOptions iterator helpers should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("0:first:0:first:0:first:2;1:second:2;")
+    );
+    assert_eq!(
+        host.html_collection_select_selected_options_items_calls,
+        vec![ElementHandle::new(1); 6]
+    );
+    assert_eq!(
+        host.html_collection_select_selected_options_named_item_calls,
+        Vec::new()
     );
 }
 
@@ -9250,6 +9378,34 @@ fn runtime_resolves_document_images_and_links_access() {
 }
 
 #[test]
+fn runtime_supports_document_links_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("docs", ElementHandle::new(1), "Docs");
+    host.seed_element("map", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_attribute(ElementHandle::new(1), "id", "docs");
+    host.seed_attribute(ElementHandle::new(2), "id", "map");
+    host.seed_document_links_items(vec![ElementHandle::new(1), ElementHandle::new(2)]);
+
+    runtime
+        .eval_program(
+            "const links = document.links; const keys = links.keys(); const values = links.values(); const entries = links.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; links.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.links iterator helpers should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("0:docs:0:docs:0:docs:2;1:map:2;")
+    );
+    assert_eq!(host.document_links_items_calls, 6);
+}
+
+#[test]
 fn runtime_resolves_document_anchors_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -9633,6 +9789,39 @@ fn runtime_resolves_window_children_alias_access() {
 }
 
 #[test]
+fn runtime_resolves_window_children_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "First");
+    host.seed_element("out", ElementHandle::new(2), "Second");
+    host.seed_element("script", ElementHandle::new(3), "");
+    host.seed_attribute(ElementHandle::new(1), "id", "root");
+    host.seed_attribute(ElementHandle::new(2), "id", "out");
+    host.seed_attribute(ElementHandle::new(3), "id", "script");
+    host.seed_document_children_items(vec![
+        ElementHandle::new(1),
+        ElementHandle::new(2),
+        ElementHandle::new(3),
+    ]);
+
+    runtime
+        .eval_program(
+            "const children = document.defaultView.children; const keys = children.keys(); const values = children.values(); const entries = children.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; children.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.children iterator helpers should resolve as an alias of document.children");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("0:root:0:root:0:root:3;1:out:3;2:script:3;")
+    );
+    assert_eq!(host.document_children_items_calls, 7);
+}
+
+#[test]
 fn runtime_resolves_child_nodes_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -9784,6 +9973,55 @@ fn runtime_resolves_table_rows_and_row_cells_access() {
 }
 
 #[test]
+fn runtime_resolves_table_rows_and_row_cells_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("table", ElementHandle::new(1), "Table");
+    host.seed_element("row", ElementHandle::new(3), "Row");
+    host.seed_element("second-row", ElementHandle::new(5), "Second row");
+    host.seed_element("cell", ElementHandle::new(4), "Cell");
+    host.seed_element("second-cell", ElementHandle::new(6), "Second cell");
+    host.seed_element("out", ElementHandle::new(7), "");
+    host.seed_attribute(ElementHandle::new(3), "id", "row");
+    host.seed_attribute(ElementHandle::new(5), "id", "second-row");
+    host.seed_attribute(ElementHandle::new(4), "id", "cell");
+    host.seed_attribute(ElementHandle::new(6), "id", "second-cell");
+    host.seed_table_rows_items(
+        ElementHandle::new(1),
+        vec![ElementHandle::new(3), ElementHandle::new(5)],
+    );
+    host.seed_row_cells_items(
+        ElementHandle::new(3),
+        vec![ElementHandle::new(4), ElementHandle::new(6)],
+    );
+
+    runtime
+        .eval_program(
+            "const table = document.getElementById('table'); const row = document.getElementById('row'); const tableKeys = table.rows.keys(); const tableValues = table.rows.values(); const tableEntries = table.rows.entries(); const rowKeys = row.cells.keys(); const rowValues = row.cells.values(); const rowEntries = row.cells.entries(); const firstTableKey = tableKeys.next(); const firstTableValue = tableValues.next(); const firstTableEntry = tableEntries.next(); const firstRowKey = rowKeys.next(); const firstRowValue = rowValues.next(); const firstRowEntry = rowEntries.next(); let out = ''; table.rows.forEach((element, index, list) => { out += 'T' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); row.cells.forEach((element, index, list) => { out += 'R' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstTableKey.value) + ':' + firstTableValue.value.getAttribute('id') + ':' + String(firstTableEntry.value.index) + ':' + firstTableEntry.value.value.getAttribute('id') + ':' + String(firstRowKey.value) + ':' + firstRowValue.value.getAttribute('id') + ':' + String(firstRowEntry.value.index) + ':' + firstRowEntry.value.value.getAttribute('id') + ':' + out;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("table.rows and row.cells iterator helpers should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(7))
+            .map(String::as_str),
+        Some("0:row:0:row:0:cell:0:cell:T0:row:2;T1:second-row:2;R0:cell:2;R1:second-cell:2;")
+    );
+    assert_eq!(host.table_rows_items_calls, vec![ElementHandle::new(1); 6]);
+    assert_eq!(host.row_cells_items_calls, vec![ElementHandle::new(3); 6]);
+    assert_eq!(
+        host.table_rows_named_item_calls,
+        Vec::<(ElementHandle, String)>::new()
+    );
+    assert_eq!(
+        host.row_cells_named_item_calls,
+        Vec::<(ElementHandle, String)>::new()
+    );
+}
+
+#[test]
 fn runtime_resolves_document_scripts_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -9830,6 +10068,39 @@ fn runtime_resolves_document_scripts_access() {
             (scripts_collection, "missing".to_string()),
         ]
     );
+}
+
+#[test]
+fn runtime_resolves_document_scripts_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("first-script", ElementHandle::new(1), "First");
+    host.seed_element("second-script", ElementHandle::new(2), "Second");
+    host.seed_element("out", ElementHandle::new(3), "");
+    let scripts_collection = HtmlCollectionTarget::ByTagName {
+        scope: HtmlCollectionScope::Document,
+        tag_name: "script".to_string(),
+    };
+    host.seed_html_collection_tag_name_items(
+        scripts_collection.clone(),
+        vec![ElementHandle::new(1), ElementHandle::new(2)],
+    );
+
+    runtime
+        .eval_program(
+            "const scripts = document.scripts; const keys = scripts.keys(); const values = scripts.values(); const entries = scripts.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; scripts.forEach((element, index, list) => { out += String(index) + ':' + element.textContent + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.textContent + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.textContent + ':' + out;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.scripts iterator helpers should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("0:First:0:First:0:First:2;1:Second:2;")
+    );
+    assert_eq!(host.html_collection_tag_name_items_calls.len(), 6);
 }
 
 #[test]
@@ -10589,6 +10860,39 @@ fn runtime_resolves_document_embeds_access() {
             (embeds_collection, "missing".to_string()),
         ]
     );
+}
+
+#[test]
+fn runtime_resolves_document_embeds_iterator_helpers() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("first-embed", ElementHandle::new(1), "");
+    host.seed_element("second-embed", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    let embeds_collection = HtmlCollectionTarget::ByTagName {
+        scope: HtmlCollectionScope::Document,
+        tag_name: "embed".to_string(),
+    };
+    host.seed_html_collection_tag_name_items(
+        embeds_collection.clone(),
+        vec![ElementHandle::new(1), ElementHandle::new(2)],
+    );
+
+    runtime
+        .eval_program(
+            "const embeds = document.embeds; const keys = embeds.keys(); const values = embeds.values(); const entries = embeds.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; embeds.forEach((element, index, list) => { out += String(index) + ':' + String(element) + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + String(firstValue.value) + ':' + String(firstEntry.value.index) + ':' + String(firstEntry.value.value) + ':' + out;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.embeds iterator helpers should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("0:[object Element]:0:[object Element]:0:[object Element]:2;1:[object Element]:2;")
+    );
+    assert_eq!(host.html_collection_tag_name_items_calls.len(), 6);
 }
 
 #[test]

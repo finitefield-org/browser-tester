@@ -493,7 +493,7 @@ Delivered in this workspace:
 - `HTMLCollection.item(index)`
 - `HTMLCollection.namedItem(name)`
 - `form.elements.namedItem(name)` returns `RadioNodeList` when multiple matching controls share the same name
-- `RadioNodeList.entries()` returns snapshot entry iterators for multi-match groups
+- `RadioNodeList.keys()` / `RadioNodeList.values()` / `RadioNodeList.entries()` / `RadioNodeList.forEach()` expose snapshot iterator and callback helpers for multi-match groups
 - `RadioNodeList.value = ...` updates the checked radio group state and clears the group when no radio matches
 
 Tests already in place:
@@ -515,7 +515,7 @@ Do not add yet:
 
 Goal:
 
-- make `select.options` available in inline scripts through a minimal live HTMLCollection surface
+- make `select.options` available in inline scripts through a minimal live HTMLCollection surface with iterator helpers
 
 Primary owners:
 
@@ -529,6 +529,10 @@ Delivered in this workspace:
 - `HTMLCollection.length`
 - `HTMLCollection.item(index)`
 - `HTMLCollection.namedItem(name)`
+- `HTMLCollection.keys()`
+- `HTMLCollection.values()`
+- `HTMLCollection.entries()`
+- `HTMLCollection.forEach()`
 
 Tests already in place:
 
@@ -699,7 +703,7 @@ Tests already in place:
 
 Goal:
 
-- make `select.selectedOptions` available in inline scripts through a minimal live HTMLCollection surface
+- make `select.selectedOptions` available in inline scripts through a minimal live HTMLCollection surface with iterator helpers
 
 Primary owners:
 
@@ -713,6 +717,10 @@ Delivered in this workspace:
 - `HTMLCollection.length`
 - `HTMLCollection.item(index)`
 - `HTMLCollection.namedItem(name)`
+- `HTMLCollection.keys()`
+- `HTMLCollection.values()`
+- `HTMLCollection.entries()`
+- `HTMLCollection.forEach()`
 
 Tests already in place:
 
@@ -814,7 +822,7 @@ Delivered slices:
    - `document.close()`
 5. mutation hardening and regression coverage (delivered)
    - selectors and collections stay consistent after mutation
-   - unsupported or lossy mutation semantics fail explicitly
+   - unsupported mutation semantics fail explicitly, and mixed-quote attribute values serialize browser-style instead of failing
 
 Tests already in place:
 
@@ -824,7 +832,7 @@ Tests already in place:
 Tests in place for the delivered slices:
 
 - serialization surfaces round-trip the bounded HTML subset
-- failure-path tests cover unsupported or lossy mutation semantics and mutation hardening regressions
+- failure-path tests cover unsupported mutation semantics and mutation hardening regressions, while browser-style mixed-quote attribute escaping and basic character reference decoding, including common named references such as `&nbsp;`, are covered by round-trip serialization tests
 
 Do not add yet:
 
@@ -849,7 +857,7 @@ Use these when the next user-visible gap lands:
 | Collection API slice 13 (`template.content.childNodes`, `template.content.children`) | 1. `template.content` live fragment-like collection surface (delivered), including `template.content.getElementById(...)` / `template.content.querySelector(...)` / `template.content.querySelectorAll(...)` and direct child mutation primitives, including `removeChild(...)` | `bt-script` + `bt-runtime` | public contract, owning-crate regression, template-content hardening |
 | Collection API broadening remainder (specialized live collections) | 1. additional specialized live collections bundle (`fieldset.elements`, `datalist.options`, `map.areas`, `table.tBodies`) is delivered; 2. `element.labels` on labelable form controls / fieldset is delivered; 3. `document.styleSheets` is delivered; 4. `document.childNodes` is delivered; 5. `template.content` is delivered, including `getElementById(...)` / `querySelector(All)` on the fragment surface and direct child mutation primitives; 6. `select.options.add()` / `select.options.remove()` is delivered; the remaining collection API broadening slices are further specialized live collections beyond the current bounded set | `bt-script` + `bt-runtime` | public contract, owning-crate regression, unsupported-method failure |
 | Selector grammar broadening | 1. `:scope` (delivered) 2. `:has(...)` (delivered) 3. structural selector expansion with richer nested selector handling (delivered) 4. `:lang(...)` / `:dir(...)` / `:link` / `:any-link` / `:placeholder-shown` (delivered) 5. bounded `:nth-of-type(... of <selector-list>)` / `:nth-last-of-type(... of <selector-list>)` (delivered) | `bt-dom` | public contract, DOM matcher regression, explicit unsupported syntax |
-| HTML serialization broadening | 1. `insertAdjacentHTML` (delivered) 2. `insertAdjacentElement()` / `insertAdjacentText()` (delivered) 3. `template.content.innerHTML` / `DocumentFragment` serialization (delivered) 4. namespace-aware serialization compatibility (delivered) 5. `document.open()` / `document.write()` / `document.writeln()` / `document.close()` helpers (delivered) | `bt-dom` + `bt-script` + `bt-runtime` | round-trip success, lossy / malformed failure, runtime regression |
+| HTML serialization broadening | 1. `insertAdjacentHTML` (delivered) 2. `insertAdjacentElement()` / `insertAdjacentText()` (delivered) 3. `template.content.innerHTML` / `DocumentFragment` serialization (delivered) 4. namespace-aware serialization compatibility (delivered) 5. browser-style mixed-quote attribute escaping and basic character reference decoding, including common named references such as `&nbsp;` (delivered) 6. `document.open()` / `document.write()` / `document.writeln()` / `document.close()` helpers (delivered) | `bt-dom` + `bt-script` + `bt-runtime` | round-trip success, malformed failure, runtime regression |
 
 ## Decision Flow for Each Change
 

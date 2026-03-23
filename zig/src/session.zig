@@ -161,6 +161,8 @@ pub const Session = struct {
     scroll_y: i64 = 0,
     window_name: []const u8 = "",
     window_load_handler: ?script.ScriptFunction = null,
+    window_beforeprint_handler: ?script.ScriptFunction = null,
+    window_afterprint_handler: ?script.ScriptFunction = null,
     window_beforeunload_handler: ?script.ScriptFunction = null,
     window_unload_handler: ?script.ScriptFunction = null,
     window_focus_handler: ?script.ScriptFunction = null,
@@ -262,6 +264,8 @@ pub const Session = struct {
         var document_write_buffer: std.ArrayListUnmanaged(u8) = .{};
         var next_timer_id: u64 = 1;
         var window_load_handler: ?script.ScriptFunction = null;
+        var window_beforeprint_handler: ?script.ScriptFunction = null;
+        var window_afterprint_handler: ?script.ScriptFunction = null;
         var window_beforeunload_handler: ?script.ScriptFunction = null;
         var window_unload_handler: ?script.ScriptFunction = null;
         var window_focus_handler: ?script.ScriptFunction = null;
@@ -291,6 +295,8 @@ pub const Session = struct {
             .allocator = arena.allocator(),
             .window_name = &window_name,
             .window_load_handler = &window_load_handler,
+            .window_beforeprint_handler = &window_beforeprint_handler,
+            .window_afterprint_handler = &window_afterprint_handler,
             .window_beforeunload_handler = &window_beforeunload_handler,
             .window_unload_handler = &window_unload_handler,
             .window_focus_handler = &window_focus_handler,
@@ -328,6 +334,14 @@ pub const Session = struct {
             var bootstrap_steps: usize = 0;
             try drainQueuedMicrotasks(allocator, &script_runtime, &bootstrap_host, &queued_microtasks, &bootstrap_steps);
         }
+        try script_runtime.dispatchDocumentEvent(
+            std.heap.page_allocator,
+            &bootstrap_host,
+            "DOMContentLoaded",
+            script_event_listeners.items,
+            null,
+            "onDOMContentLoaded",
+        );
         bootstrap_host.setDocumentReadyState("complete");
         if (bootstrap_host.documentReadyStateChangePending()) {
             try script_runtime.dispatchDocumentEvent(
@@ -386,6 +400,8 @@ pub const Session = struct {
             .scroll_y = scroll_y,
             .window_name = window_name,
             .window_load_handler = window_load_handler,
+            .window_beforeprint_handler = window_beforeprint_handler,
+            .window_afterprint_handler = window_afterprint_handler,
             .window_beforeunload_handler = window_beforeunload_handler,
             .window_unload_handler = window_unload_handler,
             .window_focus_handler = window_focus_handler,
@@ -812,6 +828,14 @@ pub const Session = struct {
             try self.dom_store.appendHtmlToDocument(self.document_write_buffer.items);
             self.document_write_buffer.clearRetainingCapacity();
         }
+        try self.script_runtime.dispatchDocumentEvent(
+            std.heap.page_allocator,
+            self,
+            "DOMContentLoaded",
+            self.scriptEventListeners(),
+            null,
+            "onDOMContentLoaded",
+        );
         self.document_ready_state = "complete";
         if (self.document_ready_state_change_pending) {
             try self.script_runtime.dispatchDocumentEvent(
@@ -881,6 +905,32 @@ pub const Session = struct {
 
     pub fn windowLoad(self: *const Session) ?script.ScriptFunction {
         return self.window_load_handler;
+    }
+
+    pub fn windowBeforePrint(self: *const Session) ?script.ScriptFunction {
+        return self.window_beforeprint_handler;
+    }
+
+    pub fn setWindowBeforePrint(self: *Session, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_beforeprint_handler = try duplicateScriptFunction(self.arena.allocator(), function);
+            return;
+        }
+        self.window_beforeprint_handler = null;
+        return;
+    }
+
+    pub fn windowAfterPrint(self: *const Session) ?script.ScriptFunction {
+        return self.window_afterprint_handler;
+    }
+
+    pub fn setWindowAfterPrint(self: *Session, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_afterprint_handler = try duplicateScriptFunction(self.arena.allocator(), function);
+            return;
+        }
+        self.window_afterprint_handler = null;
+        return;
     }
 
     pub fn setWindowLoad(self: *Session, handler: ?script.ScriptFunction) errors.Result(void) {
@@ -1468,6 +1518,23 @@ pub const Session = struct {
 
     pub fn print(self: *Session) errors.Result(void) {
         try self.mock_registry.print().recordCall();
+        var runtime = script.ScriptRuntime{};
+        try runtime.dispatchWindowEvent(
+            std.heap.page_allocator,
+            self,
+            "beforeprint",
+            self.scriptEventListeners(),
+            self.windowBeforePrint(),
+            "onbeforeprint",
+        );
+        try runtime.dispatchWindowEvent(
+            std.heap.page_allocator,
+            self,
+            "afterprint",
+            self.scriptEventListeners(),
+            self.windowAfterPrint(),
+            "onafterprint",
+        );
         return;
     }
 
@@ -1853,6 +1920,36 @@ pub const Session = struct {
         return;
     }
 
+    pub fn reportValidityNode(self: *Session, node_id: dom.NodeId) errors.Result(bool) {
+        try self.ensureElementNode(node_id);
+        const node = self.dom_store.nodeAt(node_id) orelse return error.DomError;
+        const tag_name = switch (node.kind) {
+            .element => |element| element.tag_name,
+            else => return error.DomError,
+        };
+
+        if (!std.mem.eql(u8, tag_name, "form") and
+            !std.mem.eql(u8, tag_name, "input") and
+            !std.mem.eql(u8, tag_name, "textarea") and
+            !std.mem.eql(u8, tag_name, "select"))
+        {
+            return error.DomError;
+        }
+
+        var invalid_nodes: std.ArrayList(dom.NodeId) = .empty;
+        defer invalid_nodes.deinit(std.heap.page_allocator);
+        try self.dom_store.collectInvalidSubtreeNodes(node_id, &invalid_nodes, std.heap.page_allocator);
+        if (invalid_nodes.items.len == 0) {
+            return true;
+        }
+
+        for (invalid_nodes.items) |invalid_node_id| {
+            _ = try self.dispatchDomEvent(invalid_node_id, "invalid", false, true);
+        }
+        try self.flush();
+        return false;
+    }
+
     fn dispatchDomEvent(
         self: *Session,
         node_id: dom.NodeId,
@@ -2059,14 +2156,20 @@ pub const Session = struct {
             const trimmed_href = std.mem.trim(u8, href, " \t\r\n");
             if (trimmed_href.len == 0) return;
 
-            if (std.mem.eql(u8, element.tag_name, "a")) {
-                if (elementAttributeValue(element, "download")) |download_attr| {
-                    const trimmed_download = std.mem.trim(u8, download_attr, " \t\r\n");
-                    const file_name = if (trimmed_download.len > 0)
-                        trimmed_download
-                    else
-                        try downloadFileNameFromHref(self.arena.allocator(), trimmed_href);
-                    try self.captureDownload(file_name, trimmed_href);
+            if (elementAttributeValue(element, "download")) |download_attr| {
+                const trimmed_download = std.mem.trim(u8, download_attr, " \t\r\n");
+                const file_name = if (trimmed_download.len > 0)
+                    trimmed_download
+                else
+                    try downloadFileNameFromHref(self.arena.allocator(), trimmed_href);
+                try self.captureDownload(file_name, trimmed_href);
+                return;
+            }
+
+            if (elementAttributeValue(element, "target")) |target_attr| {
+                const trimmed_target = std.mem.trim(u8, target_attr, " \t\r\n");
+                if (trimmed_target.len > 0 and !std.mem.eql(u8, trimmed_target, "_self")) {
+                    try self.open(trimmed_href, trimmed_target, null);
                     return;
                 }
             }
@@ -2096,6 +2199,8 @@ const BootstrapHost = struct {
     allocator: std.mem.Allocator,
     window_name: *[]const u8,
     window_load_handler: *?script.ScriptFunction,
+    window_beforeprint_handler: *?script.ScriptFunction,
+    window_afterprint_handler: *?script.ScriptFunction,
     window_beforeunload_handler: *?script.ScriptFunction,
     window_unload_handler: *?script.ScriptFunction,
     window_focus_handler: *?script.ScriptFunction,
@@ -2175,6 +2280,15 @@ const BootstrapHost = struct {
             try self.dom_store.appendHtmlToDocument(self.document_write_buffer.items);
             self.document_write_buffer.clearRetainingCapacity();
         }
+        var runtime = script.ScriptRuntime{};
+        try runtime.dispatchDocumentEvent(
+            self.allocator,
+            self,
+            "DOMContentLoaded",
+            self.listeners.items,
+            null,
+            "onDOMContentLoaded",
+        );
         self.document_ready_state.* = "complete";
         if (self.document_ready_state_change_pending.*) {
             try self.dispatchDocumentReadyStateChange();
@@ -2240,6 +2354,32 @@ const BootstrapHost = struct {
             return;
         }
         self.window_load_handler.* = null;
+        return;
+    }
+
+    pub fn windowBeforePrint(self: *const BootstrapHost) ?script.ScriptFunction {
+        return self.window_beforeprint_handler.*;
+    }
+
+    pub fn setWindowBeforePrint(self: *BootstrapHost, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_beforeprint_handler.* = try duplicateScriptFunction(self.allocator, function);
+            return;
+        }
+        self.window_beforeprint_handler.* = null;
+        return;
+    }
+
+    pub fn windowAfterPrint(self: *const BootstrapHost) ?script.ScriptFunction {
+        return self.window_afterprint_handler.*;
+    }
+
+    pub fn setWindowAfterPrint(self: *BootstrapHost, handler: ?script.ScriptFunction) errors.Result(void) {
+        if (handler) |function| {
+            self.window_afterprint_handler.* = try duplicateScriptFunction(self.allocator, function);
+            return;
+        }
+        self.window_afterprint_handler.* = null;
         return;
     }
 
@@ -3057,6 +3197,35 @@ const BootstrapHost = struct {
         return;
     }
 
+    pub fn reportValidityNode(self: *BootstrapHost, node_id: dom.NodeId) errors.Result(bool) {
+        const node = self.dom_store.nodeAt(node_id) orelse return error.DomError;
+        const tag_name = switch (node.kind) {
+            .element => |element| element.tag_name,
+            else => return error.DomError,
+        };
+
+        if (!std.mem.eql(u8, tag_name, "form") and
+            !std.mem.eql(u8, tag_name, "input") and
+            !std.mem.eql(u8, tag_name, "textarea") and
+            !std.mem.eql(u8, tag_name, "select"))
+        {
+            return error.DomError;
+        }
+
+        var invalid_nodes: std.ArrayList(dom.NodeId) = .empty;
+        defer invalid_nodes.deinit(self.allocator);
+        try self.dom_store.collectInvalidSubtreeNodes(node_id, &invalid_nodes, self.allocator);
+        if (invalid_nodes.items.len == 0) {
+            return true;
+        }
+
+        var runtime = script.ScriptRuntime{};
+        for (invalid_nodes.items) |invalid_node_id| {
+            _ = try runtime.dispatchDomEvent(self.allocator, self, invalid_node_id, "invalid", false, true);
+        }
+        return false;
+    }
+
     pub fn matchMedia(self: *BootstrapHost, query_source: []const u8) errors.Result(bool) {
         return matchMediaQuery(self.match_media, query_source);
     }
@@ -3129,6 +3298,23 @@ const BootstrapHost = struct {
 
     pub fn print(self: *BootstrapHost) errors.Result(void) {
         try self.print_mocks.recordCall();
+        var runtime = script.ScriptRuntime{};
+        try runtime.dispatchWindowEvent(
+            self.allocator,
+            self,
+            "beforeprint",
+            self.listeners.items,
+            self.windowBeforePrint(),
+            "onbeforeprint",
+        );
+        try runtime.dispatchWindowEvent(
+            self.allocator,
+            self,
+            "afterprint",
+            self.listeners.items,
+            self.windowAfterPrint(),
+            "onafterprint",
+        );
         return;
     }
 

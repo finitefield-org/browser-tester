@@ -625,6 +625,16 @@ fn html_collection_named_property_access_is_publicly_supported() -> browser_test
 }
 
 #[test]
+fn radio_node_list_iterator_helpers_are_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<div id='root'><form id='signup'><input type='radio' name='mode' id='mode-a' value='a'><input type='radio' name='mode' id='mode-b' value='b'></form><div id='out'></div><script>const elements = document.getElementById('signup').elements; const named = elements.namedItem('mode'); const keys = named.keys(); const values = named.values(); const entries = named.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; named.forEach((element, index, list) => { out += String(index) + ':' + element.value + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(named.length) + ':' + String(firstKey.value) + ':' + firstValue.value.value + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.value + ':' + out;</script></div>",
+    )?;
+
+    harness.assert_text("#out", "2:0:a:0:a:0:a:2;1:b:2;")?;
+    Ok(())
+}
+
+#[test]
 fn window_frames_are_publicly_supported() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<iframe id='first' name='first'></iframe><iframe id='second'></iframe><div id='out'></div><script>const frames = window.frames; const before = frames.length; document.getElementById('second').remove(); document.getElementById('out').textContent = String(before) + ':' + String(frames.length) + ':' + frames.item(0).getAttribute('id') + ':' + frames.namedItem('first').getAttribute('id') + ':' + String(frames.namedItem('missing'));</script>",

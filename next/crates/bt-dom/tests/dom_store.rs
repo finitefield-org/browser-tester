@@ -1788,7 +1788,7 @@ fn html_serialization_surfaces_reject_malformed_fragments_explicitly() {
 }
 
 #[test]
-fn html_serialization_surfaces_reject_lossy_attribute_serialization_explicitly() {
+fn html_serialization_surfaces_escape_mixed_quote_attribute_values() {
     let mut store = DomStore::new_empty();
     store
         .bootstrap_html("<main id='root'><section id='target'></section></main>")
@@ -1799,9 +1799,50 @@ fn html_serialization_surfaces_reject_lossy_attribute_serialization_explicitly()
         .set_attribute(target_id, "data-label", "a'b\"c")
         .expect("attribute mutation should succeed");
 
-    let error = store
+    let outer_html = store
         .outer_html_for_node(target_id)
-        .expect_err("lossy serialization should fail explicitly");
+        .expect("attribute serialization should escape mixed quote values");
 
-    assert!(error.contains("contains both quote types"));
+    assert_eq!(
+        outer_html,
+        "<section data-label=\"a'b&quot;c\" id=\"target\"></section>"
+    );
+}
+
+#[test]
+fn html_parser_decodes_basic_character_entities_in_attributes_and_text() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><section id='target' data-label='a&amp;b &quot;c'>A &amp; B</section></main>",
+        )
+        .expect("HTML should parse");
+
+    let target_id = store.select("#target").unwrap()[0];
+    assert_eq!(
+        store
+            .get_attribute(target_id, "data-label")
+            .expect("attribute lookup should succeed"),
+        Some("a&b \"c".to_string())
+    );
+    assert_eq!(store.text_content_for_node(target_id), "A & B");
+}
+
+#[test]
+fn html_parser_decodes_common_named_character_entities_in_attributes_and_text() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><section id='target' data-label='a&nbsp;b'>A&nbsp;B</section></main>",
+        )
+        .expect("HTML should parse");
+
+    let target_id = store.select("#target").unwrap()[0];
+    assert_eq!(
+        store
+            .get_attribute(target_id, "data-label")
+            .expect("attribute lookup should succeed"),
+        Some("a\u{a0}b".to_string())
+    );
+    assert_eq!(store.text_content_for_node(target_id), "A\u{a0}B");
 }
