@@ -1339,7 +1339,10 @@ fn session_reflects_fieldset_and_output_form_through_inline_script_regression() 
     .expect("fieldset.form and output.form reflection should remain wired through Session");
 
     let out_id = session.dom().select("#out").unwrap()[0];
-    assert_eq!(session.dom().text_content_for_node(out_id), "owner:owner:null:null");
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "owner:owner:null:null"
+    );
 }
 
 #[test]
@@ -1627,6 +1630,25 @@ fn session_reflects_input_textarea_placeholder_through_inline_script_regression(
 }
 
 #[test]
+fn session_reflects_input_textarea_default_value_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='name' value='Initial'><textarea id='bio'>Hello</textarea><div id='out'></div><script>const input = document.getElementById('name'); const textarea = document.getElementById('bio'); const before = String(input.defaultValue) + '|' + String(textarea.defaultValue); input.defaultValue = 'Updated'; textarea.defaultValue = 'World'; const afterSet = String(input.defaultValue) + '|' + String(textarea.defaultValue) + '|' + String(input.getAttribute('value')) + '|' + String(textarea.textContent); document.getElementById('out').textContent = before + ';' + afterSet;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("defaultValue reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "Initial|Hello;Updated|World|Updated|World"
+    );
+}
+
+#[test]
 fn session_reflects_blank_pseudo_class_through_inline_script_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -1746,6 +1768,82 @@ fn session_reflects_input_range_bounds_through_inline_script_regression() {
     assert_eq!(
         session.dom().text_content_for_node(out_id),
         "||||0|0;2|6|2|6|1|1|high|low;||||0|0"
+    );
+}
+
+#[test]
+fn session_reflects_input_step_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='speed' type='number' step='0.5'><div id='out'></div><script>const input = document.getElementById('speed'); const before = String(input.step); input.step = '2'; const afterSet = String(input.step) + '|' + String(input.getAttribute('step')); input.removeAttribute('step'); const afterClear = String(input.step) + '|' + String(input.hasAttribute('step')); document.getElementById('out').textContent = before + ':' + afterSet + ':' + afterClear;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("step reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0.5:2|2:|false"
+    );
+}
+
+#[test]
+fn session_reflects_input_size_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='speed' type='text' size='5'><div id='out'></div><script>const input = document.getElementById('speed'); const before = String(input.size); input.size = 9; const afterSet = String(input.size) + '|' + String(input.getAttribute('size')); input.removeAttribute('size'); const afterClear = String(input.size) + '|' + String(input.hasAttribute('size')); document.getElementById('out').textContent = before + ':' + afterSet + ':' + afterClear;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("size reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "5:9|9:20|false"
+    );
+}
+
+#[test]
+fn session_reflects_textarea_rows_and_cols_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><textarea id='note' rows='3' cols='40'>Hello</textarea><div id='out'></div><script>const textarea = document.getElementById('note'); const before = String(textarea.rows) + '|' + String(textarea.cols); textarea.rows = 7; textarea.cols = 50; const afterSet = String(textarea.rows) + '|' + String(textarea.cols) + '|' + String(textarea.getAttribute('rows')) + '|' + String(textarea.getAttribute('cols')); textarea.removeAttribute('rows'); textarea.removeAttribute('cols'); document.getElementById('out').textContent = before + ':' + afterSet + ':' + String(textarea.rows) + '|' + String(textarea.cols);</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("textarea rows and cols reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "3|40:7|50|7|50:2|20"
+    );
+}
+
+#[test]
+fn session_reflects_textarea_wrap_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><textarea id='note'>Hello</textarea><div id='out'></div><script>const textarea = document.getElementById('note'); const before = textarea.wrap; textarea.wrap = 'hard'; const afterSet = String(textarea.wrap) + '|' + String(textarea.getAttribute('wrap')); textarea.removeAttribute('wrap'); const afterClear = String(textarea.wrap) + '|' + String(textarea.getAttribute('wrap')); textarea.wrap = 'off'; const afterOff = String(textarea.wrap) + '|' + String(textarea.getAttribute('wrap')); document.getElementById('out').textContent = before + ':' + afterSet + ':' + afterClear + ':' + afterOff;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("textarea wrap reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "soft:hard|hard:soft|null:off|off"
     );
 }
 
@@ -4121,6 +4219,44 @@ fn session_rejects_labels_on_non_labelable_elements_explicitly() {
         error
             .to_string()
             .contains("node is not a labelable element")
+    );
+}
+
+#[test]
+fn session_reflects_optgroup_disabled_and_label_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<select id='mode'><optgroup id='group' label='Cold'><option id='first' value='a'>A</option></optgroup></select><div id='out'></div><script>const group = document.getElementById('group'); const beforeDisabled = group.disabled; const beforeLabel = group.label; group.disabled = true; group.label = 'Warm'; document.getElementById('out').textContent = String(beforeDisabled) + ':' + beforeLabel + ':' + String(group.disabled) + ':' + String(group.getAttribute('disabled')) + ':' + group.label + ':' + group.getAttribute('label') + ':' + String(group.matches(':disabled')) + ':' + String(document.querySelectorAll(':disabled').length);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("optgroup reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false:Cold:true::Warm:Warm:true:1"
+    );
+}
+
+#[test]
+fn session_reflects_fieldset_disabled_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<fieldset id='group'></fieldset><div id='out'></div><script>const group = document.getElementById('group'); const before = group.disabled; group.disabled = true; document.getElementById('out').textContent = String(before) + ':' + String(group.disabled) + ':' + String(group.getAttribute('disabled')) + ':' + String(group.matches(':disabled')) + ':' + String(document.querySelectorAll(':disabled').length);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("fieldset reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false:true::true:1"
     );
 }
 

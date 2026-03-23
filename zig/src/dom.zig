@@ -250,6 +250,7 @@ pub const DomStore = struct {
     focused_node: ?NodeId = null,
     target_fragment: ?[]const u8 = null,
     selection: std.AutoHashMapUnmanaged(NodeId, SelectionState) = .{},
+    document_selection_cleared: bool = false,
     custom_validity: std.AutoHashMapUnmanaged(NodeId, []const u8) = .{},
 
     pub fn init(allocator: std.mem.Allocator) errors.Result(DomStore) {
@@ -265,6 +266,7 @@ pub const DomStore = struct {
             .focused_node = null,
             .target_fragment = null,
             .selection = .{},
+            .document_selection_cleared = false,
             .custom_validity = .{},
         };
         const arena_alloc = store.arena.allocator();
@@ -696,6 +698,7 @@ pub const DomStore = struct {
         }
 
         document.children.items.len = 0;
+        self.document_selection_cleared = false;
         return;
     }
 
@@ -1472,6 +1475,14 @@ pub const DomStore = struct {
         return normalizeSelectionState(stored, length);
     }
 
+    pub fn documentSelectionCleared(self: *const DomStore) bool {
+        return self.document_selection_cleared;
+    }
+
+    pub fn setDocumentSelectionCleared(self: *DomStore, cleared: bool) void {
+        self.document_selection_cleared = cleared;
+    }
+
     pub fn setSelectionRange(
         self: *DomStore,
         node_id: NodeId,
@@ -1482,6 +1493,7 @@ pub const DomStore = struct {
         const length = try self.selectionControlValueLength(node_id) orelse return error.DomError;
         const normalized = normalizeSelectionRange(start, end, length, direction);
         try self.selection.put(self.allocator, node_id, normalized);
+        self.document_selection_cleared = false;
         return;
     }
 

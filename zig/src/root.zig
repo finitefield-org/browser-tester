@@ -464,6 +464,17 @@ test "contract: Harness.scrollTo dispatches window and document scroll handlers"
     try subject.assertValue("#win", "10:20");
 }
 
+test "contract: Harness.fromHtml runs Element.scrollIntoView during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><section id='target'></section></main><div id='doc'></div><div id='win'></div><div id='out'></div><script>document.onscroll = () => { document.getElementById('doc').textContent += 'd'; }; window.onscroll = () => { document.getElementById('win').textContent += 'w'; }; window.scrollTo(10, 20); document.getElementById('target').scrollIntoView(); document.getElementById('out').textContent = document.getElementById('doc').textContent + ':' + document.getElementById('win').textContent + ':' + String(window.scrollX) + ':' + String(window.scrollY);</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "dd:ww:0:0");
+}
+
 test "failure: malformed html is rejected" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -3509,6 +3520,193 @@ test "contract: Harness.fromHtml runs selection state on inputs and textareas du
     try subject.assertValue("#out", "3:3:none:5:5:none:null:null:null|1:3:backward|0:5:none|null:null:null");
 }
 
+test "contract: Harness.fromHtml exposes selection snapshots through getSelection" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='name' value='Ada'><div id='out'></div><script>const name = document.getElementById('name'); name.focus(); name.setSelectionRange(1, 3, 'backward'); const selection = window.getSelection(); const docSelection = document.getSelection(); document.getElementById('out').textContent = String(selection) + '|' + String(docSelection) + '|' + String(selection.rangeCount) + '|' + String(selection.isCollapsed) + '|' + selection.type + '|' + selection.anchorNode.id + '|' + selection.focusNode.id + '|' + String(selection.anchorOffset) + '|' + String(selection.focusOffset) + '|' + String(selection.containsNode(name)) + '|' + String(selection.containsNode(document.body));</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "da|da|1|false|Range|name|name|3|1|true|false");
+}
+
+test "contract: Harness.fromHtml collapses selection snapshots during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='name' value='Ada Lovelace'><div id='out'></div><script>const name = document.getElementById('name'); name.focus(); name.setSelectionRange(4, 12, 'backward'); const selection = document.getSelection(); selection.collapseToStart(); const start = String(name.selectionStart) + ':' + String(name.selectionEnd) + ':' + name.selectionDirection + ':' + String(document.getSelection()); name.setSelectionRange(4, 12, 'backward'); selection.collapseToEnd(); const end = String(name.selectionStart) + ':' + String(name.selectionEnd) + ':' + name.selectionDirection + ':' + String(document.getSelection()); document.getElementById('out').textContent = start + '|' + end;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "4:4:none:|12:12:none:");
+}
+
+test "contract: Harness.fromHtml collapses selection snapshots to a node and offset during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='name' value='Ada Lovelace'><div id='out'></div><script>const name = document.getElementById('name'); name.focus(); name.setSelectionRange(4, 12, 'backward'); const selection = document.getSelection(); selection.collapse(name, 2); document.getElementById('out').textContent = String(name.selectionStart) + ':' + String(name.selectionEnd) + ':' + name.selectionDirection + ':' + String(document.getSelection()) + ':' + String(document.getSelection().rangeCount) + ':' + document.getSelection().type;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "2:2:none::1:Caret");
+}
+
+test "contract: Harness.fromHtml extends selection snapshots during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='name' value='Ada Lovelace'><div id='out'></div><script>const name = document.getElementById('name'); name.focus(); name.setSelectionRange(4, 12, 'backward'); const selection = document.getSelection(); selection.extend(name, 2); const current = document.getSelection(); document.getElementById('out').textContent = String(name.selectionStart) + ':' + String(name.selectionEnd) + ':' + name.selectionDirection + ':' + String(current) + ':' + String(current.rangeCount) + ':' + current.type + ':' + String(current.anchorOffset) + ':' + String(current.focusOffset);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "2:12:backward:a Lovelace:1:Range:12:2");
+}
+
+test "contract: Harness.fromHtml sets selection base and extent during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='name' value='Ada Lovelace'><div id='out'></div><script>const name = document.getElementById('name'); name.focus(); const selection = document.getSelection(); selection.setBaseAndExtent(name, 12, name, 4); const current = document.getSelection(); document.getElementById('out').textContent = String(name.selectionStart) + ':' + String(name.selectionEnd) + ':' + name.selectionDirection + ':' + String(current) + ':' + String(current.rangeCount) + ':' + current.type + ':' + String(current.anchorOffset) + ':' + String(current.focusOffset);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "4:12:backward:Lovelace:1:Range:12:4");
+}
+
+test "contract: Harness.fromHtml sets selection position during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='name' value='Ada Lovelace'><div id='out'></div><script>const name = document.getElementById('name'); name.focus(); const selection = document.getSelection(); selection.setPosition(name, 2); const current = document.getSelection(); document.getElementById('out').textContent = String(name.selectionStart) + ':' + String(name.selectionEnd) + ':' + name.selectionDirection + ':' + String(current) + ':' + String(current.rangeCount) + ':' + current.type + ':' + String(current.anchorOffset) + ':' + String(current.focusOffset);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "2:2:none::1:Caret:2:2");
+}
+
+test "contract: Harness.fromHtml selects all children during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='name' value='Ada'><div id='out'></div><script>const name = document.getElementById('name'); name.focus(); const selection = document.getSelection(); selection.selectAllChildren(name); const current = document.getSelection(); document.getElementById('out').textContent = String(name.selectionStart) + ':' + String(name.selectionEnd) + ':' + name.selectionDirection + ':' + String(current) + ':' + String(current.rangeCount) + ':' + current.type + ':' + String(current.anchorOffset) + ':' + String(current.focusOffset);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "0:3:none:Ada:1:Range:0:3");
+}
+
+test "contract: Harness.fromHtml exposes selection ranges during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='name' value='Ada'><div id='out'></div><script>const name = document.getElementById('name'); name.focus(); name.setSelectionRange(1, 3, 'backward'); const range = document.getSelection().getRangeAt(0); document.getElementById('out').textContent = String(range) + '|' + range.startContainer.id + ':' + range.endContainer.id + '|' + String(range.startOffset) + ':' + String(range.endOffset) + '|' + String(range.collapsed) + '|' + range.commonAncestorContainer.id;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "da|name:name|1:3|false|name");
+}
+
+test "contract: Harness.fromHtml exposes document.createRange during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><div id='out'></div><script>const range = document.createRange(); document.getElementById('out').textContent = String(range) + ':' + String(range.collapsed) + ':' + String(range.startContainer) + ':' + String(range.endContainer) + ':' + String(range.commonAncestorContainer) + ':' + String(range.startOffset) + ':' + String(range.endOffset);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", ":true:null:null:null:0:0");
+}
+
+test "contract: Harness.fromHtml clones selection ranges during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='name' value='Ada Lovelace'><div id='out'></div><script>const name = document.getElementById('name'); name.focus(); name.setSelectionRange(4, 12, 'backward'); const range = document.getSelection().getRangeAt(0); const clone = range.cloneRange(); document.getElementById('out').textContent = String(range) + '|' + String(clone) + '|' + clone.startContainer.id + ':' + clone.endContainer.id + '|' + String(clone.startOffset) + ':' + String(clone.endOffset) + '|' + String(clone.collapsed) + '|' + clone.commonAncestorContainer.id;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "Lovelace|Lovelace|name:name|4:12|false|name");
+}
+
+test "contract: Harness.fromHtml checks points in selection ranges during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='name' value='Ada Lovelace'><div id='out'></div><script>const name = document.getElementById('name'); name.focus(); name.setSelectionRange(4, 12, 'backward'); const range = document.getSelection().getRangeAt(0); document.getElementById('out').textContent = String(range.isPointInRange(name, 4)) + ':' + String(range.isPointInRange(name, 9)) + ':' + String(range.isPointInRange(name, 12)) + ':' + String(range.isPointInRange(name, 3));</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "true:true:true:false");
+}
+
+test "contract: Harness.fromHtml intersects selection ranges during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='name' value='Ada Lovelace'><div id='out'></div><script>const name = document.getElementById('name'); name.focus(); name.setSelectionRange(4, 12, 'backward'); const range = document.getSelection().getRangeAt(0); document.getElementById('out').textContent = String(range.intersectsNode(name));</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "true");
+}
+
+test "contract: Harness.fromHtml compares points in selection ranges during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='name' value='Ada Lovelace'><div id='out'></div><script>const name = document.getElementById('name'); name.focus(); name.setSelectionRange(4, 12, 'backward'); const range = document.getSelection().getRangeAt(0); document.getElementById('out').textContent = String(range.comparePoint(name, 4)) + ':' + String(range.comparePoint(name, 9)) + ':' + String(range.comparePoint(name, 12)) + ':' + String(range.comparePoint(name, 3));</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "0:0:0:-1");
+}
+
+test "contract: Harness.fromHtml deletes selection range contents during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='name' value='Ada Lovelace'><div id='out'></div><script>const name = document.getElementById('name'); name.focus(); name.setSelectionRange(4, 12, 'backward'); const range = document.getSelection().getRangeAt(0); range.deleteContents(); document.getElementById('out').textContent = name.value + '|' + String(name.selectionStart) + ':' + String(name.selectionEnd) + ':' + name.selectionDirection + '|' + String(document.getSelection().rangeCount) + ':' + String(document.getSelection().type) + ':' + String(document.getSelection().anchorOffset) + ':' + String(document.getSelection().focusOffset);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "Ada |4:4:none|1:Caret:4:4");
+}
+
+test "contract: Harness.fromHtml adds and removes selection ranges during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='name' value='Ada'><div id='count'></div><div id='out'></div><script>const name = document.getElementById('name'); const count = document.getElementById('count'); document.onselectionchange = () => { document.getElementById('count').textContent += '1'; }; name.focus(); name.setSelectionRange(1, 3, 'backward'); const selection = document.getSelection(); const range = selection.getRangeAt(0); selection.removeRange(range); const removedSelection = document.getSelection(); const removed = String(count.textContent) + ':' + String(removedSelection.rangeCount) + ':' + removedSelection.type + ':' + String(removedSelection.anchorNode) + ':' + String(name.selectionStart) + ':' + String(name.selectionEnd) + ':' + name.selectionDirection; selection.addRange(range); const restoredSelection = document.getSelection(); const restored = String(count.textContent) + ':' + String(restoredSelection.rangeCount) + ':' + restoredSelection.type + ':' + String(restoredSelection) + ':' + String(restoredSelection.anchorOffset) + ':' + String(restoredSelection.focusOffset) + ':' + String(name.selectionStart) + ':' + String(name.selectionEnd) + ':' + name.selectionDirection; selection.removeAllRanges(); selection.removeRange(range); const clearedSelection = document.getSelection(); const cleared = String(count.textContent) + ':' + String(clearedSelection.rangeCount) + ':' + clearedSelection.type + ':' + String(clearedSelection.anchorNode); document.getElementById('out').textContent = removed + '|' + restored + '|' + cleared;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "11:0:None:null:1:3:backward|111:1:Range:da:1:3:1:3:none|1111:0:None:null");
+}
+
+test "contract: Harness.fromHtml deletes selection snapshots from the document during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='name' value='Ada Lovelace'><div id='out'></div><script>const name = document.getElementById('name'); name.focus(); name.setSelectionRange(4, 12, 'backward'); const selection = document.getSelection(); selection.deleteFromDocument(); const current = document.getSelection(); document.getElementById('out').textContent = name.value + '|' + String(name.selectionStart) + ':' + String(name.selectionEnd) + ':' + name.selectionDirection + '|' + String(current.rangeCount) + ':' + current.type + ':' + String(current.anchorOffset) + ':' + String(current.focusOffset);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "Ada |4:4:none|1:Caret:4:4");
+}
+
+test "contract: Harness.fromHtml removes selection snapshots during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='name' value='Ada'><div id='out'></div><script>const name = document.getElementById('name'); document.getElementById('out').textContent = ''; document.onselectionchange = () => { document.getElementById('out').textContent += '1'; }; name.focus(); name.setSelectionRange(1, 3, 'backward'); const selection = document.getSelection(); selection.removeAllRanges(); const current = document.getSelection(); document.getElementById('out').textContent += '|' + String(current.rangeCount) + '|' + String(current.isCollapsed) + '|' + current.type + '|' + String(current.anchorNode);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "11|0|true|None|null");
+}
+
 test "contract: Harness.fromHtml runs selectionchange handlers during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -3632,6 +3830,215 @@ test "failure: Harness.fromHtml rejects selection setters on unsupported control
         Harness.fromHtml(
             allocator,
             "<main id='root'><input id='check' type='checkbox'></main><script>document.getElementById('check').setSelectionRange(0, 1);</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects getSelection on unsupported targets" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><input id='name' value='Ada'></main><script>document.getElementById('name').getSelection();</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects Selection.containsNode with invalid arguments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><input id='name' value='Ada'></main><script>document.getSelection().containsNode(1);</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects collapseToStart on empty selection snapshots" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>document.getSelection().collapseToStart();</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects selection collapse on unsupported targets" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='out'></div><script>const selection = document.getSelection(); selection.collapse(document.body, 1);</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects selection extend on unsupported targets" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='out'></div><script>const selection = document.getSelection(); selection.extend(document.body, 1);</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects selection base and extent across nodes" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><input id='name' value='Ada'><textarea id='bio'>Hello</textarea></main><script>const selection = document.getSelection(); selection.setBaseAndExtent(document.getElementById('name'), 1, document.getElementById('bio'), 2);</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects selection deleteFromDocument with extra arguments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><input id='name' value='Ada'></main><script>document.getSelection().deleteFromDocument(1);</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects selection setPosition with extra arguments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><input id='name' value='Ada'></main><script>document.getSelection().setPosition(document.getElementById('name'), 1, 2);</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects selection selectAllChildren with invalid arguments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><input id='name' value='Ada'></main><script>document.getSelection().selectAllChildren(document.body);</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects selection getRangeAt with invalid arguments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><input id='name' value='Ada'></main><script>document.getSelection().getRangeAt(1);</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects selection addRange with invalid arguments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><input id='name' value='Ada'></main><script>document.getSelection().addRange(document.body);</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects removeAllRanges with extra arguments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><input id='name' value='Ada'></main><script>const selection = document.getSelection(); selection.removeAllRanges(1);</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects selection removeRange with extra arguments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><input id='name' value='Ada'></main><script>const name = document.getElementById('name'); name.focus(); name.setSelectionRange(1, 3); const selection = document.getSelection(); const range = selection.getRangeAt(0); selection.removeRange(range, 1);</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects document.createRange with extra arguments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>document.createRange(1);</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects Range.cloneRange with extra arguments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><input id='name' value='Ada'></main><script>const name = document.getElementById('name'); name.focus(); name.setSelectionRange(1, 3); const range = document.getSelection().getRangeAt(0); range.cloneRange(1);</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects Range.deleteContents with extra arguments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><input id='name' value='Ada'></main><script>const name = document.getElementById('name'); name.focus(); name.setSelectionRange(1, 3); const range = document.getSelection().getRangeAt(0); range.deleteContents(1);</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects Range.isPointInRange with extra arguments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><input id='name' value='Ada'></main><script>const name = document.getElementById('name'); name.focus(); name.setSelectionRange(1, 3); const range = document.getSelection().getRangeAt(0); range.isPointInRange(name, 2, 3);</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects Range.intersectsNode with extra arguments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><input id='name' value='Ada'></main><script>const name = document.getElementById('name'); name.focus(); name.setSelectionRange(1, 3); const range = document.getSelection().getRangeAt(0); range.intersectsNode(name, 2);</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects Range.comparePoint with extra arguments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><input id='name' value='Ada'></main><script>const name = document.getElementById('name'); name.focus(); name.setSelectionRange(1, 3); const range = document.getSelection().getRangeAt(0); range.comparePoint(name, 2, 3);</script>",
         ),
     );
 }
@@ -6203,6 +6610,14 @@ test "failure: window.scrollTo rejects non-integer coordinates" {
     try std.testing.expectError(
         error.ScriptRuntime,
         Harness.fromHtml(allocator, "<script>window.scrollTo(1.5, 20);</script>"),
+    );
+}
+
+test "failure: Element.scrollIntoView rejects too many arguments" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(allocator, "<main id='target'></main><script>document.getElementById('target').scrollIntoView(true, false);</script>"),
     );
 }
 

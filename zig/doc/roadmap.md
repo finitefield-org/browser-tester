@@ -48,7 +48,7 @@ Delivered in this workspace:
 - event dispatch with bubbling and capture listeners, plus script-side `Element.focus()` / `Element.blur()` focus-state updates
 - default actions
 - form controls
-- text selection state on supported `input` / `textarea` controls (`selectionStart`, `selectionEnd`, `selectionDirection`, `setSelectionRange(...)`, `setRangeText(...)`, `select()`, and document-level `selectionchange` handlers)
+- text selection state on supported `input` / `textarea` controls (`selectionStart`, `selectionEnd`, `selectionDirection`, `setSelectionRange(...)`, `setRangeText(...)`, `select()`, document-level `selectionchange` handlers, and minimal `window.getSelection()` / `document.getSelection()` snapshots with `collapseToStart()` / `collapseToEnd()` / `containsNode(...)` / `removeAllRanges()` / `collapse(node, offset)` / `extend(node, offset)` / `setBaseAndExtent(...)` / `deleteFromDocument()` / `setPosition(node, offset)` / `selectAllChildren(node)` / `addRange(range)` / `removeRange(range)` / `getRangeAt(0)` / `Range.cloneRange()` / `Range.deleteContents()` / `Range.isPointInRange(...)` / `Range.comparePoint(...)`)
 - user-facing `Harness` actions
 
 Phase 3 is complete in this workspace.

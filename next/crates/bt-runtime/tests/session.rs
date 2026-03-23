@@ -1794,7 +1794,10 @@ fn session_resolves_fieldset_and_output_form_through_inline_scripts() {
     .expect("session should execute fieldset.form and output.form scripts");
 
     let out_id = session.dom().select("#out").unwrap()[0];
-    assert_eq!(session.dom().text_content_for_node(out_id), "owner:owner:null:null");
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "owner:owner:null:null"
+    );
 }
 
 #[test]
@@ -2105,6 +2108,82 @@ fn session_resolves_input_range_bounds_through_inline_scripts() {
 }
 
 #[test]
+fn session_resolves_input_step_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><input id='speed' type='number' step='0.5'><div id='out'></div><script>const input = document.getElementById('speed'); const before = String(input.step); input.step = '2'; const afterSet = String(input.step) + '|' + String(input.getAttribute('step')); input.removeAttribute('step'); const afterClear = String(input.step) + '|' + String(input.hasAttribute('step')); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterClear;</script></div>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute step scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0.5;2|2;|false"
+    );
+}
+
+#[test]
+fn session_resolves_input_size_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><input id='speed' type='text' size='5'><div id='out'></div><script>const input = document.getElementById('speed'); const before = String(input.size); input.size = 9; const afterSet = String(input.size) + '|' + String(input.getAttribute('size')); input.removeAttribute('size'); const afterClear = String(input.size) + '|' + String(input.hasAttribute('size')); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterClear;</script></div>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute size scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "5;9|9;20|false"
+    );
+}
+
+#[test]
+fn session_resolves_textarea_rows_and_cols_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><textarea id='note' rows='3' cols='40'>Hello</textarea><div id='out'></div><script>const textarea = document.getElementById('note'); const before = String(textarea.rows) + '|' + String(textarea.cols); textarea.rows = 7; textarea.cols = 50; const afterSet = String(textarea.rows) + '|' + String(textarea.cols) + '|' + String(textarea.getAttribute('rows')) + '|' + String(textarea.getAttribute('cols')); textarea.removeAttribute('rows'); textarea.removeAttribute('cols'); document.getElementById('out').textContent = before + ';' + afterSet + ';' + String(textarea.rows) + '|' + String(textarea.cols);</script></div>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute textarea rows/cols scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "3|40;7|50|7|50;2|20"
+    );
+}
+
+#[test]
+fn session_resolves_textarea_wrap_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><textarea id='note'>Hello</textarea><div id='out'></div><script>const textarea = document.getElementById('note'); const before = textarea.wrap; textarea.wrap = 'hard'; const afterSet = String(textarea.wrap) + '|' + String(textarea.getAttribute('wrap')); textarea.removeAttribute('wrap'); const afterClear = String(textarea.wrap) + '|' + String(textarea.getAttribute('wrap')); textarea.wrap = 'off'; const afterOff = String(textarea.wrap) + '|' + String(textarea.getAttribute('wrap')); document.getElementById('out').textContent = before + ':' + afterSet + ':' + afterClear + ':' + afterOff;</script></div>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute textarea.wrap scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "soft:hard|hard:soft|null:off|off"
+    );
+}
+
+#[test]
 fn session_resolves_input_pattern_through_inline_scripts() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -2139,6 +2218,25 @@ fn session_resolves_input_textarea_placeholder_through_inline_scripts() {
     assert_eq!(
         session.dom().text_content_for_node(out_id),
         "Name|Bio|2;Full name|Biography|Full name|Biography|2;0"
+    );
+}
+
+#[test]
+fn session_resolves_input_textarea_default_value_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><input id='name' value='Initial'><textarea id='bio'>Hello</textarea></div><div id='out'></div><script>const input = document.getElementById('name'); const textarea = document.getElementById('bio'); const before = String(input.defaultValue) + '|' + String(textarea.defaultValue); input.defaultValue = 'Updated'; textarea.defaultValue = 'World'; const afterSet = String(input.defaultValue) + '|' + String(textarea.defaultValue) + '|' + String(input.getAttribute('value')) + '|' + String(textarea.textContent); document.getElementById('out').textContent = before + ';' + afterSet;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute defaultValue scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "Initial|Hello;Updated|World|Updated|World"
     );
 }
 
@@ -2185,6 +2283,42 @@ fn session_rejects_non_input_pattern_explicitly() {
     .expect_err("textarea pattern should be rejected");
 
     assert!(session.to_string().contains("pattern"));
+}
+
+#[test]
+fn session_rejects_non_input_step_explicitly() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<script>document.createElement('div').step;</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("div step should be rejected");
+
+    assert!(session.to_string().contains("step"));
+}
+
+#[test]
+fn session_rejects_non_input_size_explicitly() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<script>document.createElement('div').size;</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("div size should be rejected");
+
+    assert!(session.to_string().contains("size"));
+}
+
+#[test]
+fn session_rejects_non_textarea_cols_explicitly() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<script>document.createElement('div').cols;</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("div cols should be rejected");
+
+    assert!(session.to_string().contains("cols"));
 }
 
 #[test]
@@ -2499,6 +2633,44 @@ fn session_rejects_non_option_label_access_explicitly() {
     .expect_err("non-option label access should fail explicitly");
 
     assert!(session.to_string().contains("label"));
+}
+
+#[test]
+fn session_resolves_optgroup_disabled_and_label_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<select id='mode'><optgroup id='group' label='Cold'><option id='first' value='a'>A</option></optgroup></select><div id='out'></div><script>const group = document.getElementById('group'); const beforeDisabled = group.disabled; const beforeLabel = group.label; group.disabled = true; group.label = 'Warm'; document.getElementById('out').textContent = String(beforeDisabled) + ':' + beforeLabel + ':' + String(group.disabled) + ':' + String(group.getAttribute('disabled')) + ':' + group.label + ':' + group.getAttribute('label') + ':' + String(group.matches(':disabled')) + ':' + String(document.querySelectorAll(':disabled').length);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute optgroup reflection scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false:Cold:true::Warm:Warm:true:1"
+    );
+}
+
+#[test]
+fn session_resolves_fieldset_disabled_through_inline_scripts() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<fieldset id='group'></fieldset><div id='out'></div><script>const group = document.getElementById('group'); const before = group.disabled; group.disabled = true; document.getElementById('out').textContent = String(before) + ':' + String(group.disabled) + ':' + String(group.getAttribute('disabled')) + ':' + String(group.matches(':disabled')) + ':' + String(document.querySelectorAll(':disabled').length);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should execute fieldset reflection scripts");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false:true::true:1"
+    );
 }
 
 #[test]

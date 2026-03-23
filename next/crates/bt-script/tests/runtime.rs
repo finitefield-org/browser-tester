@@ -8571,6 +8571,216 @@ fn runtime_resolves_input_range_bounds_access() {
 }
 
 #[test]
+fn runtime_resolves_input_step_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("speed", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "input");
+    host.seed_attribute(ElementHandle::new(1), "type", "number");
+    host.seed_attribute(ElementHandle::new(1), "step", "0.5");
+
+    runtime
+        .eval_program(
+            "const input = document.getElementById('speed'); const before = String(input.step); input.step = '2'; const afterSet = String(input.step) + '|' + String(input.getAttribute('step')); input.removeAttribute('step'); const afterClear = String(input.step) + '|' + String(input.hasAttribute('step')); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterClear;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("input step should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("0.5;2|2;|false")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "step".to_string())),
+        None
+    );
+}
+
+#[test]
+fn runtime_resolves_input_size_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("speed", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "input");
+    host.seed_attribute(ElementHandle::new(1), "size", "5");
+
+    runtime
+        .eval_program(
+            "const input = document.getElementById('speed'); const before = String(input.size); input.size = 9; const afterSet = String(input.size) + '|' + String(input.getAttribute('size')); input.removeAttribute('size'); const afterClear = String(input.size) + '|' + String(input.hasAttribute('size')); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterClear;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("input size should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("5;9|9;20|false")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "size".to_string())),
+        None
+    );
+}
+
+#[test]
+fn runtime_resolves_textarea_rows_and_cols_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("note", ElementHandle::new(1), "Hello");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "textarea");
+    host.seed_attribute(ElementHandle::new(1), "rows", "3");
+    host.seed_attribute(ElementHandle::new(1), "cols", "40");
+
+    runtime
+        .eval_program(
+            "const textarea = document.getElementById('note'); const before = String(textarea.rows) + '|' + String(textarea.cols); textarea.rows = 7; textarea.cols = 50; const afterSet = String(textarea.rows) + '|' + String(textarea.cols) + '|' + String(textarea.getAttribute('rows')) + '|' + String(textarea.getAttribute('cols')); textarea.removeAttribute('rows'); textarea.removeAttribute('cols'); document.getElementById('out').textContent = before + ';' + afterSet + ';' + String(textarea.rows) + '|' + String(textarea.cols);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("textarea rows and cols should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("3|40;7|50|7|50;2|20")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "rows".to_string())),
+        None
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "cols".to_string())),
+        None
+    );
+}
+
+#[test]
+fn runtime_resolves_textarea_wrap_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("note", ElementHandle::new(1), "Hello");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "textarea");
+
+    runtime
+        .eval_program(
+            "const textarea = document.getElementById('note'); const before = textarea.wrap; textarea.wrap = 'hard'; const afterSet = String(textarea.wrap) + '|' + String(textarea.getAttribute('wrap')); textarea.removeAttribute('wrap'); const afterClear = String(textarea.wrap) + '|' + String(textarea.getAttribute('wrap')); textarea.wrap = 'off'; const afterOff = String(textarea.wrap) + '|' + String(textarea.getAttribute('wrap')); document.getElementById('out').textContent = before + ':' + afterSet + ':' + afterClear + ':' + afterOff;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("textarea wrap should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("soft:hard|hard:soft|null:off|off")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "wrap".to_string()))
+            .map(String::as_str),
+        Some("off")
+    );
+}
+
+#[test]
+fn runtime_resolves_input_and_textarea_default_value_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("name", ElementHandle::new(1), "");
+    host.seed_element("bio", ElementHandle::new(2), "Hello");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "input");
+    host.seed_element_tag_name(ElementHandle::new(2), "textarea");
+    host.seed_attribute(ElementHandle::new(1), "value", "Initial");
+
+    runtime
+        .eval_program(
+            "const input = document.getElementById('name'); const textarea = document.getElementById('bio'); const before = String(input.defaultValue) + '|' + String(textarea.defaultValue); input.defaultValue = 'Updated'; textarea.defaultValue = 'World'; const afterSet = String(input.defaultValue) + '|' + String(textarea.defaultValue) + '|' + String(input.getAttribute('value')) + '|' + String(textarea.textContent); document.getElementById('out').textContent = before + ';' + afterSet;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("defaultValue should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("Initial|Hello;Updated|World|Updated|World")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "value".to_string()))
+            .map(String::as_str),
+        Some("Updated")
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("World")
+    );
+}
+
+#[test]
+fn runtime_rejects_non_textarea_wrap_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "div");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('box').wrap;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-textarea wrap access should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported member access: `wrap` on element value")
+    );
+}
+
+#[test]
+fn runtime_rejects_non_form_control_default_value_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "div");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('box').defaultValue;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-form-control defaultValue access should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported member access: `defaultValue` on element value")
+    );
+}
+
+#[test]
 fn runtime_resolves_input_pattern_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -8673,6 +8883,60 @@ fn runtime_rejects_non_input_pattern_access() {
         .expect_err("non-input pattern access should fail");
 
     assert!(error.to_string().contains("pattern"));
+}
+
+#[test]
+fn runtime_rejects_non_input_step_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("button", ElementHandle::new(1), "Button");
+    host.seed_element_tag_name(ElementHandle::new(1), "button");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('button').step = '2';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-input step access should fail");
+
+    assert!(error.to_string().contains("step"));
+}
+
+#[test]
+fn runtime_rejects_non_input_size_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("button", ElementHandle::new(1), "Button");
+    host.seed_element_tag_name(ElementHandle::new(1), "button");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('button').size = 2;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-input size access should fail");
+
+    assert!(error.to_string().contains("size"));
+}
+
+#[test]
+fn runtime_rejects_non_textarea_cols_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "div");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('box').cols = 10;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-textarea cols access should fail");
+
+    assert!(error.to_string().contains("cols"));
 }
 
 #[test]
@@ -9238,6 +9502,58 @@ fn runtime_rejects_non_option_label_access() {
         .expect_err("non-option label access should fail");
 
     assert!(error.to_string().contains("label"));
+}
+
+#[test]
+fn runtime_resolves_optgroup_disabled_and_label_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("group", ElementHandle::new(1), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "optgroup");
+    host.seed_element_matches(ElementHandle::new(1), ":disabled", true);
+    host.seed_document_query_selector_all(":disabled", vec![ElementHandle::new(1)]);
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(2), "div");
+
+    runtime
+        .eval_program(
+            "const group = document.getElementById('group'); const beforeDisabled = group.disabled; const beforeLabel = group.label; group.disabled = true; group.label = 'Warm'; document.getElementById('out').textContent = String(beforeDisabled) + ':' + beforeLabel + ':' + String(group.disabled) + ':' + String(group.getAttribute('disabled')) + ':' + group.label + ':' + group.getAttribute('label') + ':' + String(group.matches(':disabled')) + ':' + String(document.querySelectorAll(':disabled').length);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("optgroup reflection should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("false::true::Warm:Warm:true:1")
+    );
+}
+
+#[test]
+fn runtime_resolves_fieldset_disabled_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("group", ElementHandle::new(1), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "fieldset");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(2), "div");
+
+    runtime
+        .eval_program(
+            "const group = document.getElementById('group'); const before = group.disabled; group.disabled = true; document.getElementById('out').textContent = String(before) + ':' + String(group.disabled) + ':' + String(group.getAttribute('disabled'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("fieldset reflection should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("false:true:")
+    );
 }
 
 #[test]

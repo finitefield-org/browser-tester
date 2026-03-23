@@ -195,6 +195,28 @@ fn option_text_is_available_end_to_end() -> browser_tester_next::Result<()> {
 }
 
 #[test]
+fn optgroup_disabled_and_label_are_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><select id='mode'><optgroup id='group' label='Cold'><option id='first' value='a'>A</option></optgroup></select><div id='out'></div><script>const group = document.getElementById('group'); const beforeDisabled = group.disabled; const beforeLabel = group.label; group.disabled = true; group.label = 'Warm'; document.getElementById('out').textContent = String(beforeDisabled) + ':' + beforeLabel + ':' + String(group.disabled) + ':' + String(group.getAttribute('disabled')) + ':' + group.label + ':' + group.getAttribute('label') + ':' + String(group.matches(':disabled')) + ':' + String(document.querySelectorAll(':disabled').length);</script></main>",
+    )?;
+
+    harness.assert_text("#out", "false:Cold:true::Warm:Warm:true:1")?;
+    harness.assert_exists("#group")?;
+    Ok(())
+}
+
+#[test]
+fn fieldset_disabled_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><fieldset id='group'></fieldset><div id='out'></div><script>const group = document.getElementById('group'); const before = group.disabled; group.disabled = true; document.getElementById('out').textContent = String(before) + ':' + String(group.disabled) + ':' + String(group.getAttribute('disabled')) + ':' + String(group.matches(':disabled')) + ':' + String(document.querySelectorAll(':disabled').length);</script></main>",
+    )?;
+
+    harness.assert_text("#out", "false:true::true:1")?;
+    harness.assert_exists("#group")?;
+    Ok(())
+}
+
+#[test]
 fn select_multiple_is_available_end_to_end() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><select id='mode'><option id='second' value='b'>B</option></select><div id='out'></div><script>const select = document.getElementById('mode'); const before = select.multiple; select.multiple = true; const afterSet = select.multiple; const afterSetAttr = select.getAttribute('multiple'); select.multiple = false; const afterClear = select.multiple; document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(afterSetAttr) + ':' + String(afterClear);</script></main>",
@@ -239,6 +261,50 @@ fn select_size_is_available_end_to_end() -> browser_tester_next::Result<()> {
 
     harness.assert_text("#out", "0:3:3:0:0")?;
     harness.assert_exists("#mode")?;
+    Ok(())
+}
+
+#[test]
+fn input_step_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><input id='speed' type='number' step='0.5'><div id='out'></div><script>const input = document.getElementById('speed'); const before = String(input.step); input.step = '2'; const afterSet = String(input.step) + '|' + String(input.getAttribute('step')); input.removeAttribute('step'); const afterClear = String(input.step) + '|' + String(input.hasAttribute('step')); document.getElementById('out').textContent = before + ':' + afterSet + ':' + afterClear;</script></main>",
+    )?;
+
+    harness.assert_text("#out", "0.5:2|2:|false")?;
+    harness.assert_exists("#speed")?;
+    Ok(())
+}
+
+#[test]
+fn input_size_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><input id='speed' type='text' size='5'><div id='out'></div><script>const input = document.getElementById('speed'); const before = String(input.size); input.size = 9; const afterSet = String(input.size) + '|' + String(input.getAttribute('size')); input.removeAttribute('size'); const afterClear = String(input.size) + '|' + String(input.hasAttribute('size')); document.getElementById('out').textContent = before + ':' + afterSet + ':' + afterClear;</script></main>",
+    )?;
+
+    harness.assert_text("#out", "5:9|9:20|false")?;
+    harness.assert_exists("#speed")?;
+    Ok(())
+}
+
+#[test]
+fn textarea_rows_and_cols_are_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><textarea id='note' rows='3' cols='40'>Hello</textarea><div id='out'></div><script>const textarea = document.getElementById('note'); const before = String(textarea.rows) + '|' + String(textarea.cols); textarea.rows = 7; textarea.cols = 50; const afterSet = String(textarea.rows) + '|' + String(textarea.cols) + '|' + String(textarea.getAttribute('rows')) + '|' + String(textarea.getAttribute('cols')); textarea.removeAttribute('rows'); textarea.removeAttribute('cols'); const afterClear = String(textarea.rows) + '|' + String(textarea.cols); document.getElementById('out').textContent = before + ':' + afterSet + ':' + afterClear;</script></main>",
+    )?;
+
+    harness.assert_text("#out", "3|40:7|50|7|50:2|20")?;
+    harness.assert_exists("#note")?;
+    Ok(())
+}
+
+#[test]
+fn textarea_wrap_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><textarea id='note'>Hello</textarea><div id='out'></div><script>const textarea = document.getElementById('note'); const before = textarea.wrap; textarea.wrap = 'hard'; const afterSet = String(textarea.wrap) + '|' + String(textarea.getAttribute('wrap')); textarea.removeAttribute('wrap'); const afterClear = String(textarea.wrap) + '|' + String(textarea.getAttribute('wrap')); textarea.wrap = 'off'; const afterOff = String(textarea.wrap) + '|' + String(textarea.getAttribute('wrap')); document.getElementById('out').textContent = before + ':' + afterSet + ':' + afterClear + ':' + afterOff;</script></main>",
+    )?;
+
+    harness.assert_text("#out", "soft:hard|hard:soft|null:off|off")?;
+    harness.assert_exists("#note")?;
     Ok(())
 }
 
@@ -471,6 +537,18 @@ fn input_textarea_placeholder_is_available_end_to_end() -> browser_tester_next::
         "#out",
         "Name|Bio|2;Full name|Biography|Full name|Biography|2;0",
     )?;
+    harness.assert_exists("#name")?;
+    harness.assert_exists("#bio")?;
+    Ok(())
+}
+
+#[test]
+fn input_textarea_default_value_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><input id='name' value='Initial'><textarea id='bio'>Hello</textarea><div id='out'></div><script>const input = document.getElementById('name'); const textarea = document.getElementById('bio'); const before = String(input.defaultValue) + '|' + String(textarea.defaultValue); input.defaultValue = 'Updated'; textarea.defaultValue = 'World'; const afterSet = String(input.defaultValue) + '|' + String(textarea.defaultValue) + '|' + String(input.getAttribute('value')) + '|' + String(textarea.textContent); document.getElementById('out').textContent = before + ';' + afterSet;</script></main>",
+    )?;
+
+    harness.assert_text("#out", "Initial|Hello;Updated|World|Updated|World")?;
     harness.assert_exists("#name")?;
     harness.assert_exists("#bio")?;
     Ok(())

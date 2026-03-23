@@ -141,6 +141,13 @@ fn form_target_reflection(value: Option<&str>) -> String {
     value.unwrap_or_default().to_string()
 }
 
+fn textarea_wrap_reflection(value: Option<&str>) -> String {
+    match value.map(|value| value.trim().to_ascii_lowercase()) {
+        Some(value) if matches!(value.as_str(), "soft" | "hard" | "off") => value,
+        _ => "soft".to_string(),
+    }
+}
+
 fn resolve_url_reflection(value: Option<&str>, base_uri: &str) -> String {
     let Some(value) = value.map(str::trim) else {
         return base_uri.to_string();
@@ -1011,6 +1018,13 @@ fn eval_assignment<H: HostBindings>(
                 (Value::Element(element), "value") => {
                     host.element_set_value(element, &as_string(&value))
                 }
+                (Value::Element(element), "defaultValue") => {
+                    match host.element_tag_name(element)?.as_str() {
+                        "input" => host.element_set_attribute(element, "value", &as_string(&value)),
+                        "textarea" => host.element_set_text_content(element, &as_string(&value)),
+                        _ => Err(unsupported_member_access(property, "element")),
+                    }
+                }
                 (Value::Element(element), "checked") => {
                     host.element_set_checked(element, is_truthy(&value))
                 }
@@ -1064,7 +1078,8 @@ fn eval_assignment<H: HostBindings>(
                 }
                 (Value::Element(element), "disabled") => {
                     match host.element_tag_name(element)?.as_str() {
-                        "input" | "textarea" | "button" | "select" | "option" => {
+                        "input" | "textarea" | "button" | "select" | "option" | "optgroup"
+                        | "fieldset" => {
                             if is_truthy(&value) {
                                 host.element_set_attribute(element, "disabled", "")
                             } else {
@@ -1076,11 +1091,12 @@ fn eval_assignment<H: HostBindings>(
                     }
                 }
                 (Value::Element(element), "label") => {
-                    if host.element_tag_name(element)? != "option" {
-                        return Err(unsupported_member_access(property, "element"));
+                    match host.element_tag_name(element)?.as_str() {
+                        "option" | "optgroup" => {
+                            host.element_set_attribute(element, "label", &as_string(&value))
+                        }
+                        _ => Err(unsupported_member_access(property, "element")),
                     }
-
-                    host.element_set_attribute(element, "label", &as_string(&value))
                 }
                 (Value::Element(element), "text") => {
                     if host.element_tag_name(element)? != "option" {
@@ -1333,15 +1349,63 @@ fn eval_assignment<H: HostBindings>(
                     }
                 }
                 (Value::Element(element), "size") => {
-                    if host.element_tag_name(element)? != "select" {
+                    match host.element_tag_name(element)?.as_str() {
+                        "select" | "input" => {
+                            let Some(size) = index_from_value(&value) else {
+                                return Err(ScriptError::new(
+                                    "size expects a non-negative integer",
+                                ));
+                            };
+
+                            host.element_set_attribute(element, "size", &size.to_string())
+                        }
+                        _ => Err(unsupported_member_access(property, "element")),
+                    }
+                }
+                (Value::Element(element), "rows") => {
+                    match host.element_tag_name(element)?.as_str() {
+                        "textarea" => {
+                            let Some(rows) = index_from_value(&value) else {
+                                return Err(ScriptError::new(
+                                    "rows expects a non-negative integer",
+                                ));
+                            };
+
+                            host.element_set_attribute(element, "rows", &rows.to_string())
+                        }
+                        _ => Err(unsupported_member_access(property, "element")),
+                    }
+                }
+                (Value::Element(element), "cols") => {
+                    match host.element_tag_name(element)?.as_str() {
+                        "textarea" => {
+                            let Some(cols) = index_from_value(&value) else {
+                                return Err(ScriptError::new(
+                                    "cols expects a non-negative integer",
+                                ));
+                            };
+
+                            host.element_set_attribute(element, "cols", &cols.to_string())
+                        }
+                        _ => Err(unsupported_member_access(property, "element")),
+                    }
+                }
+                (Value::Element(element), "wrap") => {
+                    match host.element_tag_name(element)?.as_str() {
+                        "textarea" => host.element_set_attribute(
+                            element,
+                            "wrap",
+                            &as_string(&value).trim().to_ascii_lowercase(),
+                        ),
+                        _ => Err(unsupported_member_access(property, "element")),
+                    }
+                }
+                (Value::Element(element), "step") => {
+                    if host.element_tag_name(element)? != "input" {
                         return Err(unsupported_member_access(property, "element"));
                     }
 
-                    let Some(size) = index_from_value(&value) else {
-                        return Err(ScriptError::new("size expects a non-negative integer"));
-                    };
-
-                    host.element_set_attribute(element, "size", &size.to_string())
+                    host.element_set_attribute(element, "step", &as_string(&value))
                 }
                 (Value::Element(element), "className") => {
                     host.element_set_attribute(element, "class", &as_string(&value))
@@ -2088,6 +2152,16 @@ fn eval_member<H: HostBindings>(
         Value::Element(element) if property == "value" => {
             Ok(Value::String(host.element_value(element)?))
         }
+        Value::Element(element) if property == "defaultValue" => {
+            match host.element_tag_name(element)?.as_str() {
+                "input" => Ok(Value::String(
+                    host.element_get_attribute(element, "value")?
+                        .unwrap_or_default(),
+                )),
+                "textarea" => Ok(Value::String(host.element_text_content(element)?)),
+                _ => Err(unsupported_member_access(property, "element")),
+            }
+        }
         Value::Element(element) if property == "length" => match host.element_tag_name(element)? {
             tag if tag == "form" => Ok(Value::Number(
                 host.html_collection_form_elements_items(element)?.len() as f64,
@@ -2253,6 +2327,16 @@ fn eval_member<H: HostBindings>(
                     .unwrap_or_default(),
             ))
         }
+        Value::Element(element) if property == "step" => {
+            if host.element_tag_name(element)? != "input" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            Ok(Value::String(
+                host.element_get_attribute(element, "step")?
+                    .unwrap_or_default(),
+            ))
+        }
         Value::Element(element) if property == "placeholder" => {
             match host.element_tag_name(element)?.as_str() {
                 "input" | "textarea" => Ok(Value::String(
@@ -2358,15 +2442,19 @@ fn eval_member<H: HostBindings>(
             }
         }
         Value::Element(element) if property == "size" => {
-            if host.element_tag_name(element)? != "select" {
-                return Err(unsupported_member_access(property, "element"));
+            match host.element_tag_name(element)?.as_str() {
+                "select" => Ok(Value::Number(
+                    host.element_get_attribute(element, "size")?
+                        .and_then(|value| value.parse::<usize>().ok())
+                        .unwrap_or(0) as f64,
+                )),
+                "input" => Ok(Value::Number(
+                    host.element_get_attribute(element, "size")?
+                        .and_then(|value| value.parse::<usize>().ok())
+                        .unwrap_or(20) as f64,
+                )),
+                _ => Err(unsupported_member_access(property, "element")),
             }
-
-            Ok(Value::Number(
-                host.element_get_attribute(element, "size")?
-                    .and_then(|value| value.parse::<usize>().ok())
-                    .unwrap_or(0) as f64,
-            ))
         }
         Value::Element(element) if property == "type" => {
             match host.element_tag_name(element)?.as_str() {
@@ -2390,23 +2478,27 @@ fn eval_member<H: HostBindings>(
             option_index_for_element(element, host)? as f64,
         )),
         Value::Element(element) if property == "form" => form_owner_for_element(element, host),
-        Value::Element(element) if property == "disabled" => {
+        Value::Element(element) if property == "disabled" => match host
+            .element_tag_name(element)?
+            .as_str()
+        {
+            "input" | "textarea" | "button" | "select" | "option" | "optgroup" | "fieldset" => Ok(
+                Value::Boolean(host.element_get_attribute(element, "disabled")?.is_some()),
+            ),
+            _ => Err(unsupported_member_access(property, "element")),
+        },
+        Value::Element(element) if property == "label" => {
             match host.element_tag_name(element)?.as_str() {
-                "input" | "textarea" | "button" | "select" | "option" => Ok(Value::Boolean(
-                    host.element_get_attribute(element, "disabled")?.is_some(),
+                "option" => Ok(Value::String(
+                    host.element_get_attribute(element, "label")?
+                        .unwrap_or(host.element_text_content(element)?),
+                )),
+                "optgroup" => Ok(Value::String(
+                    host.element_get_attribute(element, "label")?
+                        .unwrap_or_default(),
                 )),
                 _ => Err(unsupported_member_access(property, "element")),
             }
-        }
-        Value::Element(element) if property == "label" => {
-            if host.element_tag_name(element)? != "option" {
-                return Err(unsupported_member_access(property, "element"));
-            }
-
-            Ok(Value::String(
-                host.element_get_attribute(element, "label")?
-                    .unwrap_or(host.element_text_content(element)?),
-            ))
         }
         Value::Element(element) if property == "text" => {
             if host.element_tag_name(element)? != "option" {
@@ -2486,9 +2578,37 @@ fn eval_member<H: HostBindings>(
         Value::Element(element) if property == "parentElement" => {
             value_for_parent_element(NodeHandle::new(element.raw()), host)
         }
-        Value::Element(element) if property == "rows" => Ok(Value::HtmlCollection(
-            HtmlCollectionTarget::TableRows(element),
-        )),
+        Value::Element(element) if property == "rows" => {
+            if host.element_tag_name(element)? == "textarea" {
+                Ok(Value::Number(positive_index_from_attribute(
+                    host.element_get_attribute(element, "rows")?,
+                    2,
+                ) as f64))
+            } else {
+                Ok(Value::HtmlCollection(HtmlCollectionTarget::TableRows(
+                    element,
+                )))
+            }
+        }
+        Value::Element(element) if property == "cols" => {
+            if host.element_tag_name(element)? != "textarea" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            Ok(Value::Number(positive_index_from_attribute(
+                host.element_get_attribute(element, "cols")?,
+                20,
+            ) as f64))
+        }
+        Value::Element(element) if property == "wrap" => {
+            if host.element_tag_name(element)? != "textarea" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            Ok(Value::String(textarea_wrap_reflection(
+                host.element_get_attribute(element, "wrap")?.as_deref(),
+            )))
+        }
         Value::Element(element) if property == "cells" => Ok(Value::HtmlCollection(
             HtmlCollectionTarget::RowCells(element),
         )),
@@ -6569,6 +6689,13 @@ fn index_from_value(value: &Value) -> Option<usize> {
         Value::String(value) => value.parse::<usize>().ok(),
         _ => None,
     }
+}
+
+fn positive_index_from_attribute(value: Option<String>, default: usize) -> usize {
+    value
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
 }
 
 fn scroll_coordinate(value: &Value, method: &str) -> Result<i64> {

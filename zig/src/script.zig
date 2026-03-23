@@ -1492,6 +1492,16 @@ const SelectionSnapshot = struct {
     type_text: []const u8 = "None",
 };
 
+const RangeSnapshot = struct {
+    selected_text: []const u8 = "",
+    start_container: ?dom.NodeId = null,
+    end_container: ?dom.NodeId = null,
+    common_ancestor_container: ?dom.NodeId = null,
+    start_offset: usize = 0,
+    end_offset: usize = 0,
+    collapsed: bool = true,
+};
+
 fn urlFragmentText(url: []const u8) []const u8 {
     const fragment_index = std.mem.indexOfScalar(u8, url, '#') orelse return "";
     if (fragment_index + 1 >= url.len) return "";
@@ -1524,6 +1534,7 @@ const Value = union(enum) {
     dom_rect: *DomRectState,
     dom_rect_list: *DomRectListState,
     selection: SelectionSnapshot,
+    range: RangeSnapshot,
     validity_state: ValidityState,
     math: *MathState,
     crypto: *CryptoState,
@@ -4838,6 +4849,36 @@ fn evalMember(
             }
             break :blk error.ScriptRuntime;
         },
+        .range => |range| blk: {
+            if (std.mem.eql(u8, member.property, "startContainer")) {
+                if (range.start_container) |node_id| {
+                    break :blk Value{ .element = node_id };
+                }
+                break :blk Value{ .null_value = {} };
+            }
+            if (std.mem.eql(u8, member.property, "endContainer")) {
+                if (range.end_container) |node_id| {
+                    break :blk Value{ .element = node_id };
+                }
+                break :blk Value{ .null_value = {} };
+            }
+            if (std.mem.eql(u8, member.property, "commonAncestorContainer")) {
+                if (range.common_ancestor_container) |node_id| {
+                    break :blk Value{ .element = node_id };
+                }
+                break :blk Value{ .null_value = {} };
+            }
+            if (std.mem.eql(u8, member.property, "startOffset")) {
+                break :blk Value{ .number = @floatFromInt(range.start_offset) };
+            }
+            if (std.mem.eql(u8, member.property, "endOffset")) {
+                break :blk Value{ .number = @floatFromInt(range.end_offset) };
+            }
+            if (std.mem.eql(u8, member.property, "collapsed")) {
+                break :blk Value{ .boolean = range.collapsed };
+            }
+            break :blk error.ScriptRuntime;
+        },
         .attribute => |attribute| blk: {
             if (std.mem.eql(u8, member.property, "name")) {
                 break :blk Value{ .string = attribute.name };
@@ -5649,6 +5690,17 @@ fn evalMethodCall(
             if (args.len != 1) return error.ScriptRuntime;
             const position = try nodeCompareDocumentPositionValue(allocator, host, bindings, object, args[0]);
             break :blk Value{ .number = @floatFromInt(position) };
+        } else if (std.mem.eql(u8, method, "createRange")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk Value{ .range = .{
+                .selected_text = "",
+                .start_container = null,
+                .end_container = null,
+                .common_ancestor_container = null,
+                .start_offset = 0,
+                .end_offset = 0,
+                .collapsed = true,
+            } };
         } else if (std.mem.eql(u8, method, "open")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             try host.documentOpen();
@@ -6296,6 +6348,13 @@ fn evalMethodCall(
             if (args.len != 1) return error.ScriptRuntime;
             const position = try nodeCompareDocumentPositionValue(allocator, host, bindings, object, args[0]);
             break :blk Value{ .number = @floatFromInt(position) };
+        } else if (std.mem.eql(u8, method, "scrollIntoView")) blk: {
+            if (args.len > 1) return error.ScriptRuntime;
+            if (args.len == 1) {
+                _ = try evalExpr(allocator, host, bindings, args[0]);
+            }
+            try host.scrollTo(0, 0);
+            break :blk Value{ .undefined_value = {} };
         } else if (std.mem.eql(u8, method, "getBoundingClientRect")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk try makeDomRectValue(allocator, host, element);
@@ -7795,9 +7854,345 @@ fn evalMethodCall(
             if (args.len != 0) return error.ScriptRuntime;
             break :blk Value{ .string = "[object DOMRectList]" };
         } else error.ScriptRuntime,
+        .range => |range| if (std.mem.eql(u8, method, "toString")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk Value{ .string = range.selected_text };
+        } else if (std.mem.eql(u8, method, "cloneRange")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk Value{ .range = range };
+        } else if (std.mem.eql(u8, method, "comparePoint")) blk: {
+            if (args.len != 2) return error.ScriptRuntime;
+            const node_value = try evalExpr(allocator, host, bindings, args[0]);
+            const node_id = try nodeValueId(node_value);
+            const point_value = try evalExpr(allocator, host, bindings, args[1]);
+            const point = try selectionIndexFromValue(allocator, point_value);
+            const start_container = range.start_container orelse return error.ScriptRuntime;
+            const end_container = range.end_container orelse return error.ScriptRuntime;
+            if (!sameNodeId(start_container, end_container)) return error.ScriptRuntime;
+
+            const start = if (range.start_offset <= range.end_offset) range.start_offset else range.end_offset;
+            const end = if (range.start_offset <= range.end_offset) range.end_offset else range.start_offset;
+            if (sameNodeId(node_id, start_container)) {
+                break :blk Value{ .number = if (point < start) -1 else if (point > end) 1 else 0 };
+            }
+
+            const relation = dom.compareDocumentPosition(host.domStore(), node_id, start_container);
+            const DISCONNECTED: u16 = 0x01;
+            const PRECEDING: u16 = 0x02;
+            const FOLLOWING: u16 = 0x04;
+            const CONTAINS: u16 = 0x08;
+            const CONTAINED_BY: u16 = 0x10;
+            if ((relation & DISCONNECTED) != 0 or (relation & CONTAINS) != 0 or (relation & CONTAINED_BY) != 0) {
+                return error.ScriptRuntime;
+            }
+            if ((relation & FOLLOWING) != 0) {
+                break :blk Value{ .number = -1 };
+            }
+            if ((relation & PRECEDING) != 0) {
+                break :blk Value{ .number = 1 };
+            }
+            return error.ScriptRuntime;
+        } else if (std.mem.eql(u8, method, "deleteContents")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            const node_id = range.start_container orelse break :blk Value{ .undefined_value = {} };
+            const end_node_id = range.end_container orelse break :blk Value{ .undefined_value = {} };
+            if (!sameNodeId(node_id, end_node_id)) return error.ScriptRuntime;
+            if (range.start_offset == range.end_offset) {
+                break :blk Value{ .undefined_value = {} };
+            }
+            host.domStoreMut().setRangeText(node_id, "", range.start_offset, range.end_offset, .start) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            try host.dispatchSelectionChange();
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "isPointInRange")) blk: {
+            if (args.len != 2) return error.ScriptRuntime;
+            const node_value = try evalExpr(allocator, host, bindings, args[0]);
+            const node_id = try nodeValueId(node_value);
+            const point_value = try evalExpr(allocator, host, bindings, args[1]);
+            const point = try selectionIndexFromValue(allocator, point_value);
+            const start_container = range.start_container orelse break :blk Value{ .boolean = false };
+            const end_container = range.end_container orelse break :blk Value{ .boolean = false };
+            if (!sameNodeId(node_id, start_container) or !sameNodeId(node_id, end_container)) {
+                break :blk Value{ .boolean = false };
+            }
+            const start = if (range.start_offset <= range.end_offset) range.start_offset else range.end_offset;
+            const end = if (range.start_offset <= range.end_offset) range.end_offset else range.start_offset;
+            break :blk Value{ .boolean = point >= start and point <= end };
+        } else if (std.mem.eql(u8, method, "intersectsNode")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const node_value = try evalExpr(allocator, host, bindings, args[0]);
+            const node_id = try nodeValueId(node_value);
+            const start_container = range.start_container orelse break :blk Value{ .boolean = false };
+            const end_container = range.end_container orelse break :blk Value{ .boolean = false };
+            break :blk Value{ .boolean = sameNodeId(node_id, start_container) and sameNodeId(node_id, end_container) };
+        } else error.ScriptRuntime,
         .selection => |selection| if (std.mem.eql(u8, method, "toString")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk Value{ .string = selection.selected_text };
+        } else if (std.mem.eql(u8, method, "getRangeAt")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const index_value = try evalExpr(allocator, host, bindings, args[0]);
+            const index = try asNodeListIndex(index_value);
+            if (index != 0) return error.ScriptRuntime;
+            const node_id = selection.anchor_node orelse return error.ScriptRuntime;
+            if (selection.range_count == 0) return error.ScriptRuntime;
+            const start_offset = if (selection.anchor_offset <= selection.focus_offset) selection.anchor_offset else selection.focus_offset;
+            const end_offset = if (selection.anchor_offset <= selection.focus_offset) selection.focus_offset else selection.anchor_offset;
+            _ = node_id;
+            break :blk Value{ .range = .{
+                .selected_text = selection.selected_text,
+                .start_container = selection.anchor_node,
+                .end_container = selection.focus_node orelse selection.anchor_node,
+                .common_ancestor_container = selection.anchor_node,
+                .start_offset = start_offset,
+                .end_offset = end_offset,
+                .collapsed = selection.is_collapsed,
+            } };
+        } else if (std.mem.eql(u8, method, "addRange")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const range_value = try evalExpr(allocator, host, bindings, args[0]);
+            const range = switch (range_value) {
+                .range => |range| range,
+                else => return error.ScriptRuntime,
+            };
+            const node_id = range.start_container orelse return error.ScriptRuntime;
+            if (range.end_container == null or !sameNodeId(node_id, range.end_container.?)) return error.ScriptRuntime;
+            if (range.common_ancestor_container != null and !sameNodeId(node_id, range.common_ancestor_container.?)) return error.ScriptRuntime;
+            host.domStoreMut().setSelectionRange(node_id, range.start_offset, range.end_offset, .none) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            try host.dispatchSelectionChange();
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "removeRange")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            if (host.domStore().documentSelectionCleared()) {
+                break :blk Value{ .undefined_value = {} };
+            }
+            const range_value = try evalExpr(allocator, host, bindings, args[0]);
+            const range = switch (range_value) {
+                .range => |range| range,
+                else => return error.ScriptRuntime,
+            };
+            const node_id = range.start_container orelse break :blk Value{ .undefined_value = {} };
+            const current = host.domStore().selectionStateForNode(node_id) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            const state = current orelse break :blk Value{ .undefined_value = {} };
+            if (state.start != range.start_offset or state.end != range.end_offset) {
+                break :blk Value{ .undefined_value = {} };
+            }
+            host.domStoreMut().setDocumentSelectionCleared(true);
+            try host.dispatchSelectionChange();
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "removeAllRanges")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            if (host.domStore().documentSelectionCleared()) {
+                break :blk Value{ .undefined_value = {} };
+            }
+            const active_element = host.documentActiveElement() orelse break :blk Value{ .undefined_value = {} };
+            const current = host.domStore().selectionStateForNode(active_element) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            if (current == null) {
+                break :blk Value{ .undefined_value = {} };
+            }
+            host.domStoreMut().setDocumentSelectionCleared(true);
+            try host.dispatchSelectionChange();
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "collapse")) blk: {
+            if (args.len != 2) return error.ScriptRuntime;
+            const node_value = try evalExpr(allocator, host, bindings, args[0]);
+            const node_id = switch (node_value) {
+                .element => |node_id| node_id,
+                .node => |node_id| node_id,
+                else => return error.ScriptRuntime,
+            };
+            const offset_value = try evalExpr(allocator, host, bindings, args[1]);
+            const offset = try selectionIndexFromValue(allocator, offset_value);
+            const current = host.domStore().selectionStateForNode(node_id) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            const state = current orelse return error.ScriptRuntime;
+            _ = state;
+            host.domStoreMut().setSelectionRange(node_id, offset, offset, .none) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            try host.dispatchSelectionChange();
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "collapseToStart")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            const node_id = selection.anchor_node orelse return error.ScriptRuntime;
+            const current = host.domStore().selectionStateForNode(node_id) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            const state = current orelse return error.ScriptRuntime;
+            host.domStoreMut().setSelectionRange(node_id, state.start, state.start, .none) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            try host.dispatchSelectionChange();
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "collapseToEnd")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            const node_id = selection.focus_node orelse return error.ScriptRuntime;
+            const current = host.domStore().selectionStateForNode(node_id) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            const state = current orelse return error.ScriptRuntime;
+            host.domStoreMut().setSelectionRange(node_id, state.end, state.end, .none) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            try host.dispatchSelectionChange();
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "extend")) blk: {
+            if (args.len != 2) return error.ScriptRuntime;
+            const node_value = try evalExpr(allocator, host, bindings, args[0]);
+            const node_id = switch (node_value) {
+                .element => |node_id| node_id,
+                .node => |node_id| node_id,
+                else => return error.ScriptRuntime,
+            };
+            const offset_value = try evalExpr(allocator, host, bindings, args[1]);
+            const offset = try selectionIndexFromValue(allocator, offset_value);
+            const current = host.domStore().selectionStateForNode(node_id) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            const state = current orelse return error.ScriptRuntime;
+            const anchor = switch (state.direction) {
+                .backward => state.end,
+                .forward, .none => state.start,
+            };
+            const next_start = if (offset < anchor) offset else anchor;
+            const next_end = if (offset < anchor) anchor else offset;
+            const next_direction: dom.SelectionDirection = if (next_start == next_end) .none else if (offset < anchor) .backward else .forward;
+            host.domStoreMut().setSelectionRange(node_id, next_start, next_end, next_direction) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            try host.dispatchSelectionChange();
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "setPosition")) blk: {
+            if (args.len != 2) return error.ScriptRuntime;
+            const node_value = try evalExpr(allocator, host, bindings, args[0]);
+            const node_id = switch (node_value) {
+                .element => |node_id| node_id,
+                .node => |node_id| node_id,
+                else => return error.ScriptRuntime,
+            };
+            const offset_value = try evalExpr(allocator, host, bindings, args[1]);
+            const offset = try selectionIndexFromValue(allocator, offset_value);
+            const current = host.domStore().selectionStateForNode(node_id) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            const state = current orelse return error.ScriptRuntime;
+            _ = state;
+            host.domStoreMut().setSelectionRange(node_id, offset, offset, .none) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            try host.dispatchSelectionChange();
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "setBaseAndExtent")) blk: {
+            if (args.len != 4) return error.ScriptRuntime;
+
+            const anchor_node_value = try evalExpr(allocator, host, bindings, args[0]);
+            const anchor_node_id = switch (anchor_node_value) {
+                .element => |node_id| node_id,
+                .node => |node_id| node_id,
+                else => return error.ScriptRuntime,
+            };
+            const anchor_offset_value = try evalExpr(allocator, host, bindings, args[1]);
+            const anchor_offset = try selectionIndexFromValue(allocator, anchor_offset_value);
+
+            const focus_node_value = try evalExpr(allocator, host, bindings, args[2]);
+            const focus_node_id = switch (focus_node_value) {
+                .element => |node_id| node_id,
+                .node => |node_id| node_id,
+                else => return error.ScriptRuntime,
+            };
+            const focus_offset_value = try evalExpr(allocator, host, bindings, args[3]);
+            const focus_offset = try selectionIndexFromValue(allocator, focus_offset_value);
+
+            if (!sameNodeId(anchor_node_id, focus_node_id)) return error.ScriptRuntime;
+            const current = host.domStore().selectionStateForNode(anchor_node_id) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            if (current == null) return error.ScriptRuntime;
+
+            const next_start = if (anchor_offset < focus_offset) anchor_offset else focus_offset;
+            const next_end = if (anchor_offset < focus_offset) focus_offset else anchor_offset;
+            const next_direction: dom.SelectionDirection = if (next_start == next_end) .none else if (anchor_offset < focus_offset) .forward else .backward;
+            host.domStoreMut().setSelectionRange(anchor_node_id, next_start, next_end, next_direction) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            try host.dispatchSelectionChange();
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "deleteFromDocument")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            const node_id = selection.anchor_node orelse break :blk Value{ .undefined_value = {} };
+            const current = host.domStore().selectionStateForNode(node_id) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            const state = current orelse break :blk Value{ .undefined_value = {} };
+            if (state.start == state.end) {
+                break :blk Value{ .undefined_value = {} };
+            }
+            host.domStoreMut().setRangeText(node_id, "", null, null, .start) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            try host.dispatchSelectionChange();
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "containsNode")) blk: {
+            if (args.len < 1 or args.len > 2) return error.ScriptRuntime;
+            const node_value = try evalExpr(allocator, host, bindings, args[0]);
+            if (args.len == 2) {
+                _ = try evalExpr(allocator, host, bindings, args[1]);
+            }
+            const contains = switch (node_value) {
+                .element => |node_id| selection.anchor_node != null and sameNodeId(selection.anchor_node.?, node_id),
+                .node => |node_id| selection.anchor_node != null and sameNodeId(selection.anchor_node.?, node_id),
+                .document, .template_content, .null_value, .undefined_value => false,
+                else => return error.ScriptRuntime,
+            };
+            break :blk Value{ .boolean = contains };
+        } else if (std.mem.eql(u8, method, "selectAllChildren")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const node_value = try evalExpr(allocator, host, bindings, args[0]);
+            const node_id = switch (node_value) {
+                .element => |node_id| node_id,
+                .node => |node_id| node_id,
+                else => return error.ScriptRuntime,
+            };
+            const current = host.domStore().selectionStateForNode(node_id) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            const state = current orelse return error.ScriptRuntime;
+            _ = state;
+            const value = try host.domStore().valueForNode(allocator, node_id);
+            defer allocator.free(value);
+            host.domStoreMut().setSelectionRange(node_id, 0, value.len, .none) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            try host.dispatchSelectionChange();
+            break :blk Value{ .undefined_value = {} };
         } else error.ScriptRuntime,
         .collection_iterator => |iterator| if (std.mem.eql(u8, method, "next")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
@@ -13283,6 +13678,7 @@ fn asString(allocator: std.mem.Allocator, value: Value) errors.Result([]const u8
         .media_list => |media| try media.currentText(),
         .dom_rect => "[object DOMRect]",
         .dom_rect_list => "[object DOMRectList]",
+        .range => |range| range.selected_text,
         .selection => |selection| selection.selected_text,
         .collection_entry => "[object IteratorEntry]",
         .event => "[object Event]",
@@ -13306,7 +13702,7 @@ fn isTruthy(value: Value) bool {
         .boolean => |flag| flag,
         .number => |number| number != 0,
         .string => |text| text.len != 0,
-        .element, .node, .template_content, .file_list, .attribute, .named_node_map, .class_list, .part_list, .rel_list, .dataset, .node_list, .collection_iterator, .iterator_result, .collection_entry, .html_collection, .document_scripts, .document_anchors, .document_style_sheets, .css_rule_list, .css_rule, .style_sheet, .style_declaration, .radio_node_list, .media_query_list, .validity_state, .string_list, .media_list, .date, .dom_rect, .dom_rect_list, .selection, .math, .crypto, .navigator, .mime_type_array, .performance, .screen, .screen_orientation, .storage, .location, .history, .event, .document, .window, .function => true,
+        .element, .node, .template_content, .file_list, .attribute, .named_node_map, .class_list, .part_list, .rel_list, .dataset, .node_list, .collection_iterator, .iterator_result, .collection_entry, .html_collection, .document_scripts, .document_anchors, .document_style_sheets, .css_rule_list, .css_rule, .style_sheet, .style_declaration, .radio_node_list, .media_query_list, .validity_state, .string_list, .media_list, .date, .dom_rect, .dom_rect_list, .range, .selection, .math, .crypto, .navigator, .mime_type_array, .performance, .screen, .screen_orientation, .storage, .location, .history, .event, .document, .window, .function => true,
     };
 }
 
@@ -13707,11 +14103,22 @@ fn makeDomRectListValue(allocator: std.mem.Allocator, host: anytype, element: do
 
 fn makeSelectionValue(allocator: std.mem.Allocator, host: anytype) errors.Result(Value) {
     const selection = SelectionSnapshot{};
+    if (host.domStore().documentSelectionCleared()) {
+        return .{ .selection = selection };
+    }
     const active_element = host.documentActiveElement();
     if (active_element) |element| {
         if (host.domStore().selectionStateForNode(element) catch null) |state| {
             const value = try host.domStore().valueForNode(allocator, element);
             defer allocator.free(value);
+            const anchor_offset = switch (state.direction) {
+                .backward => state.end,
+                .forward, .none => state.start,
+            };
+            const focus_offset = switch (state.direction) {
+                .backward => state.start,
+                .forward, .none => state.end,
+            };
             const selected_text = try allocator.dupe(u8, value[state.start..state.end]);
             return .{ .selection = .{
                 .selected_text = selected_text,
@@ -13719,8 +14126,8 @@ fn makeSelectionValue(allocator: std.mem.Allocator, host: anytype) errors.Result
                 .is_collapsed = state.start == state.end,
                 .anchor_node = element,
                 .focus_node = element,
-                .anchor_offset = state.start,
-                .focus_offset = state.end,
+                .anchor_offset = anchor_offset,
+                .focus_offset = focus_offset,
                 .type_text = if (state.start == state.end) "Caret" else "Range",
             } };
         }
