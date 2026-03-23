@@ -319,10 +319,17 @@ pub struct MatchMediaCall {
     pub query: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MatchMediaListenerCall {
+    pub query: String,
+    pub method: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MatchMediaMocks {
     matches: Vec<(String, bool)>,
     calls: Vec<MatchMediaCall>,
+    listener_calls: Vec<MatchMediaListenerCall>,
 }
 
 impl MatchMediaMocks {
@@ -333,6 +340,13 @@ impl MatchMediaMocks {
     pub fn record_call(&mut self, query: impl Into<String>) {
         self.calls.push(MatchMediaCall {
             query: query.into(),
+        });
+    }
+
+    pub fn record_listener_call(&mut self, query: impl Into<String>, method: impl Into<String>) {
+        self.listener_calls.push(MatchMediaListenerCall {
+            query: query.into(),
+            method: method.into(),
         });
     }
 
@@ -360,9 +374,14 @@ impl MatchMediaMocks {
         &self.calls
     }
 
+    pub fn listener_calls(&self) -> &[MatchMediaListenerCall] {
+        &self.listener_calls
+    }
+
     pub fn reset(&mut self) {
         self.matches.clear();
         self.calls.clear();
+        self.listener_calls.clear();
     }
 }
 
@@ -1587,6 +1606,11 @@ impl Session {
                     self.dom
                         .set_form_control_checked(node_id, !checked)
                         .map_err(SessionError::Dom)?;
+                    if matches!(input_type.as_deref(), Some("checkbox")) {
+                        self.dom
+                            .set_form_control_indeterminate(node_id, false)
+                            .map_err(SessionError::Dom)?;
+                    }
                     self.dispatch_dom_event(node_id, "input", true, false)?;
                     self.dispatch_dom_event(node_id, "change", true, false)?;
                 }
@@ -1735,6 +1759,11 @@ impl Session {
 
     fn node_id_to_node_handle(node_id: NodeId) -> NodeHandle {
         NodeHandle::new(((node_id.generation() as u64) << 32) | node_id.index() as u64)
+    }
+
+    fn element_handle_to_node_id(handle: ElementHandle) -> NodeId {
+        let raw = handle.raw();
+        NodeId::new(raw as u32, (raw >> 32) as u32)
     }
 
     fn node_contains_id(dom: &DomStore, container: NodeId, candidate: NodeId) -> bool {
@@ -2543,6 +2572,26 @@ impl Session {
         self.dom
             .set_document_title(value.to_string())
             .map_err(SessionError::Dom)
+    }
+
+    pub fn document_write(&mut self, html: &str) -> Result<(), SessionError> {
+        self.dom
+            .append_html_to_document(html)
+            .map_err(SessionError::Dom)
+    }
+
+    pub fn document_writeln(&mut self, html: &str) -> Result<(), SessionError> {
+        let mut html = html.to_string();
+        html.push('\n');
+        self.document_write(&html)
+    }
+
+    pub fn document_open(&mut self) -> Result<(), SessionError> {
+        self.dom.document_open().map_err(SessionError::Dom)
+    }
+
+    pub fn document_close(&mut self) -> Result<(), SessionError> {
+        Ok(())
     }
 
     pub fn document_location(&self) -> String {
@@ -3584,6 +3633,18 @@ impl HostBindings for Session {
         Ok(Self::node_id_to_handle(node_id))
     }
 
+    fn document_create_element_ns(
+        &mut self,
+        namespace_uri: &str,
+        tag_name: &str,
+    ) -> bt_script::Result<ElementHandle> {
+        let node_id = self
+            .dom
+            .create_element_ns(namespace_uri, tag_name)
+            .map_err(ScriptError::new)?;
+        Ok(Self::node_id_to_handle(node_id))
+    }
+
     fn document_create_text_node(&mut self, text: &str) -> bt_script::Result<NodeHandle> {
         let node_id = self.dom.create_text_node(text).map_err(ScriptError::new)?;
         Ok(Self::node_id_to_node_handle(node_id))
@@ -3624,6 +3685,21 @@ impl HostBindings for Session {
         Ok(Session::document_has_focus(self))
     }
 
+    fn element_click(&mut self, element: ElementHandle) -> bt_script::Result<()> {
+        Session::click_node(self, Self::element_handle_to_node_id(element))
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn element_focus(&mut self, element: ElementHandle) -> bt_script::Result<()> {
+        Session::focus_node(self, Self::element_handle_to_node_id(element))
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn element_blur(&mut self, element: ElementHandle) -> bt_script::Result<()> {
+        Session::blur_node(self, Self::element_handle_to_node_id(element))
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
     fn document_visibility_state(&mut self) -> bt_script::Result<String> {
         Ok(Session::document_visibility_state(self).to_string())
     }
@@ -3639,6 +3715,22 @@ impl HostBindings for Session {
     fn document_set_title(&mut self, value: &str) -> bt_script::Result<()> {
         Session::set_document_title(self, value)
             .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_write(&mut self, html: &str) -> bt_script::Result<()> {
+        Session::document_write(self, html).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_writeln(&mut self, html: &str) -> bt_script::Result<()> {
+        Session::document_writeln(self, html).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_open(&mut self) -> bt_script::Result<()> {
+        Session::document_open(self).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_close(&mut self) -> bt_script::Result<()> {
+        Session::document_close(self).map_err(|error| ScriptError::new(error.to_string()))
     }
 
     fn document_location(&mut self) -> bt_script::Result<String> {
@@ -3702,6 +3794,20 @@ impl HostBindings for Session {
             .match_media_mut()
             .resolve(query)
             .map_err(ScriptError::new)
+    }
+
+    fn match_media_add_listener(&mut self, query: &str) -> bt_script::Result<()> {
+        self.mocks
+            .match_media_mut()
+            .record_listener_call(query, "addListener");
+        Ok(())
+    }
+
+    fn match_media_remove_listener(&mut self, query: &str) -> bt_script::Result<()> {
+        self.mocks
+            .match_media_mut()
+            .record_listener_call(query, "removeListener");
+        Ok(())
     }
 
     fn window_open(
@@ -4897,6 +5003,22 @@ impl HostBindings for Session {
         let node_id = self.node_id_for_handle(element)?;
         self.dom
             .set_form_control_checked(node_id, checked)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_indeterminate(&mut self, element: ElementHandle) -> bt_script::Result<bool> {
+        let node_id = self.node_id_for_handle(element)?;
+        Ok(self.dom.indeterminate_for_node(node_id).unwrap_or(false))
+    }
+
+    fn element_set_indeterminate(
+        &mut self,
+        element: ElementHandle,
+        indeterminate: bool,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .set_form_control_indeterminate(node_id, indeterminate)
             .map_err(ScriptError::new)
     }
 

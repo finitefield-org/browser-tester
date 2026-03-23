@@ -1477,6 +1477,16 @@ pub const Session = struct {
         return;
     }
 
+    pub fn resetNode(self: *Session, node_id: dom.NodeId) errors.Result(void) {
+        try self.ensureElementNode(node_id);
+        const node = self.dom_store.nodeAt(node_id) orelse return error.DomError;
+        if (!isFormNode(node)) return error.DomError;
+
+        _ = try self.dispatchDomEvent(node_id, "reset", true, true);
+        try self.flush();
+        return;
+    }
+
     fn dispatchDomEvent(
         self: *Session,
         node_id: dom.NodeId,
@@ -1669,6 +1679,12 @@ pub const Session = struct {
         if (isSubmitControl(element.tag_name, input_type)) {
             if (self.findAssociatedForm(node_id)) |form_id| {
                 _ = try self.dispatchDomEvent(form_id, "submit", true, true);
+            }
+        }
+
+        if (isResetControl(element.tag_name, input_type)) {
+            if (self.findAssociatedForm(node_id)) |form_id| {
+                try self.resetNode(form_id);
             }
         }
 
@@ -2363,6 +2379,27 @@ const BootstrapHost = struct {
         return self.assignLocation(url_source);
     }
 
+    pub fn submitNode(self: *BootstrapHost, node_id: dom.NodeId) errors.Result(void) {
+        const node = self.dom_store.nodeAt(node_id) orelse return error.DomError;
+        const form_id = if (isFormNode(node))
+            node_id
+        else
+            self.findAssociatedForm(node_id) orelse return error.DomError;
+
+        var runtime = script.ScriptRuntime{};
+        _ = try runtime.dispatchDomEvent(self.allocator, self, form_id, "submit", true, true);
+        return;
+    }
+
+    pub fn resetNode(self: *BootstrapHost, node_id: dom.NodeId) errors.Result(void) {
+        const node = self.dom_store.nodeAt(node_id) orelse return error.DomError;
+        if (!isFormNode(node)) return error.DomError;
+
+        var runtime = script.ScriptRuntime{};
+        _ = try runtime.dispatchDomEvent(self.allocator, self, node_id, "reset", true, true);
+        return;
+    }
+
     pub fn matchMedia(self: *BootstrapHost, query_source: []const u8) errors.Result(bool) {
         return matchMediaQuery(self.match_media, query_source);
     }
@@ -2524,6 +2561,17 @@ const BootstrapHost = struct {
 
     pub fn clearTimer(self: *BootstrapHost, timer_id: u64) void {
         clearScheduledTimer(self.timers, timer_id);
+    }
+
+    fn findAssociatedForm(self: *const BootstrapHost, node_id: dom.NodeId) ?dom.NodeId {
+        var current = self.dom_store.nodeAt(node_id).?.parent;
+        while (current) |parent_id| {
+            const parent = self.dom_store.nodeAt(parent_id) orelse break;
+            if (isFormNode(parent)) return parent_id;
+            current = parent.parent;
+        }
+
+        return null;
     }
 };
 
@@ -2905,6 +2953,18 @@ fn isSubmitControl(tag_name: []const u8, input_type: ?[]const u8) bool {
     if (std.mem.eql(u8, tag_name, "input")) {
         const value = input_type orelse "text";
         return std.mem.eql(u8, value, "submit") or std.mem.eql(u8, value, "image");
+    }
+
+    return false;
+}
+
+fn isResetControl(tag_name: []const u8, input_type: ?[]const u8) bool {
+    if (std.mem.eql(u8, tag_name, "button")) {
+        return std.mem.eql(u8, input_type orelse "submit", "reset");
+    }
+
+    if (std.mem.eql(u8, tag_name, "input")) {
+        return std.mem.eql(u8, input_type orelse "text", "reset");
     }
 
     return false;

@@ -14,6 +14,7 @@ pub(crate) enum Statement {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AssignTarget {
+    Identifier(String),
     Property { object: Expr, property: String },
 }
 

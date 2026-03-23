@@ -137,6 +137,26 @@ fn document_title_helpers_work() {
 }
 
 #[test]
+fn document_open_clears_the_root_tree() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<html id='html'><head><title>Title</title></head><body id='body'><main id='main'>Body</main></body></html>",
+        )
+        .expect("HTML should parse");
+
+    store
+        .document_open()
+        .expect("document.open should clear the current root tree");
+
+    assert!(store.select("#main").unwrap().is_empty());
+    assert!(store.document_element_id().is_none());
+    assert!(store.body_element_id().is_none());
+    assert!(store.head_element_id().is_none());
+    assert_eq!(store.document_title(), "");
+}
+
+#[test]
 fn malformed_html_is_reported_explicitly() {
     let mut store = DomStore::new_empty();
     let error = store
@@ -488,6 +508,29 @@ fn valid_and_invalid_pseudo_classes_match_form_validation_state() {
 }
 
 #[test]
+fn length_constraints_match_text_controls() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html(
+            "<main id='root'><input id='short' type='text' minlength='2' value='a'><input id='long' type='text' maxlength='2' value='abc'><input id='optional' type='text' minlength='2'><textarea id='area' minlength='2' maxlength='4'>ab</textarea></main>",
+        )
+        .expect("HTML should parse");
+
+    let short_id = store.select("#short").unwrap()[0];
+    let long_id = store.select("#long").unwrap()[0];
+    let optional_id = store.select("#optional").unwrap()[0];
+    let area_id = store.select("#area").unwrap()[0];
+
+    assert_eq!(store.select(":invalid").unwrap(), vec![short_id, long_id]);
+    assert_eq!(store.select(":valid").unwrap(), vec![optional_id, area_id]);
+    assert_eq!(store.select("#short:invalid").unwrap(), vec![short_id]);
+    assert_eq!(store.select("#long:invalid").unwrap(), vec![long_id]);
+    assert_eq!(store.select("#optional:valid").unwrap(), vec![optional_id]);
+    assert_eq!(store.select("#area:valid").unwrap(), vec![area_id]);
+    assert!(store.select(":invalid()").is_err());
+}
+
+#[test]
 fn range_input_without_explicit_value_defaults_to_in_range() {
     let mut store = DomStore::new_empty();
     store
@@ -517,7 +560,12 @@ fn focus_pseudo_classes_match_focused_nodes() {
     store.set_focused_node(Some(field_id));
 
     assert_eq!(store.select(":focus").unwrap(), vec![field_id]);
+    assert_eq!(store.select(":focus-visible").unwrap(), vec![field_id]);
     assert_eq!(store.select("#field:focus").unwrap(), vec![field_id]);
+    assert_eq!(
+        store.select("#field:focus-visible").unwrap(),
+        vec![field_id]
+    );
     assert_eq!(
         store.select("#section:focus-within").unwrap(),
         vec![section_id]
@@ -525,6 +573,7 @@ fn focus_pseudo_classes_match_focused_nodes() {
     assert_eq!(store.select("#root:focus-within").unwrap(), vec![root_id]);
     assert!(store.select("#outside:focus-within").unwrap().is_empty());
     assert!(store.select(":focus()").is_err());
+    assert!(store.select(":focus-visible()").is_err());
 }
 
 #[test]
@@ -1026,12 +1075,26 @@ fn where_pseudo_class_matches_supported_compound_selector_lists() {
 }
 
 #[test]
+fn attribute_selector_single_unknown_flag_is_tolerated() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html("<main data-kind='app'></main>")
+        .unwrap();
+
+    assert_eq!(
+        store.select("main[data-kind=app x]").unwrap(),
+        vec![NodeId::new(1, 0)]
+    );
+    assert!(store.select("main[data-kind=APP x]").unwrap().is_empty());
+}
+
+#[test]
 fn unsupported_pseudo_class_syntax_fails_explicitly() {
     let mut store = DomStore::new_empty();
     store.bootstrap_html("<main class='app'></main>").unwrap();
 
     let error = store
-        .select("main:where([data-kind=app x])")
+        .select("main:where([data-kind=app x y])")
         .expect_err("broader CSS parsing inside :where is not supported yet");
     assert!(
         error.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr]")
@@ -1050,7 +1113,7 @@ fn unsupported_not_argument_syntax_fails_explicitly() {
     store.bootstrap_html("<main class='app'></main>").unwrap();
 
     let error = store
-        .select("main:not([data-kind=app x])")
+        .select("main:not([data-kind=app x y])")
         .expect_err("broader CSS parsing inside :not is not supported yet");
     assert!(
         error.contains("supported forms are #id, .class, tag, tag.class, #id.class, [attr]")

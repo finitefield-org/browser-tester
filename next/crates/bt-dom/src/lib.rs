@@ -62,6 +62,7 @@ pub struct NodeRecord {
 pub struct FormControlState {
     pub value: String,
     pub checked: bool,
+    pub indeterminate: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

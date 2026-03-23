@@ -18,6 +18,7 @@ pub const Attribute = struct {
 
 pub const ElementData = struct {
     tag_name: []const u8,
+    namespace_uri: []const u8 = "http://www.w3.org/1999/xhtml",
     attributes: std.ArrayListUnmanaged(Attribute) = .{},
 };
 
@@ -40,10 +41,40 @@ pub const SelectionState = struct {
     direction: SelectionDirection = .none,
 };
 
+pub const RangeTextSelectionMode = enum {
+    preserve,
+    select,
+    start,
+    end,
+};
+
 const SerializationNamespace = enum {
     html,
     svg,
     mathml,
+};
+
+const HtmlNamespaceUri = "http://www.w3.org/1999/xhtml";
+const SvgNamespaceUri = "http://www.w3.org/2000/svg";
+const MathMlNamespaceUri = "http://www.w3.org/1998/Math/MathML";
+
+fn namespaceUriForSerializationNamespace(namespace: SerializationNamespace) []const u8 {
+    return switch (namespace) {
+        .html => HtmlNamespaceUri,
+        .svg => SvgNamespaceUri,
+        .mathml => MathMlNamespaceUri,
+    };
+}
+
+fn serializationNamespaceFromUri(namespace_uri: []const u8) SerializationNamespace {
+    if (std.mem.eql(u8, namespace_uri, SvgNamespaceUri)) return .svg;
+    if (std.mem.eql(u8, namespace_uri, MathMlNamespaceUri)) return .mathml;
+    return .html;
+}
+
+const AdjacentInsertion = struct {
+    parent: NodeId,
+    index: usize,
 };
 
 pub const NodeRecord = struct {
@@ -217,6 +248,7 @@ pub const DomStore = struct {
     focused_node: ?NodeId = null,
     target_fragment: ?[]const u8 = null,
     selection: std.AutoHashMapUnmanaged(NodeId, SelectionState) = .{},
+    custom_validity: std.AutoHashMapUnmanaged(NodeId, []const u8) = .{},
 
     pub fn init(allocator: std.mem.Allocator) errors.Result(DomStore) {
         var arena = std.heap.ArenaAllocator.init(allocator);
@@ -231,6 +263,7 @@ pub const DomStore = struct {
             .focused_node = null,
             .target_fragment = null,
             .selection = .{},
+            .custom_validity = .{},
         };
         const arena_alloc = store.arena.allocator();
         try store.nodes.append(arena_alloc, .{
@@ -243,6 +276,11 @@ pub const DomStore = struct {
     }
 
     pub fn deinit(self: *DomStore) void {
+        var custom_values = self.custom_validity.valueIterator();
+        while (custom_values.next()) |message| {
+            self.allocator.free(message.*);
+        }
+        self.custom_validity.deinit(self.allocator);
         self.selection.deinit(self.allocator);
         self.arena.deinit();
     }
@@ -302,6 +340,73 @@ pub const DomStore = struct {
 
     pub fn setFocusedNode(self: *DomStore, focused_node: ?NodeId) void {
         self.focused_node = focused_node;
+    }
+
+    pub fn setCustomValidity(self: *DomStore, node_id: NodeId, message: []const u8) errors.Result(void) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return error.DomError,
+        };
+
+        if (!std.mem.eql(u8, element.tag_name, "input") and
+            !std.mem.eql(u8, element.tag_name, "select") and
+            !std.mem.eql(u8, element.tag_name, "textarea"))
+        {
+            return error.DomError;
+        }
+
+        if (message.len == 0) {
+            if (self.custom_validity.fetchRemove(node_id)) |entry| {
+                self.allocator.free(entry.value);
+            }
+            return;
+        }
+
+        const message_copy = try self.allocator.dupe(u8, message);
+        errdefer self.allocator.free(message_copy);
+
+        if (self.custom_validity.getPtr(node_id)) |stored_message| {
+            const previous = stored_message.*;
+            stored_message.* = message_copy;
+            self.allocator.free(previous);
+            return;
+        }
+
+        try self.custom_validity.put(self.allocator, node_id, message_copy);
+    }
+
+    pub fn validationMessageForNode(
+        self: *const DomStore,
+        allocator: std.mem.Allocator,
+        node_id: NodeId,
+    ) errors.Result([]const u8) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return error.DomError,
+        };
+
+        if (!std.mem.eql(u8, element.tag_name, "input") and
+            !std.mem.eql(u8, element.tag_name, "select") and
+            !std.mem.eql(u8, element.tag_name, "textarea"))
+        {
+            return error.DomError;
+        }
+
+        if (isBarredFromConstraintValidation(self, node_id)) {
+            return allocator.dupe(u8, "");
+        }
+
+        if (self.custom_validity.get(node_id)) |message| {
+            return allocator.dupe(u8, message);
+        }
+
+        if (isInvalidPseudoClass(self, node_id)) {
+            return allocator.dupe(u8, "Constraints not satisfied");
+        }
+
+        return allocator.dupe(u8, "");
     }
 
     pub fn activeElement(self: *const DomStore) ?NodeId {
@@ -388,12 +493,10 @@ pub const DomStore = struct {
     }
 
     pub fn namespaceUriForNode(self: *const DomStore, node_id: NodeId) ?[]const u8 {
-        if (self.nodeAt(node_id) == null) return null;
-
-        return switch (self.serializationNamespaceForNode(node_id)) {
-            .html => "http://www.w3.org/1999/xhtml",
-            .svg => "http://www.w3.org/2000/svg",
-            .mathml => "http://www.w3.org/1998/Math/MathML",
+        const node = self.nodeAt(node_id) orelse return null;
+        return switch (node.kind) {
+            .element => |element| element.namespace_uri,
+            else => null,
         };
     }
 
@@ -609,6 +712,23 @@ pub const DomStore = struct {
         return;
     }
 
+    pub fn setOuterText(self: *DomStore, node_id: NodeId, text: []const u8) errors.Result(void) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        switch (node.kind) {
+            .element => {},
+            else => return error.DomError,
+        }
+
+        const parent_id = parentOf(self, node_id) orelse {
+            try self.setTextContent(node_id, text);
+            return;
+        };
+
+        const replacement = try self.createTextNode(text);
+        _ = try self.replaceChild(parent_id, replacement, node_id);
+        try self.syncDocumentTitleFromDom();
+    }
+
     pub fn insertAdjacentHtml(
         self: *DomStore,
         node_id: NodeId,
@@ -685,6 +805,68 @@ pub const DomStore = struct {
             try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, parent_id, insertion_index, true);
             try self.syncDocumentTitleFromDom();
             return;
+        }
+
+        return error.DomError;
+    }
+
+    pub fn insertAdjacentElement(
+        self: *DomStore,
+        node_id: NodeId,
+        position: []const u8,
+        child: NodeId,
+    ) errors.Result(NodeId) {
+        const insertion = try self.adjacentInsertionPoint(node_id, position);
+        try self.insertChildrenAt(insertion.parent, insertion.index, &.{child});
+        return child;
+    }
+
+    pub fn insertAdjacentText(
+        self: *DomStore,
+        node_id: NodeId,
+        position: []const u8,
+        text: []const u8,
+    ) errors.Result(NodeId) {
+        const insertion = try self.adjacentInsertionPoint(node_id, position);
+        const created = try self.addText(insertion.parent, text);
+        try self.moveAppendedChildToIndex(insertion.parent, created, insertion.index);
+        return created;
+    }
+
+    fn adjacentInsertionPoint(
+        self: *const DomStore,
+        node_id: NodeId,
+        position: []const u8,
+    ) errors.Result(AdjacentInsertion) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+
+        if (std.mem.eql(u8, position, "beforebegin")) {
+            const parent_id = parentOf(self, node_id) orelse return error.DomError;
+            const insertion_index = try self.childIndex(parent_id, node_id);
+            return .{ .parent = parent_id, .index = insertion_index };
+        }
+
+        if (std.mem.eql(u8, position, "afterend")) {
+            const parent_id = parentOf(self, node_id) orelse return error.DomError;
+            const insertion_index = try self.childIndex(parent_id, node_id) + 1;
+            return .{ .parent = parent_id, .index = insertion_index };
+        }
+
+        const element = switch (node.kind) {
+            .element => |*element| element,
+            else => return error.DomError,
+        };
+
+        if (isVoidElement(element.tag_name)) {
+            return error.DomError;
+        }
+
+        if (std.mem.eql(u8, position, "afterbegin")) {
+            return .{ .parent = node_id, .index = 0 };
+        }
+
+        if (std.mem.eql(u8, position, "beforeend")) {
+            return .{ .parent = node_id, .index = try self.childCount(node_id) };
         }
 
         return error.DomError;
@@ -1253,6 +1435,135 @@ pub const DomStore = struct {
         return;
     }
 
+    pub fn setRangeText(
+        self: *DomStore,
+        node_id: NodeId,
+        replacement: []const u8,
+        start: ?usize,
+        end: ?usize,
+        selection_mode: RangeTextSelectionMode,
+    ) errors.Result(void) {
+        const current_value = try self.valueForNode(self.allocator, node_id);
+        defer self.allocator.free(current_value);
+
+        const selection: SelectionState = if (try self.selectionStateForNode(node_id)) |state| state else SelectionState{
+            .start = current_value.len,
+            .end = current_value.len,
+            .direction = .none,
+        };
+        const selection_start = selection.start;
+        const selection_end = selection.end;
+        const range_start = start orelse selection_start;
+        const range_end = end orelse selection_end;
+
+        if (range_start > range_end or range_end > current_value.len) {
+            return error.DomError;
+        }
+
+        const prefix = try self.concatText(current_value[0..range_start], replacement);
+        const updated = try self.concatText(prefix, current_value[range_end..]);
+
+        try self.setFormControlValue(node_id, updated);
+
+        const delta: isize = @as(isize, @intCast(replacement.len)) - @as(isize, @intCast(range_end - range_start));
+        const new_value_length = updated.len;
+
+        const next_state: SelectionState = switch (selection_mode) {
+            .select => .{
+                .start = range_start,
+                .end = range_start + replacement.len,
+                .direction = .none,
+            },
+            .start => .{
+                .start = range_start,
+                .end = range_start,
+                .direction = .none,
+            },
+            .end => .{
+                .start = range_start + replacement.len,
+                .end = range_start + replacement.len,
+                .direction = .none,
+            },
+            .preserve => blk: {
+                var next_start = selection_start;
+                var next_end = selection_end;
+
+                if (selection_end <= range_start) {
+                    // unchanged
+                } else if (selection_start >= range_end) {
+                    next_start = shiftSelectionIndex(selection_start, delta);
+                    next_end = shiftSelectionIndex(selection_end, delta);
+                } else {
+                    if (selection_start < range_start) {
+                        next_start = selection_start;
+                    } else {
+                        next_start = range_start;
+                    }
+
+                    if (selection_end <= range_end) {
+                        next_end = range_start + replacement.len;
+                    } else {
+                        next_end = shiftSelectionIndex(selection_end, delta);
+                    }
+                }
+
+                break :blk normalizeSelectionRange(next_start, next_end, new_value_length, selection.direction);
+            },
+        };
+
+        try self.setSelectionRange(node_id, next_state.start, next_state.end, next_state.direction);
+        return;
+    }
+
+    pub fn stepInputValue(self: *DomStore, node_id: NodeId, delta_steps: i64) errors.Result(void) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return error.DomError,
+        };
+
+        const input_type = elementAttributeValue(element, "type");
+        if (!isRangeInputType(input_type)) return error.DomError;
+
+        const limits = numericRangeLimits(self, node_id);
+        const raw_value = elementAttributeValue(element, "value") orelse "";
+        const trimmed_value = std.mem.trim(u8, raw_value, " \t\r\n\x0c");
+        const current_value = if (trimmed_value.len > 0) blk: {
+            break :blk std.fmt.parseFloat(f64, trimmed_value) catch return error.DomError;
+        } else blk: {
+            if (std.mem.eql(u8, input_type orelse "text", "range")) {
+                const min = limits.?.min orelse 0.0;
+                const max = limits.?.max orelse 100.0;
+                break :blk (min + max) / 2.0;
+            }
+            break :blk if (limits) |bounds| bounds.min orelse 0.0 else 0.0;
+        };
+
+        const step_value = if (elementAttributeValue(element, "step")) |value| blk: {
+            const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+            if (trimmed.len == 0) break :blk 1.0;
+            if (std.ascii.eqlIgnoreCase(trimmed, "any")) return error.DomError;
+            const parsed = std.fmt.parseFloat(f64, trimmed) catch return error.DomError;
+            if (!std.math.isFinite(parsed) or parsed <= 0) return error.DomError;
+            break :blk parsed;
+        } else 1.0;
+
+        var next_value = current_value + (step_value * @as(f64, @floatFromInt(delta_steps)));
+        if (limits) |bounds| {
+            if (bounds.min) |min| {
+                if (next_value < min) next_value = min;
+            }
+            if (bounds.max) |max| {
+                if (next_value > max) next_value = max;
+            }
+        }
+
+        const text = try std.fmt.allocPrint(self.allocator, "{d}", .{next_value});
+        defer self.allocator.free(text);
+        try self.setFormControlValue(node_id, text);
+        return;
+    }
+
     pub fn appendChild(self: *DomStore, parent: NodeId, child: NodeId) errors.Result(NodeId) {
         try self.insertChildrenAt(parent, try self.childCount(parent), &.{child});
         return child;
@@ -1385,6 +1696,7 @@ pub const DomStore = struct {
         }
 
         self.clearSelectionStateForSubtree(node_id);
+        self.clearCustomValidityStateForSubtree(node_id);
 
         const record = self.nodeAtMut(node_id) orelse return error.DomError;
         record.parent = null;
@@ -1487,7 +1799,7 @@ pub const DomStore = struct {
     ) errors.Result(NodeId) {
         const context_tag = try self.fragmentContextTagName(context_parent);
         const context_tag_copy = try duplicateString(fragment_store, context_tag);
-        const fragment_root = try fragment_store.addElement(fragment_store.documentId(), context_tag_copy, .{});
+        const fragment_root = try fragment_store.addElement(fragment_store.documentId(), context_tag_copy, .{}, null);
 
         var parser = HtmlParser.init(html);
         try parser.parseFragmentInto(fragment_store, fragment_root);
@@ -1539,7 +1851,12 @@ pub const DomStore = struct {
                         .value = try duplicateString(self, attribute.value),
                     });
                 }
-                const node_id = try self.addElement(parent, try duplicateString(self, element.tag_name), attributes);
+                const node_id = try self.addElement(
+                    parent,
+                    try duplicateString(self, element.tag_name),
+                    attributes,
+                    element.namespace_uri,
+                );
                 break :blk node_id;
             },
         };
@@ -1866,13 +2183,13 @@ pub const DomStore = struct {
 
     fn serializationNamespaceForNode(self: *const DomStore, node_id: NodeId) SerializationNamespace {
         const node = self.nodeAt(node_id) orelse return .html;
-        const parent_id = node.parent orelse return .html;
-        const parent = self.nodeAt(parent_id) orelse return .html;
-        const parent_namespace = self.serializationNamespaceForNode(parent_id);
-
         return switch (node.kind) {
-            .element => |element| serializationNamespaceForChild(parent, parent_namespace, element.tag_name),
-            else => parent_namespace,
+            .document => .html,
+            .element => |element| serializationNamespaceFromUri(element.namespace_uri),
+            .text, .comment => {
+                const parent_id = node.parent orelse return .html;
+                return self.serializationNamespaceForNode(parent_id);
+            },
         };
     }
 
@@ -1958,6 +2275,16 @@ pub const DomStore = struct {
         }
     }
 
+    fn clearCustomValidityStateForSubtree(self: *DomStore, node_id: NodeId) void {
+        if (self.custom_validity.fetchRemove(node_id)) |entry| {
+            self.allocator.free(entry.value);
+        }
+        const node = self.nodeAt(node_id) orelse return;
+        for (node.children.items) |child_id| {
+            self.clearCustomValidityStateForSubtree(child_id);
+        }
+    }
+
     fn isTextareaNode(self: *const DomStore, node_id: NodeId) bool {
         const node = self.nodeAt(node_id) orelse return false;
         const element = switch (node.kind) {
@@ -2034,6 +2361,15 @@ pub const DomStore = struct {
             .end = clamped_end,
             .direction = direction,
         };
+    }
+
+    fn shiftSelectionIndex(index: usize, delta: isize) usize {
+        if (delta >= 0) {
+            return index + @as(usize, @intCast(delta));
+        }
+
+        const amount = @as(usize, @intCast(-delta));
+        return index - amount;
     }
 
     fn targetNodeForFragment(self: *const DomStore, fragment: []const u8) ?NodeId {
@@ -2204,15 +2540,22 @@ pub const DomStore = struct {
         parent: NodeId,
         tag_name: []const u8,
         attributes: std.ArrayListUnmanaged(Attribute),
+        namespace_uri: ?[]const u8,
     ) errors.Result(NodeId) {
         const arena_alloc = self.arena.allocator();
         const node_id = NodeId.new(@intCast(self.nodes.items.len), 0);
+        const parent_node = self.nodeAt(parent) orelse return error.HtmlParse;
+        const parent_namespace = self.serializationNamespaceForNode(parent);
+        const child_namespace = namespace_uri orelse namespaceUriForSerializationNamespace(
+            serializationNamespaceForChild(parent_node, parent_namespace, tag_name),
+        );
         try self.nodes.append(arena_alloc, .{
             .id = node_id,
             .parent = parent,
             .children = .{},
             .kind = .{ .element = .{
                 .tag_name = tag_name,
+                .namespace_uri = child_namespace,
                 .attributes = attributes,
             } },
         });
@@ -2249,18 +2592,38 @@ pub const DomStore = struct {
     }
 
     pub fn createElementDetached(self: *DomStore, tag_name: []const u8) errors.Result(NodeId) {
+        return self.createElementDetachedNS(tag_name, HtmlNamespaceUri);
+    }
+
+    pub fn createElementNS(self: *DomStore, namespace_uri: []const u8, tag_name: []const u8) errors.Result(NodeId) {
+        if (!std.mem.eql(u8, namespace_uri, HtmlNamespaceUri) and
+            !std.mem.eql(u8, namespace_uri, SvgNamespaceUri) and
+            !std.mem.eql(u8, namespace_uri, MathMlNamespaceUri))
+        {
+            return error.DomError;
+        }
+
+        return self.createElementDetachedNS(tag_name, namespace_uri);
+    }
+
+    fn createElementDetachedNS(self: *DomStore, tag_name: []const u8, namespace_uri: []const u8) errors.Result(NodeId) {
         if (!isValidDetachedElementTagName(tag_name)) {
             return error.DomError;
         }
 
         const arena_alloc = self.arena.allocator();
         const node_id = NodeId.new(@intCast(self.nodes.items.len), 0);
+        const stored_tag = if (std.mem.eql(u8, namespace_uri, HtmlNamespaceUri))
+            try duplicateLowercase(self, tag_name)
+        else
+            try duplicateString(self, tag_name);
         try self.nodes.append(arena_alloc, .{
             .id = node_id,
             .parent = null,
             .children = .{},
             .kind = .{ .element = .{
-                .tag_name = try duplicateLowercase(self, tag_name),
+                .tag_name = stored_tag,
+                .namespace_uri = namespace_uri,
                 .attributes = .{},
             } },
         });
@@ -2500,13 +2863,13 @@ const HtmlParser = struct {
 
             if (self.startsWith("/>")) {
                 self.pos += 2;
-                _ = try store.addElement(stack.items[stack.items.len - 1], tag_name, attributes);
+                _ = try store.addElement(stack.items[stack.items.len - 1], tag_name, attributes, null);
                 return;
             }
 
             if (self.currentByte() == '>') {
                 self.pos += 1;
-                const node_id = try store.addElement(stack.items[stack.items.len - 1], tag_name, attributes);
+                const node_id = try store.addElement(stack.items[stack.items.len - 1], tag_name, attributes, null);
                 if (!isVoidElement(tag_name)) {
                     try stack.append(store.arena.allocator(), node_id);
                 }
@@ -2671,6 +3034,21 @@ fn isTextInputType(input_type: ?[]const u8) bool {
 fn isSelectionInputType(input_type: ?[]const u8) bool {
     const value = input_type orelse "text";
     return std.mem.eql(u8, value, "text") or std.mem.eql(u8, value, "search") or std.mem.eql(u8, value, "url") or std.mem.eql(u8, value, "tel") or std.mem.eql(u8, value, "password");
+}
+
+fn isPatternInputType(input_type: ?[]const u8) bool {
+    const value = input_type orelse "text";
+    return std.mem.eql(u8, value, "text") or
+        std.mem.eql(u8, value, "search") or
+        std.mem.eql(u8, value, "url") or
+        std.mem.eql(u8, value, "tel") or
+        std.mem.eql(u8, value, "email") or
+        std.mem.eql(u8, value, "password");
+}
+
+fn isLengthInputType(input_type: ?[]const u8) bool {
+    const value = input_type orelse "text";
+    return std.mem.eql(u8, value, "text") or std.mem.eql(u8, value, "search") or std.mem.eql(u8, value, "url") or std.mem.eql(u8, value, "tel") or std.mem.eql(u8, value, "email") or std.mem.eql(u8, value, "password");
 }
 
 fn isCheckableInputType(input_type: ?[]const u8) bool {
@@ -4128,6 +4506,165 @@ fn isValidPseudoClass(self: *const DomStore, node_id: NodeId) bool {
     return !isInvalidPseudoClass(self, node_id);
 }
 
+pub fn formControlCheckValidity(self: *const DomStore, node_id: NodeId) bool {
+    return !isInvalidPseudoClass(self, node_id);
+}
+
+pub fn willValidateForNode(self: *const DomStore, node_id: NodeId) bool {
+    return isValidityFormControlCandidate(self, node_id) and !isBarredFromConstraintValidation(self, node_id);
+}
+
+pub fn validityStateForNode(self: *const DomStore, allocator: std.mem.Allocator, node_id: NodeId) errors.Result(ValidityStateInfo) {
+    const default_state: ValidityStateInfo = .{
+        .valid = true,
+        .value_missing = false,
+        .type_mismatch = false,
+        .pattern_mismatch = false,
+        .too_long = false,
+        .too_short = false,
+        .range_underflow = false,
+        .range_overflow = false,
+        .step_mismatch = false,
+        .bad_input = false,
+        .custom_error = self.custom_validity.contains(node_id),
+    };
+
+    const node = self.nodeAt(node_id) orelse return default_state;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return default_state,
+    };
+
+    if (isBarredFromConstraintValidation(self, node_id)) {
+        return default_state;
+    }
+
+    var state = default_state;
+
+    if (std.mem.eql(u8, element.tag_name, "textarea")) {
+        const value = self.textContent(allocator, node_id) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return default_state,
+        };
+        defer allocator.free(value);
+
+        state.value_missing = elementAttributeValue(element, "required") != null and value.len == 0;
+        if (textLengthLimits(self, node_id)) |limits| {
+            if (limits.min) |min| {
+                state.too_short = value.len > 0 and value.len < min;
+            }
+            if (limits.max) |max| {
+                state.too_long = value.len > max;
+            }
+        }
+        state.valid = !(state.custom_error or state.value_missing or state.type_mismatch or state.pattern_mismatch or state.too_long or state.too_short or state.range_underflow or state.range_overflow or state.step_mismatch or state.bad_input);
+        return state;
+    }
+
+    if (std.mem.eql(u8, element.tag_name, "select")) {
+        const value = self.selectValueForNode(allocator, node_id) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return default_state,
+        };
+        defer allocator.free(value);
+
+        state.value_missing = elementAttributeValue(element, "required") != null and value.len == 0;
+        state.valid = !(state.custom_error or state.value_missing or state.type_mismatch or state.pattern_mismatch or state.too_long or state.too_short or state.range_underflow or state.range_overflow or state.step_mismatch or state.bad_input);
+        return state;
+    }
+
+    if (!std.mem.eql(u8, element.tag_name, "input")) {
+        return default_state;
+    }
+
+    const input_type = elementAttributeValue(element, "type");
+    if (std.mem.eql(u8, input_type orelse "text", "hidden")) {
+        return default_state;
+    }
+
+    if (isCheckableInputType(input_type)) {
+        state.value_missing = elementAttributeValue(element, "required") != null and self.checkedForNode(node_id) != true;
+        state.valid = !(state.custom_error or state.value_missing or state.type_mismatch or state.pattern_mismatch or state.too_long or state.too_short or state.range_underflow or state.range_overflow or state.step_mismatch or state.bad_input);
+        return state;
+    }
+
+    if (isRangeInputType(input_type)) {
+        const value = self.inputValueForNode(allocator, node_id) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return default_state,
+        };
+        defer allocator.free(value);
+
+        const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+        if (elementAttributeValue(element, "required") != null and trimmed.len == 0) {
+            state.value_missing = true;
+        } else if (trimmed.len > 0) {
+            const parsed = std.fmt.parseFloat(f64, trimmed) catch null;
+            if (parsed == null) {
+                state.bad_input = true;
+            } else {
+                const current_value = parsed.?;
+                if (numericRangeLimits(self, node_id)) |bounds| {
+                    if (bounds.min) |min| {
+                        state.range_underflow = current_value < min;
+                    }
+                    if (bounds.max) |max| {
+                        state.range_overflow = current_value > max;
+                    }
+                }
+                if (numericStepMismatch(self, node_id, current_value)) {
+                    state.step_mismatch = true;
+                }
+            }
+        }
+        state.valid = !(state.custom_error or state.value_missing or state.type_mismatch or state.pattern_mismatch or state.too_long or state.too_short or state.range_underflow or state.range_overflow or state.step_mismatch or state.bad_input);
+        return state;
+    }
+
+    if (isFileInputType(input_type) or isTextInputType(input_type)) {
+        const value = self.inputValueForNode(allocator, node_id) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return default_state,
+        };
+        defer allocator.free(value);
+
+        if (elementAttributeValue(element, "required") != null and value.len == 0) {
+            state.value_missing = true;
+        }
+        if (inputTypeMismatch(self, allocator, node_id, input_type, value)) {
+            state.type_mismatch = true;
+        }
+        if (try inputPatternMismatch(self, allocator, node_id, input_type, value)) {
+            state.pattern_mismatch = true;
+        }
+        if (isLengthInputType(input_type)) {
+            if (textLengthLimits(self, node_id)) |limits| {
+                if (limits.min) |min| {
+                    state.too_short = value.len > 0 and value.len < min;
+                }
+                if (limits.max) |max| {
+                    state.too_long = value.len > max;
+                }
+            }
+        }
+        state.valid = !(state.custom_error or state.value_missing or state.type_mismatch or state.pattern_mismatch or state.too_long or state.too_short or state.range_underflow or state.range_overflow or state.step_mismatch or state.bad_input);
+        return state;
+    }
+
+    return default_state;
+}
+
+pub fn formCheckValidity(self: *const DomStore, form_id: NodeId) bool {
+    var descendants: std.ArrayList(NodeId) = .empty;
+    defer descendants.deinit(self.allocator);
+    self.collectSubtreeNodes(form_id, &descendants, self.allocator) catch return false;
+
+    for (descendants.items) |candidate_id| {
+        if (isInvalidPseudoClass(self, candidate_id)) return false;
+    }
+    return true;
+}
+
 fn isInvalidPseudoClass(self: *const DomStore, node_id: NodeId) bool {
     const node = self.nodeAt(node_id) orelse return false;
     const element = switch (node.kind) {
@@ -4135,10 +4672,29 @@ fn isInvalidPseudoClass(self: *const DomStore, node_id: NodeId) bool {
         else => return false,
     };
 
+    if (isBarredFromConstraintValidation(self, node_id)) {
+        return false;
+    }
+
+    if (self.custom_validity.contains(node_id)) {
+        return true;
+    }
+
     if (std.mem.eql(u8, element.tag_name, "textarea")) {
         const value = self.textContent(self.allocator, node_id) catch return false;
         defer self.allocator.free(value);
-        return elementAttributeValue(element, "required") != null and value.len == 0;
+        if (elementAttributeValue(element, "required") != null and value.len == 0) {
+            return true;
+        }
+        if (textLengthLimits(self, node_id)) |limits| {
+            if (limits.min) |min| {
+                if (value.len > 0 and value.len < min) return true;
+            }
+            if (limits.max) |max| {
+                if (value.len > max) return true;
+            }
+        }
+        return false;
     }
 
     if (std.mem.eql(u8, element.tag_name, "select")) {
@@ -4163,13 +4719,43 @@ fn isInvalidPseudoClass(self: *const DomStore, node_id: NodeId) bool {
     if (isRangeInputType(input_type)) {
         const value = self.inputValueForNode(self.allocator, node_id) catch return false;
         defer self.allocator.free(value);
-        return isOutOfRangePseudoClass(self, node_id) or (elementAttributeValue(element, "required") != null and value.len == 0);
+        const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+        if (trimmed.len == 0) {
+            return elementAttributeValue(element, "required") != null;
+        }
+        if (numericRangeValue(self, node_id) == null) {
+            return true;
+        }
+        const parsed = std.fmt.parseFloat(f64, trimmed) catch return true;
+        if (numericStepMismatch(self, node_id, parsed)) {
+            return true;
+        }
+        return isOutOfRangePseudoClass(self, node_id);
     }
 
     if (isFileInputType(input_type) or isTextInputType(input_type)) {
         const value = self.inputValueForNode(self.allocator, node_id) catch return false;
         defer self.allocator.free(value);
-        return elementAttributeValue(element, "required") != null and value.len == 0;
+        if (elementAttributeValue(element, "required") != null and value.len == 0) {
+            return true;
+        }
+        if (inputTypeMismatch(self, self.allocator, node_id, input_type, value)) {
+            return true;
+        }
+        if (inputPatternMismatch(self, self.allocator, node_id, input_type, value) catch return false) {
+            return true;
+        }
+        if (isLengthInputType(input_type)) {
+            if (textLengthLimits(self, node_id)) |limits| {
+                if (limits.min) |min| {
+                    if (value.len > 0 and value.len < min) return true;
+                }
+                if (limits.max) |max| {
+                    if (value.len > max) return true;
+                }
+            }
+        }
+        return false;
     }
 
     return false;
@@ -4247,6 +4833,33 @@ fn isValidityFormControlCandidate(self: *const DomStore, node_id: NodeId) bool {
 
     const input_type = elementAttributeValue(element, "type");
     return !std.mem.eql(u8, input_type orelse "text", "hidden") and (isTextInputType(input_type) or isCheckableInputType(input_type) or isFileInputType(input_type));
+}
+
+fn isBarredFromConstraintValidation(self: *const DomStore, node_id: NodeId) bool {
+    const node = self.nodeAt(node_id) orelse return true;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return true,
+    };
+
+    if (elementAttributeValue(element, "disabled") != null) {
+        return true;
+    }
+
+    if (std.mem.eql(u8, element.tag_name, "textarea")) {
+        return elementAttributeValue(element, "readonly") != null;
+    }
+
+    if (!std.mem.eql(u8, element.tag_name, "input")) {
+        return false;
+    }
+
+    const input_type = elementAttributeValue(element, "type");
+    if (std.mem.eql(u8, input_type orelse "text", "hidden")) {
+        return true;
+    }
+
+    return elementAttributeValue(element, "readonly") != null and isTextInputType(input_type);
 }
 
 fn isDefaultSubmitButton(self: *const DomStore, node_id: NodeId) bool {
@@ -4330,6 +4943,25 @@ const NumericRangeLimits = struct {
     max: ?f64,
 };
 
+const TextLengthLimits = struct {
+    min: ?usize,
+    max: ?usize,
+};
+
+pub const ValidityStateInfo = struct {
+    valid: bool,
+    value_missing: bool,
+    type_mismatch: bool,
+    pattern_mismatch: bool,
+    too_long: bool,
+    too_short: bool,
+    range_underflow: bool,
+    range_overflow: bool,
+    step_mismatch: bool,
+    bad_input: bool,
+    custom_error: bool,
+};
+
 fn isRangeInputType(input_type: ?[]const u8) bool {
     const value = input_type orelse "text";
     return std.mem.eql(u8, value, "number") or std.mem.eql(u8, value, "range");
@@ -4381,6 +5013,514 @@ fn numericRangeLimits(self: *const DomStore, node_id: NodeId) ?NumericRangeLimit
         .min = if (std.mem.eql(u8, input_type orelse "text", "range")) (min orelse 0.0) else min,
         .max = if (std.mem.eql(u8, input_type orelse "text", "range")) (max orelse 100.0) else max,
     };
+}
+
+fn numericStepMismatch(self: *const DomStore, node_id: NodeId, current_value: f64) bool {
+    const node = self.nodeAt(node_id) orelse return false;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return false,
+    };
+
+    const input_type = elementAttributeValue(element, "type");
+    if (!isRangeInputType(input_type)) return false;
+
+    const step = if (elementAttributeValue(element, "step")) |value| blk: {
+        const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+        if (trimmed.len == 0) return false;
+        if (std.ascii.eqlIgnoreCase(trimmed, "any")) return false;
+        const parsed = std.fmt.parseFloat(f64, trimmed) catch return false;
+        if (!std.math.isFinite(parsed) or parsed <= 0) return false;
+        break :blk parsed;
+    } else 1.0;
+
+    const base = if (elementAttributeValue(element, "min")) |value| blk: {
+        const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+        if (trimmed.len == 0) break :blk 0.0;
+        break :blk std.fmt.parseFloat(f64, trimmed) catch 0.0;
+    } else 0.0;
+
+    const quotient = (current_value - base) / step;
+    return std.math.round(quotient) != quotient;
+}
+
+fn isValidEmailAddress(value: []const u8) bool {
+    if (value.len == 0) return false;
+    if (std.mem.indexOfAny(u8, value, " \t\r\n\x0c") != null) return false;
+
+    const at_index = std.mem.indexOfScalar(u8, value, '@') orelse return false;
+    if (at_index == 0 or at_index + 1 >= value.len) return false;
+    if (std.mem.indexOfScalarPos(u8, value, at_index + 1, '@') != null) return false;
+
+    const local_part = value[0..at_index];
+    const domain_part = value[at_index + 1 ..];
+    if (local_part[0] == '.' or local_part[local_part.len - 1] == '.') return false;
+    if (domain_part[0] == '.' or domain_part[domain_part.len - 1] == '.') return false;
+
+    if (std.mem.indexOfScalar(u8, domain_part, '.') != null) return true;
+    return domain_part.len >= 2 and domain_part[0] == '[' and domain_part[domain_part.len - 1] == ']';
+}
+
+fn isValidEmailValue(value: []const u8, multiple: bool) bool {
+    if (!multiple) {
+        return isValidEmailAddress(value);
+    }
+
+    var parts = std.mem.splitScalar(u8, value, ',');
+    var saw_value = false;
+    while (parts.next()) |part| {
+        const trimmed = std.mem.trim(u8, part, " \t\r\n\x0c");
+        if (trimmed.len == 0) return false;
+        saw_value = true;
+        if (!isValidEmailAddress(trimmed)) return false;
+    }
+    return saw_value;
+}
+
+fn isValidUrlValue(allocator: std.mem.Allocator, value: []const u8) bool {
+    if (value.len == 0) return false;
+    if (std.mem.indexOfAny(u8, value, " \t\r\n\x0c") != null) return false;
+
+    if (std.Uri.parse(value)) |_| {
+        return true;
+    } else |_| {}
+
+    const base_uri = std.Uri.parse("https://example.invalid/") catch return false;
+    const buffer = allocator.alloc(u8, value.len + 64) catch return false;
+    defer allocator.free(buffer);
+    @memcpy(buffer[0..value.len], value);
+    var aux_buf = buffer;
+    _ = std.Uri.resolveInPlace(base_uri, value.len, &aux_buf) catch return false;
+    return true;
+}
+
+const PatternQuantifier = struct {
+    min: usize,
+    max: ?usize,
+};
+
+fn patternMatches(allocator: std.mem.Allocator, pattern: []const u8, value: []const u8) errors.Result(bool) {
+    const matched = try patternMatchRange(allocator, pattern, 0, pattern.len, value, 0);
+    if (matched == null) return false;
+    return matched.? == value.len;
+}
+
+fn patternMatchRange(
+    allocator: std.mem.Allocator,
+    pattern: []const u8,
+    start: usize,
+    end: usize,
+    value: []const u8,
+    value_index: usize,
+) errors.Result(?usize) {
+    var segment_start = start;
+    var index = start;
+    var depth: usize = 0;
+    var in_class = false;
+
+    while (index < end) : (index += 1) {
+        const byte = pattern[index];
+        if (in_class) {
+            if (byte == '\\') {
+                index += 1;
+                continue;
+            }
+            if (byte == ']') {
+                in_class = false;
+            }
+            continue;
+        }
+
+        if (byte == '\\') {
+            index += 1;
+            continue;
+        }
+        if (byte == '[') {
+            in_class = true;
+            continue;
+        }
+        if (byte == '(') {
+            depth += 1;
+            continue;
+        }
+        if (byte == ')') {
+            if (depth == 0) return null;
+            depth -= 1;
+            continue;
+        }
+        if (byte == '|' and depth == 0) {
+            if (try patternMatchSequence(allocator, pattern, segment_start, index, value, value_index)) |matched| {
+                return matched;
+            }
+            segment_start = index + 1;
+        }
+    }
+
+    if (depth != 0 or in_class) return null;
+    return try patternMatchSequence(allocator, pattern, segment_start, end, value, value_index);
+}
+
+fn patternMatchSequence(
+    allocator: std.mem.Allocator,
+    pattern: []const u8,
+    start: usize,
+    end: usize,
+    value: []const u8,
+    value_index: usize,
+) errors.Result(?usize) {
+    var p = start;
+    const current_index = value_index;
+
+    while (p < end) {
+        const byte = pattern[p];
+        if (byte == '^' or byte == '$') {
+            p += 1;
+            continue;
+        }
+        if (byte == '|' or byte == ')') return null;
+
+        const atom_end = patternAtomEnd(pattern, p, end) orelse return null;
+        const quantifier_start = atom_end;
+        const has_quantifier = quantifier_start < end and patternQuantifierStart(pattern[quantifier_start]);
+        const quant: PatternQuantifier = if (has_quantifier)
+            patternQuantifier(pattern, atom_end, end) orelse return null
+        else
+            .{ .min = 1, .max = 1 };
+        const next_pattern_index = if (has_quantifier) patternQuantifierEnd(pattern, atom_end, end) orelse return null else atom_end;
+
+        if (has_quantifier and (pattern[p] == '^' or pattern[p] == '$')) return null;
+
+        var positions: std.ArrayList(usize) = .empty;
+        errdefer positions.deinit(allocator);
+
+        var repeat_index = current_index;
+        while (true) {
+            const next_index = (try patternMatchAtomOnce(allocator, pattern, p, atom_end, value, repeat_index)) orelse break;
+            if (next_index == repeat_index) break;
+            try positions.append(allocator, next_index);
+            repeat_index = next_index;
+            if (quant.max) |max| {
+                if (positions.items.len >= max) break;
+            }
+        }
+
+        if (positions.items.len < quant.min) {
+            positions.deinit(allocator);
+            return null;
+        }
+
+        var repeat_count = if (quant.max) |max| @min(max, positions.items.len) else positions.items.len;
+        while (repeat_count >= quant.min) {
+            const next_index = if (repeat_count == 0) current_index else positions.items[repeat_count - 1];
+            if (try patternMatchSequence(allocator, pattern, next_pattern_index, end, value, next_index)) |result| {
+                positions.deinit(allocator);
+                return result;
+            }
+            if (repeat_count == 0) break;
+            repeat_count -= 1;
+        }
+
+        positions.deinit(allocator);
+        return null;
+    }
+
+    return current_index;
+}
+
+fn patternQuantifierStart(byte: u8) bool {
+    return byte == '*' or byte == '+' or byte == '?' or byte == '{';
+}
+
+fn patternQuantifierEnd(pattern: []const u8, start: usize, end: usize) ?usize {
+    if (start >= end) return start;
+    const byte = pattern[start];
+    if (byte == '*' or byte == '+' or byte == '?') {
+        return start + 1;
+    }
+    if (byte != '{') return start;
+
+    var index = start + 1;
+    var saw_digit = false;
+    while (index < end and std.ascii.isDigit(pattern[index])) : (index += 1) {
+        saw_digit = true;
+    }
+    if (!saw_digit) return null;
+    if (index < end and pattern[index] == '}') return index + 1;
+    if (index >= end or pattern[index] != ',') return null;
+    index += 1;
+    while (index < end and std.ascii.isDigit(pattern[index])) : (index += 1) {}
+    if (index >= end or pattern[index] != '}') return null;
+    return index + 1;
+}
+
+fn patternQuantifier(pattern: []const u8, start: usize, end: usize) ?PatternQuantifier {
+    if (start >= end) return .{ .min = 1, .max = 1 };
+    const byte = pattern[start];
+    if (byte == '*') return .{ .min = 0, .max = null };
+    if (byte == '+') return .{ .min = 1, .max = null };
+    if (byte == '?') return .{ .min = 0, .max = 1 };
+    if (byte != '{') return .{ .min = 1, .max = 1 };
+
+    var index = start + 1;
+    var min_value: usize = 0;
+    var saw_digit = false;
+    while (index < end and std.ascii.isDigit(pattern[index])) : (index += 1) {
+        saw_digit = true;
+        min_value = min_value * 10 + @as(usize, pattern[index] - '0');
+    }
+    if (!saw_digit) return null;
+
+    if (index < end and pattern[index] == '}') {
+        return .{ .min = min_value, .max = min_value };
+    }
+
+    if (index >= end or pattern[index] != ',') return null;
+    index += 1;
+
+    var max_value: ?usize = null;
+    var has_max = false;
+    var parsed_max: usize = 0;
+    while (index < end and std.ascii.isDigit(pattern[index])) : (index += 1) {
+        has_max = true;
+        parsed_max = parsed_max * 10 + @as(usize, pattern[index] - '0');
+    }
+    if (has_max) max_value = parsed_max;
+
+    if (index >= end or pattern[index] != '}') return null;
+    if (max_value) |max| {
+        if (max < min_value) return null;
+    }
+    return .{ .min = min_value, .max = max_value };
+}
+
+fn patternAtomEnd(pattern: []const u8, start: usize, end: usize) ?usize {
+    if (start >= end) return null;
+    switch (pattern[start]) {
+        '\\' => {
+            if (start + 1 >= end) return null;
+            return start + 2;
+        },
+        '[' => return patternClassEnd(pattern, start + 1, end),
+        '(' => return patternGroupEnd(pattern, start + 1, end),
+        else => return start + 1,
+    }
+}
+
+fn patternClassEnd(pattern: []const u8, start: usize, end: usize) ?usize {
+    var index = start;
+    var first_content = true;
+    while (index < end) : (index += 1) {
+        const byte = pattern[index];
+        if (byte == '\\') {
+            index += 1;
+            first_content = false;
+            continue;
+        }
+        if (byte == ']' and !first_content) {
+            return index + 1;
+        }
+        first_content = false;
+    }
+    return null;
+}
+
+fn patternGroupEnd(pattern: []const u8, start: usize, end: usize) ?usize {
+    var index = start;
+    var depth: usize = 1;
+    var in_class = false;
+    while (index < end) : (index += 1) {
+        const byte = pattern[index];
+        if (in_class) {
+            if (byte == '\\') {
+                index += 1;
+                continue;
+            }
+            if (byte == ']') in_class = false;
+            continue;
+        }
+        if (byte == '\\') {
+            index += 1;
+            continue;
+        }
+        if (byte == '[') {
+            in_class = true;
+            continue;
+        }
+        if (byte == '(') {
+            depth += 1;
+            continue;
+        }
+        if (byte == ')') {
+            depth -= 1;
+            if (depth == 0) return index + 1;
+        }
+    }
+    return null;
+}
+
+fn patternMatchAtomOnce(
+    allocator: std.mem.Allocator,
+    pattern: []const u8,
+    start: usize,
+    end: usize,
+    value: []const u8,
+    value_index: usize,
+) errors.Result(?usize) {
+    if (start >= end) return null;
+    switch (pattern[start]) {
+        '^', '$' => return value_index,
+        '.' => {
+            if (value_index >= value.len) return null;
+            const byte = value[value_index];
+            if (byte == '\n' or byte == '\r') return null;
+            return value_index + 1;
+        },
+        '[' => {
+            if (value_index >= value.len) return null;
+            return if (patternClassMatches(pattern, start + 1, end - 1, value[value_index])) value_index + 1 else null;
+        },
+        '(' => {
+            const close = patternGroupEnd(pattern, start + 1, end) orelse return null;
+            const matched = try patternMatchRange(allocator, pattern, start + 1, close - 1, value, value_index);
+            if (matched == null) return null;
+            return matched;
+        },
+        '\\' => {
+            if (start + 1 >= end) return null;
+            if (value_index >= value.len) return null;
+            return if (patternEscapeMatches(pattern[start + 1], value[value_index])) value_index + 1 else null;
+        },
+        else => {
+            if (value_index >= value.len) return null;
+            return if (pattern[start] == value[value_index]) value_index + 1 else null;
+        },
+    }
+}
+
+fn patternEscapeMatches(escaped: u8, byte: u8) bool {
+    return switch (escaped) {
+        'd' => std.ascii.isDigit(byte),
+        'D' => !std.ascii.isDigit(byte),
+        's' => isHtmlWhitespace(byte),
+        'S' => !isHtmlWhitespace(byte),
+        'w' => std.ascii.isAlphanumeric(byte) or byte == '_',
+        'W' => !(std.ascii.isAlphanumeric(byte) or byte == '_'),
+        't' => byte == '\t',
+        'r' => byte == '\r',
+        'n' => byte == '\n',
+        'f' => byte == 0x0c,
+        else => escaped == byte,
+    };
+}
+
+fn patternClassMatches(pattern: []const u8, start: usize, end: usize, byte: u8) bool {
+    if (start > end) return false;
+    var index = start;
+    var negated = false;
+    if (index < end and pattern[index] == '^') {
+        negated = true;
+        index += 1;
+    }
+
+    var matched = false;
+    while (index < end) : (index += 1) {
+        const current = pattern[index];
+        if (current == '\\' and index + 1 < end) {
+            index += 1;
+            if (patternEscapeMatches(pattern[index], byte)) matched = true;
+            continue;
+        }
+        if (index + 2 < end and pattern[index + 1] == '-' and pattern[index + 2] != ']') {
+            const range_start = current;
+            const range_end = pattern[index + 2];
+            if (range_start <= byte and byte <= range_end) matched = true;
+            index += 2;
+            continue;
+        }
+        if (current == byte) matched = true;
+    }
+
+    return if (negated) !matched else matched;
+}
+
+fn inputTypeMismatch(self: *const DomStore, allocator: std.mem.Allocator, node_id: NodeId, input_type: ?[]const u8, value: []const u8) bool {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+    if (trimmed.len == 0) return false;
+
+    const input_kind = input_type orelse "text";
+    if (std.mem.eql(u8, input_kind, "email")) {
+        const node = self.nodeAt(node_id) orelse return false;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return false,
+        };
+        const multiple = elementAttributeValue(element, "multiple") != null;
+        return !isValidEmailValue(trimmed, multiple);
+    }
+    if (std.mem.eql(u8, input_kind, "url")) {
+        return !isValidUrlValue(allocator, trimmed);
+    }
+    return false;
+}
+
+fn inputPatternMismatch(self: *const DomStore, allocator: std.mem.Allocator, node_id: NodeId, input_type: ?[]const u8, value: []const u8) errors.Result(bool) {
+    if (!isPatternInputType(input_type)) return false;
+    if (value.len == 0) return false;
+
+    const node = self.nodeAt(node_id) orelse return false;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return false,
+    };
+
+    const pattern = elementAttributeValue(element, "pattern") orelse return false;
+    const matched = try patternMatches(allocator, pattern, value);
+    return !matched;
+}
+
+fn textLengthLimits(self: *const DomStore, node_id: NodeId) ?TextLengthLimits {
+    const node = self.nodeAt(node_id) orelse return null;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return null,
+    };
+
+    if (std.mem.eql(u8, element.tag_name, "textarea")) {
+        const min = if (elementAttributeValue(element, "minlength")) |value| blk: {
+            const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+            if (trimmed.len == 0) break :blk null;
+            break :blk std.fmt.parseInt(usize, trimmed, 10) catch null;
+        } else null;
+
+        const max = if (elementAttributeValue(element, "maxlength")) |value| blk: {
+            const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+            if (trimmed.len == 0) break :blk null;
+            break :blk std.fmt.parseInt(usize, trimmed, 10) catch null;
+        } else null;
+
+        return .{ .min = min, .max = max };
+    }
+
+    if (!std.mem.eql(u8, element.tag_name, "input")) {
+        return null;
+    }
+
+    const input_type = elementAttributeValue(element, "type");
+    if (!isLengthInputType(input_type)) return null;
+
+    const min = if (elementAttributeValue(element, "minlength")) |value| blk: {
+        const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+        if (trimmed.len == 0) break :blk null;
+        break :blk std.fmt.parseInt(usize, trimmed, 10) catch null;
+    } else null;
+
+    const max = if (elementAttributeValue(element, "maxlength")) |value| blk: {
+        const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+        if (trimmed.len == 0) break :blk null;
+        break :blk std.fmt.parseInt(usize, trimmed, 10) catch null;
+    } else null;
+
+    return .{ .min = min, .max = max };
 }
 
 fn isLangPseudoClass(self: *const DomStore, node_id: NodeId, langs: []const []const u8) bool {

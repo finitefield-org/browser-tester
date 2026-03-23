@@ -7,9 +7,9 @@ use bt_runtime::SessionError;
 pub use bt_runtime::{
     ClipboardMocks, CloseCall, CloseMocks, DebugState, DialogMocks, DownloadCapture, DownloadMocks,
     FetchCall, FetchErrorRule, FetchMocks, FetchResponse, FetchResponseRule, FileInputMocks,
-    FileInputSelection, LocationMocks, MatchMediaCall, MatchMediaMocks, MockRegistry, OpenCall,
-    OpenMocks, PrintCall, PrintMocks, ScheduledTimer, Scheduler, ScrollCall, ScrollMethod,
-    ScrollMocks, Session, SessionConfig, StorageSeeds,
+    FileInputSelection, LocationMocks, MatchMediaCall, MatchMediaListenerCall, MatchMediaMocks,
+    MockRegistry, OpenCall, OpenMocks, PrintCall, PrintMocks, ScheduledTimer, Scheduler,
+    ScrollCall, ScrollMethod, ScrollMocks, Session, SessionConfig, StorageSeeds,
 };
 pub use bt_script::{HostBindings, ScriptError, ScriptRuntime};
 

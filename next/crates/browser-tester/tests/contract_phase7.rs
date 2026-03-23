@@ -589,7 +589,7 @@ fn unsupported_get_elements_by_tag_name_ns_arity_fails_explicitly() {
 #[test]
 fn unsupported_element_matches_selector_fails_explicitly() {
     let error = Harness::from_html(
-        "<main id='root' class='primary'></main><script>document.getElementById('root').matches('main:where([data-kind=primary x])');</script>",
+        "<main id='root' class='primary'></main><script>document.getElementById('root').matches('main:where([data-kind=primary x y])');</script>",
     )
     .expect_err("broader CSS parsing inside :where should fail");
 
@@ -609,7 +609,7 @@ fn unsupported_element_matches_selector_fails_explicitly() {
 #[test]
 fn unsupported_element_closest_selector_fails_explicitly() {
     let error = Harness::from_html(
-        "<main id='root' class='primary'></main><script>document.getElementById('root').closest('main:where([data-kind=primary x])');</script>",
+        "<main id='root' class='primary'></main><script>document.getElementById('root').closest('main:where([data-kind=primary x y])');</script>",
     )
     .expect_err("broader CSS parsing inside :where should fail");
 

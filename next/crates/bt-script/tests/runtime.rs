@@ -92,6 +92,7 @@ struct RecordingHost {
     inner_html: BTreeMap<ElementHandle, String>,
     values: BTreeMap<ElementHandle, String>,
     checked: BTreeMap<ElementHandle, bool>,
+    indeterminate: BTreeMap<ElementHandle, bool>,
     attributes: BTreeMap<(ElementHandle, String), String>,
     element_children_results: BTreeMap<ElementHandle, Vec<ElementHandle>>,
     element_tag_name_results: BTreeMap<ElementHandle, String>,
@@ -171,6 +172,10 @@ struct RecordingHost {
     document_cookie_jar: BTreeMap<String, String>,
     document_cookie_calls: usize,
     document_set_cookie_calls: Vec<String>,
+    document_write_calls: Vec<String>,
+    document_writeln_calls: Vec<String>,
+    document_open_calls: usize,
+    document_close_calls: usize,
     window_name_result: String,
     window_name_calls: usize,
     set_window_name_calls: Vec<String>,
@@ -207,6 +212,7 @@ struct RecordingHost {
     window_device_pixel_ratio_result: f64,
     match_media_matches: BTreeMap<String, bool>,
     match_media_calls: Vec<String>,
+    match_media_listener_calls: Vec<(String, String)>,
     local_storage: BTreeMap<String, String>,
     session_storage: BTreeMap<String, String>,
     document_compat_mode_calls: usize,
@@ -323,6 +329,10 @@ impl RecordingHost {
 
     fn seed_checked(&mut self, handle: ElementHandle, checked: bool) {
         self.checked.insert(handle, checked);
+    }
+
+    fn seed_indeterminate(&mut self, handle: ElementHandle, indeterminate: bool) {
+        self.indeterminate.insert(handle, indeterminate);
     }
 
     fn seed_attribute(
@@ -956,6 +966,26 @@ impl HostBindings for RecordingHost {
         Ok(())
     }
 
+    fn document_write(&mut self, html: &str) -> bt_script::Result<()> {
+        self.document_write_calls.push(html.to_string());
+        Ok(())
+    }
+
+    fn document_writeln(&mut self, html: &str) -> bt_script::Result<()> {
+        self.document_writeln_calls.push(html.to_string());
+        Ok(())
+    }
+
+    fn document_open(&mut self) -> bt_script::Result<()> {
+        self.document_open_calls += 1;
+        Ok(())
+    }
+
+    fn document_close(&mut self) -> bt_script::Result<()> {
+        self.document_close_calls += 1;
+        Ok(())
+    }
+
     fn window_name(&mut self) -> bt_script::Result<String> {
         self.window_name_calls += 1;
         Ok(self.window_name_result.clone())
@@ -1333,6 +1363,18 @@ impl HostBindings for RecordingHost {
                 bt_script::ScriptError::new(format!("no matchMedia mock configured for `{query}`"))
             })?;
         Ok(MediaQueryListState::new(query, matches))
+    }
+
+    fn match_media_add_listener(&mut self, query: &str) -> bt_script::Result<()> {
+        self.match_media_listener_calls
+            .push((query.to_string(), "addListener".to_string()));
+        Ok(())
+    }
+
+    fn match_media_remove_listener(&mut self, query: &str) -> bt_script::Result<()> {
+        self.match_media_listener_calls
+            .push((query.to_string(), "removeListener".to_string()));
+        Ok(())
     }
 
     fn set_window_name(&mut self, value: &str) -> bt_script::Result<()> {
@@ -1975,6 +2017,19 @@ impl HostBindings for RecordingHost {
         Ok(())
     }
 
+    fn element_indeterminate(&mut self, element: ElementHandle) -> bt_script::Result<bool> {
+        Ok(self.indeterminate.get(&element).copied().unwrap_or(false))
+    }
+
+    fn element_set_indeterminate(
+        &mut self,
+        element: ElementHandle,
+        indeterminate: bool,
+    ) -> bt_script::Result<()> {
+        self.indeterminate.insert(element, indeterminate);
+        Ok(())
+    }
+
     fn element_get_attribute(
         &mut self,
         element: ElementHandle,
@@ -2418,6 +2473,66 @@ fn runtime_reads_and_writes_form_control_state() {
 }
 
 #[test]
+fn runtime_reads_and_writes_checkbox_indeterminate_state() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("agree", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "input");
+    host.seed_attribute(ElementHandle::new(1), "type", "checkbox");
+    host.seed_indeterminate(ElementHandle::new(1), false);
+
+    runtime
+        .eval_program(
+            "const agree = document.getElementById('agree'); const before = agree.indeterminate; agree.indeterminate = true; document.getElementById('out').textContent = String(before) + ':' + String(agree.indeterminate);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("script should mutate checkbox indeterminate state");
+
+    assert_eq!(
+        host.indeterminate.get(&ElementHandle::new(1)).copied(),
+        Some(true)
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("false:true")
+    );
+}
+
+#[test]
+fn runtime_reads_and_writes_checkbox_default_checked_state() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("agree", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "input");
+    host.seed_attribute(ElementHandle::new(1), "type", "checkbox");
+    host.seed_checked(ElementHandle::new(1), false);
+
+    runtime
+        .eval_program(
+            "const agree = document.getElementById('agree'); const before = agree.defaultChecked; agree.defaultChecked = true; document.getElementById('out').textContent = String(before) + ':' + String(agree.defaultChecked) + ':' + String(agree.checked);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("script should mutate checkbox defaultChecked state");
+
+    assert_eq!(
+        host.checked.get(&ElementHandle::new(1)).copied(),
+        Some(true)
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("false:true:true")
+    );
+}
+
+#[test]
 fn runtime_supports_attribute_reflection_methods() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -2462,7 +2577,7 @@ fn runtime_supports_classname_classlist_and_dataset_views() {
 
     runtime
         .eval_program(
-            "const root = document.getElementById('root'); const before = root.classList.length; const contains = root.classList.contains('primary'); root.classList.add('tertiary'); root.classList.remove('secondary'); const toggled = root.classList.toggle('active'); root.dataset.userId = '42'; document.getElementById('out').textContent = root.className + ':' + String(before) + ':' + String(contains) + ':' + String(toggled) + ':' + root.dataset.kind + ':' + root.dataset.userId + ':' + String(root.classList) + ':' + String(root.dataset);",
+            "const root = document.getElementById('root'); const before = root.classList.length; const contains = root.classList.contains('primary'); root.classList.add('tertiary'); root.classList.remove('secondary'); const toggled = root.classList.toggle('active'); root.dataset.userId = '42'; const out = document.getElementById('out'); out.textContent = root.className + ':' + String(before) + ':' + String(contains) + ':' + String(toggled) + ':' + root.dataset.kind + ':' + root.dataset.userId + ':' + String(root.classList) + ':' + root.classList.toString() + ':' + String(root.classList.item(1)) + ':' + String(root.classList.keys().next().value) + ':' + String(root.classList.values().next().value) + ':' + String(root.classList.entries().next().value.index) + ':' + String(root.classList.entries().next().value.value) + ':' + String(root.dataset); root.classList.forEach((token, index, list) => { out.textContent += '|F' + String(index) + ':' + token + ':' + String(list.length); });",
             "inline-script",
             &mut host,
         )
@@ -2491,8 +2606,131 @@ fn runtime_supports_classname_classlist_and_dataset_views() {
             .get(&ElementHandle::new(2))
             .map(String::as_str),
         Some(
-            "primary tertiary active:2:true:true:App:42:[object DOMTokenList]:[object DOMStringMap]"
+            "primary tertiary active:2:true:true:App:42:[object DOMTokenList]:primary tertiary active:tertiary:0:primary:0:primary:[object DOMStringMap]|F0:primary:3|F1:tertiary:3|F2:active:3"
         )
+    );
+}
+
+#[test]
+fn runtime_supports_classlist_value() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "class", "primary secondary");
+
+    runtime
+        .eval_program(
+            "const root = document.getElementById('root'); const before = root.classList.value; root.classList.value = 'alpha beta'; document.getElementById('out').textContent = before + ':' + root.className + ':' + root.classList.value + ':' + String(root.classList.length) + ':' + String(root.classList.contains('alpha')) + ':' + String(root.classList.contains('beta'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("classList.value should dispatch through host bindings");
+
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "class".to_string()))
+            .map(String::as_str),
+        Some("alpha beta")
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("primary secondary:alpha beta:alpha beta:2:true:true")
+    );
+}
+
+#[test]
+fn runtime_supports_classlist_replace() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "class", "base primary active");
+
+    runtime
+        .eval_program(
+            "const root = document.getElementById('root'); const first = root.classList.replace('primary', 'secondary'); const second = root.classList.replace('missing', 'delta'); const third = root.classList.replace('secondary', 'active'); document.getElementById('out').textContent = root.className + ':' + String(first) + ':' + String(second) + ':' + String(third) + ':' + String(root.classList.length) + ':' + root.classList.toString();",
+            "inline-script",
+            &mut host,
+        )
+        .expect("classList.replace should dispatch through host bindings");
+
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "class".to_string()))
+            .map(String::as_str),
+        Some("base active")
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("base active:true:false:true:2:base active")
+    );
+}
+
+#[test]
+fn runtime_rejects_classlist_tostring_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('root').classList.toString('unexpected');",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("classList.toString should reject arguments");
+
+    assert!(
+        error
+            .to_string()
+            .contains("classList.toString() expects no arguments")
+    );
+}
+
+#[test]
+fn runtime_rejects_classlist_foreach_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('root').classList.forEach();",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("classList.forEach should reject missing callback");
+
+    assert!(
+        error
+            .to_string()
+            .contains("classList.forEach() expects one or two arguments")
+    );
+}
+
+#[test]
+fn runtime_rejects_classlist_replace_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("root", ElementHandle::new(1), "");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('root').classList.replace('primary');",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("classList.replace should reject missing arguments");
+
+    assert!(
+        error
+            .to_string()
+            .contains("classList.replace() expects exactly two arguments")
     );
 }
 
@@ -2830,10 +3068,7 @@ fn runtime_resolves_element_namespace_uri_access() {
     let mut host = RecordingHost::default();
     host.seed_element("root", ElementHandle::new(1), "");
     host.seed_element("out", ElementHandle::new(2), "");
-    host.seed_node_namespace_uri(
-        NodeHandle::new(1),
-        "http://www.w3.org/1999/xhtml",
-    );
+    host.seed_node_namespace_uri(NodeHandle::new(1), "http://www.w3.org/1999/xhtml");
 
     runtime
         .eval_program(
@@ -2983,6 +3218,101 @@ fn runtime_resolves_document_has_focus_access() {
             .map(String::as_str),
         Some("true")
     );
+}
+
+#[test]
+fn runtime_resolves_element_click_focus_and_blur_access() {
+    #[derive(Default)]
+    struct InteractionHost {
+        element: Option<ElementHandle>,
+        document_get_element_by_id_calls: usize,
+        element_click_calls: Vec<ElementHandle>,
+        element_focus_calls: Vec<ElementHandle>,
+        element_blur_calls: Vec<ElementHandle>,
+    }
+
+    impl HostBindings for InteractionHost {
+        fn document_get_element_by_id(
+            &mut self,
+            id: &str,
+        ) -> bt_script::Result<Option<ElementHandle>> {
+            self.document_get_element_by_id_calls += 1;
+            assert_eq!(id, "first");
+            Ok(self.element)
+        }
+
+        fn element_click(&mut self, element: ElementHandle) -> bt_script::Result<()> {
+            self.element_click_calls.push(element);
+            Ok(())
+        }
+
+        fn element_focus(&mut self, element: ElementHandle) -> bt_script::Result<()> {
+            self.element_focus_calls.push(element);
+            Ok(())
+        }
+
+        fn element_blur(&mut self, element: ElementHandle) -> bt_script::Result<()> {
+            self.element_blur_calls.push(element);
+            Ok(())
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = InteractionHost {
+        element: Some(ElementHandle::new(1)),
+        ..Default::default()
+    };
+
+    runtime
+        .eval_program(
+            "const first = document.getElementById('first'); first.click(); first.focus(); first.blur();",
+            "inline-script",
+            &mut host,
+        )
+        .expect("Element.click/focus/blur should resolve through host bindings");
+
+    assert_eq!(host.document_get_element_by_id_calls, 1);
+    assert_eq!(host.element_click_calls, vec![ElementHandle::new(1)]);
+    assert_eq!(host.element_focus_calls, vec![ElementHandle::new(1)]);
+    assert_eq!(host.element_blur_calls, vec![ElementHandle::new(1)]);
+}
+
+#[test]
+fn runtime_rejects_element_click_focus_and_blur_with_arguments() {
+    #[derive(Default)]
+    struct InteractionHost;
+
+    impl HostBindings for InteractionHost {
+        fn document_get_element_by_id(
+            &mut self,
+            _id: &str,
+        ) -> bt_script::Result<Option<ElementHandle>> {
+            Ok(Some(ElementHandle::new(1)))
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = InteractionHost;
+
+    for (source, expected_message) in [
+        (
+            "document.getElementById('first').click(1);",
+            "click() expects no arguments",
+        ),
+        (
+            "document.getElementById('first').focus(1);",
+            "focus() expects no arguments",
+        ),
+        (
+            "document.getElementById('first').blur(1);",
+            "blur() expects no arguments",
+        ),
+    ] {
+        let error = runtime
+            .eval_program(source, "inline-script", &mut host)
+            .expect_err("Element activation methods should validate arity");
+        assert!(error.message().contains(expected_message));
+    }
 }
 
 #[test]
@@ -3847,6 +4177,49 @@ fn runtime_resolves_window_match_media_access() {
 }
 
 #[test]
+fn runtime_supports_window_match_media_listeners() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+    host.seed_match_media_result("(prefers-color-scheme: dark)", true);
+
+    runtime
+        .eval_program(
+            "const out = document.getElementById('out'); out.textContent = 'before'; const list = window.matchMedia('(prefers-color-scheme: dark)'); list.addListener(() => { out.textContent = 'called'; }); list.removeListener(() => { out.textContent = 'removed'; }); out.textContent += ':' + String(list.matches) + ':' + list.media + ':' + String(window.matchMedia('(prefers-color-scheme: dark)'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("matchMedia listeners should resolve through host bindings");
+
+    assert_eq!(
+        host.match_media_calls,
+        vec![
+            "(prefers-color-scheme: dark)".to_string(),
+            "(prefers-color-scheme: dark)".to_string()
+        ]
+    );
+    assert_eq!(
+        host.match_media_listener_calls,
+        vec![
+            (
+                "(prefers-color-scheme: dark)".to_string(),
+                "addListener".to_string()
+            ),
+            (
+                "(prefers-color-scheme: dark)".to_string(),
+                "removeListener".to_string()
+            )
+        ]
+    );
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("before:true:(prefers-color-scheme: dark):[object MediaQueryList]")
+    );
+}
+
+#[test]
 fn runtime_rejects_window_match_media_wrong_arity() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -3859,6 +4232,27 @@ fn runtime_rejects_window_match_media_wrong_arity() {
         error
             .to_string()
             .contains("matchMedia() expects exactly one argument")
+    );
+}
+
+#[test]
+fn runtime_rejects_media_query_list_listener_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_match_media_result("(prefers-color-scheme: dark)", true);
+
+    let error = runtime
+        .eval_program(
+            "window.matchMedia('(prefers-color-scheme: dark)').addListener();",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("matchMedia listeners should reject missing callbacks");
+
+    assert!(
+        error
+            .to_string()
+            .contains("MediaQueryList.addListener() expects exactly one argument")
     );
 }
 
@@ -4343,6 +4737,30 @@ fn runtime_resolves_window_navigator_languages_iterator_helpers() {
 }
 
 #[test]
+fn runtime_resolves_window_navigator_languages_for_each_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_navigator("browser-tester-next", "unknown", "en-US", true, true);
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "const languages = window.navigator.languages; languages.forEach((value, index, list) => { document.getElementById('out').textContent += String(index) + ':' + value + ':' + String(list.length) + ';'; });",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.navigator.languages.forEach should resolve through host bindings");
+
+    assert_eq!(host.navigator_languages_calls, 1);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("0:en-US:1;")
+    );
+}
+
+#[test]
 fn runtime_rejects_window_navigator_mime_types_assignment() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -4434,6 +4852,49 @@ fn runtime_resolves_window_navigator_mime_types_iterator_helpers() {
             .get(&ElementHandle::new(1))
             .map(String::as_str),
         Some("true:true:true")
+    );
+}
+
+#[test]
+fn runtime_resolves_window_navigator_mime_types_for_each_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "const mimeTypes = window.navigator.mimeTypes; mimeTypes.forEach(() => { document.getElementById('out').textContent = 'called'; });",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.navigator.mimeTypes.forEach should resolve through host bindings");
+
+    assert_eq!(host.navigator_mime_types_calls, 1);
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("")
+    );
+}
+
+#[test]
+fn runtime_rejects_window_navigator_languages_for_each_with_arguments() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.languages.forEach(123);",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("navigator.languages.forEach should require an arrow function callback");
+
+    assert!(
+        error
+            .to_string()
+            .contains("navigator.languages.forEach() requires an arrow function callback")
     );
 }
 
@@ -4727,6 +5188,56 @@ fn runtime_resolves_document_dir_getter_and_setter_access() {
 }
 
 #[test]
+fn runtime_resolves_element_dir_and_lang_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "div");
+
+    runtime
+        .eval_program(
+            "const box = document.getElementById('box'); const before = String(box.dir) + '|' + String(box.lang); box.dir = 'rtl'; box.lang = 'fr'; const afterSet = String(box.dir) + '|' + String(box.lang) + '|' + String(box.getAttribute('dir')) + '|' + String(box.getAttribute('lang')); document.getElementById('out').textContent = before + ';' + afterSet;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element dir and lang should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("|;rtl|fr|rtl|fr")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "dir".to_string()))
+            .map(String::as_str),
+        Some("rtl")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "lang".to_string()))
+            .map(String::as_str),
+        Some("fr")
+    );
+}
+
+#[test]
+fn runtime_rejects_non_element_lang_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    runtime
+        .eval_program(
+            "document.createTextNode('x').lang;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("text nodes should not expose lang");
+}
+
+#[test]
 fn runtime_resolves_document_title_getter_setter_and_window_alias() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -4750,6 +5261,777 @@ fn runtime_resolves_document_title_getter_setter_and_window_alias() {
             .map(String::as_str),
         Some("Initial:Updated")
     );
+}
+
+#[test]
+fn runtime_records_document_write_calls_and_concatenates_arguments() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    runtime
+        .eval_program(
+            "document.write('<span id=\"written\">', 'Written', '</span>');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.write should resolve through host bindings");
+
+    assert_eq!(
+        host.document_write_calls,
+        vec!["<span id=\"written\">Written</span>".to_string()]
+    );
+}
+
+#[test]
+fn runtime_records_document_writeln_calls_and_concatenates_arguments() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    runtime
+        .eval_program(
+            "document.writeln('<span id=\"written\">', 'Written', '</span>');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.writeln should resolve through host bindings");
+
+    assert_eq!(
+        host.document_writeln_calls,
+        vec!["<span id=\"written\">Written</span>\n".to_string()]
+    );
+}
+
+#[test]
+fn runtime_rejects_document_write_on_unimplemented_host() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost::default();
+
+    let error = runtime
+        .eval_program(
+            "document.write('<span id=\"written\">Written</span>');",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("document.write should be rejected when the host does not support it");
+
+    assert!(error.to_string().contains("document.write"));
+}
+
+#[test]
+fn runtime_rejects_document_writeln_on_unimplemented_host() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost::default();
+
+    let error = runtime
+        .eval_program(
+            "document.writeln('<span id=\"written\">Written</span>');",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("document.writeln should be rejected when the host does not support it");
+
+    assert!(error.to_string().contains("document.writeln"));
+}
+
+#[test]
+fn runtime_records_document_open_and_close_calls() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    runtime
+        .eval_program(
+            "document.open(); document.close();",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.open and document.close should resolve through host bindings");
+
+    assert_eq!(host.document_open_calls, 1);
+    assert_eq!(host.document_close_calls, 1);
+}
+
+#[test]
+fn runtime_rejects_document_open_on_unimplemented_host() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost::default();
+
+    let error = runtime
+        .eval_program("document.open();", "inline-script", &mut host)
+        .expect_err("document.open should be rejected when the host does not support it");
+
+    assert!(error.to_string().contains("document.open"));
+}
+
+#[test]
+fn runtime_rejects_document_open_with_arguments() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("document.open('x');", "inline-script", &mut host)
+        .expect_err("document.open should reject arguments");
+
+    assert!(error.to_string().contains("expects no arguments"));
+}
+
+#[test]
+fn runtime_rejects_document_close_on_unimplemented_host() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost::default();
+
+    let error = runtime
+        .eval_program("document.close();", "inline-script", &mut host)
+        .expect_err("document.close should be rejected when the host does not support it");
+
+    assert!(error.to_string().contains("document.close"));
+}
+
+#[test]
+fn runtime_rejects_document_close_with_arguments() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    let error = runtime
+        .eval_program("document.close('x');", "inline-script", &mut host)
+        .expect_err("document.close should reject arguments");
+
+    assert!(error.to_string().contains("expects no arguments"));
+}
+
+#[test]
+fn runtime_resolves_element_title_getter_setter_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "title", "Initial");
+
+    runtime
+        .eval_program(
+            "const box = document.getElementById('box'); const before = box.title; box.title = 'Updated'; document.getElementById('out').textContent = before + ':' + box.title + ':' + box.getAttribute('title');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element.title should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("Initial:Updated:Updated")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "title".to_string()))
+            .map(String::as_str),
+        Some("Updated")
+    );
+}
+
+#[test]
+fn runtime_resolves_element_role_getter_setter_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "role", "button");
+
+    runtime
+        .eval_program(
+            "const box = document.getElementById('box'); const before = box.role; box.role = 'menu'; document.getElementById('out').textContent = before + ':' + box.role + ':' + box.getAttribute('role');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element.role should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("button:menu:menu")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "role".to_string()))
+            .map(String::as_str),
+        Some("menu")
+    );
+}
+
+#[test]
+fn runtime_resolves_element_aria_label_getter_setter_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "aria-label", "Initial");
+
+    runtime
+        .eval_program(
+            "const box = document.getElementById('box'); const before = box.ariaLabel; box.ariaLabel = 'Updated'; document.getElementById('out').textContent = before + ':' + box.ariaLabel + ':' + box.getAttribute('aria-label');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element.ariaLabel should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("Initial:Updated:Updated")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "aria-label".to_string()))
+            .map(String::as_str),
+        Some("Updated")
+    );
+}
+
+#[test]
+fn runtime_resolves_element_aria_description_getter_setter_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "aria-description", "Initial");
+
+    runtime
+        .eval_program(
+            "const box = document.getElementById('box'); const before = box.ariaDescription; box.ariaDescription = 'Updated'; document.getElementById('out').textContent = before + ':' + box.ariaDescription + ':' + box.getAttribute('aria-description');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element.ariaDescription should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("Initial:Updated:Updated")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "aria-description".to_string()))
+            .map(String::as_str),
+        Some("Updated")
+    );
+}
+
+#[test]
+fn runtime_rejects_non_element_aria_description_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    runtime
+        .eval_program(
+            "document.createTextNode('x').ariaDescription;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("text nodes should not expose ariaDescription");
+}
+
+#[test]
+fn runtime_resolves_element_aria_role_description_getter_setter_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "aria-roledescription", "Initial");
+
+    runtime
+        .eval_program(
+            "const box = document.getElementById('box'); const before = box.ariaRoleDescription; box.ariaRoleDescription = 'Updated'; document.getElementById('out').textContent = before + ':' + box.ariaRoleDescription + ':' + box.getAttribute('aria-roledescription');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element.ariaRoleDescription should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("Initial:Updated:Updated")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "aria-roledescription".to_string()))
+            .map(String::as_str),
+        Some("Updated")
+    );
+}
+
+#[test]
+fn runtime_rejects_non_element_aria_role_description_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    runtime
+        .eval_program(
+            "document.createTextNode('x').ariaRoleDescription;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("text nodes should not expose ariaRoleDescription");
+}
+
+#[test]
+fn runtime_resolves_element_aria_hidden_getter_setter_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "aria-hidden", "true");
+
+    runtime
+        .eval_program(
+            "const box = document.getElementById('box'); const before = box.ariaHidden; box.ariaHidden = false; document.getElementById('out').textContent = before + ':' + box.ariaHidden + ':' + box.getAttribute('aria-hidden');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element.ariaHidden should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("true:false:false")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "aria-hidden".to_string()))
+            .map(String::as_str),
+        Some("false")
+    );
+}
+
+#[test]
+fn runtime_rejects_non_element_aria_label_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    runtime
+        .eval_program(
+            "document.createTextNode('x').ariaLabel;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("text nodes should not expose ariaLabel");
+}
+
+#[test]
+fn runtime_rejects_non_element_aria_hidden_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    runtime
+        .eval_program(
+            "document.createTextNode('x').ariaHidden;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("text nodes should not expose ariaHidden");
+}
+
+#[test]
+fn runtime_rejects_non_element_role_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    runtime
+        .eval_program(
+            "document.createTextNode('x').role;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("text nodes should not expose role");
+}
+
+#[test]
+fn runtime_resolves_element_tab_index_getter_setter_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("button", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "div");
+    host.seed_element_tag_name(ElementHandle::new(2), "button");
+    host.seed_element_tag_name(ElementHandle::new(3), "div");
+
+    runtime
+        .eval_program(
+            "const box = document.getElementById('box'); const button = document.getElementById('button'); const before = String(box.tabIndex) + '|' + String(button.tabIndex); box.tabIndex = 4; button.tabIndex = -1; document.getElementById('out').textContent = before + ':' + String(box.tabIndex) + '|' + String(button.tabIndex) + ':' + box.getAttribute('tabindex') + '|' + button.getAttribute('tabindex');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element.tabIndex should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("-1|0:4|-1:4|-1")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "tabindex".to_string()))
+            .map(String::as_str),
+        Some("4")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(2), "tabindex".to_string()))
+            .map(String::as_str),
+        Some("-1")
+    );
+}
+
+#[test]
+fn runtime_rejects_non_element_tab_index_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    runtime
+        .eval_program(
+            "document.createTextNode('x').tabIndex;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("text nodes should not expose tabIndex");
+}
+
+#[test]
+fn runtime_resolves_element_access_key_getter_setter_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "accesskey", "x");
+
+    runtime
+        .eval_program(
+            "const box = document.getElementById('box'); const before = box.accessKey; box.accessKey = 'y'; document.getElementById('out').textContent = before + ':' + box.accessKey + ':' + box.getAttribute('accesskey');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element.accessKey should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("x:y:y")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "accesskey".to_string()))
+            .map(String::as_str),
+        Some("y")
+    );
+}
+
+#[test]
+fn runtime_resolves_element_slot_getter_setter_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "slot", "start");
+
+    runtime
+        .eval_program(
+            "const box = document.getElementById('box'); const before = box.slot; box.slot = 'end'; document.getElementById('out').textContent = before + ':' + box.slot + ':' + box.getAttribute('slot');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element.slot should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("start:end:end")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "slot".to_string()))
+            .map(String::as_str),
+        Some("end")
+    );
+}
+
+#[test]
+fn runtime_rejects_non_element_title_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    runtime
+        .eval_program(
+            "document.createTextNode('x').title;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("text nodes should not expose title");
+}
+
+#[test]
+fn runtime_rejects_non_element_access_key_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    runtime
+        .eval_program(
+            "document.createTextNode('x').accessKey;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("text nodes should not expose accessKey");
+}
+
+#[test]
+fn runtime_rejects_non_element_slot_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    runtime
+        .eval_program(
+            "document.createTextNode('x').slot;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("text nodes should not expose slot");
+}
+
+#[test]
+fn runtime_resolves_element_autocapitalize_getter_setter_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "autocapitalize", "sentences");
+
+    runtime
+        .eval_program(
+            "const box = document.getElementById('box'); const before = box.autocapitalize; box.autocapitalize = 'words'; document.getElementById('out').textContent = before + ':' + box.autocapitalize + ':' + box.getAttribute('autocapitalize');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element.autocapitalize should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("sentences:words:words")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "autocapitalize".to_string()))
+            .map(String::as_str),
+        Some("words")
+    );
+}
+
+#[test]
+fn runtime_rejects_non_element_autocapitalize_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    runtime
+        .eval_program(
+            "document.createTextNode('x').autocapitalize;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("text nodes should not expose autocapitalize");
+}
+
+#[test]
+fn runtime_resolves_element_spellcheck_getter_setter_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("outer", ElementHandle::new(1), "");
+    host.seed_element("inner", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_attribute(ElementHandle::new(1), "spellcheck", "false");
+    host.seed_node_parent(NodeHandle::new(2), Some(NodeHandle::new(1)));
+    host.seed_node_type(NodeHandle::new(1), 1);
+    host.seed_node_type(NodeHandle::new(2), 1);
+
+    runtime
+        .eval_program(
+            "const outer = document.getElementById('outer'); const inner = document.getElementById('inner'); const before = String(inner.spellcheck); outer.spellcheck = true; const afterTrue = String(inner.spellcheck) + ':' + outer.getAttribute('spellcheck'); inner.spellcheck = false; const afterFalse = String(inner.spellcheck) + ':' + inner.getAttribute('spellcheck'); document.getElementById('out').textContent = before + ':' + afterTrue + ':' + afterFalse;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element.spellcheck should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("false:true:true:false:false")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "spellcheck".to_string()))
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(2), "spellcheck".to_string()))
+            .map(String::as_str),
+        Some("false")
+    );
+}
+
+#[test]
+fn runtime_rejects_non_element_spellcheck_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    runtime
+        .eval_program(
+            "document.createTextNode('x').spellcheck = false;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("text nodes should not expose spellcheck");
+}
+
+#[test]
+fn runtime_resolves_element_input_mode_getter_setter_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "inputmode", "text");
+
+    runtime
+        .eval_program(
+            "const box = document.getElementById('box'); const before = box.inputMode; box.inputMode = 'numeric'; document.getElementById('out').textContent = before + ':' + box.inputMode + ':' + box.getAttribute('inputmode');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element.inputMode should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("text:numeric:numeric")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "inputmode".to_string()))
+            .map(String::as_str),
+        Some("numeric")
+    );
+}
+
+#[test]
+fn runtime_rejects_non_element_input_mode_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    runtime
+        .eval_program(
+            "document.createTextNode('x').inputMode = 'numeric';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("text nodes should not expose inputMode");
+}
+
+#[test]
+fn runtime_resolves_element_translate_getter_setter_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "translate", "no");
+    host.seed_node_type(NodeHandle::new(1), 1);
+
+    runtime
+        .eval_program(
+            "const box = document.getElementById('box'); const before = String(box.translate); box.translate = true; const afterTrue = String(box.translate) + ':' + box.getAttribute('translate'); box.translate = false; document.getElementById('out').textContent = before + ':' + afterTrue + ':' + String(box.translate) + ':' + box.getAttribute('translate');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element.translate should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("false:true:yes:false:no")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "translate".to_string()))
+            .map(String::as_str),
+        Some("no")
+    );
+}
+
+#[test]
+fn runtime_rejects_non_element_translate_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    runtime
+        .eval_program(
+            "document.createTextNode('x').translate;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("text nodes should not expose translate");
+}
+
+#[test]
+fn runtime_resolves_element_hidden_getter_setter_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_attribute(ElementHandle::new(1), "hidden", "");
+
+    runtime
+        .eval_program(
+            "const box = document.getElementById('box'); const before = String(box.hidden); box.hidden = false; const afterClear = String(box.hidden) + ':' + String(box.hasAttribute('hidden')); box.hidden = true; document.getElementById('out').textContent = before + ':' + afterClear + ':' + String(box.hidden) + ':' + String(box.hasAttribute('hidden'));",
+            "inline-script",
+            &mut host,
+        )
+        .expect("element.hidden should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("true:false:false:true:true")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "hidden".to_string()))
+            .map(String::as_str),
+        Some("")
+    );
+}
+
+#[test]
+fn runtime_rejects_non_element_hidden_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    runtime
+        .eval_program(
+            "document.createTextNode('x').hidden;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("text nodes should not expose hidden");
 }
 
 #[test]
@@ -6375,6 +7657,76 @@ fn runtime_resolves_select_multiple_access() {
 }
 
 #[test]
+fn runtime_resolves_select_type_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("mode", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "select");
+    host.seed_node_type(NodeHandle::new(1), 1);
+
+    runtime
+        .eval_program(
+            "const select = document.getElementById('mode'); const before = select.type; select.multiple = true; const after = select.type; document.getElementById('out').textContent = before + ':' + after;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("select.type should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("select-one:select-multiple")
+    );
+}
+
+#[test]
+fn runtime_resolves_input_and_button_type_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("field", ElementHandle::new(1), "");
+    host.seed_element("action", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "input");
+    host.seed_element_tag_name(ElementHandle::new(2), "button");
+    host.seed_node_type(NodeHandle::new(1), 1);
+    host.seed_node_type(NodeHandle::new(2), 1);
+
+    runtime
+        .eval_program(
+            "const input = document.getElementById('field'); const button = document.getElementById('action'); const before = input.type + '|' + button.type; input.type = 'email'; button.type = 'reset'; const afterSet = input.type + '|' + button.type + '|' + input.getAttribute('type') + '|' + button.getAttribute('type'); input.type = 'bogus'; button.type = 'bogus'; const afterInvalid = input.type + '|' + button.type + '|' + input.getAttribute('type') + '|' + button.getAttribute('type'); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterInvalid;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("input.type and button.type should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("text|submit;email|reset|email|reset;text|submit|bogus|bogus")
+    );
+}
+
+#[test]
+fn runtime_rejects_non_form_control_type_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('box').type;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-form-control type access should fail");
+
+    assert!(error.to_string().contains("type"));
+}
+
+#[test]
 fn runtime_resolves_select_size_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -6402,6 +7754,631 @@ fn runtime_resolves_select_size_access() {
             .map(String::as_str),
         Some("0")
     );
+}
+
+#[test]
+fn runtime_resolves_select_required_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("mode", ElementHandle::new(1), "mode");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "select");
+
+    runtime
+        .eval_program(
+            "const select = document.getElementById('mode'); const before = select.required; select.required = true; const afterSet = select.required; const afterSetAttr = select.getAttribute('required'); select.required = false; const afterClear = select.required; const afterQuery = document.querySelector('select:required'); document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(afterSetAttr) + ':' + String(afterClear) + ':' + String(afterQuery);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("select.required should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("false:true::false:null")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "required".to_string())),
+        None
+    );
+}
+
+#[test]
+fn runtime_resolves_form_no_validate_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("signup", ElementHandle::new(1), "");
+    host.seed_element("submit", ElementHandle::new(2), "Submit");
+    host.seed_element("field", ElementHandle::new(3), "");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "form");
+    host.seed_element_tag_name(ElementHandle::new(2), "button");
+    host.seed_element_tag_name(ElementHandle::new(3), "input");
+
+    runtime
+        .eval_program(
+            "const form = document.getElementById('signup'); const button = document.getElementById('submit'); const field = document.getElementById('field'); const before = String(form.noValidate) + '|' + String(button.formNoValidate) + '|' + String(field.formNoValidate); form.noValidate = true; button.formNoValidate = true; field.formNoValidate = true; const afterSet = String(form.noValidate) + '|' + String(button.formNoValidate) + '|' + String(field.formNoValidate) + '|' + String(form.getAttribute('novalidate')) + '|' + String(button.getAttribute('formnovalidate')) + '|' + String(field.getAttribute('formnovalidate')); form.noValidate = false; button.formNoValidate = false; field.formNoValidate = false; const afterClear = String(form.noValidate) + '|' + String(button.formNoValidate) + '|' + String(field.formNoValidate) + '|' + String(form.hasAttribute('novalidate')) + '|' + String(button.hasAttribute('formnovalidate')) + '|' + String(field.hasAttribute('formnovalidate')); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterClear;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("form noValidate and formNoValidate should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some("false|false|false;true|true|true|||;false|false|false|false|false|false")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "novalidate".to_string())),
+        None
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(2), "formnovalidate".to_string())),
+        None
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(3), "formnovalidate".to_string())),
+        None
+    );
+}
+
+#[test]
+fn runtime_resolves_form_submission_metadata_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_document_location("https://example.test/start");
+    host.seed_element("signup", ElementHandle::new(1), "");
+    host.seed_element("submit", ElementHandle::new(2), "");
+    host.seed_element("field", ElementHandle::new(3), "");
+    host.seed_element("out", ElementHandle::new(4), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "form");
+    host.seed_element_tag_name(ElementHandle::new(2), "button");
+    host.seed_element_tag_name(ElementHandle::new(3), "input");
+    host.seed_node_type(NodeHandle::new(1), 1);
+    host.seed_node_type(NodeHandle::new(2), 1);
+    host.seed_node_type(NodeHandle::new(3), 1);
+    host.seed_node_parent(NodeHandle::new(2), Some(NodeHandle::new(1)));
+    host.seed_node_parent(NodeHandle::new(3), Some(NodeHandle::new(1)));
+    host.seed_attribute(ElementHandle::new(1), "action", "/submit?from=form#frag");
+    host.seed_attribute(ElementHandle::new(1), "method", "BOGUS");
+    host.seed_attribute(ElementHandle::new(1), "enctype", "BOGUS");
+    host.seed_attribute(
+        ElementHandle::new(3),
+        "formaction",
+        "/field-preview?x=1#field",
+    );
+
+    runtime
+        .eval_program(
+            "const form = document.getElementById('signup'); const button = document.getElementById('submit'); const field = document.getElementById('field'); const before = String(form.action) + '|' + String(button.formAction) + '|' + String(field.formAction) + '|' + String(form.method) + '|' + String(form.enctype) + '|' + String(form.target) + '|' + String(button.formMethod) + '|' + String(button.formEnctype) + '|' + String(button.formTarget) + '|' + String(field.formMethod) + '|' + String(field.formEnctype) + '|' + String(field.formTarget); form.action = '/override-form?x=1#form'; form.method = 'Dialog'; form.enctype = 'Multipart/Form-Data'; form.target = '_blank'; button.formAction = '/override-button?button=1#button'; button.formMethod = 'PoSt'; button.formEnctype = 'Text/Plain'; button.formTarget = 'preview'; field.formAction = '/override-field?field=1#field'; field.formMethod = 'GET'; field.formEnctype = 'application/x-www-form-urlencoded'; field.formTarget = 'field-preview'; const afterSet = String(form.action) + '|' + String(button.formAction) + '|' + String(field.formAction) + '|' + String(form.method) + '|' + String(form.enctype) + '|' + String(form.target) + '|' + String(button.formMethod) + '|' + String(button.formEnctype) + '|' + String(button.formTarget) + '|' + String(field.formMethod) + '|' + String(field.formEnctype) + '|' + String(field.formTarget) + '|' + String(form.getAttribute('action')) + '|' + String(form.getAttribute('method')) + '|' + String(form.getAttribute('enctype')) + '|' + String(form.getAttribute('target')) + '|' + String(button.getAttribute('formaction')) + '|' + String(button.getAttribute('formmethod')) + '|' + String(button.getAttribute('formenctype')) + '|' + String(button.getAttribute('formtarget')) + '|' + String(field.getAttribute('formaction')) + '|' + String(field.getAttribute('formmethod')) + '|' + String(field.getAttribute('formenctype')) + '|' + String(field.getAttribute('formtarget')); document.getElementById('out').textContent = before + ';' + afterSet;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("form submission metadata should resolve through host bindings");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(4))
+            .map(String::as_str),
+        Some(
+            "https://example.test/submit?from=form#frag|https://example.test/submit?from=form#frag|https://example.test/field-preview?x=1#field|get|application/x-www-form-urlencoded||get|application/x-www-form-urlencoded||get|application/x-www-form-urlencoded|;https://example.test/override-form?x=1#form|https://example.test/override-button?button=1#button|https://example.test/override-field?field=1#field|dialog|multipart/form-data|_blank|post|text/plain|preview|get|application/x-www-form-urlencoded|field-preview|/override-form?x=1#form|dialog|multipart/form-data|_blank|/override-button?button=1#button|post|text/plain|preview|/override-field?field=1#field|get|application/x-www-form-urlencoded|field-preview"
+        )
+    );
+}
+
+#[test]
+fn runtime_rejects_non_form_submission_metadata_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "div");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('box').formAction;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-form submission metadata access should fail");
+
+    assert!(error.to_string().contains("formAction"));
+}
+
+#[test]
+fn runtime_resolves_input_textarea_readonly_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("name", ElementHandle::new(1), "Ada");
+    host.seed_element("bio", ElementHandle::new(2), "Hello");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "input");
+    host.seed_element_tag_name(ElementHandle::new(2), "textarea");
+
+    runtime
+        .eval_program(
+            "const input = document.getElementById('name'); const textarea = document.getElementById('bio'); const before = String(input.readOnly) + '|' + String(textarea.readOnly); input.readOnly = true; textarea.readOnly = true; const afterSet = String(input.readOnly) + '|' + String(textarea.readOnly); const afterAttr = String(input.hasAttribute('readonly')) + '|' + String(textarea.hasAttribute('readonly')); input.readOnly = false; textarea.readOnly = false; const afterClear = String(input.readOnly) + '|' + String(textarea.readOnly); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterAttr + ';' + afterClear;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("input and textarea readOnly should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("false|false;true|true;true|true;false|false")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "readonly".to_string())),
+        None
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(2), "readonly".to_string())),
+        None
+    );
+}
+
+#[test]
+fn runtime_resolves_input_textarea_autofocus_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("name", ElementHandle::new(1), "");
+    host.seed_element("bio", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "input");
+    host.seed_element_tag_name(ElementHandle::new(2), "textarea");
+
+    runtime
+        .eval_program(
+            "const input = document.getElementById('name'); const textarea = document.getElementById('bio'); const before = String(input.autofocus) + '|' + String(textarea.autofocus); input.autofocus = true; textarea.autofocus = true; const afterSet = String(input.autofocus) + '|' + String(textarea.autofocus); const afterAttr = String(input.getAttribute('autofocus')) + '|' + String(textarea.getAttribute('autofocus')); input.autofocus = false; textarea.autofocus = false; const afterClear = String(input.autofocus) + '|' + String(textarea.autofocus); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterAttr + ';' + afterClear;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("input and textarea autofocus should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("false|false;true|true;|;false|false")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "autofocus".to_string())),
+        None
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(2), "autofocus".to_string())),
+        None
+    );
+}
+
+#[test]
+fn runtime_resolves_input_textarea_autocomplete_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("name", ElementHandle::new(1), "");
+    host.seed_element("bio", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "input");
+    host.seed_element_tag_name(ElementHandle::new(2), "textarea");
+
+    runtime
+        .eval_program(
+            "const input = document.getElementById('name'); const textarea = document.getElementById('bio'); const before = String(input.autocomplete) + '|' + String(textarea.autocomplete); input.autocomplete = 'email'; textarea.autocomplete = 'off'; const afterSet = String(input.autocomplete) + '|' + String(textarea.autocomplete); const afterAttr = String(input.getAttribute('autocomplete')) + '|' + String(textarea.getAttribute('autocomplete')); input.autocomplete = ''; textarea.autocomplete = ''; const afterClear = String(input.autocomplete) + '|' + String(textarea.autocomplete) + '|' + String(input.hasAttribute('autocomplete')) + '|' + String(textarea.hasAttribute('autocomplete')); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterAttr + ';' + afterClear;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("input and textarea autocomplete should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("|;email|off;email|off;||true|true")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "autocomplete".to_string())),
+        Some(&"".to_string())
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(2), "autocomplete".to_string())),
+        Some(&"".to_string())
+    );
+}
+
+#[test]
+fn runtime_resolves_input_file_accept_and_multiple_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("upload", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "input");
+
+    runtime
+        .eval_program(
+            "const upload = document.getElementById('upload'); const before = String(upload.accept) + '|' + String(upload.multiple) + '|' + String(upload.hasAttribute('accept')) + '|' + String(upload.hasAttribute('multiple')); upload.accept = 'image/*'; upload.multiple = true; const afterSet = String(upload.accept) + '|' + String(upload.multiple) + '|' + String(upload.getAttribute('accept')) + '|' + String(upload.hasAttribute('multiple')); upload.accept = ''; upload.multiple = false; const afterClear = String(upload.accept) + '|' + String(upload.multiple) + '|' + String(upload.getAttribute('accept')) + '|' + String(upload.hasAttribute('multiple')); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterClear;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("input accept and multiple should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("|false|false|false;image/*|true|image/*|true;|false||false")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "accept".to_string())),
+        Some(&"".to_string())
+    );
+    assert!(
+        !host
+            .attributes
+            .contains_key(&(ElementHandle::new(1), "multiple".to_string()))
+    );
+}
+
+#[test]
+fn runtime_resolves_input_textarea_length_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("name", ElementHandle::new(1), "");
+    host.seed_element("bio", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "input");
+    host.seed_element_tag_name(ElementHandle::new(2), "textarea");
+    host.seed_attribute(ElementHandle::new(1), "minlength", "2");
+    host.seed_attribute(ElementHandle::new(1), "maxlength", "6");
+    host.seed_attribute(ElementHandle::new(2), "minlength", "3");
+    host.seed_attribute(ElementHandle::new(2), "maxlength", "8");
+
+    runtime
+        .eval_program(
+            "const input = document.getElementById('name'); const textarea = document.getElementById('bio'); const before = String(input.minLength) + '|' + String(input.maxLength) + '|' + String(textarea.minLength) + '|' + String(textarea.maxLength); input.minLength = 4; input.maxLength = 7; textarea.minLength = 5; textarea.maxLength = 9; const afterSet = String(input.minLength) + '|' + String(input.maxLength) + '|' + String(textarea.minLength) + '|' + String(textarea.maxLength) + '|' + String(input.getAttribute('minlength')) + '|' + String(input.getAttribute('maxlength')) + '|' + String(textarea.getAttribute('minlength')) + '|' + String(textarea.getAttribute('maxlength')); input.removeAttribute('minlength'); input.removeAttribute('maxlength'); textarea.removeAttribute('minlength'); textarea.removeAttribute('maxlength'); const afterClear = String(input.minLength) + '|' + String(input.maxLength) + '|' + String(textarea.minLength) + '|' + String(textarea.maxLength); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterClear;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("input and textarea length constraints should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("2|6|3|8;4|7|5|9|4|7|5|9;0|0|0|0")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "minlength".to_string())),
+        None
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "maxlength".to_string())),
+        None
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(2), "minlength".to_string())),
+        None
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(2), "maxlength".to_string())),
+        None
+    );
+}
+
+#[test]
+fn runtime_resolves_input_range_bounds_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("low", ElementHandle::new(1), "");
+    host.seed_element("high", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "input");
+    host.seed_element_tag_name(ElementHandle::new(2), "input");
+    host.seed_attribute(ElementHandle::new(1), "type", "number");
+    host.seed_attribute(ElementHandle::new(2), "type", "number");
+    host.seed_value(ElementHandle::new(1), "1");
+    host.seed_value(ElementHandle::new(2), "4");
+
+    runtime
+        .eval_program(
+            "const low = document.getElementById('low'); const high = document.getElementById('high'); const before = String(low.min) + '|' + String(low.max) + '|' + String(high.min) + '|' + String(high.max); low.min = 2; low.max = 6; high.min = 2; high.max = 6; const afterSet = String(low.min) + '|' + String(low.max) + '|' + String(high.min) + '|' + String(high.max) + '|' + String(low.getAttribute('min')) + '|' + String(low.getAttribute('max')) + '|' + String(high.getAttribute('min')) + '|' + String(high.getAttribute('max')); low.removeAttribute('min'); low.removeAttribute('max'); high.removeAttribute('min'); high.removeAttribute('max'); const afterClear = String(low.min) + '|' + String(low.max) + '|' + String(high.min) + '|' + String(high.max); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterClear;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("input range bounds should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("|||;2|6|2|6|2|6|2|6;|||")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "min".to_string())),
+        None
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "max".to_string())),
+        None
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(2), "min".to_string())),
+        None
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(2), "max".to_string())),
+        None
+    );
+}
+
+#[test]
+fn runtime_resolves_input_pattern_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("name", ElementHandle::new(1), "");
+    host.seed_element("out", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "input");
+    host.seed_attribute(ElementHandle::new(1), "pattern", "A[a-z]+");
+    host.seed_value(ElementHandle::new(1), "Ada");
+
+    runtime
+        .eval_program(
+            "const input = document.getElementById('name'); const before = String(input.pattern); input.pattern = 'B[a-z]+'; const afterSet = String(input.pattern) + '|' + String(input.getAttribute('pattern')); input.value = 'Bob'; const afterValue = String(input.value); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterValue;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("input pattern should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(2))
+            .map(String::as_str),
+        Some("A[a-z]+;B[a-z]+|B[a-z]+;Bob")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "pattern".to_string())),
+        Some(&"B[a-z]+".to_string())
+    );
+}
+
+#[test]
+fn runtime_resolves_input_textarea_placeholder_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("name", ElementHandle::new(1), "");
+    host.seed_element("bio", ElementHandle::new(2), "");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "input");
+    host.seed_element_tag_name(ElementHandle::new(2), "textarea");
+    host.seed_attribute(ElementHandle::new(1), "placeholder", "Name");
+    host.seed_attribute(ElementHandle::new(2), "placeholder", "Bio");
+
+    runtime
+        .eval_program(
+            "const input = document.getElementById('name'); const textarea = document.getElementById('bio'); const before = String(input.placeholder) + '|' + String(textarea.placeholder); input.placeholder = 'Full name'; textarea.placeholder = 'Biography'; const afterSet = String(input.placeholder) + '|' + String(textarea.placeholder); const afterAttr = String(input.getAttribute('placeholder')) + '|' + String(textarea.getAttribute('placeholder')); input.placeholder = ''; textarea.placeholder = ''; const afterClear = String(input.placeholder) + '|' + String(textarea.placeholder) + '|' + String(input.hasAttribute('placeholder')) + '|' + String(textarea.hasAttribute('placeholder')); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterAttr + ';' + afterClear;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("input and textarea placeholder should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("Name|Bio;Full name|Biography;Full name|Biography;||true|true")
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(1), "placeholder".to_string())),
+        Some(&"".to_string())
+    );
+    assert_eq!(
+        host.attributes
+            .get(&(ElementHandle::new(2), "placeholder".to_string())),
+        Some(&"".to_string())
+    );
+}
+
+#[test]
+fn runtime_rejects_non_input_range_bounds_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("textarea", ElementHandle::new(1), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "textarea");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('textarea').min = 1;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-input min access should fail");
+
+    assert!(error.to_string().contains("min"));
+}
+
+#[test]
+fn runtime_rejects_non_input_pattern_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("textarea", ElementHandle::new(1), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "textarea");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('textarea').pattern = 'abc';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-input pattern access should fail");
+
+    assert!(error.to_string().contains("pattern"));
+}
+
+#[test]
+fn runtime_rejects_non_form_control_length_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("button", ElementHandle::new(1), "Button");
+    host.seed_element_tag_name(ElementHandle::new(1), "button");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('button').minLength = 1;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-form-control minLength access should fail");
+
+    assert!(error.to_string().contains("minLength"));
+}
+
+#[test]
+fn runtime_rejects_non_form_control_autofocus_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("button", ElementHandle::new(1), "Button");
+    host.seed_element_tag_name(ElementHandle::new(1), "div");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('button').autofocus;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-form-control autofocus access should fail");
+
+    assert!(error.to_string().contains("autofocus"));
+}
+
+#[test]
+fn runtime_rejects_non_form_control_autocomplete_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("button", ElementHandle::new(1), "Button");
+    host.seed_element_tag_name(ElementHandle::new(1), "button");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('button').autocomplete = 'on';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-form-control autocomplete access should fail");
+
+    assert!(error.to_string().contains("autocomplete"));
+}
+
+#[test]
+fn runtime_rejects_non_form_control_accept_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("button", ElementHandle::new(1), "Button");
+    host.seed_element_tag_name(ElementHandle::new(1), "button");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('button').accept = 'image/*';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-input accept access should fail");
+
+    assert!(error.to_string().contains("accept"));
+}
+
+#[test]
+fn runtime_rejects_non_form_control_multiple_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("button", ElementHandle::new(1), "Button");
+    host.seed_element_tag_name(ElementHandle::new(1), "button");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('button').multiple = true;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-input/select multiple access should fail");
+
+    assert!(error.to_string().contains("multiple"));
+}
+
+#[test]
+fn runtime_rejects_non_form_control_placeholder_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("button", ElementHandle::new(1), "Button");
+    host.seed_element_tag_name(ElementHandle::new(1), "button");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('button').placeholder = 'hint';",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-form-control placeholder access should fail");
+
+    assert!(error.to_string().contains("placeholder"));
+}
+
+#[test]
+fn runtime_rejects_non_checkbox_indeterminate_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("textarea", ElementHandle::new(1), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "textarea");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('textarea').indeterminate = true;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-checkbox indeterminate access should fail");
+
+    assert!(error.to_string().contains("indeterminate"));
+}
+
+#[test]
+fn runtime_rejects_non_checkbox_default_checked_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("textarea", ElementHandle::new(1), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "textarea");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('textarea').defaultChecked = true;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-checkbox defaultChecked access should fail");
+
+    assert!(error.to_string().contains("defaultChecked"));
 }
 
 #[test]
@@ -6516,6 +8493,32 @@ fn runtime_resolves_option_disabled_access() {
 }
 
 #[test]
+fn runtime_resolves_form_control_disabled_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("name", ElementHandle::new(1), "");
+    host.seed_element("action", ElementHandle::new(2), "Go");
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "input");
+    host.seed_element_tag_name(ElementHandle::new(2), "button");
+
+    runtime
+        .eval_program(
+            "const input = document.getElementById('name'); const button = document.getElementById('action'); const before = String(input.disabled) + '|' + String(button.disabled); input.disabled = true; button.disabled = true; const afterSet = String(input.disabled) + '|' + String(button.disabled) + '|' + String(input.getAttribute('disabled')) + '|' + String(button.getAttribute('disabled')); input.disabled = false; button.disabled = false; const afterClear = String(input.disabled) + '|' + String(button.disabled); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterClear;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("form-control disabled should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("false|false;true|true||;false|false")
+    );
+}
+
+#[test]
 fn runtime_resolves_option_label_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -6586,19 +8589,37 @@ fn runtime_resolves_option_text_access() {
 }
 
 #[test]
-fn runtime_rejects_non_option_disabled_access() {
+fn runtime_rejects_non_form_control_disabled_access_getter() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
-    host.seed_element("button", ElementHandle::new(1), "Button");
-    host.seed_element_tag_name(ElementHandle::new(1), "button");
+    host.seed_element("wrapper", ElementHandle::new(1), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "div");
 
     let error = runtime
         .eval_program(
-            "document.getElementById('button').disabled;",
+            "document.getElementById('wrapper').disabled;",
             "inline-script",
             &mut host,
         )
-        .expect_err("non-option disabled access should fail");
+        .expect_err("non-form-control disabled access should fail");
+
+    assert!(error.to_string().contains("disabled"));
+}
+
+#[test]
+fn runtime_rejects_non_form_control_disabled_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("wrapper", ElementHandle::new(1), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "div");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('wrapper').disabled = true;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-form-control disabled access should fail");
 
     assert!(error.to_string().contains("disabled"));
 }
@@ -6745,6 +8766,96 @@ fn runtime_rejects_non_select_size_access() {
         .expect_err("non-select size access should fail");
 
     assert!(error.to_string().contains("size"));
+}
+
+#[test]
+fn runtime_rejects_non_form_control_required_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("button", ElementHandle::new(1), "Button");
+    host.seed_element_tag_name(ElementHandle::new(1), "button");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('button').required;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-form-control required access should fail");
+
+    assert!(error.to_string().contains("required"));
+}
+
+#[test]
+fn runtime_rejects_non_form_novalidate_access_getter() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "div");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('box').noValidate;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-form noValidate getter should fail");
+
+    assert!(error.to_string().contains("noValidate"));
+}
+
+#[test]
+fn runtime_rejects_non_form_novalidate_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "div");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('box').noValidate = true;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-form noValidate setter should fail");
+
+    assert!(error.to_string().contains("noValidate"));
+}
+
+#[test]
+fn runtime_rejects_non_form_form_no_validate_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("box", ElementHandle::new(1), "");
+    host.seed_element_tag_name(ElementHandle::new(1), "div");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('box').formNoValidate = true;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-form formNoValidate setter should fail");
+
+    assert!(error.to_string().contains("formNoValidate"));
+}
+
+#[test]
+fn runtime_rejects_non_form_control_readonly_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("button", ElementHandle::new(1), "Button");
+    host.seed_element_tag_name(ElementHandle::new(1), "button");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('button').readOnly;",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("non-form-control readOnly access should fail");
+
+    assert!(error.to_string().contains("readOnly"));
 }
 
 #[test]
@@ -8019,6 +10130,51 @@ fn runtime_resolves_document_style_sheets_entries_access() {
 }
 
 #[test]
+fn runtime_resolves_document_style_sheets_for_each_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(3), "");
+    host.seed_document_style_sheets_items(vec![ElementHandle::new(1), ElementHandle::new(2)]);
+
+    runtime
+        .eval_program(
+            "const sheets = document.styleSheets; let out = ''; sheets.forEach((sheet, index, list) => { out += String(index) + ':' + String(sheet) + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = out;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.styleSheets.forEach should resolve");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("0:[object CSSStyleSheet]:2;1:[object CSSStyleSheet]:2;")
+    );
+    assert_eq!(host.document_style_sheets_items_calls, 3);
+}
+
+#[test]
+fn runtime_rejects_document_style_sheets_for_each_with_non_function_callback() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_document_style_sheets_items(vec![ElementHandle::new(1)]);
+
+    let error = runtime
+        .eval_program(
+            "document.styleSheets.forEach(123);",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("document.styleSheets.forEach should require an arrow function callback");
+
+    assert!(
+        error
+            .to_string()
+            .contains("StyleSheetList.forEach() requires an arrow function callback")
+    );
+}
+
+#[test]
 fn runtime_resolves_document_style_sheets_named_item_access() {
     let mut runtime = ScriptRuntime::new();
     let mut host = RecordingHost::default();
@@ -8452,11 +10608,12 @@ fn runtime_resolves_element_matches_for_current_element_only() {
     host.seed_element("out", ElementHandle::new(3), "");
     host.seed_element_matches(ElementHandle::new(1), ".primary", true);
     host.seed_element_matches(ElementHandle::new(1), ".child", false);
+    host.seed_element_matches(ElementHandle::new(1), ":focus-visible", true);
     host.seed_element_matches(ElementHandle::new(2), ".child", true);
 
     runtime
         .eval_program(
-            "const root = document.getElementById('root'); const child = document.getElementById('child'); document.getElementById('out').textContent = String(root.matches('.primary')) + ':' + String(root.matches('.child')) + ':' + String(child.matches('.child'));",
+            "const root = document.getElementById('root'); const child = document.getElementById('child'); document.getElementById('out').textContent = String(root.matches('.primary')) + ':' + String(root.matches('.child')) + ':' + String(root.matches(':focus-visible')) + ':' + String(child.matches('.child'));",
             "inline-script",
             &mut host,
         )
@@ -8466,13 +10623,14 @@ fn runtime_resolves_element_matches_for_current_element_only() {
         host.text_content
             .get(&ElementHandle::new(3))
             .map(String::as_str),
-        Some("true:false:true")
+        Some("true:false:true:true")
     );
     assert_eq!(
         host.element_matches_calls,
         vec![
             (ElementHandle::new(1), ".primary".to_string()),
             (ElementHandle::new(1), ".child".to_string()),
+            (ElementHandle::new(1), ":focus-visible".to_string()),
             (ElementHandle::new(2), ".child".to_string()),
         ]
     );
@@ -8824,6 +10982,110 @@ fn runtime_rejects_document_create_element_wrong_arity() {
         error
             .to_string()
             .contains("document.createElement() expects exactly one argument")
+    );
+}
+
+#[test]
+fn runtime_rejects_document_create_element_ns_wrong_arity() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost::default();
+
+    let error = runtime
+        .eval_program(
+            "document.createElementNS('http://www.w3.org/2000/svg');",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("createElementNS should validate arity");
+
+    assert!(
+        error
+            .to_string()
+            .contains("document.createElementNS() expects exactly two arguments")
+    );
+}
+
+#[test]
+fn runtime_resolves_document_create_element_ns_access() {
+    struct CreateElementNsHost {
+        create_element_ns_calls: Vec<(String, String)>,
+        namespace_results: BTreeMap<NodeHandle, Option<String>>,
+        tag_name_results: BTreeMap<ElementHandle, String>,
+        text_content_results: BTreeMap<ElementHandle, String>,
+    }
+
+    impl HostBindings for CreateElementNsHost {
+        fn document_get_element_by_id(
+            &mut self,
+            id: &str,
+        ) -> bt_script::Result<Option<ElementHandle>> {
+            Ok(match id {
+                "out" => Some(ElementHandle::new(2)),
+                _ => None,
+            })
+        }
+
+        fn document_create_element_ns(
+            &mut self,
+            namespace_uri: &str,
+            tag_name: &str,
+        ) -> bt_script::Result<ElementHandle> {
+            self.create_element_ns_calls
+                .push((namespace_uri.to_string(), tag_name.to_string()));
+            Ok(ElementHandle::new(7))
+        }
+
+        fn node_namespace_uri(&mut self, node: NodeHandle) -> bt_script::Result<Option<String>> {
+            Ok(self.namespace_results.get(&node).cloned().unwrap_or(None))
+        }
+
+        fn element_tag_name(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+            Ok(self
+                .tag_name_results
+                .get(&element)
+                .cloned()
+                .unwrap_or_else(|| "div".to_string()))
+        }
+
+        fn element_set_text_content(
+            &mut self,
+            element: ElementHandle,
+            value: &str,
+        ) -> bt_script::Result<()> {
+            self.text_content_results.insert(element, value.to_string());
+            Ok(())
+        }
+    }
+
+    let mut runtime = ScriptRuntime::new();
+    let mut host = CreateElementNsHost {
+        create_element_ns_calls: Vec::new(),
+        namespace_results: BTreeMap::from([(
+            NodeHandle::new(7),
+            Some("http://www.w3.org/2000/svg".to_string()),
+        )]),
+        tag_name_results: BTreeMap::from([(ElementHandle::new(7), "svg".to_string())]),
+        text_content_results: BTreeMap::new(),
+    };
+
+    runtime
+        .eval_program(
+            "const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); document.getElementById('out').textContent = String(svg.namespaceURI) + '|' + String(svg.localName);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("document.createElementNS should resolve");
+
+    assert_eq!(
+        host.create_element_ns_calls,
+        vec![("http://www.w3.org/2000/svg".to_string(), "svg".to_string())]
+    );
+    assert_eq!(
+        host.text_content_results
+            .get(&ElementHandle::new(2))
+            .cloned()
+            .unwrap_or_default(),
+        "http://www.w3.org/2000/svg|svg"
     );
 }
 

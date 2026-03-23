@@ -1,24 +1,28 @@
 use std::collections::BTreeMap;
 
+use url::Url;
+
 use crate::syntax::{AssignTarget, Expr, Program, Statement};
 use crate::{
     CollectionEntryHandle, CollectionIteratorHandle, ElementHandle, HostBindings,
     HtmlCollectionNamedItem, HtmlCollectionScope, HtmlCollectionTarget, ListenerTarget,
-    MimeTypeArrayState, NodeHandle, NodeListTarget, RadioNodeListTarget, Result, ScriptError,
-    ScriptValue as Value, StorageTarget, StringListState, StyleSheetListTarget, StyleSheetTarget,
+    MediaQueryListState, MimeTypeArrayState, NodeHandle, NodeListTarget, RadioNodeListTarget,
+    Result, ScriptError, ScriptValue as Value, StorageTarget, StringListState,
+    StyleSheetListTarget, StyleSheetTarget,
 };
 
 pub(crate) fn eval_program<H: HostBindings>(program: &Program, host: &mut H) -> Result<()> {
-    eval_program_with_bindings(program, host, BTreeMap::new())
+    let mut env = BTreeMap::new();
+    eval_program_with_bindings(program, host, &mut env)
 }
 
 pub(crate) fn eval_program_with_bindings<H: HostBindings>(
     program: &Program,
     host: &mut H,
-    mut env: BTreeMap<String, Value>,
+    env: &mut BTreeMap<String, Value>,
 ) -> Result<()> {
     for statement in &program.statements {
-        eval_statement(statement, &mut env, host)?;
+        eval_statement(statement, env, host)?;
     }
 
     Ok(())
@@ -71,6 +75,207 @@ fn content_editable_reflection(value: Option<&str>) -> &'static str {
         Some(value) if value == "false" => "false",
         Some(value) if value == "plaintext-only" => "plaintext-only",
         _ => "inherit",
+    }
+}
+
+fn input_type_reflection(value: Option<&str>) -> String {
+    let value = value.map(|value| value.trim().to_ascii_lowercase());
+    match value.as_deref() {
+        Some("hidden")
+        | Some("text")
+        | Some("search")
+        | Some("tel")
+        | Some("url")
+        | Some("email")
+        | Some("password")
+        | Some("date")
+        | Some("month")
+        | Some("week")
+        | Some("time")
+        | Some("datetime-local")
+        | Some("number")
+        | Some("range")
+        | Some("color")
+        | Some("checkbox")
+        | Some("radio")
+        | Some("file")
+        | Some("submit")
+        | Some("image")
+        | Some("reset")
+        | Some("button") => value.unwrap(),
+        _ => "text".to_string(),
+    }
+}
+
+fn button_type_reflection(value: Option<&str>) -> String {
+    match value.map(|value| value.trim().to_ascii_lowercase()) {
+        Some(value) if matches!(value.as_str(), "submit" | "reset" | "button") => value,
+        _ => "submit".to_string(),
+    }
+}
+
+fn form_method_reflection(value: Option<&str>) -> String {
+    match value.map(|value| value.trim().to_ascii_lowercase()) {
+        Some(value) if matches!(value.as_str(), "get" | "post" | "dialog") => value,
+        _ => "get".to_string(),
+    }
+}
+
+fn form_enctype_reflection(value: Option<&str>) -> String {
+    match value.map(|value| value.trim().to_ascii_lowercase()) {
+        Some(value)
+            if matches!(
+                value.as_str(),
+                "application/x-www-form-urlencoded" | "multipart/form-data" | "text/plain"
+            ) =>
+        {
+            value
+        }
+        _ => "application/x-www-form-urlencoded".to_string(),
+    }
+}
+
+fn form_target_reflection(value: Option<&str>) -> String {
+    value.unwrap_or_default().to_string()
+}
+
+fn resolve_url_reflection(value: Option<&str>, base_uri: &str) -> String {
+    let Some(value) = value.map(str::trim) else {
+        return base_uri.to_string();
+    };
+    if value.is_empty() {
+        return base_uri.to_string();
+    }
+
+    if let Ok(url) = Url::parse(value) {
+        return url.to_string();
+    }
+
+    Url::parse(base_uri)
+        .and_then(|base| base.join(value))
+        .map(|url| url.to_string())
+        .unwrap_or_else(|_| value.to_string())
+}
+
+fn associated_form_for_submit_control<H: HostBindings>(
+    element: ElementHandle,
+    host: &mut H,
+) -> Result<Option<ElementHandle>> {
+    match host.element_tag_name(element)?.as_str() {
+        "input" | "button" => {}
+        _ => return Err(unsupported_member_access("formAction", "element")),
+    }
+
+    let mut current = NodeHandle::new(element.raw());
+    while let Some(parent) = host.node_parent(current)? {
+        if host.node_type(parent)? == 1 {
+            let parent_element = ElementHandle::new(parent.raw());
+            if host.element_tag_name(parent_element)? == "form" {
+                return Ok(Some(parent_element));
+            }
+        }
+
+        current = parent;
+    }
+
+    Ok(None)
+}
+
+fn form_action_reflection<H: HostBindings>(element: ElementHandle, host: &mut H) -> Result<String> {
+    let base_uri = host.document_base_uri()?;
+    Ok(resolve_url_reflection(
+        host.element_get_attribute(element, "action")?.as_deref(),
+        &base_uri,
+    ))
+}
+
+fn form_action_override_reflection<H: HostBindings>(
+    element: ElementHandle,
+    host: &mut H,
+) -> Result<String> {
+    let base_uri = host.document_base_uri()?;
+    let override_value = host.element_get_attribute(element, "formaction")?;
+    if override_value.is_some() {
+        return Ok(resolve_url_reflection(override_value.as_deref(), &base_uri));
+    }
+
+    if let Some(form) = associated_form_for_submit_control(element, host)? {
+        return Ok(resolve_url_reflection(
+            host.element_get_attribute(form, "action")?.as_deref(),
+            &base_uri,
+        ));
+    }
+
+    Ok(base_uri)
+}
+
+fn translate_reflection<H: HostBindings>(element: ElementHandle, host: &mut H) -> Result<bool> {
+    let mut current = Some(NodeHandle::new(element.raw()));
+
+    while let Some(node) = current {
+        if host.node_type(node)? == 1 {
+            let current_element = ElementHandle::new(node.raw());
+            if let Some(value) = host.element_get_attribute(current_element, "translate")? {
+                return Ok(value.trim().to_ascii_lowercase() != "no");
+            }
+        }
+
+        current = host.node_parent(node)?;
+    }
+
+    Ok(true)
+}
+
+fn spellcheck_reflection<H: HostBindings>(element: ElementHandle, host: &mut H) -> Result<bool> {
+    let mut current = Some(NodeHandle::new(element.raw()));
+
+    while let Some(node) = current {
+        if host.node_type(node)? == 1 {
+            let current_element = ElementHandle::new(node.raw());
+            if let Some(value) = host.element_get_attribute(current_element, "spellcheck")? {
+                let value = value.trim().to_ascii_lowercase();
+                if value == "false" {
+                    return Ok(false);
+                }
+                if value == "true" || value.is_empty() {
+                    return Ok(true);
+                }
+
+                return Ok(true);
+            }
+        }
+
+        current = host.node_parent(node)?;
+    }
+
+    Ok(true)
+}
+
+fn element_is_natively_focusable<H: HostBindings>(
+    element: ElementHandle,
+    host: &mut H,
+) -> Result<bool> {
+    if host.element_get_attribute(element, "disabled")?.is_some() {
+        return Ok(false);
+    }
+
+    if host
+        .element_get_attribute(element, "contenteditable")?
+        .is_some()
+    {
+        return Ok(true);
+    }
+
+    match host.element_tag_name(element)?.as_str() {
+        "button" | "select" | "textarea" | "summary" | "iframe" | "object" | "embed" => Ok(true),
+        "input" => Ok(!matches!(
+            host.element_get_attribute(element, "type")?
+                .as_deref()
+                .map(|value| value.trim().to_ascii_lowercase()),
+            Some(value) if value == "hidden"
+        )),
+        "a" | "area" => Ok(host.element_get_attribute(element, "href")?.is_some()),
+        _ => Ok(false),
     }
 }
 
@@ -256,10 +461,24 @@ fn selected_index_from_value(value: &Value) -> Result<i64> {
     }
 }
 
-fn option_index_for_element<H: HostBindings>(
-    option: ElementHandle,
-    host: &mut H,
-) -> Result<i64> {
+fn integer_from_value(value: &Value, property: &str) -> Result<i64> {
+    match value {
+        Value::Number(number)
+            if number.is_finite()
+                && number.fract() == 0.0
+                && *number >= i64::MIN as f64
+                && *number <= i64::MAX as f64 =>
+        {
+            Ok(*number as i64)
+        }
+        Value::String(value) => value
+            .parse::<i64>()
+            .map_err(|_| ScriptError::new(format!("{property} expects an integer"))),
+        _ => Err(ScriptError::new(format!("{property} expects an integer"))),
+    }
+}
+
+fn option_index_for_element<H: HostBindings>(option: ElementHandle, host: &mut H) -> Result<i64> {
     if host.element_tag_name(option)? != "option" {
         return Err(unsupported_member_access("index", "element"));
     }
@@ -288,10 +507,7 @@ fn option_index_for_element<H: HostBindings>(
         .unwrap_or(-1))
 }
 
-fn option_form_for_element<H: HostBindings>(
-    option: ElementHandle,
-    host: &mut H,
-) -> Result<Value> {
+fn option_form_for_element<H: HostBindings>(option: ElementHandle, host: &mut H) -> Result<Value> {
     if host.element_tag_name(option)? != "option" {
         return Err(unsupported_member_access("form", "element"));
     }
@@ -376,6 +592,61 @@ fn document_import_node<H: HostBindings>(
             "document.importNode() expects a node or DocumentFragment argument",
         )),
     }
+}
+
+fn document_write<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let mut html = String::new();
+    for expr in args {
+        html.push_str(&as_string(&eval_expr(expr, env, host)?));
+    }
+
+    host.document_write(&html)?;
+    Ok(Value::Undefined)
+}
+
+fn document_writeln<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let mut html = String::new();
+    for expr in args {
+        html.push_str(&as_string(&eval_expr(expr, env, host)?));
+    }
+
+    html.push('\n');
+    host.document_writeln(&html)?;
+    Ok(Value::Undefined)
+}
+
+fn document_open<H: HostBindings>(
+    args: &[Expr],
+    _env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new("document.open() expects no arguments"));
+    }
+
+    host.document_open()?;
+    Ok(Value::Document)
+}
+
+fn document_close<H: HostBindings>(
+    args: &[Expr],
+    _env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new("document.close() expects no arguments"));
+    }
+
+    host.document_close()?;
+    Ok(Value::Document)
 }
 
 fn node_replace_with<H: HostBindings>(
@@ -703,6 +974,10 @@ fn eval_assignment<H: HostBindings>(
     host: &mut H,
 ) -> Result<()> {
     match target {
+        AssignTarget::Identifier(name) => {
+            env.insert(name.clone(), value);
+            Ok(())
+        }
         AssignTarget::Property { object, property } => {
             if let Some(result) =
                 try_eval_location_url_assignment(object, property, &value, env, host)?
@@ -735,6 +1010,30 @@ fn eval_assignment<H: HostBindings>(
                 (Value::Element(element), "checked") => {
                     host.element_set_checked(element, is_truthy(&value))
                 }
+                (Value::Element(element), "defaultChecked") => {
+                    if host.element_tag_name(element)? != "input" {
+                        return Err(unsupported_member_access(property, "element"));
+                    }
+
+                    match host.element_get_attribute(element, "type")?.as_deref() {
+                        Some("checkbox") | Some("radio") => {
+                            host.element_set_checked(element, is_truthy(&value))
+                        }
+                        _ => Err(unsupported_member_access(property, "element")),
+                    }
+                }
+                (Value::Element(element), "indeterminate") => {
+                    if host.element_tag_name(element)? != "input" {
+                        return Err(unsupported_member_access(property, "element"));
+                    }
+
+                    match host.element_get_attribute(element, "type")?.as_deref() {
+                        Some("checkbox") => {
+                            host.element_set_indeterminate(element, is_truthy(&value))
+                        }
+                        _ => Err(unsupported_member_access(property, "element")),
+                    }
+                }
                 (Value::Element(element), "selected") => {
                     if host.element_tag_name(element)? != "option" {
                         return Err(unsupported_member_access(property, "element"));
@@ -760,15 +1059,16 @@ fn eval_assignment<H: HostBindings>(
                     }
                 }
                 (Value::Element(element), "disabled") => {
-                    if host.element_tag_name(element)? != "option" {
-                        return Err(unsupported_member_access(property, "element"));
-                    }
-
-                    if is_truthy(&value) {
-                        host.element_set_attribute(element, "disabled", "")
-                    } else {
-                        host.element_remove_attribute(element, "disabled")?;
-                        Ok(())
+                    match host.element_tag_name(element)?.as_str() {
+                        "input" | "textarea" | "button" | "select" | "option" => {
+                            if is_truthy(&value) {
+                                host.element_set_attribute(element, "disabled", "")
+                            } else {
+                                host.element_remove_attribute(element, "disabled")?;
+                                Ok(())
+                            }
+                        }
+                        _ => Err(unsupported_member_access(property, "element")),
                     }
                 }
                 (Value::Element(element), "label") => {
@@ -808,15 +1108,224 @@ fn eval_assignment<H: HostBindings>(
                     Ok(())
                 }
                 (Value::Element(element), "multiple") => {
-                    if host.element_tag_name(element)? != "select" {
+                    match host.element_tag_name(element)?.as_str() {
+                        "input" | "select" => {
+                            if is_truthy(&value) {
+                                host.element_set_attribute(element, "multiple", "")
+                            } else {
+                                host.element_remove_attribute(element, "multiple")?;
+                                Ok(())
+                            }
+                        }
+                        _ => Err(unsupported_member_access(property, "element")),
+                    }
+                }
+                (Value::Element(element), "readOnly") => {
+                    match host.element_tag_name(element)?.as_str() {
+                        "input" | "textarea" => {
+                            if is_truthy(&value) {
+                                host.element_set_attribute(element, "readonly", "")
+                            } else {
+                                host.element_remove_attribute(element, "readonly")?;
+                                Ok(())
+                            }
+                        }
+                        _ => Err(unsupported_member_access(property, "element")),
+                    }
+                }
+                (Value::Element(element), "autofocus") => {
+                    match host.element_tag_name(element)?.as_str() {
+                        "input" | "textarea" | "button" | "select" => {
+                            if is_truthy(&value) {
+                                host.element_set_attribute(element, "autofocus", "")
+                            } else {
+                                host.element_remove_attribute(element, "autofocus")?;
+                                Ok(())
+                            }
+                        }
+                        _ => Err(unsupported_member_access(property, "element")),
+                    }
+                }
+                (Value::Element(element), "autocomplete") => {
+                    match host.element_tag_name(element)?.as_str() {
+                        "input" | "textarea" => {
+                            host.element_set_attribute(element, "autocomplete", &as_string(&value))
+                        }
+                        _ => Err(unsupported_member_access(property, "element")),
+                    }
+                }
+                (Value::Element(element), "accept") => {
+                    if host.element_tag_name(element)? != "input" {
+                        return Err(unsupported_member_access(property, "element"));
+                    }
+
+                    host.element_set_attribute(element, "accept", &as_string(&value))
+                }
+                (Value::Element(element), "minLength") => {
+                    match host.element_tag_name(element)?.as_str() {
+                        "input" | "textarea" => {
+                            let Some(length) = index_from_value(&value) else {
+                                return Err(ScriptError::new(
+                                    "minLength expects a non-negative integer",
+                                ));
+                            };
+
+                            host.element_set_attribute(element, "minlength", &length.to_string())
+                        }
+                        _ => Err(unsupported_member_access(property, "element")),
+                    }
+                }
+                (Value::Element(element), "maxLength") => {
+                    match host.element_tag_name(element)?.as_str() {
+                        "input" | "textarea" => {
+                            let Some(length) = index_from_value(&value) else {
+                                return Err(ScriptError::new(
+                                    "maxLength expects a non-negative integer",
+                                ));
+                            };
+
+                            host.element_set_attribute(element, "maxlength", &length.to_string())
+                        }
+                        _ => Err(unsupported_member_access(property, "element")),
+                    }
+                }
+                (Value::Element(element), "pattern") => {
+                    if host.element_tag_name(element)? != "input" {
+                        return Err(unsupported_member_access(property, "element"));
+                    }
+
+                    host.element_set_attribute(element, "pattern", &as_string(&value))
+                }
+                (Value::Element(element), "min") => {
+                    if host.element_tag_name(element)? != "input" {
+                        return Err(unsupported_member_access(property, "element"));
+                    }
+
+                    host.element_set_attribute(element, "min", &as_string(&value))
+                }
+                (Value::Element(element), "max") => {
+                    if host.element_tag_name(element)? != "input" {
+                        return Err(unsupported_member_access(property, "element"));
+                    }
+
+                    host.element_set_attribute(element, "max", &as_string(&value))
+                }
+                (Value::Element(element), "placeholder") => {
+                    match host.element_tag_name(element)?.as_str() {
+                        "input" | "textarea" => {
+                            host.element_set_attribute(element, "placeholder", &as_string(&value))
+                        }
+                        _ => Err(unsupported_member_access(property, "element")),
+                    }
+                }
+                (Value::Element(element), "required") => {
+                    match host.element_tag_name(element)?.as_str() {
+                        "input" | "textarea" | "select" => {
+                            if is_truthy(&value) {
+                                host.element_set_attribute(element, "required", "")
+                            } else {
+                                host.element_remove_attribute(element, "required")?;
+                                Ok(())
+                            }
+                        }
+                        _ => Err(unsupported_member_access(property, "element")),
+                    }
+                }
+                (Value::Element(element), "noValidate") => {
+                    if host.element_tag_name(element)? != "form" {
                         return Err(unsupported_member_access(property, "element"));
                     }
 
                     if is_truthy(&value) {
-                        host.element_set_attribute(element, "multiple", "")
+                        host.element_set_attribute(element, "novalidate", "")
                     } else {
-                        host.element_remove_attribute(element, "multiple")?;
+                        host.element_remove_attribute(element, "novalidate")?;
                         Ok(())
+                    }
+                }
+                (Value::Element(element), "method") => {
+                    if host.element_tag_name(element)? != "form" {
+                        return Err(unsupported_member_access(property, "element"));
+                    }
+
+                    host.element_set_attribute(
+                        element,
+                        "method",
+                        &as_string(&value).trim().to_ascii_lowercase(),
+                    )
+                }
+                (Value::Element(element), "enctype") => {
+                    if host.element_tag_name(element)? != "form" {
+                        return Err(unsupported_member_access(property, "element"));
+                    }
+
+                    host.element_set_attribute(
+                        element,
+                        "enctype",
+                        &as_string(&value).trim().to_ascii_lowercase(),
+                    )
+                }
+                (Value::Element(element), "target") => {
+                    if host.element_tag_name(element)? != "form" {
+                        return Err(unsupported_member_access(property, "element"));
+                    }
+
+                    host.element_set_attribute(element, "target", &as_string(&value))
+                }
+                (Value::Element(element), "action") => {
+                    if host.element_tag_name(element)? != "form" {
+                        return Err(unsupported_member_access(property, "element"));
+                    }
+
+                    host.element_set_attribute(element, "action", &as_string(&value))
+                }
+                (Value::Element(element), "formNoValidate") => {
+                    match host.element_tag_name(element)?.as_str() {
+                        "input" | "button" => {
+                            if is_truthy(&value) {
+                                host.element_set_attribute(element, "formnovalidate", "")
+                            } else {
+                                host.element_remove_attribute(element, "formnovalidate")?;
+                                Ok(())
+                            }
+                        }
+                        _ => Err(unsupported_member_access(property, "element")),
+                    }
+                }
+                (Value::Element(element), "formMethod") => {
+                    match host.element_tag_name(element)?.as_str() {
+                        "input" | "button" => host.element_set_attribute(
+                            element,
+                            "formmethod",
+                            &as_string(&value).trim().to_ascii_lowercase(),
+                        ),
+                        _ => Err(unsupported_member_access(property, "element")),
+                    }
+                }
+                (Value::Element(element), "formEnctype") => {
+                    match host.element_tag_name(element)?.as_str() {
+                        "input" | "button" => host.element_set_attribute(
+                            element,
+                            "formenctype",
+                            &as_string(&value).trim().to_ascii_lowercase(),
+                        ),
+                        _ => Err(unsupported_member_access(property, "element")),
+                    }
+                }
+                (Value::Element(element), "formTarget") => {
+                    match host.element_tag_name(element)?.as_str() {
+                        "input" | "button" => {
+                            host.element_set_attribute(element, "formtarget", &as_string(&value))
+                        }
+                        _ => Err(unsupported_member_access(property, "element")),
+                    }
+                }
+                (Value::Element(element), "formAction") => {
+                    match host.element_tag_name(element)?.as_str() {
+                        "input" | "button" => {
+                            host.element_set_attribute(element, "formaction", &as_string(&value))
+                        }
+                        _ => Err(unsupported_member_access(property, "element")),
                     }
                 }
                 (Value::Element(element), "size") => {
@@ -825,9 +1334,7 @@ fn eval_assignment<H: HostBindings>(
                     }
 
                     let Some(size) = index_from_value(&value) else {
-                        return Err(ScriptError::new(
-                            "size expects a non-negative integer",
-                        ));
+                        return Err(ScriptError::new("size expects a non-negative integer"));
                     };
 
                     host.element_set_attribute(element, "size", &size.to_string())
@@ -835,11 +1342,87 @@ fn eval_assignment<H: HostBindings>(
                 (Value::Element(element), "className") => {
                     host.element_set_attribute(element, "class", &as_string(&value))
                 }
+                (Value::ClassList(element), "value") => {
+                    host.element_set_attribute(element, "class", &as_string(&value))
+                }
                 (Value::Element(element), "id") => {
                     host.element_set_attribute(element, "id", &as_string(&value))
                 }
                 (Value::Element(element), "name") => {
                     host.element_set_attribute(element, "name", &as_string(&value))
+                }
+                (Value::Element(element), "title") => {
+                    host.element_set_attribute(element, "title", &as_string(&value))
+                }
+                (Value::Element(element), "role") => {
+                    host.element_set_attribute(element, "role", &as_string(&value))
+                }
+                (Value::Element(element), "ariaLabel") => {
+                    host.element_set_attribute(element, "aria-label", &as_string(&value))
+                }
+                (Value::Element(element), "ariaDescription") => {
+                    host.element_set_attribute(element, "aria-description", &as_string(&value))
+                }
+                (Value::Element(element), "ariaRoleDescription") => {
+                    host.element_set_attribute(element, "aria-roledescription", &as_string(&value))
+                }
+                (Value::Element(element), "ariaHidden") => {
+                    host.element_set_attribute(element, "aria-hidden", &as_string(&value))
+                }
+                (Value::Element(element), "tabIndex") => {
+                    let tab_index = integer_from_value(&value, "tabIndex")?;
+                    host.element_set_attribute(element, "tabindex", &tab_index.to_string())
+                }
+                (Value::Element(element), "type") => match host.element_tag_name(element)?.as_str()
+                {
+                    "input" | "button" => host.element_set_attribute(
+                        element,
+                        "type",
+                        &as_string(&value).trim().to_ascii_lowercase(),
+                    ),
+                    _ => Err(ScriptError::new(format!(
+                        "unsupported assignment target on element: {property}"
+                    ))),
+                },
+                (Value::Element(element), "accessKey") => {
+                    host.element_set_attribute(element, "accesskey", &as_string(&value))
+                }
+                (Value::Element(element), "slot") => {
+                    host.element_set_attribute(element, "slot", &as_string(&value))
+                }
+                (Value::Element(element), "autocapitalize") => {
+                    host.element_set_attribute(element, "autocapitalize", &as_string(&value))
+                }
+                (Value::Element(element), "spellcheck") => {
+                    if is_truthy(&value) {
+                        host.element_set_attribute(element, "spellcheck", "true")
+                    } else {
+                        host.element_set_attribute(element, "spellcheck", "false")
+                    }
+                }
+                (Value::Element(element), "translate") => {
+                    if is_truthy(&value) {
+                        host.element_set_attribute(element, "translate", "yes")
+                    } else {
+                        host.element_set_attribute(element, "translate", "no")
+                    }
+                }
+                (Value::Element(element), "inputMode") => {
+                    host.element_set_attribute(element, "inputmode", &as_string(&value))
+                }
+                (Value::Element(element), "hidden") => {
+                    if is_truthy(&value) {
+                        host.element_set_attribute(element, "hidden", "")
+                    } else {
+                        host.element_remove_attribute(element, "hidden")?;
+                        Ok(())
+                    }
+                }
+                (Value::Element(element), "dir") => {
+                    host.element_set_attribute(element, "dir", &as_string(&value))
+                }
+                (Value::Element(element), "lang") => {
+                    host.element_set_attribute(element, "lang", &as_string(&value))
                 }
                 (Value::Element(element), "contentEditable") => {
                     let value = as_string(&value);
@@ -1402,18 +1985,90 @@ fn eval_member<H: HostBindings>(
         Value::Element(element) if property == "localName" => {
             Ok(Value::String(host.element_tag_name(element)?))
         }
-        Value::Element(element) if property == "namespaceURI" => {
-            Ok(match host.node_namespace_uri(NodeHandle::new(element.raw()))? {
+        Value::Element(element) if property == "namespaceURI" => Ok(
+            match host.node_namespace_uri(NodeHandle::new(element.raw()))? {
                 Some(value) => Value::String(value),
                 None => Value::Null,
-            })
+            },
+        ),
+        Value::Element(element) if property == "id" => Ok(Value::String(
+            host.element_get_attribute(element, "id")?
+                .unwrap_or_default(),
+        )),
+        Value::Element(element) if property == "name" => Ok(Value::String(
+            host.element_get_attribute(element, "name")?
+                .unwrap_or_default(),
+        )),
+        Value::Element(element) if property == "title" => Ok(Value::String(
+            host.element_get_attribute(element, "title")?
+                .unwrap_or_default(),
+        )),
+        Value::Element(element) if property == "role" => Ok(Value::String(
+            host.element_get_attribute(element, "role")?
+                .unwrap_or_default(),
+        )),
+        Value::Element(element) if property == "ariaLabel" => Ok(Value::String(
+            host.element_get_attribute(element, "aria-label")?
+                .unwrap_or_default(),
+        )),
+        Value::Element(element) if property == "ariaDescription" => Ok(Value::String(
+            host.element_get_attribute(element, "aria-description")?
+                .unwrap_or_default(),
+        )),
+        Value::Element(element) if property == "ariaRoleDescription" => Ok(Value::String(
+            host.element_get_attribute(element, "aria-roledescription")?
+                .unwrap_or_default(),
+        )),
+        Value::Element(element) if property == "ariaHidden" => Ok(Value::String(
+            host.element_get_attribute(element, "aria-hidden")?
+                .unwrap_or_default(),
+        )),
+        Value::Element(element) if property == "tabIndex" => {
+            let default = if element_is_natively_focusable(element, host)? {
+                0
+            } else {
+                -1
+            };
+            let value = host.element_get_attribute(element, "tabindex")?;
+            let tab_index = value
+                .as_deref()
+                .and_then(|value| value.trim().parse::<i64>().ok())
+                .unwrap_or(default);
+            Ok(Value::Number(tab_index as f64))
         }
-        Value::Element(element) if property == "id" => {
-            Ok(Value::String(host.element_get_attribute(element, "id")?.unwrap_or_default()))
+        Value::Element(element) if property == "accessKey" => Ok(Value::String(
+            host.element_get_attribute(element, "accesskey")?
+                .unwrap_or_default(),
+        )),
+        Value::Element(element) if property == "slot" => Ok(Value::String(
+            host.element_get_attribute(element, "slot")?
+                .unwrap_or_default(),
+        )),
+        Value::Element(element) if property == "autocapitalize" => Ok(Value::String(
+            host.element_get_attribute(element, "autocapitalize")?
+                .unwrap_or_default(),
+        )),
+        Value::Element(element) if property == "inputMode" => Ok(Value::String(
+            host.element_get_attribute(element, "inputmode")?
+                .unwrap_or_default(),
+        )),
+        Value::Element(element) if property == "spellcheck" => {
+            Ok(Value::Boolean(spellcheck_reflection(element, host)?))
         }
-        Value::Element(element) if property == "name" => {
-            Ok(Value::String(host.element_get_attribute(element, "name")?.unwrap_or_default()))
+        Value::Element(element) if property == "translate" => {
+            Ok(Value::Boolean(translate_reflection(element, host)?))
         }
+        Value::Element(element) if property == "hidden" => Ok(Value::Boolean(
+            host.element_get_attribute(element, "hidden")?.is_some(),
+        )),
+        Value::Element(element) if property == "dir" => Ok(Value::String(
+            host.element_get_attribute(element, "dir")?
+                .unwrap_or_default(),
+        )),
+        Value::Element(element) if property == "lang" => Ok(Value::String(
+            host.element_get_attribute(element, "lang")?
+                .unwrap_or_default(),
+        )),
         Value::Element(_) if property == "ownerDocument" => Ok(Value::Document),
         Value::Element(element) if property == "baseURI" => {
             Ok(Value::String(host.element_base_uri(element)?))
@@ -1435,6 +2090,28 @@ fn eval_member<H: HostBindings>(
         },
         Value::Element(element) if property == "checked" => {
             Ok(Value::Boolean(host.element_checked(element)?))
+        }
+        Value::Element(element) if property == "defaultChecked" => {
+            if host.element_tag_name(element)? != "input" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            match host.element_get_attribute(element, "type")?.as_deref() {
+                Some("checkbox") | Some("radio") => {
+                    Ok(Value::Boolean(host.element_checked(element)?))
+                }
+                _ => Err(unsupported_member_access(property, "element")),
+            }
+        }
+        Value::Element(element) if property == "indeterminate" => {
+            if host.element_tag_name(element)? != "input" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            match host.element_get_attribute(element, "type")?.as_deref() {
+                Some("checkbox") => Ok(Value::Boolean(host.element_indeterminate(element)?)),
+                _ => Err(unsupported_member_access(property, "element")),
+            }
         }
         Value::Element(element) if property == "selected" => {
             if host.element_tag_name(element)? != "option" {
@@ -1475,19 +2152,199 @@ fn eval_member<H: HostBindings>(
             }))
         }
         Value::Element(element) if property == "multiple" => {
-            if host.element_tag_name(element)? != "select" {
+            match host.element_tag_name(element)?.as_str() {
+                "input" | "select" => Ok(Value::Boolean(
+                    host.element_get_attribute(element, "multiple")?.is_some(),
+                )),
+                _ => Err(unsupported_member_access(property, "element")),
+            }
+        }
+        Value::Element(element) if property == "accept" => {
+            if host.element_tag_name(element)? != "input" {
                 return Err(unsupported_member_access(property, "element"));
             }
 
-            Ok(Value::Boolean(
-                host.element_get_attribute(element, "multiple")?.is_some(),
+            Ok(Value::String(
+                host.element_get_attribute(element, "accept")?
+                    .unwrap_or_default(),
             ))
+        }
+        Value::Element(element) if property == "readOnly" => {
+            match host.element_tag_name(element)?.as_str() {
+                "input" | "textarea" => Ok(Value::Boolean(
+                    host.element_get_attribute(element, "readonly")?.is_some(),
+                )),
+                _ => Err(unsupported_member_access(property, "element")),
+            }
+        }
+        Value::Element(element) if property == "autofocus" => {
+            match host.element_tag_name(element)?.as_str() {
+                "input" | "textarea" | "button" | "select" => Ok(Value::Boolean(
+                    host.element_get_attribute(element, "autofocus")?.is_some(),
+                )),
+                _ => Err(unsupported_member_access(property, "element")),
+            }
+        }
+        Value::Element(element) if property == "autocomplete" => {
+            match host.element_tag_name(element)?.as_str() {
+                "input" | "textarea" => Ok(Value::String(
+                    host.element_get_attribute(element, "autocomplete")?
+                        .unwrap_or_default(),
+                )),
+                _ => Err(unsupported_member_access(property, "element")),
+            }
+        }
+        Value::Element(element) if property == "minLength" => {
+            match host.element_tag_name(element)?.as_str() {
+                "input" | "textarea" => Ok(Value::Number(
+                    host.element_get_attribute(element, "minlength")?
+                        .and_then(|value| value.parse::<usize>().ok())
+                        .unwrap_or(0) as f64,
+                )),
+                _ => Err(unsupported_member_access(property, "element")),
+            }
+        }
+        Value::Element(element) if property == "maxLength" => {
+            match host.element_tag_name(element)?.as_str() {
+                "input" | "textarea" => Ok(Value::Number(
+                    host.element_get_attribute(element, "maxlength")?
+                        .and_then(|value| value.parse::<usize>().ok())
+                        .unwrap_or(0) as f64,
+                )),
+                _ => Err(unsupported_member_access(property, "element")),
+            }
+        }
+        Value::Element(element) if property == "pattern" => {
+            if host.element_tag_name(element)? != "input" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            Ok(Value::String(
+                host.element_get_attribute(element, "pattern")?
+                    .unwrap_or_default(),
+            ))
+        }
+        Value::Element(element) if property == "min" => {
+            if host.element_tag_name(element)? != "input" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            Ok(Value::String(
+                host.element_get_attribute(element, "min")?
+                    .unwrap_or_default(),
+            ))
+        }
+        Value::Element(element) if property == "max" => {
+            if host.element_tag_name(element)? != "input" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            Ok(Value::String(
+                host.element_get_attribute(element, "max")?
+                    .unwrap_or_default(),
+            ))
+        }
+        Value::Element(element) if property == "placeholder" => {
+            match host.element_tag_name(element)?.as_str() {
+                "input" | "textarea" => Ok(Value::String(
+                    host.element_get_attribute(element, "placeholder")?
+                        .unwrap_or_default(),
+                )),
+                _ => Err(unsupported_member_access(property, "element")),
+            }
         }
         Value::Element(element) if property == "required" => {
             match host.element_tag_name(element)?.as_str() {
                 "input" | "textarea" | "select" => Ok(Value::Boolean(
                     host.element_get_attribute(element, "required")?.is_some(),
                 )),
+                _ => Err(unsupported_member_access(property, "element")),
+            }
+        }
+        Value::Element(element) if property == "noValidate" => {
+            if host.element_tag_name(element)? != "form" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            Ok(Value::Boolean(
+                host.element_get_attribute(element, "novalidate")?.is_some(),
+            ))
+        }
+        Value::Element(element) if property == "method" => {
+            if host.element_tag_name(element)? != "form" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            Ok(Value::String(form_method_reflection(
+                host.element_get_attribute(element, "method")?.as_deref(),
+            )))
+        }
+        Value::Element(element) if property == "enctype" => {
+            if host.element_tag_name(element)? != "form" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            Ok(Value::String(form_enctype_reflection(
+                host.element_get_attribute(element, "enctype")?.as_deref(),
+            )))
+        }
+        Value::Element(element) if property == "target" => {
+            if host.element_tag_name(element)? != "form" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            Ok(Value::String(form_target_reflection(
+                host.element_get_attribute(element, "target")?.as_deref(),
+            )))
+        }
+        Value::Element(element) if property == "action" => {
+            if host.element_tag_name(element)? != "form" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            Ok(Value::String(form_action_reflection(element, host)?))
+        }
+        Value::Element(element) if property == "formNoValidate" => {
+            match host.element_tag_name(element)?.as_str() {
+                "input" | "button" => Ok(Value::Boolean(
+                    host.element_get_attribute(element, "formnovalidate")?
+                        .is_some(),
+                )),
+                _ => Err(unsupported_member_access(property, "element")),
+            }
+        }
+        Value::Element(element) if property == "formMethod" => {
+            match host.element_tag_name(element)?.as_str() {
+                "input" | "button" => Ok(Value::String(form_method_reflection(
+                    host.element_get_attribute(element, "formmethod")?
+                        .as_deref(),
+                ))),
+                _ => Err(unsupported_member_access(property, "element")),
+            }
+        }
+        Value::Element(element) if property == "formEnctype" => {
+            match host.element_tag_name(element)?.as_str() {
+                "input" | "button" => Ok(Value::String(form_enctype_reflection(
+                    host.element_get_attribute(element, "formenctype")?
+                        .as_deref(),
+                ))),
+                _ => Err(unsupported_member_access(property, "element")),
+            }
+        }
+        Value::Element(element) if property == "formTarget" => {
+            match host.element_tag_name(element)?.as_str() {
+                "input" | "button" => Ok(Value::String(form_target_reflection(
+                    host.element_get_attribute(element, "formtarget")?
+                        .as_deref(),
+                ))),
+                _ => Err(unsupported_member_access(property, "element")),
+            }
+        }
+        Value::Element(element) if property == "formAction" => {
+            match host.element_tag_name(element)?.as_str() {
+                "input" | "button" => Ok(Value::String(form_action_override_reflection(
+                    element, host,
+                )?)),
                 _ => Err(unsupported_member_access(property, "element")),
             }
         }
@@ -1502,18 +2359,35 @@ fn eval_member<H: HostBindings>(
                     .unwrap_or(0) as f64,
             ))
         }
+        Value::Element(element) if property == "type" => {
+            match host.element_tag_name(element)?.as_str() {
+                "select" => Ok(Value::String(
+                    if host.element_get_attribute(element, "multiple")?.is_some() {
+                        "select-multiple".to_string()
+                    } else {
+                        "select-one".to_string()
+                    },
+                )),
+                "input" => Ok(Value::String(input_type_reflection(
+                    host.element_get_attribute(element, "type")?.as_deref(),
+                ))),
+                "button" => Ok(Value::String(button_type_reflection(
+                    host.element_get_attribute(element, "type")?.as_deref(),
+                ))),
+                _ => Err(unsupported_member_access(property, "element")),
+            }
+        }
         Value::Element(element) if property == "index" => Ok(Value::Number(
             option_index_for_element(element, host)? as f64,
         )),
         Value::Element(element) if property == "form" => option_form_for_element(element, host),
         Value::Element(element) if property == "disabled" => {
-            if host.element_tag_name(element)? != "option" {
-                return Err(unsupported_member_access(property, "element"));
+            match host.element_tag_name(element)?.as_str() {
+                "input" | "textarea" | "button" | "select" | "option" => Ok(Value::Boolean(
+                    host.element_get_attribute(element, "disabled")?.is_some(),
+                )),
+                _ => Err(unsupported_member_access(property, "element")),
             }
-
-            Ok(Value::Boolean(
-                host.element_get_attribute(element, "disabled")?.is_some(),
-            ))
         }
         Value::Element(element) if property == "label" => {
             if host.element_tag_name(element)? != "option" {
@@ -1709,6 +2583,10 @@ fn eval_member<H: HostBindings>(
             let length = class_list_tokens(element, host)?.len();
             Ok(Value::Number(length as f64))
         }
+        Value::ClassList(element) if property == "value" => Ok(Value::String(
+            host.element_get_attribute(element, "class")?
+                .unwrap_or_default(),
+        )),
         Value::NodeList(target) if property == "length" => {
             let length = node_list_items(&target, host)?.len();
             Ok(Value::Number(length as f64))
@@ -2506,6 +3384,18 @@ fn eval_method_call<H: HostBindings>(
                 let tag_name = as_string(&eval_expr(tag_expr, env, host)?);
                 Ok(Value::Element(host.document_create_element(&tag_name)?))
             }
+            "createElementNS" => {
+                let [namespace_expr, tag_expr] = args else {
+                    return Err(ScriptError::new(
+                        "document.createElementNS() expects exactly two arguments",
+                    ));
+                };
+                let namespace_uri = as_string(&eval_expr(namespace_expr, env, host)?);
+                let tag_name = as_string(&eval_expr(tag_expr, env, host)?);
+                Ok(Value::Element(
+                    host.document_create_element_ns(&namespace_uri, &tag_name)?,
+                ))
+            }
             "createTextNode" => {
                 let [text_expr] = args else {
                     return Err(ScriptError::new(
@@ -2543,6 +3433,10 @@ fn eval_method_call<H: HostBindings>(
                 Ok(Value::Undefined)
             }
             "removeChild" => node_remove_child(NodeHandle::new(0), args, env, host),
+            "open" => document_open(args, env, host),
+            "close" => document_close(args, env, host),
+            "write" => document_write(args, env, host),
+            "writeln" => document_writeln(args, env, host),
             "contains" => document_contains(args, env, host),
             "isSameNode" => same_node(Value::Document, args, env, host),
             "isEqualNode" => equal_node(Value::Document, args, env, host),
@@ -2676,6 +3570,27 @@ fn eval_method_call<H: HostBindings>(
             ))),
         },
         Value::Element(element) => match method {
+            "click" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("click() expects no arguments"));
+                }
+                host.element_click(element)?;
+                Ok(Value::Undefined)
+            }
+            "focus" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("focus() expects no arguments"));
+                }
+                host.element_focus(element)?;
+                Ok(Value::Undefined)
+            }
+            "blur" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("blur() expects no arguments"));
+                }
+                host.element_blur(element)?;
+                Ok(Value::Undefined)
+            }
             "getAttribute" => element_get_attribute(element, args, env, host),
             "setAttribute" => element_set_attribute(element, args, env, host),
             "removeAttribute" => element_remove_attribute(element, args, env, host),
@@ -2860,6 +3775,7 @@ fn eval_method_call<H: HostBindings>(
         Value::StyleSheetList(target) => match method {
             "item" => style_sheet_list_item(&target, args, env, host),
             "namedItem" => style_sheet_list_named_item(&target, args, env, host),
+            "forEach" => style_sheet_list_for_each(&target, args, env, host),
             "keys" => style_sheet_list_keys(&target, host),
             "values" => style_sheet_list_values(&target, host),
             "entries" => style_sheet_list_entries(&target, host),
@@ -2952,10 +3868,17 @@ fn eval_method_call<H: HostBindings>(
             "cannot call `{method}` on a screen value"
         ))),
         Value::ClassList(element) => match method {
+            "item" => class_list_item(element, args, env, host),
             "contains" => class_list_contains(element, args, env, host),
+            "forEach" => class_list_for_each(element, args, env, host),
+            "keys" => class_list_keys(element, host),
+            "values" => class_list_values(element, host),
+            "entries" => class_list_entries(element, host),
             "add" => class_list_add(element, args, env, host),
             "remove" => class_list_remove(element, args, env, host),
+            "replace" => class_list_replace(element, args, env, host),
             "toggle" => class_list_toggle(element, args, env, host),
+            "toString" => class_list_to_string(element, args, host),
             other => Err(ScriptError::new(format!(
                 "unsupported class list method: {other}"
             ))),
@@ -2995,12 +3918,17 @@ fn eval_method_call<H: HostBindings>(
                 "unsupported Storage method: {other}"
             ))),
         },
-        Value::MediaQueryList(_) => Err(ScriptError::new(format!(
-            "cannot call `{method}` on a media query list value"
-        ))),
+        Value::MediaQueryList(list) => match method {
+            "addListener" => media_query_list_add_listener(&list, args, env, host),
+            "removeListener" => media_query_list_remove_listener(&list, args, env, host),
+            other => Err(ScriptError::new(format!(
+                "cannot call `{other}` on a media query list value"
+            ))),
+        },
         Value::StringList(list) => match method {
             "item" => string_list_item(&list, args, env, host),
             "contains" => string_list_contains(&list, args, env, host),
+            "forEach" => string_list_for_each(&list, args, env, host),
             "keys" => Ok(string_list_keys(&list)),
             "values" => Ok(string_list_values(&list)),
             "entries" => Ok(string_list_entries(&list)),
@@ -3012,6 +3940,7 @@ fn eval_method_call<H: HostBindings>(
         Value::MimeTypeArray(list) => match method {
             "item" => mime_type_array_item(&list, args, env, host),
             "namedItem" => mime_type_array_named_item(&list, args, env, host),
+            "forEach" => mime_type_array_for_each(&list, args, env, host),
             "keys" => Ok(mime_type_array_keys(&list)),
             "values" => Ok(mime_type_array_values(&list)),
             "entries" => Ok(mime_type_array_entries(&list)),
@@ -4122,6 +5051,42 @@ fn style_sheet_list_entries<H: HostBindings>(
     ))
 }
 
+fn style_sheet_list_for_each<H: HostBindings>(
+    target: &StyleSheetListTarget,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let (callback_expr, this_arg_expr) = match args {
+        [callback_expr] => (callback_expr, None),
+        [callback_expr, this_arg_expr] => (callback_expr, Some(this_arg_expr)),
+        _ => {
+            return Err(ScriptError::new(
+                "StyleSheetList.forEach() expects one or two arguments",
+            ));
+        }
+    };
+
+    let callback = match eval_expr(callback_expr, env, host)? {
+        Value::Function(function) => function,
+        _ => {
+            return Err(ScriptError::new(
+                "StyleSheetList.forEach() requires an arrow function callback",
+            ));
+        }
+    };
+    if let Some(this_arg_expr) = this_arg_expr {
+        let _ = eval_expr(this_arg_expr, env, host)?;
+    }
+
+    let items = style_sheet_list_items(target, host)?
+        .into_iter()
+        .map(|handle| Value::StyleSheet(StyleSheetTarget::OwnerNode(handle)))
+        .collect();
+    let collection_value = Value::StyleSheetList(target.clone());
+    for_each_over_items(&callback, items, collection_value, env, host)
+}
+
 fn html_collection_items<H: HostBindings>(
     collection: &HtmlCollectionTarget,
     host: &mut H,
@@ -4408,6 +5373,39 @@ fn string_list_contains<H: HostBindings>(
     Ok(Value::Boolean(list.contains(&value)))
 }
 
+fn string_list_for_each<H: HostBindings>(
+    list: &StringListState,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let (callback_expr, this_arg_expr) = match args {
+        [callback_expr] => (callback_expr, None),
+        [callback_expr, this_arg_expr] => (callback_expr, Some(this_arg_expr)),
+        _ => {
+            return Err(ScriptError::new(
+                "navigator.languages.forEach() expects one or two arguments",
+            ));
+        }
+    };
+
+    let callback = match eval_expr(callback_expr, env, host)? {
+        Value::Function(function) => function,
+        _ => {
+            return Err(ScriptError::new(
+                "navigator.languages.forEach() requires an arrow function callback",
+            ));
+        }
+    };
+    if let Some(this_arg_expr) = this_arg_expr {
+        let _ = eval_expr(this_arg_expr, env, host)?;
+    }
+
+    let items = list.items().iter().cloned().map(Value::String).collect();
+    let collection_value = Value::StringList(list.clone());
+    for_each_over_items(&callback, items, collection_value, env, host)
+}
+
 fn string_list_to_string(args: &[Expr]) -> Result<Value> {
     let [] = args else {
         return Err(ScriptError::new(
@@ -4484,6 +5482,39 @@ fn mime_type_array_named_item<H: HostBindings>(
         .named_item(&name)
         .map(|value| Value::String(value.to_string()))
         .unwrap_or(Value::Null))
+}
+
+fn mime_type_array_for_each<H: HostBindings>(
+    list: &MimeTypeArrayState,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let (callback_expr, this_arg_expr) = match args {
+        [callback_expr] => (callback_expr, None),
+        [callback_expr, this_arg_expr] => (callback_expr, Some(this_arg_expr)),
+        _ => {
+            return Err(ScriptError::new(
+                "navigator.mimeTypes.forEach() expects one or two arguments",
+            ));
+        }
+    };
+
+    let callback = match eval_expr(callback_expr, env, host)? {
+        Value::Function(function) => function,
+        _ => {
+            return Err(ScriptError::new(
+                "navigator.mimeTypes.forEach() requires an arrow function callback",
+            ));
+        }
+    };
+    if let Some(this_arg_expr) = this_arg_expr {
+        let _ = eval_expr(this_arg_expr, env, host)?;
+    }
+
+    let items = list.items().iter().cloned().map(Value::String).collect();
+    let collection_value = Value::MimeTypeArray(list.clone());
+    for_each_over_items(&callback, items, collection_value, env, host)
 }
 
 fn mime_type_array_keys(list: &MimeTypeArrayState) -> Value {
@@ -4564,6 +5595,13 @@ fn for_each_over_items<H: HostBindings>(
     let program = crate::parser::parse_program(&callback.body_source)?;
 
     for (index, item) in items.into_iter().enumerate() {
+        let outer_keys: Vec<String> = env.keys().cloned().collect();
+        let param_snapshots: Vec<(String, Option<Value>)> = callback
+            .params
+            .iter()
+            .map(|param| (param.clone(), env.get(param).cloned()))
+            .collect();
+
         let mut bindings = env.clone();
         for (param_index, param) in callback.params.iter().enumerate() {
             let value = match param_index {
@@ -4574,7 +5612,29 @@ fn for_each_over_items<H: HostBindings>(
             };
             bindings.insert(param.clone(), value);
         }
-        eval_program_with_bindings(&program, host, bindings)?;
+        eval_program_with_bindings(&program, host, &mut bindings)?;
+
+        for key in outer_keys {
+            if callback.params.iter().any(|param| param == &key) {
+                continue;
+            }
+            if let Some(value) = bindings.get(&key).cloned() {
+                env.insert(key, value);
+            } else {
+                env.remove(&key);
+            }
+        }
+
+        for (param, previous) in param_snapshots {
+            match previous {
+                Some(value) => {
+                    env.insert(param, value);
+                }
+                None => {
+                    env.remove(&param);
+                }
+            }
+        }
     }
 
     Ok(Value::Undefined)
@@ -4836,6 +5896,56 @@ fn history_state_from_value(value: &Value) -> Option<String> {
     }
 }
 
+fn media_query_list_listener<H: HostBindings>(
+    list: &MediaQueryListState,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+    method: &str,
+) -> Result<Value> {
+    let [callback_expr] = args else {
+        return Err(ScriptError::new(format!(
+            "MediaQueryList.{method}() expects exactly one argument",
+        )));
+    };
+
+    match eval_expr(callback_expr, env, host)? {
+        Value::Function(_) => {
+            match method {
+                "addListener" => host.match_media_add_listener(list.media())?,
+                "removeListener" => host.match_media_remove_listener(list.media())?,
+                other => {
+                    return Err(ScriptError::new(format!(
+                        "cannot call `{other}` on a media query list value"
+                    )));
+                }
+            }
+            Ok(Value::Undefined)
+        }
+        _ => Err(ScriptError::new(format!(
+            "MediaQueryList.{method}() requires an arrow function callback",
+        ))),
+    }
+}
+
+fn media_query_list_add_listener<H: HostBindings>(
+    list: &MediaQueryListState,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    media_query_list_listener(list, args, env, host, "addListener")
+}
+
+fn media_query_list_remove_listener<H: HostBindings>(
+    list: &MediaQueryListState,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    media_query_list_listener(list, args, env, host, "removeListener")
+}
+
 fn class_list_tokens<H: HostBindings>(
     element: crate::ElementHandle,
     host: &mut H,
@@ -4898,6 +6008,31 @@ fn class_list_contains<H: HostBindings>(
     ))
 }
 
+fn class_list_item<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [index_expr] = args else {
+        return Err(ScriptError::new(
+            "classList.item() expects exactly one argument",
+        ));
+    };
+
+    let index_value = eval_expr(index_expr, env, host)?;
+    let Some(index) = index_from_value(&index_value) else {
+        return Ok(Value::Null);
+    };
+
+    let tokens = class_list_tokens(element, host)?;
+    Ok(tokens
+        .get(index)
+        .cloned()
+        .map(Value::String)
+        .unwrap_or(Value::Null))
+}
+
 fn class_list_add<H: HostBindings>(
     element: crate::ElementHandle,
     args: &[Expr],
@@ -4947,6 +6082,39 @@ fn class_list_remove<H: HostBindings>(
         write_class_list_tokens(element, &tokens, host)?;
     }
     Ok(Value::Undefined)
+}
+
+fn class_list_replace<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [old_token_expr, new_token_expr] = args else {
+        return Err(ScriptError::new(
+            "classList.replace() expects exactly two arguments",
+        ));
+    };
+
+    let old_token = validate_class_list_token(&as_string(&eval_expr(old_token_expr, env, host)?))?;
+    let new_token = validate_class_list_token(&as_string(&eval_expr(new_token_expr, env, host)?))?;
+
+    let mut tokens = class_list_tokens(element, host)?;
+    let Some(old_index) = tokens.iter().position(|candidate| candidate == &old_token) else {
+        return Ok(Value::Boolean(false));
+    };
+
+    if old_token == new_token {
+        return Ok(Value::Boolean(true));
+    }
+
+    if tokens.iter().any(|candidate| candidate == &new_token) {
+        tokens.retain(|candidate| candidate != &old_token);
+    } else {
+        tokens[old_index] = new_token;
+    }
+    write_class_list_tokens(element, &tokens, host)?;
+    Ok(Value::Boolean(true))
 }
 
 fn class_list_toggle<H: HostBindings>(
@@ -5002,6 +6170,86 @@ fn class_list_toggle<H: HostBindings>(
     };
 
     Ok(Value::Boolean(now_present))
+}
+
+fn class_list_for_each<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let (callback_expr, this_arg_expr) = match args {
+        [callback_expr] => (callback_expr, None),
+        [callback_expr, this_arg_expr] => (callback_expr, Some(this_arg_expr)),
+        _ => {
+            return Err(ScriptError::new(
+                "classList.forEach() expects one or two arguments",
+            ));
+        }
+    };
+
+    let callback = match eval_expr(callback_expr, env, host)? {
+        Value::Function(function) => function,
+        _ => {
+            return Err(ScriptError::new(
+                "classList.forEach() requires an arrow function callback",
+            ));
+        }
+    };
+    if let Some(this_arg_expr) = this_arg_expr {
+        let _ = eval_expr(this_arg_expr, env, host)?;
+    }
+
+    let items = class_list_tokens(element, host)?
+        .into_iter()
+        .map(Value::String)
+        .collect();
+    let collection_value = Value::ClassList(element);
+    for_each_over_items(&callback, items, collection_value, env, host)
+}
+
+fn class_list_keys<H: HostBindings>(element: crate::ElementHandle, host: &mut H) -> Result<Value> {
+    let tokens = class_list_tokens(element, host)?;
+    Ok(collection_iterator(
+        (0..tokens.len())
+            .map(|index| Value::Number(index as f64))
+            .collect(),
+    ))
+}
+
+fn class_list_values<H: HostBindings>(
+    element: crate::ElementHandle,
+    host: &mut H,
+) -> Result<Value> {
+    let tokens = class_list_tokens(element, host)?;
+    Ok(collection_iterator(
+        tokens.into_iter().map(Value::String).collect(),
+    ))
+}
+
+fn class_list_entries<H: HostBindings>(
+    element: crate::ElementHandle,
+    host: &mut H,
+) -> Result<Value> {
+    let tokens = class_list_tokens(element, host)?;
+    Ok(collection_entries(
+        tokens.into_iter().map(Value::String).collect(),
+    ))
+}
+
+fn class_list_to_string<H: HostBindings>(
+    element: crate::ElementHandle,
+    args: &[Expr],
+    host: &mut H,
+) -> Result<Value> {
+    let [] = args else {
+        return Err(ScriptError::new(
+            "classList.toString() expects no arguments",
+        ));
+    };
+
+    let tokens = class_list_tokens(element, host)?;
+    Ok(Value::String(tokens.join(" ")))
 }
 
 fn dataset_attribute_name(property: &str) -> Result<String> {

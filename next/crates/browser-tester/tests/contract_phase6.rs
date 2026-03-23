@@ -72,7 +72,7 @@ fn pseudo_class_selectors_still_fail_explicitly() -> browser_tester_next::Result
     let harness = Harness::from_html("<main><span class='primary'></span></main>")?;
 
     let error = harness
-        .assert_exists("main:where([data-kind=primary x])")
+        .assert_exists("main:where([data-kind=primary x y])")
         .expect_err("broader CSS parsing is not part of the selector slices");
 
     let message = error.to_string();

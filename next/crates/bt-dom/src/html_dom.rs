@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
+use regex::Regex;
+
 use super::DomIndexes;
 use super::DomStore;
 use super::ElementData;
@@ -82,6 +84,7 @@ enum SelectorPseudoClass {
     Indeterminate,
     Default,
     Focus,
+    FocusVisible,
     FocusWithin,
     Required,
     Optional,
@@ -357,6 +360,14 @@ impl DomStore {
     }
 
     pub fn create_element(&mut self, tag_name: impl Into<String>) -> Result<NodeId, String> {
+        self.create_element_ns(HTML_NAMESPACE_URI, tag_name)
+    }
+
+    pub fn create_element_ns(
+        &mut self,
+        namespace_uri: impl Into<String>,
+        tag_name: impl Into<String>,
+    ) -> Result<NodeId, String> {
         let tag_name = tag_name.into().trim().to_ascii_lowercase();
         if tag_name.is_empty() || !tag_name.bytes().all(is_simple_name_byte) {
             return Err(format!("invalid tag name: `{tag_name}`"));
@@ -370,7 +381,7 @@ impl DomStore {
             kind: NodeKind::Element(ElementData {
                 tag_name: tag_name.clone(),
                 local_name: tag_name,
-                namespace_uri: HTML_NAMESPACE_URI.to_string(),
+                namespace_uri: namespace_uri.into(),
                 attributes: BTreeMap::new(),
             }),
         });
@@ -499,6 +510,30 @@ impl DomStore {
                 .get(&node_id)
                 .map(|state| state.checked)
                 .or_else(|| Some(element.attributes.contains_key("checked")))
+        } else {
+            None
+        }
+    }
+
+    pub fn indeterminate_for_node(&self, node_id: NodeId) -> Option<bool> {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return None;
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return None;
+        };
+
+        if element.tag_name == "input"
+            && is_checkable_input_type(element.attributes.get("type").map(String::as_str))
+        {
+            Some(
+                self.side_tables
+                    .form_controls
+                    .get(&node_id)
+                    .map(|state| state.indeterminate)
+                    .unwrap_or(false),
+            )
         } else {
             None
         }
@@ -695,6 +730,44 @@ impl DomStore {
         }
     }
 
+    pub fn set_form_control_indeterminate(
+        &mut self,
+        node_id: NodeId,
+        indeterminate: bool,
+    ) -> Result<(), String> {
+        let node_index = node_id.index() as usize;
+        let Some(node) = self.nodes.get(node_index) else {
+            return Err(format!("invalid node id: {:?}", node_id));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(format!(
+                "node {:?} is not a supported form control",
+                node_id
+            ));
+        };
+
+        if element.tag_name != "input"
+            || !matches!(
+                element.attributes.get("type").map(String::as_str),
+                Some("checkbox") | Some("radio")
+            )
+        {
+            return Err(format!(
+                "indeterminate is only supported on checkbox and radio inputs, not <input type=\"{}\">",
+                element
+                    .attributes
+                    .get("type")
+                    .map(String::as_str)
+                    .unwrap_or("text")
+            ));
+        }
+
+        let state = self.side_tables.form_controls.entry(node_id).or_default();
+        state.indeterminate = indeterminate;
+        Ok(())
+    }
+
     pub fn set_file_input_files(
         &mut self,
         node_id: NodeId,
@@ -814,6 +887,48 @@ impl DomStore {
         self.rebuild_indexes();
         self.rebuild_form_controls();
         self.document.title = self.document_title();
+        Ok(())
+    }
+
+    pub fn append_html_to_document(&mut self, html: &str) -> Result<(), String> {
+        let target_parent = self
+            .body_element_id()
+            .or(self.root_element_id())
+            .or(Some(self.document_id))
+            .ok_or_else(|| "document.write() requires a document element".to_string())?;
+        let insertion_index = self.child_count(target_parent)?;
+        let (fragment_store, fragment_children) =
+            self.fragment_children_for_html(target_parent, html)?;
+
+        self.clone_fragment_children_into(
+            &fragment_store,
+            &fragment_children,
+            target_parent,
+            insertion_index,
+        )?;
+
+        self.rebuild_indexes();
+        self.rebuild_form_controls();
+        self.document.title = self.document_title();
+        Ok(())
+    }
+
+    pub fn document_open(&mut self) -> Result<(), String> {
+        let target = self.document_id;
+        let removed_nodes = self
+            .nodes
+            .get(target.index() as usize)
+            .map(|node| self.collect_subtree_nodes(node.children.clone()))
+            .unwrap_or_default();
+        let focused_node = self.focused_node;
+
+        self.replace_children(target, std::iter::empty::<NodeId>())?;
+        if focused_node.is_some_and(|focused| removed_nodes.contains(&focused)) {
+            self.focused_node = None;
+        }
+        self.rebuild_indexes();
+        self.rebuild_form_controls();
+        self.document.title = String::new();
         Ok(())
     }
 
@@ -1831,11 +1946,15 @@ impl DomStore {
     }
 
     fn rebuild_form_controls(&mut self) {
-        self.side_tables.form_controls.clear();
-        self.index_form_controls(self.document_id);
+        let previous_form_controls = std::mem::take(&mut self.side_tables.form_controls);
+        self.index_form_controls(self.document_id, &previous_form_controls);
     }
 
-    fn index_form_controls(&mut self, node_id: NodeId) {
+    fn index_form_controls(
+        &mut self,
+        node_id: NodeId,
+        previous_form_controls: &BTreeMap<NodeId, super::FormControlState>,
+    ) {
         let Some(node) = self.nodes.get(node_id.index() as usize).cloned() else {
             return;
         };
@@ -1843,22 +1962,32 @@ impl DomStore {
         if let NodeKind::Element(element) = &node.kind {
             match element.tag_name.as_str() {
                 "textarea" => {
+                    let indeterminate = previous_form_controls
+                        .get(&node_id)
+                        .map(|state| state.indeterminate)
+                        .unwrap_or(false);
                     self.side_tables.form_controls.insert(
                         node_id,
                         super::FormControlState {
                             value: self.text_content_for_node(node_id),
                             checked: false,
+                            indeterminate,
                         },
                     );
                 }
                 "input"
                     if is_text_input_type(element.attributes.get("type").map(String::as_str)) =>
                 {
+                    let indeterminate = previous_form_controls
+                        .get(&node_id)
+                        .map(|state| state.indeterminate)
+                        .unwrap_or(false);
                     self.side_tables.form_controls.insert(
                         node_id,
                         super::FormControlState {
                             value: element.attributes.get("value").cloned().unwrap_or_default(),
                             checked: false,
+                            indeterminate,
                         },
                     );
                 }
@@ -1867,6 +1996,10 @@ impl DomStore {
                         element.attributes.get("type").map(String::as_str),
                     ) =>
                 {
+                    let indeterminate = previous_form_controls
+                        .get(&node_id)
+                        .map(|state| state.indeterminate)
+                        .unwrap_or(false);
                     self.side_tables.form_controls.insert(
                         node_id,
                         super::FormControlState {
@@ -1876,6 +2009,7 @@ impl DomStore {
                                 .cloned()
                                 .unwrap_or_else(|| "on".to_string()),
                             checked: element.attributes.contains_key("checked"),
+                            indeterminate,
                         },
                     );
                 }
@@ -1884,7 +2018,7 @@ impl DomStore {
         }
 
         for child in node.children {
-            self.index_form_controls(child);
+            self.index_form_controls(child, previous_form_controls);
         }
     }
 
@@ -2265,6 +2399,7 @@ impl DomStore {
             SelectorPseudoClass::Indeterminate => self.is_indeterminate_pseudo_class(node_id),
             SelectorPseudoClass::Default => self.is_default_pseudo_class(node_id),
             SelectorPseudoClass::Focus => self.is_focus_pseudo_class(node_id),
+            SelectorPseudoClass::FocusVisible => self.is_focus_visible_pseudo_class(node_id),
             SelectorPseudoClass::FocusWithin => self.is_focus_within_pseudo_class(node_id),
             SelectorPseudoClass::Required => self.is_required_pseudo_class(node_id),
             SelectorPseudoClass::Optional => self.is_optional_pseudo_class(node_id),
@@ -2557,6 +2692,7 @@ impl DomStore {
                         "indeterminate" => SelectorPseudoClass::Indeterminate,
                         "default" => SelectorPseudoClass::Default,
                         "focus" => SelectorPseudoClass::Focus,
+                        "focus-visible" => SelectorPseudoClass::FocusVisible,
                         "focus-within" => SelectorPseudoClass::FocusWithin,
                         "required" => SelectorPseudoClass::Required,
                         "optional" => SelectorPseudoClass::Optional,
@@ -2797,6 +2933,10 @@ impl DomStore {
         self.focused_node() == Some(node_id)
     }
 
+    fn is_focus_visible_pseudo_class(&self, node_id: NodeId) -> bool {
+        self.is_focus_pseudo_class(node_id)
+    }
+
     fn is_focus_within_pseudo_class(&self, node_id: NodeId) -> bool {
         let mut current = self.focused_node();
 
@@ -2835,6 +2975,7 @@ impl DomStore {
             "textarea" => {
                 element.attributes.contains_key("required")
                     && self.value_for_node(node_id).is_empty()
+                    || self.is_text_length_invalid(node_id)
             }
             "select" => {
                 element.attributes.contains_key("required")
@@ -2857,6 +2998,8 @@ impl DomStore {
                 } else if is_file_input_type(input_type) || is_text_input_type(input_type) {
                     element.attributes.contains_key("required")
                         && self.value_for_node(node_id).is_empty()
+                        || self.is_text_length_invalid(node_id)
+                        || self.is_pattern_mismatch(node_id)
                 } else {
                     false
                 }
@@ -3098,6 +3241,79 @@ impl DomStore {
             }
             _ => false,
         }
+    }
+
+    fn is_text_length_invalid(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        let input_type = element.attributes.get("type").map(String::as_str);
+        match element.tag_name.as_str() {
+            "textarea" => {}
+            "input" if is_text_input_type(input_type) => {}
+            _ => return false,
+        }
+
+        let value = self.value_for_node(node_id);
+        if value.is_empty() {
+            return false;
+        }
+
+        let value_length = value.encode_utf16().count();
+        let min_length = element
+            .attributes
+            .get("minlength")
+            .and_then(|value| value.trim().parse::<usize>().ok());
+        let max_length = element
+            .attributes
+            .get("maxlength")
+            .and_then(|value| value.trim().parse::<usize>().ok());
+
+        if let Some(min_length) = min_length {
+            if value_length < min_length {
+                return true;
+            }
+        }
+        if let Some(max_length) = max_length {
+            if value_length > max_length {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn is_pattern_mismatch(&self, node_id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(node_id.index() as usize) else {
+            return false;
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return false;
+        };
+
+        let input_type = element.attributes.get("type").map(String::as_str);
+        match element.tag_name.as_str() {
+            "input" if is_pattern_input_type(input_type) => {}
+            _ => return false,
+        }
+
+        let Some(pattern) = element.attributes.get("pattern") else {
+            return false;
+        };
+        let value = self.value_for_node(node_id);
+        if value.is_empty() {
+            return false;
+        }
+
+        let Ok(pattern) = Regex::new(&format!("^(?:{})$", pattern)) else {
+            return false;
+        };
+
+        !pattern.is_match(&value)
     }
 
     fn is_optional_form_control_element(&self, node_id: NodeId) -> bool {
@@ -3476,6 +3692,14 @@ impl DomStore {
             "input"
                 if matches!(
                     element.attributes.get("type").map(String::as_str),
+                    Some("checkbox")
+                ) =>
+            {
+                self.indeterminate_for_node(node_id).unwrap_or(false)
+            }
+            "input"
+                if matches!(
+                    element.attributes.get("type").map(String::as_str),
                     Some("radio")
                 ) =>
             {
@@ -3806,7 +4030,7 @@ impl DomStore {
 
 fn selector_not_supported(selector: &str) -> String {
     format!(
-        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, `:enabled`, `:indeterminate`, `:default`, `:valid`, `:invalid`, `:in-range`, and `:out-of-range`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`; additional bounded structural pseudo-classes include `:root`, `:empty`, `:only-child`, `:only-of-type`, `:first-of-type`, `:last-of-type`, `:nth-of-type(2)`, `:nth-of-type(... of <selector-list>)`, `:nth-last-of-type(2)`, and `:nth-last-of-type(... of <selector-list>)`; additional bounded selector grammar now also includes `:scope`, `:has(...)`, `:lang(...)`, `:defined`, `:nth-child(... of <selector-list>)` / `:nth-last-child(... of <selector-list>)`, `:focus`, `:focus-within`, and `:target`; form-editable state pseudo-classes also include `:read-only` and `:read-write`"
+        "unsupported selector `{selector}`; supported forms are #id, .class, tag, tag.class, #id.class, [attr], [attr=value], [attr^=value], [attr$=value], [attr*=value], [attr~=value], [attr|=value], optional attribute selector flags like `[attr=value i]` and `[attr=value s]`, bounded logical pseudo-classes like `:not(.primary)`, `:is(.primary, .secondary)`, and `:where(.primary, .secondary)`, structural pseudo-classes like `:first-child`, `:last-child`, `:nth-child(2)`, `:nth-child(odd)`, `:nth-child(2n+1)`, and `:nth-last-child(2)`, state pseudo-classes like `:checked`, `:disabled`, `:enabled`, `:indeterminate`, `:default`, `:valid`, `:invalid`, `:in-range`, and `:out-of-range`, descendant combinators like `A B`, adjacent sibling combinators like `A + B`, general sibling combinators like `A ~ B`, and child combinators like `A > B`; additional bounded structural pseudo-classes include `:root`, `:empty`, `:only-child`, `:only-of-type`, `:first-of-type`, `:last-of-type`, `:nth-of-type(2)`, `:nth-of-type(... of <selector-list>)`, `:nth-last-of-type(2)`, and `:nth-last-of-type(... of <selector-list>)`; additional bounded selector grammar now also includes `:scope`, `:has(...)`, `:lang(...)`, `:defined`, `:nth-child(... of <selector-list>)` / `:nth-last-child(... of <selector-list>)`, `:focus`, `:focus-visible`, `:focus-within`, and `:target`; form-editable state pseudo-classes also include `:read-only` and `:read-write`"
     )
 }
 
@@ -4225,7 +4449,7 @@ fn parse_selector_attribute_case_sensitivity(
             let case_sensitivity = match flag.to_ascii_lowercase() {
                 b'i' => SelectorAttributeCaseSensitivity::AsciiInsensitive,
                 b's' => SelectorAttributeCaseSensitivity::CaseSensitive,
-                _ => return Err(selector_not_supported(selector)),
+                _ => SelectorAttributeCaseSensitivity::CaseSensitive,
             };
             skip_selector_whitespace(bytes, pos);
             if bytes.get(*pos) != Some(&b']') {
@@ -5076,6 +5300,13 @@ fn is_text_input_type(input_type: Option<&str>) -> bool {
             | "week"
             | "time"
             | "color"
+    )
+}
+
+fn is_pattern_input_type(input_type: Option<&str>) -> bool {
+    matches!(
+        input_type.unwrap_or("text"),
+        "text" | "search" | "url" | "tel" | "email" | "password"
     )
 }
 

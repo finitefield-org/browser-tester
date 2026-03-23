@@ -95,7 +95,7 @@ fn main() -> browser_tester_next::Result<()> {
 }
 ```
 
-`matchMedia` is configured through the builder seed API and inspected through the registry:
+`matchMedia` is configured through the builder seed API and inspected through the registry. The returned `MediaQueryList` exposes `matches`, `media`, and deterministic `addListener()` / `removeListener()` hooks that accept callback functions, do not fire asynchronously in this workspace, and are recorded through `listener_calls()`:
 
 ```rust
 use browser_tester_next::Harness;
@@ -107,6 +107,7 @@ fn main() -> browser_tester_next::Result<()> {
         .build()?;
 
     assert_eq!(harness.mocks_mut().match_media().calls().len(), 1);
+    assert!(harness.mocks_mut().match_media().listener_calls().is_empty());
     harness.assert_text("#out", "true:(prefers-color-scheme: dark)")?;
     Ok(())
 }
@@ -207,7 +208,7 @@ Examples:
 - `open`: call capture through the registry and `Harness::open(...)`, plus optional builder-seeded bootstrap failure for `window.open(...)`; the mock returns `undefined` rather than a popup `WindowProxy`
 - `close`: call capture through the registry and `Harness::close(...)`, plus optional builder-seeded bootstrap failure for `window.close(...)`
 - `scroll`: call capture through the registry and `Harness::scroll_to(...)` / `Harness::scroll_by(...)`, plus optional builder-seeded bootstrap failure for `window.scrollTo(...)` / `window.scrollBy(...)`
-- `matchMedia`: query seed state and call capture for `window.matchMedia(...)`
+- `matchMedia`: query seed state and call capture for `window.matchMedia(...)`, plus deterministic `MediaQueryList.addListener()` / `removeListener()` hooks and listener call capture
 
 ## Why the Registry Shape Matters
 

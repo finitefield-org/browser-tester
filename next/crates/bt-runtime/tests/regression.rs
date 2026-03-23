@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use bt_runtime::{MockRegistry, Session, SessionConfig};
+use bt_runtime::{MatchMediaListenerCall, MockRegistry, Session, SessionConfig};
 use bt_script::ScriptRuntime;
 
 #[test]
@@ -215,7 +215,7 @@ fn session_rejects_unsupported_selector_syntax_in_closest_explicitly() {
     let error = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
         html: Some(
-            "<main id='root' class='primary'></main><script>document.getElementById('root').closest('main:where([data-kind=primary x])');</script>"
+            "<main id='root' class='primary'></main><script>document.getElementById('root').closest('main:where([data-kind=primary x y])');</script>"
                 .to_string(),
         ),
         local_storage: BTreeMap::new(),
@@ -426,6 +426,45 @@ fn session_resolves_location_href_getter_and_setter_regression() {
     assert_eq!(
         session.mocks().location().navigations(),
         &["https://example.test/next".to_string()]
+    );
+}
+
+#[test]
+fn session_supports_match_media_listeners_regression() {
+    let mut local_storage = BTreeMap::new();
+    local_storage.insert(
+        "__browser_tester_match_media__(prefers-color-scheme: dark)".to_string(),
+        "true".to_string(),
+    );
+
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><script>const out = document.getElementById('out'); out.textContent = 'before'; const list = window.matchMedia('(prefers-color-scheme: dark)'); list.addListener(() => { out.textContent = 'called'; }); list.removeListener(() => { out.textContent = 'removed'; }); out.textContent += ':' + String(list.matches) + ':' + list.media + ':' + String(window.matchMedia('(prefers-color-scheme: dark)'));</script>"
+                .to_string(),
+        ),
+        local_storage,
+    })
+    .expect("matchMedia listeners should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "before:true:(prefers-color-scheme: dark):[object MediaQueryList]"
+    );
+    assert_eq!(session.mocks().match_media().calls().len(), 2);
+    assert_eq!(
+        session.mocks().match_media().listener_calls(),
+        &[
+            MatchMediaListenerCall {
+                query: "(prefers-color-scheme: dark)".to_string(),
+                method: "addListener".to_string(),
+            },
+            MatchMediaListenerCall {
+                query: "(prefers-color-scheme: dark)".to_string(),
+                method: "removeListener".to_string(),
+            },
+        ]
     );
 }
 
@@ -950,6 +989,41 @@ fn session_resolves_indeterminate_pseudo_class_regression() {
 }
 
 #[test]
+fn session_resolves_checkbox_indeterminate_state_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='toggle' type='checkbox'><div id='out'></div><script>const toggle = document.getElementById('toggle'); toggle.indeterminate = true; const matches = document.querySelectorAll(':indeterminate'); document.getElementById('out').textContent = String(matches.length) + ':' + matches.item(0).getAttribute('id') + ':' + String(toggle.matches(':indeterminate'));</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("checkbox indeterminate state should resolve through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "1:toggle:true");
+}
+
+#[test]
+fn session_resolves_checkbox_default_checked_state_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='toggle' type='checkbox'><div id='out'></div><script>const toggle = document.getElementById('toggle'); const before = toggle.defaultChecked; toggle.defaultChecked = true; const matches = document.querySelectorAll(':default'); document.getElementById('out').textContent = String(before) + ':' + String(toggle.defaultChecked) + ':' + String(toggle.checked) + ':' + String(matches.length) + ':' + matches.item(0).getAttribute('id') + ':' + String(toggle.matches(':default'));</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("checkbox defaultChecked state should resolve through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false:true:true:1:toggle:true"
+    );
+}
+
+#[test]
 fn session_resolves_read_only_and_read_write_pseudo_classes_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -1119,6 +1193,25 @@ fn session_reflects_select_selected_index_through_inline_script_regression() {
 }
 
 #[test]
+fn session_reflects_select_type_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><select id='mode'><option id='first' value='a'>A</option></select><div id='out'></div><script>const select = document.getElementById('mode'); const before = select.type; select.multiple = true; const after = select.type; document.getElementById('out').textContent = before + ':' + after;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("select.type reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "select-one:select-multiple"
+    );
+}
+
+#[test]
 fn session_reflects_option_index_through_inline_script_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -1164,7 +1257,29 @@ fn session_reflects_option_disabled_through_inline_script_regression() {
     .expect("option.disabled reflection should remain wired through Session");
 
     let out_id = session.dom().select("#out").unwrap()[0];
-    assert_eq!(session.dom().text_content_for_node(out_id), "false:true:false:null");
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false:true:false:null"
+    );
+}
+
+#[test]
+fn session_reflects_form_control_disabled_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='name'><button id='action'>Go</button><div id='out'></div><script>const input = document.getElementById('name'); const button = document.getElementById('action'); const before = String(input.disabled) + '|' + String(button.disabled) + '|' + String(document.querySelectorAll(':disabled').length) + '|' + String(document.querySelectorAll(':enabled').length); input.disabled = true; button.disabled = true; const afterSet = String(input.disabled) + '|' + String(button.disabled) + '|' + String(document.querySelectorAll(':disabled').length) + '|' + String(document.querySelectorAll(':enabled').length); input.disabled = false; button.disabled = false; const afterClear = String(input.disabled) + '|' + String(button.disabled) + '|' + String(document.querySelectorAll(':disabled').length) + '|' + String(document.querySelectorAll(':enabled').length); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterClear;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("disabled reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false|false|0|2;true|true|2|0;false|false|0|2"
+    );
 }
 
 #[test]
@@ -1180,7 +1295,10 @@ fn session_reflects_option_label_through_inline_script_regression() {
     .expect("option.label reflection should remain wired through Session");
 
     let out_id = session.dom().select("#out").unwrap()[0];
-    assert_eq!(session.dom().text_content_for_node(out_id), "B:Bee:B:second");
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "B:Bee:B:second"
+    );
 }
 
 #[test]
@@ -1212,7 +1330,44 @@ fn session_reflects_select_multiple_through_inline_script_regression() {
     .expect("select.multiple reflection should remain wired through Session");
 
     let out_id = session.dom().select("#out").unwrap()[0];
-    assert_eq!(session.dom().text_content_for_node(out_id), "false:true::false");
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false:true::false"
+    );
+}
+
+#[test]
+fn session_resolves_input_and_button_type_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='field'><button id='action'></button><div id='out'></div><script>const input = document.getElementById('field'); const button = document.getElementById('action'); const before = input.type + '|' + button.type; input.type = 'email'; button.type = 'reset'; const afterSet = input.type + '|' + button.type + '|' + input.getAttribute('type') + '|' + button.getAttribute('type'); input.type = 'bogus'; button.type = 'bogus'; const afterInvalid = input.type + '|' + button.type + '|' + input.getAttribute('type') + '|' + button.getAttribute('type'); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterInvalid;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("input.type and button.type reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "text|submit;email|reset|email|reset;text|submit|bogus|bogus"
+    );
+}
+
+#[test]
+fn session_rejects_non_form_control_type_access_explicitly() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><div id='box'></div></div><script>document.getElementById('box').type;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-form-control type access should fail explicitly");
+
+    assert!(session.to_string().contains("type"));
 }
 
 #[test]
@@ -1232,11 +1387,304 @@ fn session_reflects_select_size_through_inline_script_regression() {
 }
 
 #[test]
+fn session_reflects_select_required_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><select id='mode'></select><div id='out'></div><script>const select = document.getElementById('mode'); const before = select.required; select.required = true; const afterSet = select.required; const afterSetAttr = select.getAttribute('required'); select.required = false; const afterClear = select.required; document.getElementById('out').textContent = String(before) + ':' + String(afterSet) + ':' + String(afterSetAttr) + ':' + String(afterClear) + ':' + String(document.querySelector('select:required'));</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("select.required reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false:true::false:null"
+    );
+}
+
+#[test]
+fn session_reflects_form_no_validate_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><form id='signup'><button id='submit'>Submit</button><input id='field'></form><div id='out'></div><script>const form = document.getElementById('signup'); const button = document.getElementById('submit'); const field = document.getElementById('field'); const before = String(form.noValidate) + '|' + String(button.formNoValidate) + '|' + String(field.formNoValidate); form.noValidate = true; button.formNoValidate = true; field.formNoValidate = true; const afterSet = String(form.noValidate) + '|' + String(button.formNoValidate) + '|' + String(field.formNoValidate) + '|' + String(form.getAttribute('novalidate')) + '|' + String(button.getAttribute('formnovalidate')) + '|' + String(field.getAttribute('formnovalidate')); form.noValidate = false; button.formNoValidate = false; field.formNoValidate = false; const afterClear = String(form.noValidate) + '|' + String(button.formNoValidate) + '|' + String(field.formNoValidate) + '|' + String(form.hasAttribute('novalidate')) + '|' + String(button.hasAttribute('formnovalidate')) + '|' + String(field.hasAttribute('formnovalidate')); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterClear;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("form noValidate reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false|false|false;true|true|true|||;false|false|false|false|false|false"
+    );
+}
+
+#[test]
+fn session_reflects_form_submission_metadata_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><form id='signup' action='/submit?from=form#frag' method='BOGUS' enctype='BOGUS'><button id='submit'>Submit</button><input id='field' type='submit' formaction='/field-preview?x=1#field'></form><div id='out'></div><script>const form = document.getElementById('signup'); const button = document.getElementById('submit'); const field = document.getElementById('field'); const before = String(form.action) + '|' + String(button.formAction) + '|' + String(field.formAction) + '|' + String(form.method) + '|' + String(form.enctype) + '|' + String(form.target) + '|' + String(button.formMethod) + '|' + String(button.formEnctype) + '|' + String(button.formTarget) + '|' + String(field.formMethod) + '|' + String(field.formEnctype) + '|' + String(field.formTarget); form.action = '/override-form?x=1#form'; form.method = 'Dialog'; form.enctype = 'Multipart/Form-Data'; form.target = '_blank'; button.formAction = '/override-button?button=1#button'; button.formMethod = 'PoSt'; button.formEnctype = 'Text/Plain'; button.formTarget = 'preview'; field.formAction = '/override-field?field=1#field'; field.formMethod = 'GET'; field.formEnctype = 'application/x-www-form-urlencoded'; field.formTarget = 'field-preview'; const afterSet = String(form.action) + '|' + String(button.formAction) + '|' + String(field.formAction) + '|' + String(form.method) + '|' + String(form.enctype) + '|' + String(form.target) + '|' + String(button.formMethod) + '|' + String(button.formEnctype) + '|' + String(button.formTarget) + '|' + String(field.formMethod) + '|' + String(field.formEnctype) + '|' + String(field.formTarget) + '|' + String(form.getAttribute('action')) + '|' + String(form.getAttribute('method')) + '|' + String(form.getAttribute('enctype')) + '|' + String(form.getAttribute('target')) + '|' + String(button.getAttribute('formaction')) + '|' + String(button.getAttribute('formmethod')) + '|' + String(button.getAttribute('formenctype')) + '|' + String(button.getAttribute('formtarget')) + '|' + String(field.getAttribute('formaction')) + '|' + String(field.getAttribute('formmethod')) + '|' + String(field.getAttribute('formenctype')) + '|' + String(field.getAttribute('formtarget')); document.getElementById('out').textContent = before + ';' + afterSet;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("form submission metadata reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "https://example.test/submit?from=form#frag|https://example.test/submit?from=form#frag|https://example.test/field-preview?x=1#field|get|application/x-www-form-urlencoded||get|application/x-www-form-urlencoded||get|application/x-www-form-urlencoded|;https://example.test/override-form?x=1#form|https://example.test/override-button?button=1#button|https://example.test/override-field?field=1#field|dialog|multipart/form-data|_blank|post|text/plain|preview|get|application/x-www-form-urlencoded|field-preview|/override-form?x=1#form|dialog|multipart/form-data|_blank|/override-button?button=1#button|post|text/plain|preview|/override-field?field=1#field|get|application/x-www-form-urlencoded|field-preview"
+    );
+}
+
+#[test]
+fn session_rejects_non_form_submission_metadata_access_explicitly() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='box'></div></main><script>document.getElementById('box').method;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-form submission metadata getter should fail explicitly");
+
+    assert!(session.to_string().contains("method"));
+}
+
+#[test]
+fn session_reflects_input_textarea_readonly_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='name' value='Ada'><textarea id='bio'>Hello</textarea><div id='out'></div><script>const input = document.getElementById('name'); const textarea = document.getElementById('bio'); const before = String(input.readOnly) + '|' + String(textarea.readOnly); input.readOnly = true; textarea.readOnly = true; const afterSet = String(input.readOnly) + '|' + String(textarea.readOnly); const afterAttr = String(input.hasAttribute('readonly')) + '|' + String(textarea.hasAttribute('readonly')); const afterReadOnly = String(input.matches(':read-only')) + '|' + String(textarea.matches(':read-only')); input.readOnly = false; textarea.readOnly = false; const afterClear = String(input.readOnly) + '|' + String(textarea.readOnly); const afterClearReadOnly = String(input.matches(':read-only')) + '|' + String(textarea.matches(':read-only')); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterAttr + ';' + afterReadOnly + ';' + afterClear + ';' + afterClearReadOnly;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("readOnly reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false|false;true|true;true|true;true|true;false|false;false|false"
+    );
+}
+
+#[test]
+fn session_reflects_input_textarea_placeholder_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='name' placeholder='Name'><textarea id='bio' placeholder='Bio'></textarea><div id='out'></div><script>const input = document.getElementById('name'); const textarea = document.getElementById('bio'); const before = String(input.placeholder) + '|' + String(textarea.placeholder) + '|' + String(document.querySelectorAll(':placeholder-shown').length); input.placeholder = 'Full name'; textarea.placeholder = 'Biography'; const afterSet = String(input.placeholder) + '|' + String(textarea.placeholder) + '|' + String(input.getAttribute('placeholder')) + '|' + String(textarea.getAttribute('placeholder')) + '|' + String(document.querySelectorAll(':placeholder-shown').length); input.value = 'Alice'; textarea.value = 'Bio text'; const afterValue = String(document.querySelectorAll(':placeholder-shown').length); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterValue;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("placeholder reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "Name|Bio|2;Full name|Biography|Full name|Biography|2;0"
+    );
+}
+
+#[test]
+fn session_reflects_input_textarea_autofocus_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='name'><textarea id='bio'></textarea><div id='out'></div><script>const input = document.getElementById('name'); const textarea = document.getElementById('bio'); const before = String(input.autofocus) + '|' + String(textarea.autofocus) + '|' + String(document.querySelectorAll('[autofocus]').length); input.autofocus = true; textarea.autofocus = true; const afterSet = String(input.autofocus) + '|' + String(textarea.autofocus) + '|' + String(document.querySelectorAll('[autofocus]').length); input.autofocus = false; textarea.autofocus = false; const afterClear = String(input.autofocus) + '|' + String(textarea.autofocus) + '|' + String(document.querySelectorAll('[autofocus]').length); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterClear;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("autofocus reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false|false|0;true|true|2;false|false|0"
+    );
+}
+
+#[test]
+fn session_reflects_input_textarea_autocomplete_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='name'><textarea id='bio'></textarea><div id='out'></div><script>const input = document.getElementById('name'); const textarea = document.getElementById('bio'); const before = String(input.autocomplete) + '|' + String(textarea.autocomplete); input.autocomplete = 'email'; textarea.autocomplete = 'off'; const afterSet = String(input.autocomplete) + '|' + String(textarea.autocomplete); const afterAttr = String(input.getAttribute('autocomplete')) + '|' + String(textarea.getAttribute('autocomplete')); input.autocomplete = ''; textarea.autocomplete = ''; const afterClear = String(input.autocomplete) + '|' + String(textarea.autocomplete) + '|' + String(input.hasAttribute('autocomplete')) + '|' + String(textarea.hasAttribute('autocomplete')); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterAttr + ';' + afterClear;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("autocomplete reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "|;email|off;email|off;||true|true"
+    );
+}
+
+#[test]
+fn session_reflects_input_file_accept_and_multiple_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='upload' type='file'><div id='out'></div><script>const upload = document.getElementById('upload'); const before = String(upload.accept) + '|' + String(upload.multiple) + '|' + String(upload.hasAttribute('accept')) + '|' + String(upload.hasAttribute('multiple')); upload.accept = 'image/*'; upload.multiple = true; const afterSet = String(upload.accept) + '|' + String(upload.multiple) + '|' + String(upload.getAttribute('accept')) + '|' + String(upload.hasAttribute('multiple')); upload.accept = ''; upload.multiple = false; const afterClear = String(upload.accept) + '|' + String(upload.multiple) + '|' + String(upload.getAttribute('accept')) + '|' + String(upload.hasAttribute('multiple')); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterClear;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("file input accept/multiple reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "|false|false|false;image/*|true|image/*|true;|false||false"
+    );
+    assert_eq!(
+        session
+            .dom()
+            .select("#upload[accept='image/*']")
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(session.dom().select("#upload[multiple]").unwrap().len(), 0);
+}
+
+#[test]
+fn session_reflects_input_textarea_length_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='name' minlength='2' maxlength='4' value='Ada'><textarea id='bio' minlength='2' maxlength='4'>Bio</textarea><div id='out'></div><script>const input = document.getElementById('name'); const textarea = document.getElementById('bio'); const before = String(input.minLength) + '|' + String(input.maxLength) + '|' + String(textarea.minLength) + '|' + String(textarea.maxLength) + '|' + String(document.querySelectorAll(':invalid').length); input.minLength = 4; textarea.maxLength = 2; const afterSet = String(input.minLength) + '|' + String(input.maxLength) + '|' + String(textarea.minLength) + '|' + String(textarea.maxLength) + '|' + String(document.querySelectorAll(':invalid').length); input.value = 'Jane'; textarea.value = 'No'; const afterValue = String(document.querySelectorAll(':invalid').length) + ':' + String(document.querySelectorAll(':valid').length); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterValue;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("length reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "2|4|2|4|0;4|4|2|2|2;0:2"
+    );
+}
+
+#[test]
+fn session_reflects_input_range_bounds_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='low' type='number' value='1'><input id='high' type='number' value='4'><div id='out'></div><script>const low = document.getElementById('low'); const high = document.getElementById('high'); const before = String(low.min) + '|' + String(low.max) + '|' + String(high.min) + '|' + String(high.max) + '|' + String(document.querySelectorAll(':in-range').length) + '|' + String(document.querySelectorAll(':out-of-range').length); low.min = 2; low.max = 6; high.min = 2; high.max = 6; const afterSet = String(low.min) + '|' + String(low.max) + '|' + String(high.min) + '|' + String(high.max) + '|' + String(document.querySelectorAll(':in-range').length) + '|' + String(document.querySelectorAll(':out-of-range').length) + '|' + document.querySelectorAll(':in-range').item(0).id + '|' + document.querySelectorAll(':out-of-range').item(0).id; low.removeAttribute('min'); low.removeAttribute('max'); high.removeAttribute('min'); high.removeAttribute('max'); const afterClear = String(low.min) + '|' + String(low.max) + '|' + String(high.min) + '|' + String(high.max) + '|' + String(document.querySelectorAll(':in-range').length) + '|' + String(document.querySelectorAll(':out-of-range').length); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterClear;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("range bounds reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "||||0|0;2|6|2|6|1|1|high|low;||||0|0"
+    );
+}
+
+#[test]
+fn session_reflects_input_pattern_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><input id='name' pattern='A[a-z]+' value='Ada'><div id='out'></div><script>const input = document.getElementById('name'); const before = String(input.pattern) + '|' + String(document.querySelectorAll(':invalid').length); input.pattern = 'B[a-z]+'; const afterSet = String(input.pattern) + '|' + String(input.getAttribute('pattern')) + '|' + String(document.querySelectorAll(':invalid').length); input.value = 'Bob'; const afterValue = String(document.querySelectorAll(':invalid').length) + ':' + String(document.querySelectorAll(':valid').length); document.getElementById('out').textContent = before + ';' + afterSet + ';' + afterValue;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("pattern reflection should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "A[a-z]+|0;B[a-z]+|B[a-z]+|1;0:1"
+    );
+}
+
+#[test]
+fn session_rejects_non_form_control_length_access_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><button id='button'>Button</button></div><script>document.getElementById('button').minLength = 1;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-form-control minLength access should fail explicitly");
+
+    assert!(error.to_string().contains("minLength"));
+}
+
+#[test]
+fn session_rejects_non_input_pattern_access_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><button id='button'>Button</button></div><script>document.getElementById('button').pattern = 'abc';</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-input pattern access should fail explicitly");
+
+    assert!(error.to_string().contains("pattern"));
+}
+
+#[test]
+fn session_rejects_non_form_control_disabled_access_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><div id='box'></div></div><script>document.getElementById('box').disabled = true;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-form-control disabled access should fail explicitly");
+
+    assert!(error.to_string().contains("disabled"));
+}
+
+#[test]
+fn session_rejects_non_input_range_bounds_access_regression() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='wrapper'><button id='button'>Button</button></div><script>document.getElementById('button').min = 1;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-input min access should fail explicitly");
+
+    assert!(error.to_string().contains("min"));
+}
+
+#[test]
 fn session_reflects_class_views_through_inline_script_regression() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
         html: Some(
-            "<main id='root'><button id='button' class='base' data-kind='App'>First</button><div id='out'></div><script>const button = document.getElementById('button'); button.className = 'primary secondary'; const before = button.classList.length; const contains = button.classList.contains('primary'); button.classList.add('tertiary'); button.classList.remove('secondary'); const toggled = button.classList.toggle('active'); button.dataset.userId = '42'; document.getElementById('out').textContent = button.className + ':' + String(before) + ':' + String(contains) + ':' + String(toggled) + ':' + button.dataset.kind + ':' + button.dataset.userId + ':' + String(button.classList) + ':' + String(button.dataset);</script></main>"
+            "<main id='root'><button id='button' class='base' data-kind='App'>First</button><div id='out'></div><script>const button = document.getElementById('button'); button.className = 'primary secondary'; const before = button.classList.length; const contains = button.classList.contains('primary'); button.classList.add('tertiary'); button.classList.remove('secondary'); const toggled = button.classList.toggle('active'); button.dataset.userId = '42'; const out = document.getElementById('out'); out.textContent = button.className + ':' + String(before) + ':' + String(contains) + ':' + String(toggled) + ':' + button.dataset.kind + ':' + button.dataset.userId + ':' + String(button.classList) + ':' + button.classList.toString() + ':' + String(button.classList.item(1)) + ':' + String(button.classList.keys().next().value) + ':' + String(button.classList.values().next().value) + ':' + String(button.classList.entries().next().value.index) + ':' + String(button.classList.entries().next().value.value) + ':' + String(button.dataset); button.classList.forEach((token, index, list) => { out.textContent += '|F' + String(index) + ':' + token + ':' + String(list.length); });</script></main>"
                 .to_string(),
         ),
         local_storage: BTreeMap::new(),
@@ -1246,11 +1694,49 @@ fn session_reflects_class_views_through_inline_script_regression() {
     let out_id = session.dom().select("#out").unwrap()[0];
     assert_eq!(
         session.dom().text_content_for_node(out_id),
-        "primary tertiary active:2:true:true:App:42:[object DOMTokenList]:[object DOMStringMap]"
+        "primary tertiary active:2:true:true:App:42:[object DOMTokenList]:primary tertiary active:tertiary:0:primary:0:primary:[object DOMStringMap]|F0:primary:3|F1:tertiary:3|F2:active:3"
     );
     assert_eq!(session.dom().select(".active").unwrap().len(), 1);
     assert_eq!(session.dom().select("[data-user-id]").unwrap().len(), 1);
     assert_eq!(session.dom().select("[data-kind=App]").unwrap().len(), 1);
+}
+
+#[test]
+fn session_reflects_classlist_value_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><button id='button' class='primary secondary'>First</button><div id='out'></div><script>const button = document.getElementById('button'); const before = button.classList.value; button.classList.value = 'alpha beta'; document.getElementById('out').textContent = before + ':' + button.className + ':' + button.classList.value + ':' + String(button.classList.length) + ':' + String(button.classList.contains('alpha')) + ':' + String(button.classList.contains('beta'));</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("classList.value should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "primary secondary:alpha beta:alpha beta:2:true:true"
+    );
+}
+
+#[test]
+fn session_reflects_classlist_replace_through_inline_script_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><button id='button' class='base primary active'>First</button><div id='out'></div><script>const button = document.getElementById('button'); const first = button.classList.replace('primary', 'secondary'); const second = button.classList.replace('missing', 'delta'); const third = button.classList.replace('secondary', 'active'); document.getElementById('out').textContent = button.className + ':' + String(first) + ':' + String(second) + ':' + String(third) + ':' + String(button.classList.length) + ':' + button.classList.toString();</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("classList.replace should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "base active:true:false:true:2:base active"
+    );
 }
 
 #[test]
@@ -1428,6 +1914,25 @@ fn session_resolves_document_style_sheets_entries_regression() {
     assert_eq!(
         session.dom().text_content_for_node(out_id),
         "2:0:[object CSSStyleSheet]:0:[object CSSStyleSheet]"
+    );
+}
+
+#[test]
+fn session_resolves_document_style_sheets_for_each_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='root'><style id='first-style'>.primary { color: red; }</style><link id='first-link' rel='stylesheet' href='a.css'></div><div id='out'></div><script>const out = document.getElementById('out'); const sheets = document.styleSheets; let value = ''; sheets.forEach((sheet, index, list) => { value += String(index) + ':' + String(sheet) + ':' + String(list.length) + ';'; }); out.textContent = value;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.styleSheets.forEach should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "0:[object CSSStyleSheet]:2;1:[object CSSStyleSheet]:2;"
     );
 }
 
@@ -1754,6 +2259,40 @@ fn session_resolves_element_namespace_uri_regression() {
         session.dom().text_content_for_node(out_id),
         "http://www.w3.org/1999/xhtml"
     );
+}
+
+#[test]
+fn session_resolves_create_element_ns_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<main id='root'></main><div id='out'></div><script>const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('viewBox', '0 0 10 10'); document.getElementById('root').appendChild(svg); document.getElementById('out').textContent = svg.namespaceURI + '|' + svg.localName + '|' + svg.outerHTML;</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.createElementNS should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "http://www.w3.org/2000/svg|svg|<svg viewBox=\"0 0 10 10\"></svg>"
+    );
+}
+
+#[test]
+fn session_rejects_create_element_ns_invalid_tag_name_explicitly() {
+    let error = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'></main><script>document.createElementNS('http://www.w3.org/2000/svg', 'svg:rect');</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("invalid qualified names should fail explicitly");
+
+    let message = error.to_string();
+    assert!(message.contains("Script error"));
+    assert!(message.contains("invalid tag name"));
+    assert!(message.contains("svg:rect"));
 }
 
 #[test]
@@ -2375,6 +2914,25 @@ fn session_exposes_element_content_editable_getter_setter_and_is_content_editabl
 }
 
 #[test]
+fn session_exposes_element_translate_getter_setter_with_inheritance_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='out'></main><div id='parent' translate='no'><span id='child'>Edit</span></div><script>const child = document.getElementById('child'); const before = String(child.translate); child.translate = true; const afterTrue = String(child.translate) + ':' + child.getAttribute('translate'); child.translate = false; const afterFalse = String(child.translate) + ':' + child.getAttribute('translate'); document.getElementById('out').textContent = before + ':' + afterTrue + ':' + afterFalse;</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("element.translate should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false:true:yes:false:no"
+    );
+}
+
+#[test]
 fn session_rejects_invalid_element_content_editable_assignment_regression() {
     let error = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -2764,6 +3322,264 @@ fn session_exposes_document_dir_regression() {
 
     let out_id = session.dom().select("#out").unwrap()[0];
     assert_eq!(session.dom().text_content_for_node(out_id), "ltr:rtl:rtl");
+}
+
+#[test]
+fn session_exposes_element_title_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='box' title='Initial'></div><div id='out'></div><script>const box = document.getElementById('box'); const before = box.title; box.title = 'Updated'; document.getElementById('out').textContent = before + ':' + box.title + ':' + box.getAttribute('title');</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("element.title should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "Initial:Updated:Updated"
+    );
+}
+
+#[test]
+fn session_exposes_element_role_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='box' role='button'></div><div id='out'></div><script>const box = document.getElementById('box'); const before = box.role; box.role = 'menu'; document.getElementById('out').textContent = before + ':' + box.role + ':' + box.getAttribute('role');</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("element.role should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "button:menu:menu"
+    );
+}
+
+#[test]
+fn session_exposes_element_tab_index_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='box'></div><button id='button'></button><div id='out'></div><script>const box = document.getElementById('box'); const button = document.getElementById('button'); const before = String(box.tabIndex) + '|' + String(button.tabIndex); box.tabIndex = 4; button.tabIndex = -1; document.getElementById('out').textContent = before + ':' + String(box.tabIndex) + '|' + String(button.tabIndex) + ':' + box.getAttribute('tabindex') + '|' + button.getAttribute('tabindex');</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("element.tabIndex should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "-1|0:4|-1:4|-1"
+    );
+}
+
+#[test]
+fn session_exposes_element_aria_label_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='box' aria-label='Initial'></div><div id='out'></div><script>const box = document.getElementById('box'); const before = box.ariaLabel; box.ariaLabel = 'Updated'; document.getElementById('out').textContent = before + ':' + box.ariaLabel + ':' + box.getAttribute('aria-label');</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("element.ariaLabel should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "Initial:Updated:Updated"
+    );
+}
+
+#[test]
+fn session_exposes_element_aria_description_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='box' aria-description='Initial'></div><div id='out'></div><script>const box = document.getElementById('box'); const before = box.ariaDescription; box.ariaDescription = 'Updated'; document.getElementById('out').textContent = before + ':' + box.ariaDescription + ':' + box.getAttribute('aria-description');</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("element.ariaDescription should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "Initial:Updated:Updated"
+    );
+}
+
+#[test]
+fn session_exposes_element_aria_role_description_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='box' aria-roledescription='Initial'></div><div id='out'></div><script>const box = document.getElementById('box'); const before = box.ariaRoleDescription; box.ariaRoleDescription = 'Updated'; document.getElementById('out').textContent = before + ':' + box.ariaRoleDescription + ':' + box.getAttribute('aria-roledescription');</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("element.ariaRoleDescription should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "Initial:Updated:Updated"
+    );
+}
+
+#[test]
+fn session_exposes_element_aria_hidden_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='box' aria-hidden='true'></div><div id='out'></div><script>const box = document.getElementById('box'); const before = box.ariaHidden; box.ariaHidden = false; document.getElementById('out').textContent = before + ':' + box.ariaHidden + ':' + box.getAttribute('aria-hidden');</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("element.ariaHidden should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "true:false:false"
+    );
+}
+
+#[test]
+fn session_exposes_element_access_key_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='box' accesskey='x'></div><div id='out'></div><script>const box = document.getElementById('box'); const before = box.accessKey; box.accessKey = 'y'; document.getElementById('out').textContent = before + ':' + box.accessKey + ':' + box.getAttribute('accesskey');</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("element.accessKey should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "x:y:y");
+}
+
+#[test]
+fn session_exposes_element_slot_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='box' slot='start'></div><div id='out'></div><script>const box = document.getElementById('box'); const before = box.slot; box.slot = 'end'; document.getElementById('out').textContent = before + ':' + box.slot + ':' + box.getAttribute('slot');</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("element.slot should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "start:end:end");
+}
+
+#[test]
+fn session_exposes_element_autocapitalize_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='box' autocapitalize='sentences'></div><div id='out'></div><script>const box = document.getElementById('box'); const before = box.autocapitalize; box.autocapitalize = 'words'; document.getElementById('out').textContent = before + ':' + box.autocapitalize + ':' + box.getAttribute('autocapitalize');</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("element.autocapitalize should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "sentences:words:words"
+    );
+}
+
+#[test]
+fn session_exposes_element_spellcheck_and_input_mode_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='out'></div><div id='parent' spellcheck='false'><span id='child'>Edit</span></div><div id='mode' inputmode='text'></div><script>const child = document.getElementById('child'); const beforeSpell = String(child.spellcheck); child.spellcheck = true; const afterSpell = String(child.spellcheck) + ':' + child.getAttribute('spellcheck'); const mode = document.getElementById('mode'); const beforeMode = mode.inputMode; mode.inputMode = 'numeric'; document.getElementById('out').textContent = beforeSpell + ':' + afterSpell + ':' + beforeMode + ':' + mode.inputMode + ':' + mode.getAttribute('inputmode');</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("element.spellcheck and element.inputMode should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "false:true:true:text:numeric:numeric"
+    );
+}
+
+#[test]
+fn session_rejects_non_element_spellcheck_and_input_mode_access_regression() {
+    Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<main id='root'></main><script>document.createTextNode('x').spellcheck = false;</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-element spellcheck access should fail explicitly");
+
+    Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<main id='root'></main><script>document.createTextNode('x').inputMode = 'numeric';</script>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect_err("non-element inputMode access should fail explicitly");
+}
+
+#[test]
+fn session_exposes_element_hidden_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='box' hidden></div><div id='out'></div><script>const box = document.getElementById('box'); const before = String(box.hidden); box.hidden = false; const afterClear = String(box.hidden) + ':' + String(box.hasAttribute('hidden')); box.hidden = true; document.getElementById('out').textContent = before + ':' + afterClear + ':' + String(box.hidden) + ':' + String(box.hasAttribute('hidden'));</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("element.hidden should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "true:false:false:true:true"
+    );
+}
+
+#[test]
+fn session_exposes_element_dir_and_lang_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='box'></div><div id='out'></div><script>const box = document.getElementById('box'); const before = String(box.dir) + '|' + String(box.lang); box.dir = 'rtl'; box.lang = 'fr'; const afterSet = String(box.dir) + '|' + String(box.lang) + '|' + String(box.getAttribute('dir')) + '|' + String(box.getAttribute('lang')); document.getElementById('out').textContent = before + ';' + afterSet;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("element dir and lang should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "|;rtl|fr|rtl|fr"
+    );
 }
 
 #[test]
@@ -3225,7 +4041,7 @@ fn session_rejects_unsupported_not_argument_syntax_explicitly() {
     let error = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
         html: Some(
-            "<main id='root' class='primary'></main><script>document.getElementById('root').matches('main:not([data-kind=primary x])');</script>"
+            "<main id='root' class='primary'></main><script>document.getElementById('root').matches('main:not([data-kind=primary x y])');</script>"
                 .to_string(),
         ),
         local_storage: BTreeMap::new(),
@@ -3285,7 +4101,7 @@ fn session_resolves_focus_pseudo_classes() {
     let mut session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
         html: Some(
-            "<main id='root'><section id='section'><input id='field'></section><div id='outside'>outside</div></main><div id='out'></div><script>document.getElementById('field').addEventListener('focus', () => { const field = document.querySelector(':focus'); const section = document.getElementById('section'); const root = document.getElementById('root'); document.getElementById('out').textContent = field.getAttribute('id') + ':' + String(section.matches(':focus-within')) + ':' + String(root.matches(':focus-within')); });</script>"
+            "<main id='root'><section id='section'><input id='field'></section><div id='outside'>outside</div></main><div id='out'></div><script>document.getElementById('field').addEventListener('focus', () => { const field = document.querySelector(':focus'); const focusVisible = document.querySelector(':focus-visible'); const section = document.getElementById('section'); const root = document.getElementById('root'); document.getElementById('out').textContent = field.getAttribute('id') + ':' + focusVisible.getAttribute('id') + ':' + String(section.matches(':focus-visible')) + ':' + String(root.matches(':focus-visible')) + ':' + String(section.matches(':focus-within')) + ':' + String(root.matches(':focus-within')); });</script>"
                 .to_string(),
         ),
         local_storage: BTreeMap::new(),
@@ -3299,7 +4115,15 @@ fn session_resolves_focus_pseudo_classes() {
 
     assert_eq!(session.dom().select(":focus").unwrap(), vec![field_id]);
     assert_eq!(
+        session.dom().select(":focus-visible").unwrap(),
+        vec![field_id]
+    );
+    assert_eq!(
         session.dom().select("#field:focus").unwrap(),
+        vec![field_id]
+    );
+    assert_eq!(
+        session.dom().select("#field:focus-visible").unwrap(),
         vec![field_id]
     );
     assert_eq!(
@@ -3313,11 +4137,12 @@ fn session_resolves_focus_pseudo_classes() {
     let out_id = session.dom().select("#out").unwrap()[0];
     assert_eq!(
         session.dom().text_content_for_node(out_id),
-        "field:true:true"
+        "field:field:false:false:true:true"
     );
 
     session.blur_node(field_id).expect("blur should work");
     assert!(session.dom().select(":focus").unwrap().is_empty());
+    assert!(session.dom().select(":focus-visible").unwrap().is_empty());
     assert!(
         session
             .dom()
@@ -3360,6 +4185,22 @@ fn session_resolves_document_has_focus_regression() {
 
     let out_id = session.dom().select("#out").unwrap()[0];
     assert_eq!(session.dom().text_content_for_node(out_id), "false");
+}
+
+#[test]
+fn session_resolves_element_click_focus_and_blur_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<input id='agree' type='checkbox'><input id='first'><div id='out'></div><script>const checkbox = document.getElementById('agree'); const first = document.getElementById('first'); checkbox.click(); first.focus(); const focused = document.activeElement.getAttribute('id'); first.blur(); document.getElementById('out').textContent = String(checkbox.checked) + ':' + String(focused);</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("Element.click/focus/blur should be wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "true:first");
 }
 
 #[test]
@@ -3851,6 +4692,67 @@ fn session_mutation_hardening_updates_live_collections_and_selectors_regression(
     assert_eq!(session.dom().select("#third").unwrap().len(), 1);
     assert!(session.dom().select("#form").unwrap().is_empty());
     assert_eq!(session.dom().select("option:checked").unwrap().len(), 1);
+}
+
+#[test]
+fn session_writes_document_html_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<html><body><main id='root'><div id='out'></div><script>document.write('<span id=\"written\">Written</span>'); document.getElementById('out').textContent = document.body.lastElementChild.getAttribute('id') + ':' + document.getElementById('written').textContent;</script></main></body></html>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.write should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "written:Written"
+    );
+    assert_eq!(session.dom().select("#written").unwrap().len(), 1);
+}
+
+#[test]
+fn session_writes_document_html_with_newline_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<html><body><main id='root'><div id='out'></div><script>document.writeln('<span id=\"written\">Written</span>'); document.getElementById('out').textContent = document.body.lastElementChild.getAttribute('id') + ':' + String(document.body.lastChild.nodeType) + ':' + document.getElementById('written').textContent;</script></main></body></html>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.writeln should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "written:3:Written"
+    );
+    assert_eq!(session.dom().select("#written").unwrap().len(), 1);
+}
+
+#[test]
+fn session_opens_document_and_writes_fresh_html_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<html><head><title>Title</title></head><body><main id='root'><div id='out'></div></main><script>const opened = document.open(); document.write('<span id=\"written\">Written</span><div id=\"out\"></div>'); const closed = document.close(); document.getElementById('out').textContent = String(opened) + ':' + String(closed) + ':' + String(document.documentElement) + ':' + String(document.body);</script></body></html>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("document.open should remain wired through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "[object Document]:[object Document]:[object Element]:null"
+    );
+    assert_eq!(session.dom().select("#written").unwrap().len(), 1);
+    assert!(session.dom().select("#root").unwrap().is_empty());
 }
 
 #[test]

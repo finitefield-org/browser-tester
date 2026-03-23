@@ -508,6 +508,14 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("document.createElement"))
     }
 
+    fn document_create_element_ns(
+        &mut self,
+        _namespace_uri: &str,
+        _tag_name: &str,
+    ) -> Result<ElementHandle> {
+        Err(ScriptError::phase_not_ready("document.createElementNS"))
+    }
+
     fn document_create_text_node(&mut self, _text: &str) -> Result<NodeHandle> {
         Err(ScriptError::phase_not_ready("document.createTextNode"))
     }
@@ -600,6 +608,18 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("document.hasFocus"))
     }
 
+    fn element_click(&mut self, _element: ElementHandle) -> Result<()> {
+        Err(ScriptError::phase_not_ready("Element.click"))
+    }
+
+    fn element_focus(&mut self, _element: ElementHandle) -> Result<()> {
+        Err(ScriptError::phase_not_ready("Element.focus"))
+    }
+
+    fn element_blur(&mut self, _element: ElementHandle) -> Result<()> {
+        Err(ScriptError::phase_not_ready("Element.blur"))
+    }
+
     fn document_visibility_state(&mut self) -> Result<String> {
         Err(ScriptError::phase_not_ready("document.visibilityState"))
     }
@@ -668,8 +688,34 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("document.cookie"))
     }
 
+    fn document_write(&mut self, _html: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready("document.write"))
+    }
+
+    fn document_writeln(&mut self, _html: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready("document.writeln"))
+    }
+
+    fn document_open(&mut self) -> Result<()> {
+        Err(ScriptError::phase_not_ready("document.open"))
+    }
+
+    fn document_close(&mut self) -> Result<()> {
+        Err(ScriptError::phase_not_ready("document.close"))
+    }
+
     fn match_media(&mut self, _query: &str) -> Result<MediaQueryListState> {
         Err(ScriptError::phase_not_ready("window.matchMedia"))
+    }
+
+    fn match_media_add_listener(&mut self, _query: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready("MediaQueryList.addListener"))
+    }
+
+    fn match_media_remove_listener(&mut self, _query: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready(
+            "MediaQueryList.removeListener",
+        ))
     }
 
     fn window_open(
@@ -1418,6 +1464,20 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("element.checked assignment"))
     }
 
+    fn element_indeterminate(&mut self, _element: ElementHandle) -> Result<bool> {
+        Err(ScriptError::phase_not_ready("element.indeterminate"))
+    }
+
+    fn element_set_indeterminate(
+        &mut self,
+        _element: ElementHandle,
+        _indeterminate: bool,
+    ) -> Result<()> {
+        Err(ScriptError::phase_not_ready(
+            "element.indeterminate assignment",
+        ))
+    }
+
     fn element_get_attribute(
         &mut self,
         _element: ElementHandle,
@@ -1652,9 +1712,9 @@ impl Evaluator {
         &self,
         program: &syntax::Program,
         host: &mut H,
-        initial_bindings: BTreeMap<String, ScriptValue>,
+        mut initial_bindings: BTreeMap<String, ScriptValue>,
     ) -> Result<()> {
-        evaluator::eval_program_with_bindings(program, host, initial_bindings)
+        evaluator::eval_program_with_bindings(program, host, &mut initial_bindings)
     }
 }
 

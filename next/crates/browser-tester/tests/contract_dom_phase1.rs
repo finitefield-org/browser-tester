@@ -426,7 +426,9 @@ fn focus_pseudo_classes_work_with_public_assert_exists() -> browser_tester_next:
 
     harness.focus("#field")?;
     harness.assert_exists(":focus")?;
+    harness.assert_exists(":focus-visible")?;
     harness.assert_exists("#field:focus")?;
+    harness.assert_exists("#field:focus-visible")?;
     harness.assert_exists("#section:focus-within")?;
     harness.assert_exists("#root:focus-within")?;
 
@@ -436,6 +438,13 @@ fn focus_pseudo_classes_work_with_public_assert_exists() -> browser_tester_next:
     let message = error.to_string();
     assert!(message.contains("Selector error"));
     assert!(message.contains("unsupported selector `:focus()`"));
+
+    let visible_error = harness
+        .assert_exists(":focus-visible()")
+        .expect_err("malformed focus-visible selector should fail explicitly");
+    let visible_message = visible_error.to_string();
+    assert!(visible_message.contains("Selector error"));
+    assert!(visible_message.contains("unsupported selector `:focus-visible()`"));
     Ok(())
 }
 
@@ -494,7 +503,7 @@ fn malformed_html_is_rejected_with_a_parse_error() {
 fn unsupported_selector_syntax_is_reported_explicitly() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html("<main><span class='app'></span></main>")?;
     let error = harness
-        .assert_exists("main:where([data-kind=app x])")
+        .assert_exists("main:where([data-kind=app x y])")
         .expect_err("broader CSS parsing inside :where is not part of the selector slice");
 
     let message = error.to_string();
@@ -515,7 +524,7 @@ fn unsupported_selector_syntax_is_reported_explicitly() -> browser_tester_next::
 fn unsupported_not_argument_syntax_is_reported_explicitly() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html("<main class='app'></main>")?;
     let error = harness
-        .assert_exists("main:not([data-kind=app x])")
+        .assert_exists("main:not([data-kind=app x y])")
         .expect_err("broader CSS parsing inside :not is not part of the selector slice");
 
     let message = error.to_string();

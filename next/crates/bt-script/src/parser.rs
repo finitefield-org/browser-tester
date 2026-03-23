@@ -49,15 +49,7 @@ impl<'a> Parser<'a> {
         self.skip_ws_and_comments();
         if self.consume_str("+=") {
             let value = self.parse_expression()?;
-            let target = match &expr {
-                Expr::Member { object, property } => AssignTarget::Property {
-                    object: (*object.clone()),
-                    property: property.clone(),
-                },
-                _ => {
-                    return Err(self.error("unsupported assignment target"));
-                }
-            };
+            let target = self.assignment_target_from_expr(&expr)?;
 
             let value = Expr::BinaryAdd {
                 left: Box::new(expr),
@@ -67,18 +59,21 @@ impl<'a> Parser<'a> {
         }
         if self.consume_char('=') {
             let value = self.parse_expression()?;
-            let target = match expr {
-                Expr::Member { object, property } => AssignTarget::Property {
-                    object: *object,
-                    property,
-                },
-                _ => {
-                    return Err(self.error("unsupported assignment target"));
-                }
-            };
+            let target = self.assignment_target_from_expr(&expr)?;
             Ok(Statement::Assignment { target, value })
         } else {
             Ok(Statement::Expression(expr))
+        }
+    }
+
+    fn assignment_target_from_expr(&self, expr: &Expr) -> Result<AssignTarget> {
+        match expr {
+            Expr::Identifier(name) => Ok(AssignTarget::Identifier(name.clone())),
+            Expr::Member { object, property } => Ok(AssignTarget::Property {
+                object: (*object.clone()),
+                property: property.clone(),
+            }),
+            _ => Err(self.error("unsupported assignment target")),
         }
     }
 

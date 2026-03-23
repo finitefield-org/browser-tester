@@ -9,3 +9,5 @@ license.workspace = true
 name = "bt_script"
 path = "src/lib.rs"
 
+[dependencies]
+url = "2"

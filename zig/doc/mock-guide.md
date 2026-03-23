@@ -1,6 +1,6 @@
 # Mock Guide
 
-`Harness.mocksMut()` returns the typed test-only `MockRegistry`. Use it when a test needs deterministic network, dialogs, clipboard, location, open/close/print/scroll, matchMedia, download, file-input, or storage behavior, including seeding `window.localStorage`, `window.sessionStorage`, `window.open()`, `window.close()`, `window.print()`, `window.scrollTo()`, and `window.scrollBy()` before inline scripts run; storage mutations also dispatch deterministic `storage` events through `window.addEventListener('storage', ...)` and `window.onstorage`.
+`Harness.mocksMut()` returns the typed test-only `MockRegistry`. Use it when a test needs deterministic network, dialogs, clipboard, location, open/close/print/scroll, matchMedia, download, file-input, or storage behavior, including seeding `window.localStorage`, `window.sessionStorage`, `window.open()`, `window.close()`, `window.print()`, `window.scrollTo()`, and `window.scrollBy()` before inline scripts run; file-input selections also flow through to the script-side `input.files` snapshot; storage mutations also dispatch deterministic `storage` events through `window.addEventListener('storage', ...)` and `window.onstorage`.
 
 The registry is intentionally narrow:
 
@@ -339,6 +339,7 @@ The public mock API fails explicitly when the test has not seeded the required s
 - `Harness.open()` / `Harness.close()` / `Harness.print()` return `error.MockError` when the corresponding mock family was seeded to fail
 - `Harness.scrollTo()` / `Harness.scrollBy()` return `error.MockError` when the corresponding mock family was seeded to fail
 - `window.open()` / `window.close()` / `window.print()` / `window.scrollTo()` / `window.scrollBy()` return `error.MockError` during bootstrap when `HarnessBuilder.openFailure(...)` / `HarnessBuilder.closeFailure(...)` / `HarnessBuilder.printFailure(...)` / `HarnessBuilder.scrollFailure(...)` were used
+- `input.files` returns `error.ScriptRuntime` when read from a non-file input
 - `window.matchMedia()` returns `error.MockError` when no matching rule exists or a failure rule was seeded
 - `MediaQueryList.addListener(...)`, `MediaQueryList.removeListener(...)`, `MediaQueryList.addEventListener(...)`, `MediaQueryList.removeEventListener(...)`, and `MediaQueryList.onchange = ...` return `error.ScriptRuntime` on wrong arity or non-callable arguments
 - `window.localStorage.setItem(...)`, `window.localStorage.removeItem(...)`, `window.localStorage.clear()`, `window.sessionStorage.setItem(...)`, `window.sessionStorage.removeItem(...)`, and `window.sessionStorage.clear()` return `error.ScriptRuntime` when called with the wrong arity or on unsupported members

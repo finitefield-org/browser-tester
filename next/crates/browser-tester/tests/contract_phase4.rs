@@ -36,6 +36,16 @@ fn focus_and_blur_are_publicly_supported() -> browser_tester_next::Result<()> {
 }
 
 #[test]
+fn element_click_focus_and_blur_are_publicly_supported() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<input id='agree' type='checkbox'><input id='first'><div id='out'></div><script>const checkbox = document.getElementById('agree'); const first = document.getElementById('first'); checkbox.click(); first.focus(); const focused = document.activeElement.getAttribute('id'); first.blur(); document.getElementById('out').textContent = String(checkbox.checked) + ':' + String(focused);</script>",
+    )?;
+
+    harness.assert_text("#out", "true:first")?;
+    Ok(())
+}
+
+#[test]
 fn navigator_app_name_is_publicly_supported() -> browser_tester_next::Result<()> {
     let harness = Harness::from_html(
         "<div id='out'></div><script>document.getElementById('out').textContent = window.navigator.userAgent + ':' + window.navigator.appCodeName + ':' + window.navigator.appName + ':' + window.navigator.appVersion + ':' + window.navigator.product + ':' + window.navigator.productSub + ':' + window.navigator.vendor + ':' + window.navigator.vendorSub + ':' + String(window.navigator.pdfViewerEnabled) + ':' + window.navigator.doNotTrack + ':' + String(window.navigator.javaEnabled()) + ':' + window.navigator.platform + ':' + window.navigator.language + ':' + String(window.navigator.cookieEnabled) + ':' + String(window.navigator.onLine) + ':' + String(window.navigator.webdriver);</script>",
@@ -1143,6 +1153,44 @@ fn match_media_is_publicly_supported() -> browser_tester_next::Result<()> {
             browser_tester_next::MatchMediaCall {
                 query: "(prefers-color-scheme: dark)".to_string(),
             }
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn match_media_listeners_are_publicly_supported() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::builder()
+        .html("<main id='out'></main><script>const out = document.getElementById('out'); out.textContent = 'before'; const list = window.matchMedia('(prefers-color-scheme: dark)'); list.addListener(() => { out.textContent = 'called'; }); list.removeListener(() => { out.textContent = 'removed'; }); out.textContent += ':' + String(list.matches) + ':' + list.media + ':' + String(window.matchMedia('(prefers-color-scheme: dark)'));</script>")
+        .match_media([("(prefers-color-scheme: dark)", true)])
+        .build()?;
+
+    harness.assert_text(
+        "#out",
+        "before:true:(prefers-color-scheme: dark):[object MediaQueryList]",
+    )?;
+    assert_eq!(
+        harness.mocks_mut().match_media().calls(),
+        &[
+            browser_tester_next::MatchMediaCall {
+                query: "(prefers-color-scheme: dark)".to_string(),
+            },
+            browser_tester_next::MatchMediaCall {
+                query: "(prefers-color-scheme: dark)".to_string(),
+            }
+        ]
+    );
+    assert_eq!(
+        harness.mocks_mut().match_media().listener_calls(),
+        &[
+            browser_tester_next::MatchMediaListenerCall {
+                query: "(prefers-color-scheme: dark)".to_string(),
+                method: "addListener".to_string(),
+            },
+            browser_tester_next::MatchMediaListenerCall {
+                query: "(prefers-color-scheme: dark)".to_string(),
+                method: "removeListener".to_string(),
+            },
         ]
     );
     Ok(())
