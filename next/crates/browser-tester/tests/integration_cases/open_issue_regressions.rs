@@ -125,16 +125,11 @@ fn click_preserves_pre_request_animation_frame_processing_state() -> browser_tes
           ].join("|");
         }
 
-        function nextFrame() {
-          return new Promise((resolve) => {
-            window.requestAnimationFrame(() => resolve());
-          });
-        }
-
-        async function runTask() {
+        function runTask() {
           setProcessing(true);
-          await nextFrame();
-          setProcessing(false);
+          window.requestAnimationFrame(() => {
+            setProcessing(false);
+          });
         }
 
         el.run.addEventListener("click", runTask);
@@ -165,14 +160,8 @@ fn dispatch_keyboard_completes_async_keydown_handlers_waiting_for_animation_fram
         const input = document.getElementById("input");
         const result = document.getElementById("result");
 
-        function nextFrame() {
-          return new Promise((resolve) => {
-            window.requestAnimationFrame(() => resolve());
-          });
-        }
-
-        async function runDedupe() {
-          await nextFrame();
+        function runDedupe() {
+          window.requestAnimationFrame(() => {
           const seen = new Set();
           const lines = [];
           for (const rawLine of input.value.split(/\r?\n/)) {
@@ -183,6 +172,7 @@ fn dispatch_keyboard_completes_async_keydown_handlers_waiting_for_animation_fram
             lines.push(rawLine);
           }
           result.value = lines.join("\n");
+          });
         }
 
         document.addEventListener("keydown", (event) => {

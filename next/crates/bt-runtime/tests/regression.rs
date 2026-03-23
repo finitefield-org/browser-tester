@@ -83,6 +83,26 @@ fn reset_all_clears_every_mock_family() {
 }
 
 #[test]
+fn session_rejects_unseeded_window_navigator_clipboard_reads_through_script_runtime() {
+    let mut session = Session::new(SessionConfig::default()).expect("session should build");
+    let mut runtime = ScriptRuntime::new();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.clipboard.readText();",
+            "inline-script",
+            &mut session,
+        )
+        .expect_err("clipboard reads should require a seed");
+
+    assert!(
+        error
+            .to_string()
+            .contains("clipboard text has not been seeded")
+    );
+}
+
+#[test]
 fn session_rejects_unseeded_window_confirm_through_script_runtime() {
     let mut session = Session::new(SessionConfig::default()).expect("session should build");
     let mut runtime = ScriptRuntime::new();

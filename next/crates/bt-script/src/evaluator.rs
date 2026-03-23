@@ -1,31 +1,52 @@
 use std::collections::BTreeMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use unicode_normalization::UnicodeNormalization;
 use url::Url;
 
-use crate::syntax::{AssignTarget, Expr, Program, Statement};
-use crate::{
-    AttributeHandle, CollectionEntryHandle, CollectionIteratorHandle, ElementHandle, HostBindings,
-    HtmlCollectionNamedItem, HtmlCollectionScope, HtmlCollectionTarget, ListenerTarget,
-    MediaQueryListState, MimeTypeArrayState, NodeHandle, NodeListTarget, RadioNodeListTarget,
-    Result, ScriptError, ScriptValue as Value, StorageTarget, StringListState,
-    StyleSheetListTarget, StyleSheetTarget,
+use crate::syntax::{
+    ArrayElement, AssignTarget, AssignmentOperator, ComparisonOperator, Expr, ObjectProperty,
+    ObjectPropertyName, Program, Statement,
 };
+use crate::{
+    ArrayHandle, AttributeHandle, CollectionEntryHandle, CollectionIteratorHandle, ElementHandle,
+    HostBindings, HtmlCollectionNamedItem, HtmlCollectionScope, HtmlCollectionTarget,
+    ListenerTarget, MapHandle, MapKey, MediaQueryListState, MimeTypeArrayState, NodeHandle,
+    NodeListTarget, PropertyKey, PropertyValue, RadioNodeListTarget, Result, ScriptError,
+    ScriptValue as Value, StorageTarget, StringListState, StyleSheetListTarget, StyleSheetTarget,
+};
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum EvalControl {
+    Continue,
+    Return(Value),
+    Break,
+    ContinueLoop,
+}
 
 pub(crate) fn eval_program<H: HostBindings>(program: &Program, host: &mut H) -> Result<()> {
     let mut env = BTreeMap::new();
-    eval_program_with_bindings(program, host, &mut env)
+    match eval_program_with_bindings(program, host, &mut env)? {
+        EvalControl::Continue => Ok(()),
+        EvalControl::Return(_) => Err(ScriptError::new("return outside function")),
+        EvalControl::Break => Err(ScriptError::new("break outside loop")),
+        EvalControl::ContinueLoop => Err(ScriptError::new("continue outside loop")),
+    }
 }
 
 pub(crate) fn eval_program_with_bindings<H: HostBindings>(
     program: &Program,
     host: &mut H,
     env: &mut BTreeMap<String, Value>,
-) -> Result<()> {
+) -> Result<EvalControl> {
     for statement in &program.statements {
-        eval_statement(statement, env, host)?;
+        match eval_statement(statement, env, host)? {
+            EvalControl::Continue => {}
+            other => return Ok(other),
+        }
     }
 
-    Ok(())
+    Ok(EvalControl::Continue)
 }
 
 fn as_string(value: &Value) -> String {
@@ -41,6 +62,15 @@ fn as_string(value: &Value) -> String {
             }
         }
         Value::String(value) => value.clone(),
+        Value::Object(_) | Value::ObjectNamespace => "[object Object]".to_string(),
+        Value::Array(array) => array_to_string(array, ",", None),
+        Value::Map(_) => "[object Map]".to_string(),
+        Value::Symbol(symbol) => match symbol.description() {
+            Some(description) => format!("Symbol({description})"),
+            None => "Symbol()".to_string(),
+        },
+        Value::ArrayNamespace => "[function Array]".to_string(),
+        Value::IntlNamespace => "[object Intl]".to_string(),
         Value::Element(_) => "[object Element]".to_string(),
         Value::Attribute(_) => "[object Attr]".to_string(),
         Value::ClassList(_) => "[object DOMTokenList]".to_string(),
@@ -58,6 +88,7 @@ fn as_string(value: &Value) -> String {
         Value::StringList(_) => "[object DOMStringList]".to_string(),
         Value::MimeTypeArray(_) => "[object MimeTypeArray]".to_string(),
         Value::Navigator => "[object Navigator]".to_string(),
+        Value::Clipboard => "[object Clipboard]".to_string(),
         Value::History => "[object History]".to_string(),
         Value::Screen => "[object Screen]".to_string(),
         Value::ScreenOrientation(_) => "[object ScreenOrientation]".to_string(),
@@ -960,25 +991,143 @@ fn eval_statement<H: HostBindings>(
     statement: &Statement,
     env: &mut BTreeMap<String, Value>,
     host: &mut H,
-) -> Result<()> {
+) -> Result<EvalControl> {
     match statement {
         Statement::VariableDeclaration { name, value } => {
             let value = eval_expr(value, env, host)?;
             env.insert(name.clone(), value);
-            Ok(())
+            Ok(EvalControl::Continue)
+        }
+        Statement::FunctionDeclaration { name, function } => {
+            let function = function.clone().with_captured_bindings(env.clone());
+            env.insert(name.clone(), Value::Function(function));
+            Ok(EvalControl::Continue)
+        }
+        Statement::Return(value) => Ok(EvalControl::Return(match value {
+            Some(expr) => eval_expr(expr, env, host)?,
+            None => Value::Undefined,
+        })),
+        Statement::Break => Ok(EvalControl::Break),
+        Statement::Continue => Ok(EvalControl::ContinueLoop),
+        Statement::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            if is_truthy(&eval_expr(condition, env, host)?) {
+                eval_statements(then_branch, env, host)
+            } else if let Some(else_branch) = else_branch {
+                eval_statements(else_branch, env, host)
+            } else {
+                Ok(EvalControl::Continue)
+            }
+        }
+        Statement::While { condition, body } => {
+            loop {
+                if !is_truthy(&eval_expr(condition, env, host)?) {
+                    break;
+                }
+
+                match eval_statements(body, env, host)? {
+                    EvalControl::Continue | EvalControl::ContinueLoop => {}
+                    EvalControl::Break => break,
+                    EvalControl::Return(value) => return Ok(EvalControl::Return(value)),
+                }
+            }
+
+            Ok(EvalControl::Continue)
+        }
+        Statement::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(init) = init {
+                match eval_statement(init, env, host)? {
+                    EvalControl::Continue => {}
+                    EvalControl::Return(value) => return Ok(EvalControl::Return(value)),
+                    EvalControl::Break => return Err(ScriptError::new("break outside loop")),
+                    EvalControl::ContinueLoop => {
+                        return Err(ScriptError::new("continue outside loop"));
+                    }
+                }
+            }
+
+            loop {
+                if let Some(condition) = condition {
+                    if !is_truthy(&eval_expr(condition, env, host)?) {
+                        break;
+                    }
+                }
+
+                match eval_statements(body, env, host)? {
+                    EvalControl::Continue | EvalControl::ContinueLoop => {}
+                    EvalControl::Break => break,
+                    EvalControl::Return(value) => return Ok(EvalControl::Return(value)),
+                }
+
+                if let Some(update) = update {
+                    let _ = eval_expr(update, env, host)?;
+                }
+            }
+
+            Ok(EvalControl::Continue)
         }
         Statement::Assignment { target, value } => {
             let value = eval_expr(value, env, host)?;
-            eval_assignment(target, value, env, host)
+            eval_assign(target, value, env, host)?;
+            Ok(EvalControl::Continue)
         }
         Statement::Expression(expr) => {
             let _ = eval_expr(expr, env, host)?;
-            Ok(())
+            Ok(EvalControl::Continue)
         }
     }
 }
 
-fn eval_assignment<H: HostBindings>(
+fn eval_statements<H: HostBindings>(
+    statements: &[Statement],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<EvalControl> {
+    for statement in statements {
+        match eval_statement(statement, env, host)? {
+            EvalControl::Continue => {}
+            other => return Ok(other),
+        }
+    }
+
+    Ok(EvalControl::Continue)
+}
+
+fn eval_assignment_target_value<H: HostBindings>(
+    target: &AssignTarget,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    match target {
+        AssignTarget::Identifier(name) => Ok(env.get(name).cloned().unwrap_or(Value::Undefined)),
+        AssignTarget::Property { object, property } => eval_expr(
+            &Expr::Member {
+                object: object.clone(),
+                property: property.clone(),
+            },
+            env,
+            host,
+        ),
+        AssignTarget::ComputedProperty { object, property } => eval_expr(
+            &Expr::ComputedMember {
+                object: object.clone(),
+                property: property.clone(),
+            },
+            env,
+            host,
+        ),
+    }
+}
+
+fn eval_assign<H: HostBindings>(
     target: &AssignTarget,
     value: Value,
     env: &mut BTreeMap<String, Value>,
@@ -988,6 +1137,28 @@ fn eval_assignment<H: HostBindings>(
         AssignTarget::Identifier(name) => {
             env.insert(name.clone(), value);
             Ok(())
+        }
+        AssignTarget::ComputedProperty { object, property } => {
+            let object = eval_expr(object, env, host)?;
+            let property = eval_expr(property, env, host)?;
+            let key = property_key_from_expr_value(&property);
+            if set_property_value_on_value(&object, key.clone(), value.clone(), env, host)? {
+                return Ok(());
+            }
+
+            match object {
+                Value::Window => {
+                    if let Some(name) = property_key_to_string(&key) {
+                        env.insert(name.to_string(), value);
+                        Ok(())
+                    } else {
+                        Err(ScriptError::new(
+                            "window computed property assignment expects a string key",
+                        ))
+                    }
+                }
+                _ => Err(ScriptError::new("unsupported computed assignment target")),
+            }
         }
         AssignTarget::Property { object, property } => {
             if let Some(result) =
@@ -1624,6 +1795,9 @@ fn eval_assignment<H: HostBindings>(
                 (Value::Navigator, property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on navigator value"
                 ))),
+                (Value::Clipboard, property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on clipboard value"
+                ))),
                 (Value::History, "scrollRestoration") => {
                     host.set_window_history_scroll_restoration(&as_string(&value))?;
                     Ok(())
@@ -1631,9 +1805,48 @@ fn eval_assignment<H: HostBindings>(
                 (Value::History, property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on history value"
                 ))),
-                (Value::Document, property) | (Value::Window, property) => Err(ScriptError::new(
-                    format!("unsupported assignment target: {property}"),
-                )),
+                (Value::Object(object), property) => {
+                    let key = property_key_from_string(property);
+                    set_property_value_on_value(
+                        &Value::Object(object),
+                        key,
+                        value.clone(),
+                        env,
+                        host,
+                    )?;
+                    Ok(())
+                }
+                (Value::Array(array), property) => {
+                    let key = property_key_from_string(property);
+                    set_property_value_on_value(
+                        &Value::Array(array),
+                        key,
+                        value.clone(),
+                        env,
+                        host,
+                    )?;
+                    Ok(())
+                }
+                (Value::Map(map), property) => {
+                    let key = property_key_from_string(property);
+                    set_property_value_on_value(&Value::Map(map), key, value.clone(), env, host)?;
+                    Ok(())
+                }
+                (Value::ObjectNamespace, property)
+                | (Value::ArrayNamespace, property)
+                | (Value::IntlNamespace, property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on namespace value"
+                ))),
+                (Value::Document, property) => Err(ScriptError::new(format!(
+                    "unsupported assignment target: {property}"
+                ))),
+                (Value::Window, property) => {
+                    env.insert(property.to_string(), value);
+                    Ok(())
+                }
+                (Value::Symbol(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on symbol value"
+                ))),
                 (Value::String(_), property) => Err(ScriptError::new(format!(
                     "unsupported assignment target on string value: {property}"
                 ))),
@@ -1675,11 +1888,102 @@ fn eval_expr<H: HostBindings>(
         Expr::Null => Ok(Value::Null),
         Expr::Undefined => Ok(Value::Undefined),
         Expr::Member { object, property } => eval_member(object, property, env, host),
+        Expr::ComputedMember { object, property } => {
+            eval_computed_member(object, property, env, host)
+        }
         Expr::Call { callee, args } => eval_call(callee, args, env, host),
+        Expr::ArrayLiteral(elements) => eval_array_literal(elements, env, host),
+        Expr::ObjectLiteral(properties) => eval_object_literal(properties, env, host),
+        Expr::New { callee, args } => eval_new(callee, args, env, host),
+        Expr::Assignment {
+            target,
+            value,
+            operator,
+        } => {
+            let right = eval_expr(value, env, host)?;
+            let result = match operator {
+                AssignmentOperator::Assign => right.clone(),
+                AssignmentOperator::AddAssign => {
+                    let left = eval_assignment_target_value(target, env, host)?;
+                    eval_add(left, right.clone())
+                }
+            };
+            eval_assign(target, result.clone(), env, host)?;
+            Ok(result)
+        }
         Expr::BinaryAdd { left, right } => {
             let left = eval_expr(left, env, host)?;
             let right = eval_expr(right, env, host)?;
             Ok(eval_add(left, right))
+        }
+        Expr::BinarySub { left, right } => {
+            let left = eval_number(left, env, host, "operator -")?;
+            let right = eval_number(right, env, host, "operator -")?;
+            Ok(Value::Number(left - right))
+        }
+        Expr::BinaryMul { left, right } => {
+            let left = eval_number(left, env, host, "operator *")?;
+            let right = eval_number(right, env, host, "operator *")?;
+            Ok(Value::Number(left * right))
+        }
+        Expr::BinaryDiv { left, right } => {
+            let left = eval_number(left, env, host, "operator /")?;
+            let right = eval_number(right, env, host, "operator /")?;
+            Ok(Value::Number(left / right))
+        }
+        Expr::BinaryRem { left, right } => {
+            let left = eval_number(left, env, host, "operator %")?;
+            let right = eval_number(right, env, host, "operator %")?;
+            Ok(Value::Number(left % right))
+        }
+        Expr::LogicalAnd { left, right } => {
+            let left = eval_expr(left, env, host)?;
+            if is_truthy(&left) {
+                eval_expr(right, env, host)
+            } else {
+                Ok(left)
+            }
+        }
+        Expr::LogicalOr { left, right } => {
+            let left = eval_expr(left, env, host)?;
+            if is_truthy(&left) {
+                Ok(left)
+            } else {
+                eval_expr(right, env, host)
+            }
+        }
+        Expr::NullishCoalesce { left, right } => {
+            let left = eval_expr(left, env, host)?;
+            if matches!(left, Value::Null | Value::Undefined) {
+                eval_expr(right, env, host)
+            } else {
+                Ok(left)
+            }
+        }
+        Expr::Equality {
+            left,
+            right,
+            negated,
+            strict,
+        } => {
+            let left = eval_expr(left, env, host)?;
+            let right = eval_expr(right, env, host)?;
+            let equal = eval_equality(&left, &right, *strict);
+            Ok(Value::Boolean(if *negated { !equal } else { equal }))
+        }
+        Expr::Comparison {
+            left,
+            right,
+            operator,
+        } => {
+            let left = eval_number(left, env, host, "comparison")?;
+            let right = eval_number(right, env, host, "comparison")?;
+            Ok(Value::Boolean(match operator {
+                ComparisonOperator::LessThan => left < right,
+                ComparisonOperator::LessThanOrEqual => left <= right,
+                ComparisonOperator::GreaterThan => left > right,
+                ComparisonOperator::GreaterThanOrEqual => left >= right,
+            }))
         }
         Expr::UnaryNeg(expr) => {
             let value = eval_expr(expr, env, host)?;
@@ -1688,7 +1992,54 @@ fn eval_expr<H: HostBindings>(
                 _ => Err(ScriptError::new("unary - expects a number")),
             }
         }
-        Expr::ArrowFunction(function) => Ok(Value::Function(function.clone())),
+        Expr::UnaryNot(expr) => Ok(Value::Boolean(!is_truthy(&eval_expr(expr, env, host)?))),
+        Expr::TypeOf(expr) => Ok(Value::String(
+            eval_typeof(&eval_expr(expr, env, host)?).to_string(),
+        )),
+        Expr::Void(expr) => {
+            let _ = eval_expr(expr, env, host)?;
+            Ok(Value::Undefined)
+        }
+        Expr::Conditional {
+            condition,
+            consequent,
+            alternate,
+        } => {
+            if is_truthy(&eval_expr(condition, env, host)?) {
+                eval_expr(consequent, env, host)
+            } else {
+                eval_expr(alternate, env, host)
+            }
+        }
+        Expr::ArrowFunction(function) | Expr::FunctionExpression(function) => Ok(Value::Function(
+            function.clone().with_captured_bindings(env.clone()),
+        )),
+        Expr::Spread(_) => Err(ScriptError::new(
+            "spread syntax is only valid in arrays, objects, and call arguments",
+        )),
+        Expr::Update {
+            target,
+            increment,
+            prefix,
+        } => {
+            let current = eval_assignment_target_value(target, env, host)?;
+            let current_number = match current.clone() {
+                Value::Number(number) => number,
+                Value::String(value) => value
+                    .parse::<f64>()
+                    .map_err(|_| ScriptError::new("update operator expects a number"))?,
+                _ => {
+                    return Err(ScriptError::new("update operator expects a number"));
+                }
+            };
+            let next = if *increment {
+                Value::Number(current_number + 1.0)
+            } else {
+                Value::Number(current_number - 1.0)
+            };
+            eval_assign(target, next.clone(), env, host)?;
+            if *prefix { Ok(next) } else { Ok(current) }
+        }
     }
 }
 
@@ -1700,6 +2051,34 @@ fn eval_identifier(name: &str, env: &BTreeMap<String, Value>) -> Result<Value> {
     match name {
         "document" => Ok(Value::Document),
         "window" => Ok(Value::Window),
+        "alert"
+        | "confirm"
+        | "prompt"
+        | "open"
+        | "close"
+        | "print"
+        | "scrollTo"
+        | "scrollBy"
+        | "matchMedia"
+        | "requestAnimationFrame"
+        | "cancelAnimationFrame"
+        | "setTimeout"
+        | "setInterval"
+        | "clearTimeout"
+        | "clearInterval"
+        | "addEventListener"
+        | "removeEventListener"
+        | "dispatchEvent" => Ok(native_method_function(Value::Window, name)),
+        "localStorage" => Ok(Value::Storage(StorageTarget::Local)),
+        "sessionStorage" => Ok(Value::Storage(StorageTarget::Session)),
+        "Object" => Ok(Value::ObjectNamespace),
+        "Array" => Ok(Value::ArrayNamespace),
+        "String" => Ok(Value::ObjectNamespace),
+        "Number" => Ok(Value::ObjectNamespace),
+        "Date" => Ok(Value::ObjectNamespace),
+        "Math" => Ok(Value::IntlNamespace),
+        "CSS" => Ok(Value::IntlNamespace),
+        "Intl" => Ok(Value::IntlNamespace),
         "undefined" => Ok(Value::Undefined),
         "null" => Ok(Value::Null),
         "true" => Ok(Value::Boolean(true)),
@@ -1921,6 +2300,32 @@ fn eval_member<H: HostBindings>(
             Ok(Value::Number(host.window_screen_top()? as f64))
         }
         Value::Window if property == "screen" => Ok(Value::Screen),
+        Value::Window if env.contains_key(property) => {
+            Ok(env.get(property).cloned().unwrap_or(Value::Undefined))
+        }
+        Value::Window
+            if matches!(
+                property,
+                "matchMedia"
+                    | "requestAnimationFrame"
+                    | "cancelAnimationFrame"
+                    | "setTimeout"
+                    | "setInterval"
+                    | "clearTimeout"
+                    | "clearInterval"
+                    | "open"
+                    | "close"
+                    | "print"
+                    | "scrollTo"
+                    | "scrollBy"
+                    | "addEventListener"
+                    | "removeEventListener"
+                    | "dispatchEvent"
+            ) =>
+        {
+            Ok(native_method_function(Value::Window, property))
+        }
+        Value::Window if property == "URL" => Ok(Value::ObjectNamespace),
         Value::Screen if property == "width" => {
             Ok(Value::Number(host.window_screen_width()? as f64))
         }
@@ -2000,6 +2405,7 @@ fn eval_member<H: HostBindings>(
         Value::Navigator if property == "mimeTypes" => Ok(Value::MimeTypeArray(
             MimeTypeArrayState::new(host.window_navigator_mime_types()?),
         )),
+        Value::Navigator if property == "clipboard" => Ok(Value::Clipboard),
         Value::Navigator if property == "cookieEnabled" => {
             Ok(Value::Boolean(host.window_navigator_cookie_enabled()?))
         }
@@ -2043,6 +2449,51 @@ fn eval_member<H: HostBindings>(
         Value::History if property == "scrollRestoration" => {
             Ok(Value::String(host.window_history_scroll_restoration()?))
         }
+        Value::History
+            if matches!(
+                property,
+                "pushState" | "replaceState" | "back" | "forward" | "go"
+            ) =>
+        {
+            Ok(native_method_function(Value::History, property))
+        }
+        Value::String(value) if property == "length" => {
+            Ok(Value::Number(value.chars().count() as f64))
+        }
+        Value::String(value)
+            if matches!(
+                property,
+                "trim"
+                    | "toString"
+                    | "valueOf"
+                    | "split"
+                    | "replace"
+                    | "replaceAll"
+                    | "toLowerCase"
+                    | "toUpperCase"
+                    | "includes"
+                    | "startsWith"
+                    | "endsWith"
+                    | "indexOf"
+                    | "lastIndexOf"
+                    | "slice"
+                    | "substring"
+                    | "charAt"
+                    | "charCodeAt"
+                    | "concat"
+                    | "repeat"
+                    | "normalize"
+            ) =>
+        {
+            Ok(native_method_function(
+                Value::String(value.clone()),
+                property,
+            ))
+        }
+        Value::Symbol(symbol) if property == "description" => Ok(Value::String(
+            symbol.description().unwrap_or_default().to_string(),
+        )),
+        Value::Symbol(_) => Err(unsupported_member_access(property, "symbol")),
         Value::Element(element) if property == "textContent" => {
             Ok(Value::String(host.element_text_content(element)?))
         }
@@ -2714,6 +3165,42 @@ fn eval_member<H: HostBindings>(
                 None => Value::Undefined,
             },
         ),
+        Value::Object(object) => Ok(
+            match property_value_on_value(
+                &Value::Object(object.clone()),
+                &property_key_from_string(property),
+                env,
+                host,
+            )? {
+                Some(value) => value,
+                None => Value::Undefined,
+            },
+        ),
+        Value::Array(array) => Ok(
+            match property_value_on_value(
+                &Value::Array(array.clone()),
+                &property_key_from_string(property),
+                env,
+                host,
+            )? {
+                Some(value) => value,
+                None => Value::Undefined,
+            },
+        ),
+        Value::Map(map) if property == "size" => {
+            Ok(Value::Number(map.0.borrow().entries.len() as f64))
+        }
+        Value::Map(map) => Ok(
+            match property_value_on_value(
+                &Value::Map(map.clone()),
+                &property_key_from_string(property),
+                env,
+                host,
+            )? {
+                Some(value) => value,
+                None => Value::Undefined,
+            },
+        ),
         Value::StyleSheetList(target) if property == "length" => {
             let length = style_sheet_list_items(&target, host)?.len();
             Ok(Value::Number(length as f64))
@@ -2782,7 +3269,54 @@ fn eval_member<H: HostBindings>(
         Value::MimeTypeArray(list) if property == "length" => {
             Ok(Value::Number(list.length() as f64))
         }
+        Value::ObjectNamespace
+            if matches!(
+                property,
+                "assign"
+                    | "keys"
+                    | "values"
+                    | "entries"
+                    | "getOwnPropertySymbols"
+                    | "fromCharCode"
+                    | "isFinite"
+                    | "isNaN"
+                    | "parseFloat"
+                    | "parseInt"
+                    | "now"
+                    | "UTC"
+                    | "parse"
+            ) =>
+        {
+            Ok(native_method_function(Value::ObjectNamespace, property))
+        }
+        Value::ArrayNamespace if matches!(property, "isArray" | "from") => {
+            Ok(native_method_function(Value::ArrayNamespace, property))
+        }
+        Value::IntlNamespace
+            if matches!(
+                property,
+                "NumberFormat"
+                    | "DateTimeFormat"
+                    | "min"
+                    | "max"
+                    | "abs"
+                    | "floor"
+                    | "ceil"
+                    | "round"
+                    | "trunc"
+                    | "sign"
+                    | "pow"
+                    | "sqrt"
+                    | "escape"
+            ) =>
+        {
+            Ok(native_method_function(Value::IntlNamespace, property))
+        }
+        Value::ObjectNamespace | Value::ArrayNamespace | Value::IntlNamespace => {
+            Ok(Value::Undefined)
+        }
         Value::Navigator => Err(unsupported_member_access(property, "navigator")),
+        Value::Clipboard => Err(unsupported_member_access(property, "clipboard")),
         Value::History => Err(unsupported_member_access(property, "history")),
         Value::Screen => Err(unsupported_member_access(property, "screen")),
         Value::Element(_) => Err(unsupported_member_access(property, "element")),
@@ -2896,7 +3430,24 @@ fn eval_call<H: HostBindings>(
             };
             Ok(Value::Boolean(is_truthy(&value)))
         }
-        Expr::Identifier(_) => Err(ScriptError::new("invalid call target")),
+        Expr::Identifier(name) if name == "Number" => {
+            let value = match args.len() {
+                0 => Value::Undefined,
+                1 => eval_expr(&args[0], env, host)?,
+                _ => return Err(ScriptError::new("Number() accepts at most one argument")),
+            };
+            Ok(Value::Number(number_from_value(&value)?))
+        }
+        Expr::Identifier(name) if name == "Symbol" => {
+            if args.len() > 1 {
+                return Err(ScriptError::new("Symbol() accepts at most one argument"));
+            }
+            let description = match args.first() {
+                Some(expr) => Some(as_string(&eval_expr(expr, env, host)?)),
+                None => None,
+            };
+            Ok(Value::Symbol(crate::SymbolValue::new(description)))
+        }
         Expr::Member { object, property } => {
             if let Some(value) = try_eval_location_method_call(object, property, args, env, host)? {
                 return Ok(value);
@@ -2904,7 +3455,16 @@ fn eval_call<H: HostBindings>(
             let object_value = eval_expr(object, env, host)?;
             eval_method_call(object_value, property, args, env, host)
         }
-        Expr::ArrowFunction(_) => Err(ScriptError::new("arrow functions are not callable")),
+        Expr::ArrowFunction(function) | Expr::FunctionExpression(function) => {
+            call_script_function(function, args, env, host)
+        }
+        Expr::Identifier(_) => {
+            let callee = eval_expr(callee, env, host)?;
+            match callee {
+                Value::Function(function) => call_script_function(&function, args, env, host),
+                _ => Err(ScriptError::new("invalid call target")),
+            }
+        }
         Expr::String(_)
         | Expr::Number(_)
         | Expr::Boolean(_)
@@ -2914,6 +3474,222 @@ fn eval_call<H: HostBindings>(
         Expr::Call { .. } | Expr::BinaryAdd { .. } => {
             Err(ScriptError::new("invalid nested call target"))
         }
+        _ => Err(ScriptError::new("invalid call target")),
+    }
+}
+
+fn call_script_function<H: HostBindings>(
+    function: &crate::ScriptFunction,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let values = eval_call_argument_values(args, env, host)?;
+    call_script_function_value(function, &values, Value::Undefined, env, host)
+}
+
+fn call_script_function_with_this<H: HostBindings>(
+    function: &crate::ScriptFunction,
+    args: &[Expr],
+    this_value: Value,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let mut bindings = env.clone();
+    bindings.extend(
+        function
+            .captured_bindings
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
+    let outer_names: Vec<String> = env.keys().cloned().collect();
+
+    bindings.insert("this".to_string(), this_value);
+
+    for (index, param) in function.params.iter().enumerate() {
+        let value = match args.get(index) {
+            Some(expr) => eval_expr(expr, env, host)?,
+            None => Value::Undefined,
+        };
+        bindings.insert(param.clone(), value);
+    }
+
+    let program = crate::parser::parse_program(&function.body_source)?;
+    let control = eval_program_with_bindings(&program, host, &mut bindings)?;
+
+    for name in outer_names {
+        if name == "this" || function.params.iter().any(|param| param == &name) {
+            continue;
+        }
+        if let Some(value) = bindings.get(&name).cloned() {
+            env.insert(name, value);
+        }
+    }
+
+    match control {
+        EvalControl::Continue => Ok(Value::Undefined),
+        EvalControl::Return(value) => Ok(value),
+        EvalControl::Break => Err(ScriptError::new("break outside loop")),
+        EvalControl::ContinueLoop => Err(ScriptError::new("continue outside loop")),
+    }
+}
+
+fn eval_call_argument_values<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Vec<Value>> {
+    let mut values = Vec::new();
+    for arg in args {
+        match arg {
+            Expr::Spread(expr) => {
+                let value = eval_expr(expr, env, host)?;
+                values.extend(array_from_value(value, env, host)?);
+            }
+            expr => values.push(eval_expr(expr, env, host)?),
+        }
+    }
+    Ok(values)
+}
+
+const NATIVE_METHOD_PREFIX: &str = "__native_method__:";
+const NATIVE_METHOD_RECEIVER_KEY: &str = "__native_method_receiver";
+
+fn native_method_function(receiver: Value, method: &str) -> Value {
+    let mut captured_bindings = BTreeMap::new();
+    captured_bindings.insert(NATIVE_METHOD_RECEIVER_KEY.to_string(), receiver);
+    Value::Function(
+        crate::ScriptFunction::new(Vec::new(), format!("{NATIVE_METHOD_PREFIX}{method}"))
+            .with_captured_bindings(captured_bindings),
+    )
+}
+
+fn call_script_function_value<H: HostBindings>(
+    function: &crate::ScriptFunction,
+    args: &[Value],
+    this_value: Value,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if let Some(method) = function.body_source.strip_prefix(NATIVE_METHOD_PREFIX) {
+        return call_native_function(function, method, args, this_value, env, host);
+    }
+
+    let mut bindings = env.clone();
+    bindings.extend(
+        function
+            .captured_bindings
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
+    let outer_names: Vec<String> = env.keys().cloned().collect();
+
+    bindings.insert("this".to_string(), this_value);
+
+    for (index, param) in function.params.iter().enumerate() {
+        let value = args.get(index).cloned().unwrap_or(Value::Undefined);
+        bindings.insert(param.clone(), value);
+    }
+
+    let program = crate::parser::parse_program(&function.body_source)?;
+    let control = eval_program_with_bindings(&program, host, &mut bindings)?;
+
+    for name in outer_names {
+        if name == "this" || function.params.iter().any(|param| param == &name) {
+            continue;
+        }
+        if let Some(value) = bindings.get(&name).cloned() {
+            env.insert(name, value);
+        }
+    }
+
+    match control {
+        EvalControl::Continue => Ok(Value::Undefined),
+        EvalControl::Return(value) => Ok(value),
+        EvalControl::Break => Err(ScriptError::new("break outside loop")),
+        EvalControl::ContinueLoop => Err(ScriptError::new("continue outside loop")),
+    }
+}
+
+fn call_native_function<H: HostBindings>(
+    function: &crate::ScriptFunction,
+    method: &str,
+    args: &[Value],
+    this_value: Value,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let receiver = function
+        .captured_bindings
+        .get(NATIVE_METHOD_RECEIVER_KEY)
+        .cloned()
+        .unwrap_or(this_value);
+
+    let mut native_env = env.clone();
+    let fake_args: Vec<Expr> = args
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let name = format!("__native_arg_{index}");
+            native_env.insert(name.clone(), value.clone());
+            Expr::Identifier(name)
+        })
+        .collect();
+
+    eval_method_call(receiver, method, &fake_args, &mut native_env, host)
+}
+
+fn timer_callback_from_expr<H: HostBindings>(
+    expr: &Expr,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+    method: &str,
+) -> Result<crate::ScriptFunction> {
+    match eval_expr(expr, env, host)? {
+        Value::Function(function) => Ok(function),
+        _ => Err(ScriptError::new(format!(
+            "{method}() expects a function callback"
+        ))),
+    }
+}
+
+fn timer_delay_from_expr<H: HostBindings>(
+    expr: Option<&Expr>,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+    method: &str,
+) -> Result<i64> {
+    let Some(expr) = expr else {
+        return Ok(0);
+    };
+    let delay = eval_expr(expr, env, host)?;
+    match delay {
+        Value::Number(number) if number.is_finite() => Ok(number as i64),
+        Value::String(text) => text
+            .trim()
+            .parse::<i64>()
+            .map_err(|_| ScriptError::new(format!("{method}() expects a numeric delay"))),
+        Value::Boolean(true) => Ok(1),
+        Value::Boolean(false) => Ok(0),
+        _ => Err(ScriptError::new(format!(
+            "{method}() expects a numeric delay"
+        ))),
+    }
+}
+
+fn timer_handle_from_expr<H: HostBindings>(
+    expr: &Expr,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+    method: &str,
+) -> Result<u64> {
+    match eval_expr(expr, env, host)? {
+        Value::Number(number) if number.is_finite() && number >= 0.0 => Ok(number.trunc() as u64),
+        Value::String(text) => text
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| ScriptError::new(format!("{method}() expects a timer id"))),
+        _ => Err(ScriptError::new(format!("{method}() expects a timer id"))),
     }
 }
 
@@ -3754,6 +4530,72 @@ fn eval_method_call<H: HostBindings>(
                 host.window_print()?;
                 Ok(Value::Undefined)
             }
+            "requestAnimationFrame" => {
+                let [callback_expr, ..] = args else {
+                    return Err(ScriptError::new(
+                        "requestAnimationFrame() expects at least one argument",
+                    ));
+                };
+                let callback =
+                    timer_callback_from_expr(callback_expr, env, host, "requestAnimationFrame")?;
+                Ok(Value::Number(
+                    host.window_request_animation_frame(callback)? as f64,
+                ))
+            }
+            "cancelAnimationFrame" => {
+                if args.is_empty() {
+                    return Err(ScriptError::new(
+                        "cancelAnimationFrame() expects at least one argument",
+                    ));
+                }
+                let handle = timer_handle_from_expr(&args[0], env, host, "cancelAnimationFrame")?;
+                host.window_cancel_animation_frame(handle)?;
+                Ok(Value::Undefined)
+            }
+            "setTimeout" => {
+                let [callback_expr, ..] = args else {
+                    return Err(ScriptError::new(
+                        "setTimeout() expects at least one argument",
+                    ));
+                };
+                let callback = timer_callback_from_expr(callback_expr, env, host, "setTimeout")?;
+                let delay_ms = timer_delay_from_expr(args.get(1), env, host, "setTimeout")?;
+                Ok(Value::Number(
+                    host.window_set_timeout(callback, delay_ms)? as f64
+                ))
+            }
+            "setInterval" => {
+                let [callback_expr, ..] = args else {
+                    return Err(ScriptError::new(
+                        "setInterval() expects at least one argument",
+                    ));
+                };
+                let callback = timer_callback_from_expr(callback_expr, env, host, "setInterval")?;
+                let delay_ms = timer_delay_from_expr(args.get(1), env, host, "setInterval")?;
+                Ok(Value::Number(
+                    host.window_set_interval(callback, delay_ms)? as f64
+                ))
+            }
+            "clearTimeout" => {
+                if args.is_empty() {
+                    return Err(ScriptError::new(
+                        "clearTimeout() expects at least one argument",
+                    ));
+                }
+                let handle = timer_handle_from_expr(&args[0], env, host, "clearTimeout")?;
+                host.window_clear_timeout(handle)?;
+                Ok(Value::Undefined)
+            }
+            "clearInterval" => {
+                if args.is_empty() {
+                    return Err(ScriptError::new(
+                        "clearInterval() expects at least one argument",
+                    ));
+                }
+                let handle = timer_handle_from_expr(&args[0], env, host, "clearInterval")?;
+                host.window_clear_interval(handle)?;
+                Ok(Value::Undefined)
+            }
             "scrollTo" => window_scroll_to(args, env, host),
             "scrollBy" => window_scroll_by(args, env, host),
             "matchMedia" => {
@@ -4030,6 +4872,29 @@ fn eval_method_call<H: HostBindings>(
                 "cannot call `{other}` on a navigator value"
             ))),
         },
+        Value::Clipboard => match method {
+            "writeText" => {
+                let [text_expr] = args else {
+                    return Err(ScriptError::new(
+                        "navigator.clipboard.writeText() expects exactly one argument",
+                    ));
+                };
+                let text = as_string(&eval_expr(text_expr, env, host)?);
+                host.clipboard_write_text(&text)?;
+                Ok(Value::Undefined)
+            }
+            "readText" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new(
+                        "navigator.clipboard.readText() expects no arguments",
+                    ));
+                }
+                Ok(Value::String(host.clipboard_read_text()?))
+            }
+            other => Err(ScriptError::new(format!(
+                "cannot call `{other}` on a clipboard value"
+            ))),
+        },
         Value::History => match method {
             "pushState" => {
                 if args.len() < 2 || args.len() > 3 {
@@ -4096,6 +4961,164 @@ fn eval_method_call<H: HostBindings>(
         },
         Value::Screen => Err(ScriptError::new(format!(
             "cannot call `{method}` on a screen value"
+        ))),
+        Value::String(value) => match method {
+            "trim" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("trim() expects no arguments"));
+                }
+                Ok(Value::String(value.trim().to_string()))
+            }
+            "toString" | "valueOf" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new(format!("{method}() expects no arguments")));
+                }
+                Ok(Value::String(value))
+            }
+            "split" => string_split(&value, args, env, host),
+            "replace" => string_replace(&value, args, false, env, host),
+            "replaceAll" => string_replace(&value, args, true, env, host),
+            "toLowerCase" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("toLowerCase() expects no arguments"));
+                }
+                Ok(Value::String(value.to_lowercase()))
+            }
+            "toUpperCase" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("toUpperCase() expects no arguments"));
+                }
+                Ok(Value::String(value.to_uppercase()))
+            }
+            "includes" => string_contains(&value, args, env, host),
+            "startsWith" => string_starts_with(&value, args, env, host),
+            "endsWith" => string_ends_with(&value, args, env, host),
+            "indexOf" => string_index_of(&value, args, env, host),
+            "lastIndexOf" => string_last_index_of(&value, args, env, host),
+            "slice" => string_slice(&value, args, env, host),
+            "substring" => string_substring(&value, args, env, host),
+            "charAt" => string_char_at(&value, args, env, host),
+            "charCodeAt" => string_char_code_at(&value, args, env, host),
+            "concat" => string_concat(&value, args, env, host),
+            "repeat" => string_repeat(&value, args, env, host),
+            "normalize" => string_normalize(&value, args, env, host),
+            other => Err(ScriptError::new(format!(
+                "unsupported string method: {other}"
+            ))),
+        },
+        Value::ObjectNamespace => match method {
+            "assign" => object_namespace_assign(args, env, host),
+            "keys" => object_namespace_keys(args, env, host),
+            "values" => object_namespace_values(args, env, host),
+            "entries" => object_namespace_entries(args, env, host),
+            "getOwnPropertySymbols" => object_namespace_get_own_property_symbols(args, env, host),
+            "fromCharCode" => string_namespace_from_char_code(args, env, host),
+            "isFinite" => number_namespace_is_finite(args, env, host),
+            "isNaN" => number_namespace_is_nan(args, env, host),
+            "parseFloat" => number_namespace_parse_float(args, env, host),
+            "parseInt" => number_namespace_parse_int(args, env, host),
+            "now" => date_namespace_now(args, env, host),
+            "UTC" => date_namespace_utc(args, env, host),
+            "parse" => date_namespace_parse(args, env, host),
+            other => Err(ScriptError::new(format!(
+                "unsupported Object method: {other}"
+            ))),
+        },
+        Value::ArrayNamespace => match method {
+            "isArray" => array_namespace_is_array(args, env, host),
+            "from" => array_namespace_from(args, env, host),
+            other => Err(ScriptError::new(format!(
+                "unsupported Array method: {other}"
+            ))),
+        },
+        Value::Object(object) => match method {
+            "toString" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("toString() expects no arguments"));
+                }
+                Ok(Value::String("[object Object]".to_string()))
+            }
+            "valueOf" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("valueOf() expects no arguments"));
+                }
+                Ok(Value::Object(object))
+            }
+            other => Err(ScriptError::new(format!(
+                "unsupported Object instance method: {other}"
+            ))),
+        },
+        Value::Array(array) => match method {
+            "join" => array_join(&array, args, env, host),
+            "map" => array_map(&array, args, env, host),
+            "filter" => array_filter(&array, args, env, host),
+            "forEach" => array_for_each(&array, args, env, host),
+            "flatMap" => array_flat_map(&array, args, env, host),
+            "flat" => array_flat(&array, args, env, host),
+            "push" => array_push(&array, args, env, host),
+            "pop" => array_pop(&array, args, env, host),
+            "slice" => array_slice(&array, args, env, host),
+            "concat" => array_concat(&array, args, env, host),
+            "sort" => array_sort(&array, args, env, host),
+            "includes" => array_includes(&array, args, env, host),
+            "indexOf" => array_index_of(&array, args, env, host, false),
+            "lastIndexOf" => array_index_of(&array, args, env, host, true),
+            "reverse" => array_reverse(&array, args, env, host),
+            "reduce" => array_reduce(&array, args, env, host),
+            "toString" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("toString() expects no arguments"));
+                }
+                Ok(Value::String(array_to_string(&array, ",", None)))
+            }
+            other => Err(ScriptError::new(format!(
+                "unsupported Array instance method: {other}"
+            ))),
+        },
+        Value::Map(map) => match method {
+            "get" => map_get(&map, args, env, host),
+            "set" => map_set(&map, args, env, host),
+            "has" => map_has(&map, args, env, host),
+            "delete" => map_delete(&map, args, env, host),
+            "clear" => map_clear(&map, args, env, host),
+            "keys" => map_keys(&map, host),
+            "values" => map_values(&map, host),
+            "entries" => map_entries(&map, host),
+            "forEach" => map_for_each(&map, args, env, host),
+            "toString" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("toString() expects no arguments"));
+                }
+                Ok(Value::String("[object Map]".to_string()))
+            }
+            other => Err(ScriptError::new(format!(
+                "unsupported Map instance method: {other}"
+            ))),
+        },
+        Value::IntlNamespace => match method {
+            "NumberFormat" => Err(ScriptError::new(
+                "Intl.NumberFormat() is not yet supported in this runtime",
+            )),
+            "DateTimeFormat" => Err(ScriptError::new(
+                "Intl.DateTimeFormat() is not yet supported in this runtime",
+            )),
+            "min" => math_namespace_min(args, env, host),
+            "max" => math_namespace_max(args, env, host),
+            "abs" => math_namespace_abs(args, env, host),
+            "floor" => math_namespace_floor(args, env, host),
+            "ceil" => math_namespace_ceil(args, env, host),
+            "round" => math_namespace_round(args, env, host),
+            "trunc" => math_namespace_trunc(args, env, host),
+            "sign" => math_namespace_sign(args, env, host),
+            "pow" => math_namespace_pow(args, env, host),
+            "sqrt" => math_namespace_sqrt(args, env, host),
+            "escape" => css_namespace_escape(args, env, host),
+            other => Err(ScriptError::new(format!(
+                "unsupported Intl method: {other}"
+            ))),
+        },
+        Value::Symbol(_) => Err(ScriptError::new(format!(
+            "cannot call `{method}` on a symbol value"
         ))),
         Value::ClassList(element) => match method {
             "item" => class_list_item(element, args, env, host),
@@ -4197,9 +5220,6 @@ fn eval_method_call<H: HostBindings>(
         Value::IteratorResult(_) => Err(ScriptError::new(format!(
             "cannot call `{method}` on an iterator result value"
         ))),
-        Value::String(_) => Err(ScriptError::new(format!(
-            "unsupported method call on string value: {method}"
-        ))),
         Value::Number(_) => Err(ScriptError::new(format!(
             "unsupported method call on number value: {method}"
         ))),
@@ -4245,7 +5265,7 @@ fn register_listener<H: HostBindings>(
         Value::Function(function) => function,
         _ => {
             return Err(ScriptError::new(
-                "addEventListener() requires an arrow function callback",
+                "addEventListener() requires a function callback",
             ));
         }
     };
@@ -6453,7 +7473,13 @@ fn for_each_over_items<H: HostBindings>(
             };
             bindings.insert(param.clone(), value);
         }
-        eval_program_with_bindings(&program, host, &mut bindings)?;
+        match eval_program_with_bindings(&program, host, &mut bindings)? {
+            EvalControl::Continue | EvalControl::Return(_) => {}
+            EvalControl::Break => return Err(ScriptError::new("break outside loop")),
+            EvalControl::ContinueLoop => {
+                return Err(ScriptError::new("continue outside loop"));
+            }
+        }
 
         for key in outer_keys {
             if callback.params.iter().any(|param| param == &key) {
@@ -6660,18 +7686,109 @@ fn eval_add(left: Value, right: Value) -> Value {
     }
 }
 
+fn eval_number<H: HostBindings>(
+    expr: &Expr,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+    operator: &str,
+) -> Result<f64> {
+    number_from_value(&eval_expr(expr, env, host)?)
+        .map_err(|_| ScriptError::new(format!("{operator} expects a number")))
+}
+
+fn number_from_value(value: &Value) -> Result<f64> {
+    match value {
+        Value::Number(number) => Ok(*number),
+        Value::String(value) => {
+            if value.trim().is_empty() {
+                Ok(0.0)
+            } else {
+                value
+                    .trim()
+                    .parse::<f64>()
+                    .map_err(|_| ScriptError::new("value cannot be converted to a number"))
+            }
+        }
+        Value::Boolean(value) => Ok(if *value { 1.0 } else { 0.0 }),
+        Value::Null => Ok(0.0),
+        Value::Undefined => Ok(f64::NAN),
+        _ => Err(ScriptError::new("value cannot be converted to a number")),
+    }
+}
+
+fn eval_equality(left: &Value, right: &Value, strict: bool) -> bool {
+    if strict {
+        return left == right;
+    }
+
+    if matches!(left, Value::Null | Value::Undefined)
+        && matches!(right, Value::Null | Value::Undefined)
+    {
+        return true;
+    }
+
+    match (left, right) {
+        (Value::Boolean(lhs), rhs) => {
+            let lhs = if *lhs { 1.0 } else { 0.0 };
+            number_from_value(rhs)
+                .map(|rhs| lhs == rhs)
+                .unwrap_or(false)
+        }
+        (lhs, Value::Boolean(rhs)) => {
+            let rhs = if *rhs { 1.0 } else { 0.0 };
+            number_from_value(lhs)
+                .map(|lhs| lhs == rhs)
+                .unwrap_or(false)
+        }
+        (Value::Number(lhs), Value::String(rhs)) => rhs
+            .trim()
+            .parse::<f64>()
+            .map(|rhs| *lhs == rhs)
+            .unwrap_or(false),
+        (Value::String(lhs), Value::Number(rhs)) => lhs
+            .trim()
+            .parse::<f64>()
+            .map(|lhs| lhs == *rhs)
+            .unwrap_or(false),
+        _ => left == right,
+    }
+}
+
+fn eval_typeof(value: &Value) -> &'static str {
+    match value {
+        Value::Undefined => "undefined",
+        Value::Null => "object",
+        Value::Boolean(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::ObjectNamespace | Value::ArrayNamespace => "function",
+        Value::IntlNamespace => "object",
+        Value::Object(_) | Value::Array(_) | Value::Map(_) | Value::Symbol(_) => "object",
+        Value::Function(_) => "function",
+        _ => "object",
+    }
+}
+
 fn is_truthy(value: &Value) -> bool {
     match value {
         Value::Undefined | Value::Null => false,
         Value::Boolean(value) => *value,
         Value::Number(value) => *value != 0.0,
         Value::String(value) => !value.is_empty(),
-        Value::Element(_)
+        Value::Object(_)
+        | Value::Array(_)
+        | Value::Map(_)
+        | Value::Symbol(_)
+        | Value::ObjectNamespace
+        | Value::ArrayNamespace
+        | Value::IntlNamespace
+        | Value::Element(_)
         | Value::Attribute(_)
         | Value::ClassList(_)
         | Value::Dataset(_)
         | Value::NamedNodeMap(_)
         | Value::Navigator
+        | Value::Clipboard
         | Value::History
         | Value::HtmlCollection(_)
         | Value::StyleSheetList(_)
@@ -6711,6 +7828,2362 @@ fn positive_index_from_attribute(value: Option<String>, default: usize) -> usize
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(default)
+}
+
+fn property_key_from_string(name: impl Into<String>) -> PropertyKey {
+    PropertyKey::String(name.into())
+}
+
+fn property_key_from_value(value: &Value) -> PropertyKey {
+    match value {
+        Value::Symbol(symbol) => PropertyKey::Symbol(symbol.id()),
+        other => PropertyKey::String(as_string(other)),
+    }
+}
+
+fn property_key_to_string(key: &PropertyKey) -> Option<&str> {
+    match key {
+        PropertyKey::String(value) => Some(value.as_str()),
+        PropertyKey::Symbol(_) => None,
+    }
+}
+
+fn array_to_string(array: &crate::ArrayHandle, separator: &str, limit: Option<usize>) -> String {
+    let items = {
+        let state = array.0.borrow();
+        state.items.clone()
+    };
+    let rendered: Vec<String> = items
+        .into_iter()
+        .take(limit.unwrap_or(usize::MAX))
+        .map(|value| as_string(&value))
+        .collect();
+    rendered.join(separator)
+}
+
+fn object_property_entries(
+    properties: &[(PropertyKey, crate::PropertyValue)],
+) -> Vec<(PropertyKey, crate::PropertyValue)> {
+    properties.to_vec()
+}
+
+fn property_key_from_expr_value(value: &Value) -> PropertyKey {
+    property_key_from_value(value)
+}
+
+fn property_key_matches_string(key: &PropertyKey, name: &str) -> bool {
+    matches!(key, PropertyKey::String(value) if value == name)
+}
+
+fn object_find_property<'a>(
+    properties: &'a [(PropertyKey, crate::PropertyValue)],
+    key: &PropertyKey,
+) -> Option<&'a crate::PropertyValue> {
+    properties
+        .iter()
+        .find(|(candidate, _)| candidate == key)
+        .map(|(_, value)| value)
+}
+
+fn object_find_property_mut<'a>(
+    properties: &'a mut Vec<(PropertyKey, crate::PropertyValue)>,
+    key: &PropertyKey,
+) -> Option<&'a mut crate::PropertyValue> {
+    properties
+        .iter_mut()
+        .find(|(candidate, _)| candidate == key)
+        .map(|(_, value)| value)
+}
+
+fn object_remove_property(
+    properties: &mut Vec<(PropertyKey, crate::PropertyValue)>,
+    key: &PropertyKey,
+) {
+    if let Some(index) = properties
+        .iter()
+        .position(|(candidate, _)| candidate == key)
+    {
+        properties.remove(index);
+    }
+}
+
+fn object_own_string_keys(object: &crate::ObjectHandle) -> Vec<String> {
+    let state = object.0.borrow();
+    state
+        .properties
+        .iter()
+        .filter_map(|(key, _)| property_key_to_string(key).map(str::to_string))
+        .collect()
+}
+
+fn object_own_symbol_keys(object: &crate::ObjectHandle) -> Vec<crate::SymbolValue> {
+    let state = object.0.borrow();
+    state
+        .properties
+        .iter()
+        .filter_map(|(key, _)| match key {
+            PropertyKey::Symbol(id) => Some(crate::SymbolValue::from_parts(*id, None)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn object_property_value<H: HostBindings>(
+    object: &crate::ObjectHandle,
+    key: &PropertyKey,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Option<Value>> {
+    let property = {
+        let state = object.0.borrow();
+        object_find_property(&state.properties, key).cloned()
+    };
+
+    match property {
+        Some(crate::PropertyValue::Data(value)) => Ok(Some(value)),
+        Some(crate::PropertyValue::Accessor { getter, .. }) => match getter {
+            Some(getter) => call_script_function_with_this(
+                &getter,
+                &[],
+                Value::Object(object.clone()),
+                env,
+                host,
+            )
+            .map(Some),
+            None => Ok(Some(Value::Undefined)),
+        },
+        None => Ok(None),
+    }
+}
+
+fn object_set_property_value<H: HostBindings>(
+    object: &crate::ObjectHandle,
+    key: PropertyKey,
+    value: Value,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<()> {
+    let accessor = {
+        let mut state = object.0.borrow_mut();
+        match object_find_property_mut(&mut state.properties, &key) {
+            Some(crate::PropertyValue::Data(existing)) => {
+                *existing = value;
+                return Ok(());
+            }
+            Some(crate::PropertyValue::Accessor { setter, .. }) => setter.clone(),
+            None => {
+                state
+                    .properties
+                    .push((key.clone(), crate::PropertyValue::Data(value)));
+                return Ok(());
+            }
+        }
+    };
+
+    if let Some(setter) = accessor {
+        call_script_function_value(&setter, &[value], Value::Object(object.clone()), env, host)?;
+    }
+
+    Ok(())
+}
+
+fn array_index_from_key(key: &PropertyKey) -> Option<usize> {
+    match key {
+        PropertyKey::String(value) => value.parse::<usize>().ok(),
+        PropertyKey::Symbol(_) => None,
+    }
+}
+
+fn array_property_value<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    key: &PropertyKey,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Option<Value>> {
+    if property_key_matches_string(key, "length") {
+        return Ok(Some(Value::Number(array.0.borrow().items.len() as f64)));
+    }
+
+    if let Some(index) = array_index_from_key(key) {
+        return Ok(array
+            .0
+            .borrow()
+            .items
+            .get(index)
+            .cloned()
+            .or(Some(Value::Undefined)));
+    }
+
+    let property = {
+        let state = array.0.borrow();
+        object_find_property(&state.properties, key).cloned()
+    };
+
+    match property {
+        Some(crate::PropertyValue::Data(value)) => Ok(Some(value)),
+        Some(crate::PropertyValue::Accessor { getter, .. }) => match getter {
+            Some(getter) => {
+                call_script_function_with_this(&getter, &[], Value::Array(array.clone()), env, host)
+                    .map(Some)
+            }
+            None => Ok(Some(Value::Undefined)),
+        },
+        None => Ok(property_key_to_string(key).and_then(|name| {
+            matches!(
+                name,
+                "join"
+                    | "map"
+                    | "filter"
+                    | "forEach"
+                    | "flatMap"
+                    | "flat"
+                    | "push"
+                    | "pop"
+                    | "slice"
+                    | "concat"
+                    | "sort"
+                    | "reverse"
+                    | "reduce"
+                    | "includes"
+                    | "indexOf"
+                    | "lastIndexOf"
+                    | "toString"
+            )
+            .then(|| native_method_function(Value::Array(array.clone()), name))
+        })),
+    }
+}
+
+fn array_set_property_value<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    key: PropertyKey,
+    value: Value,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<()> {
+    if property_key_matches_string(&key, "length") {
+        return Err(ScriptError::new(
+            "cannot assign to array length in this runtime",
+        ));
+    }
+
+    if let Some(index) = array_index_from_key(&key) {
+        let mut state = array.0.borrow_mut();
+        if index >= state.items.len() {
+            state.items.resize(index + 1, Value::Undefined);
+        }
+        state.items[index] = value;
+        return Ok(());
+    }
+
+    let accessor = {
+        let mut state = array.0.borrow_mut();
+        match object_find_property_mut(&mut state.properties, &key) {
+            Some(crate::PropertyValue::Data(existing)) => {
+                *existing = value;
+                return Ok(());
+            }
+            Some(crate::PropertyValue::Accessor { setter, .. }) => setter.clone(),
+            None => {
+                state
+                    .properties
+                    .push((key.clone(), crate::PropertyValue::Data(value)));
+                return Ok(());
+            }
+        }
+    };
+
+    if let Some(setter) = accessor {
+        call_script_function_value(&setter, &[value], Value::Array(array.clone()), env, host)?;
+    }
+
+    Ok(())
+}
+
+fn object_value_keys(object: &crate::ObjectHandle) -> Vec<String> {
+    object_own_string_keys(object)
+}
+
+fn object_value_entries(object: &crate::ObjectHandle) -> Vec<(String, Value)> {
+    let state = object.0.borrow();
+    state
+        .properties
+        .iter()
+        .filter_map(|(key, value)| {
+            property_key_to_string(key).and_then(|name| match value {
+                crate::PropertyValue::Data(value) => Some((name.to_string(), value.clone())),
+                crate::PropertyValue::Accessor { .. } => None,
+            })
+        })
+        .collect()
+}
+
+fn array_value_entries(array: &crate::ArrayHandle) -> Vec<(String, Value)> {
+    let state = array.0.borrow();
+    let mut entries = state
+        .items
+        .iter()
+        .enumerate()
+        .map(|(index, value)| (index.to_string(), value.clone()))
+        .collect::<Vec<_>>();
+    for (key, value) in &state.properties {
+        if let Some(name) = property_key_to_string(key) {
+            if let crate::PropertyValue::Data(value) = value {
+                entries.push((name.to_string(), value.clone()));
+            }
+        }
+    }
+    entries
+}
+
+fn property_value_on_value<H: HostBindings>(
+    value: &Value,
+    key: &PropertyKey,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Option<Value>> {
+    match value {
+        Value::Object(object) => object_property_value(object, key, env, host),
+        Value::Array(array) => array_property_value(array, key, env, host),
+        Value::Map(map) => map_property_value(map, key),
+        _ => Ok(None),
+    }
+}
+
+fn set_property_value_on_value<H: HostBindings>(
+    value: &Value,
+    key: PropertyKey,
+    next: Value,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<bool> {
+    match value {
+        Value::Object(object) => {
+            object_set_property_value(object, key, next, env, host)?;
+            Ok(true)
+        }
+        Value::Array(array) => {
+            array_set_property_value(array, key, next, env, host)?;
+            Ok(true)
+        }
+        Value::Map(map) => {
+            map_set_property_value(map, key, next);
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn map_key_from_value(value: &Value) -> MapKey {
+    match value {
+        Value::Undefined => MapKey::Undefined,
+        Value::Null => MapKey::Null,
+        Value::Boolean(value) => MapKey::Boolean(*value),
+        Value::Number(value) => MapKey::Number(value.to_bits()),
+        Value::String(value) => MapKey::String(value.clone()),
+        Value::Symbol(symbol) => MapKey::Symbol(symbol.id()),
+        Value::Object(object) => MapKey::Object(object.identity()),
+        Value::Array(array) => MapKey::Array(array.identity()),
+        Value::Map(map) => MapKey::Map(map.identity()),
+        other => MapKey::String(as_string(other)),
+    }
+}
+
+fn map_values_from_handle(map: &MapHandle) -> Vec<(MapKey, Value)> {
+    map.0.borrow().entries.clone()
+}
+
+fn map_property_value(map: &MapHandle, key: &PropertyKey) -> Result<Option<Value>> {
+    if property_key_matches_string(key, "size") {
+        return Ok(Some(Value::Number(map.0.borrow().entries.len() as f64)));
+    }
+
+    let property = {
+        let state = map.0.borrow();
+        object_find_property(&state.properties, key).cloned()
+    };
+
+    match property {
+        Some(PropertyValue::Data(value)) => Ok(Some(value)),
+        Some(PropertyValue::Accessor { .. }) => Ok(Some(Value::Undefined)),
+        None => Ok(property_key_to_string(key).and_then(|name| {
+            matches!(
+                name,
+                "get"
+                    | "set"
+                    | "has"
+                    | "delete"
+                    | "clear"
+                    | "keys"
+                    | "values"
+                    | "entries"
+                    | "forEach"
+                    | "toString"
+            )
+            .then(|| native_method_function(Value::Map(map.clone()), name))
+        })),
+    }
+}
+
+fn map_set_property_value(map: &MapHandle, key: PropertyKey, value: Value) {
+    if property_key_matches_string(&key, "size") {
+        return;
+    }
+
+    let mut state = map.0.borrow_mut();
+    match object_find_property_mut(&mut state.properties, &key) {
+        Some(PropertyValue::Data(existing)) => {
+            *existing = value;
+        }
+        Some(PropertyValue::Accessor { .. }) => {}
+        None => {
+            state.properties.push((key, PropertyValue::Data(value)));
+        }
+    }
+}
+
+fn object_own_property_values<H: HostBindings>(
+    object: &crate::ObjectHandle,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Vec<(PropertyKey, Value)>> {
+    let properties = {
+        let state = object.0.borrow();
+        state.properties.clone()
+    };
+
+    let mut values = Vec::new();
+    for (key, property) in properties {
+        if let Some(value) = match property {
+            PropertyValue::Data(value) => Some(value),
+            PropertyValue::Accessor { getter, .. } => match getter {
+                Some(getter) => Some(call_script_function_with_this(
+                    &getter,
+                    &[],
+                    Value::Object(object.clone()),
+                    env,
+                    host,
+                )?),
+                None => Some(Value::Undefined),
+            },
+        } {
+            values.push((key, value));
+        }
+    }
+    Ok(values)
+}
+
+fn array_own_property_values<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Vec<(PropertyKey, Value)>> {
+    let (items, properties) = {
+        let state = array.0.borrow();
+        (state.items.clone(), state.properties.clone())
+    };
+
+    let mut values = Vec::new();
+    for (index, item) in items.into_iter().enumerate() {
+        values.push((PropertyKey::String(index.to_string()), item));
+    }
+    for (key, property) in properties {
+        if let Some(value) = match property {
+            PropertyValue::Data(value) => Some(value),
+            PropertyValue::Accessor { getter, .. } => match getter {
+                Some(getter) => Some(call_script_function_with_this(
+                    &getter,
+                    &[],
+                    Value::Array(array.clone()),
+                    env,
+                    host,
+                )?),
+                None => Some(Value::Undefined),
+            },
+        } {
+            values.push((key, value));
+        }
+    }
+    Ok(values)
+}
+
+fn string_own_property_values(value: &str) -> Vec<(PropertyKey, Value)> {
+    value
+        .chars()
+        .enumerate()
+        .map(|(index, ch)| {
+            (
+                PropertyKey::String(index.to_string()),
+                Value::String(ch.to_string()),
+            )
+        })
+        .collect()
+}
+
+fn object_own_string_values<H: HostBindings>(
+    value: &Value,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Vec<(String, Value)>> {
+    match value {
+        Value::Object(object) => Ok(object_own_property_values(object, env, host)?
+            .into_iter()
+            .filter_map(|(key, value)| match key {
+                PropertyKey::String(name) => Some((name, value)),
+                PropertyKey::Symbol(_) => None,
+            })
+            .collect()),
+        Value::Array(array) => Ok(array_own_property_values(array, env, host)?
+            .into_iter()
+            .filter_map(|(key, value)| match key {
+                PropertyKey::String(name) => Some((name, value)),
+                PropertyKey::Symbol(_) => None,
+            })
+            .collect()),
+        Value::Map(map) => {
+            let state = map.0.borrow();
+            Ok(state
+                .properties
+                .iter()
+                .filter_map(|(key, property)| match key {
+                    PropertyKey::String(name) => match property {
+                        PropertyValue::Data(value) => Some((name.clone(), value.clone())),
+                        PropertyValue::Accessor { .. } => Some((name.clone(), Value::Undefined)),
+                    },
+                    PropertyKey::Symbol(_) => None,
+                })
+                .collect())
+        }
+        Value::String(string) => Ok(string_own_property_values(string)
+            .into_iter()
+            .filter_map(|(key, value)| match key {
+                PropertyKey::String(name) => Some((name, value)),
+                PropertyKey::Symbol(_) => None,
+            })
+            .collect()),
+        _ => Ok(Vec::new()),
+    }
+}
+
+fn object_own_symbol_values<H: HostBindings>(
+    value: &Value,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Vec<crate::SymbolValue>> {
+    match value {
+        Value::Object(object) => Ok(object_own_property_values(object, env, host)?
+            .into_iter()
+            .filter_map(|(key, _)| match key {
+                PropertyKey::Symbol(id) => Some(crate::SymbolValue::from_parts(id, None)),
+                _ => None,
+            })
+            .collect()),
+        Value::Array(array) => Ok(array_own_property_values(array, env, host)?
+            .into_iter()
+            .filter_map(|(key, _)| match key {
+                PropertyKey::Symbol(id) => Some(crate::SymbolValue::from_parts(id, None)),
+                _ => None,
+            })
+            .collect()),
+        Value::Map(map) => {
+            let state = map.0.borrow();
+            Ok(state
+                .properties
+                .iter()
+                .filter_map(|(key, _)| match key {
+                    PropertyKey::Symbol(id) => Some(crate::SymbolValue::from_parts(*id, None)),
+                    _ => None,
+                })
+                .collect())
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
+fn object_assign_from_source<H: HostBindings>(
+    target: &crate::ObjectHandle,
+    source: &Value,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<()> {
+    match source {
+        Value::Undefined | Value::Null => Ok(()),
+        Value::String(string) => {
+            for (index, ch) in string.chars().enumerate() {
+                object_set_property_value(
+                    target,
+                    PropertyKey::String(index.to_string()),
+                    Value::String(ch.to_string()),
+                    env,
+                    host,
+                )?;
+            }
+            Ok(())
+        }
+        Value::Object(object) => {
+            for (key, value) in object_own_property_values(object, env, host)? {
+                object_set_property_value(target, key, value, env, host)?;
+            }
+            Ok(())
+        }
+        Value::Array(array) => {
+            for (key, value) in array_own_property_values(array, env, host)? {
+                object_set_property_value(target, key, value, env, host)?;
+            }
+            Ok(())
+        }
+        Value::Map(map) => {
+            let state = map.0.borrow();
+            for (key, property) in &state.properties {
+                if let Some(name) = property_key_to_string(key) {
+                    let value = match property {
+                        PropertyValue::Data(value) => value.clone(),
+                        PropertyValue::Accessor { getter, .. } => match getter {
+                            Some(getter) => call_script_function_with_this(
+                                getter,
+                                &[],
+                                Value::Map(map.clone()),
+                                env,
+                                host,
+                            )?,
+                            None => Value::Undefined,
+                        },
+                    };
+                    object_set_property_value(
+                        target,
+                        PropertyKey::String(name.to_string()),
+                        value,
+                        env,
+                        host,
+                    )?;
+                } else if let PropertyKey::Symbol(id) = key {
+                    let value = match property {
+                        PropertyValue::Data(value) => value.clone(),
+                        PropertyValue::Accessor { getter, .. } => match getter {
+                            Some(getter) => call_script_function_with_this(
+                                getter,
+                                &[],
+                                Value::Map(map.clone()),
+                                env,
+                                host,
+                            )?,
+                            None => Value::Undefined,
+                        },
+                    };
+                    object_set_property_value(target, PropertyKey::Symbol(*id), value, env, host)?;
+                }
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn array_from_value<H: HostBindings>(
+    source: Value,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Vec<Value>> {
+    match source {
+        Value::Undefined | Value::Null => Ok(Vec::new()),
+        Value::Array(array) => Ok(array.0.borrow().items.clone()),
+        Value::String(string) => Ok(string
+            .chars()
+            .map(|ch| Value::String(ch.to_string()))
+            .collect()),
+        Value::CollectionIterator(iterator) => {
+            let mut out = Vec::new();
+            loop {
+                let next = iterator.next_result();
+                if next.done() {
+                    break;
+                }
+                if let Some(value) = next.value() {
+                    out.push(value);
+                }
+            }
+            Ok(out)
+        }
+        Value::Map(map) => {
+            let state = map.0.borrow();
+            let mut out = Vec::new();
+            for (key, value) in &state.entries {
+                out.push(Value::Array(ArrayHandle::new(vec![
+                    match key {
+                        MapKey::Undefined => Value::Undefined,
+                        MapKey::Null => Value::Null,
+                        MapKey::Boolean(value) => Value::Boolean(*value),
+                        MapKey::Number(bits) => Value::Number(f64::from_bits(*bits)),
+                        MapKey::String(value) => Value::String(value.clone()),
+                        MapKey::Symbol(id) => {
+                            Value::Symbol(crate::SymbolValue::from_parts(*id, None))
+                        }
+                        MapKey::Object(id) => Value::String(format!("[object Object:{id}]")),
+                        MapKey::Array(id) => Value::String(format!("[object Array:{id}]")),
+                        MapKey::Map(id) => Value::String(format!("[object Map:{id}]")),
+                    },
+                    value.clone(),
+                ])));
+            }
+            Ok(out)
+        }
+        Value::Object(_) => Err(ScriptError::new("value is not iterable")),
+        Value::Boolean(_)
+        | Value::Number(_)
+        | Value::Symbol(_)
+        | Value::CollectionEntry(_)
+        | Value::IteratorResult(_)
+        | Value::Element(_)
+        | Value::Attribute(_)
+        | Value::ClassList(_)
+        | Value::Dataset(_)
+        | Value::TemplateContent(_)
+        | Value::NamedNodeMap(_)
+        | Value::HtmlCollection(_)
+        | Value::StyleSheetList(_)
+        | Value::StyleSheet(_)
+        | Value::Node(_)
+        | Value::NodeList(_)
+        | Value::RadioNodeList(_)
+        | Value::Storage(_)
+        | Value::MediaQueryList(_)
+        | Value::StringList(_)
+        | Value::MimeTypeArray(_)
+        | Value::Navigator
+        | Value::Clipboard
+        | Value::History
+        | Value::Screen
+        | Value::ScreenOrientation(_)
+        | Value::Document
+        | Value::Window
+        | Value::Event(_)
+        | Value::Function(_)
+        | Value::ObjectNamespace
+        | Value::ArrayNamespace
+        | Value::IntlNamespace => Err(ScriptError::new("value is not iterable")),
+    }
+}
+
+fn array_namespace_from<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.is_empty() {
+        return Ok(Value::Array(ArrayHandle::new(Vec::new())));
+    }
+
+    if args.len() > 1 {
+        return Err(ScriptError::new(
+            "Array.from() expects at most one argument",
+        ));
+    }
+
+    let source = eval_expr(&args[0], env, host)?;
+    Ok(Value::Array(ArrayHandle::new(array_from_value(
+        source, env, host,
+    )?)))
+}
+
+fn array_namespace_is_array(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut impl HostBindings,
+) -> Result<Value> {
+    let [value_expr] = args else {
+        return Err(ScriptError::new(
+            "Array.isArray() expects exactly one argument",
+        ));
+    };
+    Ok(Value::Boolean(matches!(
+        eval_expr(value_expr, env, host)?,
+        Value::Array(_)
+    )))
+}
+
+fn eval_array_literal<H: HostBindings>(
+    elements: &[ArrayElement],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let mut items = Vec::new();
+    for element in elements {
+        match element {
+            ArrayElement::Expression(expr) => items.push(eval_expr(expr, env, host)?),
+            ArrayElement::Spread(expr) => {
+                let value = eval_expr(expr, env, host)?;
+                items.extend(array_from_value(value, env, host)?);
+            }
+        }
+    }
+    Ok(Value::Array(ArrayHandle::new(items)))
+}
+
+fn eval_object_property_name<H: HostBindings>(
+    name: &ObjectPropertyName,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<PropertyKey> {
+    match name {
+        ObjectPropertyName::Static(name) => Ok(PropertyKey::String(name.clone())),
+        ObjectPropertyName::Computed(expr) => {
+            let value = eval_expr(expr, env, host)?;
+            Ok(property_key_from_expr_value(&value))
+        }
+    }
+}
+
+fn eval_object_literal<H: HostBindings>(
+    properties: &[ObjectProperty],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let object = crate::ObjectHandle::new();
+    for property in properties {
+        match property {
+            ObjectProperty::KeyValue { name, value } => {
+                let key = eval_object_property_name(name, env, host)?;
+                let value = eval_expr(value, env, host)?;
+                object_set_property_value(&object, key, value, env, host)?;
+            }
+            ObjectProperty::Method { name, function } => {
+                let key = eval_object_property_name(name, env, host)?;
+                object_set_property_value(
+                    &object,
+                    key,
+                    Value::Function(function.clone().with_captured_bindings(env.clone())),
+                    env,
+                    host,
+                )?;
+            }
+            ObjectProperty::Getter { name, function } => {
+                let key = eval_object_property_name(name, env, host)?;
+                let mut state = object.0.borrow_mut();
+                match object_find_property_mut(&mut state.properties, &key) {
+                    Some(PropertyValue::Accessor { getter, .. }) => {
+                        *getter = Some(function.clone().with_captured_bindings(env.clone()));
+                    }
+                    Some(PropertyValue::Data(_)) | None => {
+                        state.properties.push((
+                            key,
+                            PropertyValue::Accessor {
+                                getter: Some(function.clone().with_captured_bindings(env.clone())),
+                                setter: None,
+                            },
+                        ));
+                    }
+                }
+            }
+            ObjectProperty::Setter { name, function } => {
+                let key = eval_object_property_name(name, env, host)?;
+                let mut state = object.0.borrow_mut();
+                match object_find_property_mut(&mut state.properties, &key) {
+                    Some(PropertyValue::Accessor { setter, .. }) => {
+                        *setter = Some(function.clone().with_captured_bindings(env.clone()));
+                    }
+                    Some(PropertyValue::Data(_)) | None => {
+                        state.properties.push((
+                            key,
+                            PropertyValue::Accessor {
+                                getter: None,
+                                setter: Some(function.clone().with_captured_bindings(env.clone())),
+                            },
+                        ));
+                    }
+                }
+            }
+            ObjectProperty::Spread(expr) => {
+                let source = eval_expr(expr, env, host)?;
+                object_assign_from_source(&object, &source, env, host)?;
+            }
+        }
+    }
+    Ok(Value::Object(object))
+}
+
+fn eval_computed_member<H: HostBindings>(
+    object: &Expr,
+    property: &Expr,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let object_value = eval_expr(object, env, host)?;
+    let property_value = eval_expr(property, env, host)?;
+    let key = property_key_from_expr_value(&property_value);
+
+    if matches!(object_value, Value::Window) {
+        if let Some(name) = property_key_to_string(&key) {
+            return Ok(env.get(name).cloned().unwrap_or(Value::Undefined));
+        }
+    }
+
+    Ok(
+        match property_value_on_value(&object_value, &key, env, host)? {
+            Some(value) => value,
+            None => Value::Undefined,
+        },
+    )
+}
+
+fn eval_new<H: HostBindings>(
+    callee: &Expr,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    match callee {
+        Expr::Identifier(name) if name == "Object" => {
+            if args.len() > 1 {
+                return Err(ScriptError::new("Object() expects at most one argument"));
+            }
+            let object = crate::ObjectHandle::new();
+            if let Some(expr) = args.first() {
+                let value = eval_expr(expr, env, host)?;
+                object_assign_from_source(&object, &value, env, host)?;
+            }
+            Ok(Value::Object(object))
+        }
+        Expr::Identifier(name) if name == "Array" => {
+            if args.len() > 1 {
+                return Err(ScriptError::new("Array() expects at most one argument"));
+            }
+            if let Some(expr) = args.first() {
+                let value = eval_expr(expr, env, host)?;
+                match value {
+                    Value::Number(length)
+                        if length.is_finite() && length >= 0.0 && length.fract() == 0.0 =>
+                    {
+                        Ok(Value::Array(ArrayHandle::new(vec![
+                            Value::Undefined;
+                            length as usize
+                        ])))
+                    }
+                    other => Ok(Value::Array(ArrayHandle::new(array_from_value(
+                        other, env, host,
+                    )?))),
+                }
+            } else {
+                Ok(Value::Array(ArrayHandle::new(Vec::new())))
+            }
+        }
+        Expr::Identifier(name) if name == "Map" => {
+            let map = crate::MapHandle::new();
+            if args.is_empty() {
+                return Ok(Value::Map(map));
+            }
+            if args.len() > 1 {
+                return Err(ScriptError::new("Map() expects at most one argument"));
+            }
+            let entries = array_from_value(eval_expr(&args[0], env, host)?, env, host)?;
+            for entry in entries {
+                let Value::Array(pair) = entry else {
+                    return Err(ScriptError::new("Map() expects iterable pairs"));
+                };
+                let items = pair.0.borrow().items.clone();
+                if items.is_empty() {
+                    return Err(ScriptError::new("Map() expects iterable pairs"));
+                }
+                let key = items.first().cloned().unwrap_or(Value::Undefined);
+                let value = items.get(1).cloned().unwrap_or(Value::Undefined);
+                let map_key = map_key_from_value(&key);
+                let mut state = map.0.borrow_mut();
+                if let Some((_, existing)) = state
+                    .entries
+                    .iter_mut()
+                    .find(|(candidate, _)| *candidate == map_key)
+                {
+                    *existing = value;
+                } else {
+                    state.entries.push((map_key, value));
+                }
+            }
+            Ok(Value::Map(map))
+        }
+        Expr::Identifier(name) if name == "Date" => {
+            let value = date_constructor(args, env, host)?;
+            Ok(value)
+        }
+        Expr::Member { object, property } => {
+            if let Expr::Identifier(name) = &**object {
+                if name == "Intl" && (property == "NumberFormat" || property == "DateTimeFormat") {
+                    return intl_construct(property, args, env, host);
+                }
+            }
+            Err(ScriptError::new("invalid new target"))
+        }
+        _ => Err(ScriptError::new("invalid new target")),
+    }
+}
+
+fn values_array(items: Vec<Value>) -> Value {
+    Value::Array(ArrayHandle::new(items))
+}
+
+fn map_key_to_value(key: &MapKey) -> Value {
+    match key {
+        MapKey::Undefined => Value::Undefined,
+        MapKey::Null => Value::Null,
+        MapKey::Boolean(value) => Value::Boolean(*value),
+        MapKey::Number(bits) => Value::Number(f64::from_bits(*bits)),
+        MapKey::String(value) => Value::String(value.clone()),
+        MapKey::Symbol(id) => Value::Symbol(crate::SymbolValue::from_parts(*id, None)),
+        MapKey::Object(id) => Value::String(format!("[object Object:{id}]")),
+        MapKey::Array(id) => Value::String(format!("[object Array:{id}]")),
+        MapKey::Map(id) => Value::String(format!("[object Map:{id}]")),
+    }
+}
+
+fn object_namespace_assign<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.is_empty() {
+        return Err(ScriptError::new(
+            "Object.assign() expects at least one argument",
+        ));
+    }
+
+    let target_value = eval_expr(&args[0], env, host)?;
+    let target = match target_value {
+        Value::Object(object) => object,
+        Value::Undefined | Value::Null => {
+            return Err(ScriptError::new(
+                "Cannot convert undefined or null to object",
+            ));
+        }
+        _ => crate::ObjectHandle::new(),
+    };
+
+    for source_expr in &args[1..] {
+        let source = eval_expr(source_expr, env, host)?;
+        object_assign_from_source(&target, &source, env, host)?;
+    }
+
+    Ok(Value::Object(target))
+}
+
+fn object_namespace_keys<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [source_expr] = args else {
+        return Err(ScriptError::new(
+            "Object.keys() expects exactly one argument",
+        ));
+    };
+    let source = eval_expr(source_expr, env, host)?;
+    let keys = object_own_string_values(&source, env, host)?
+        .into_iter()
+        .map(|(key, _)| Value::String(key))
+        .collect();
+    Ok(values_array(keys))
+}
+
+fn object_namespace_values<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [source_expr] = args else {
+        return Err(ScriptError::new(
+            "Object.values() expects exactly one argument",
+        ));
+    };
+    let source = eval_expr(source_expr, env, host)?;
+    let values = object_own_string_values(&source, env, host)?
+        .into_iter()
+        .map(|(_, value)| value)
+        .collect();
+    Ok(values_array(values))
+}
+
+fn object_namespace_entries<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [source_expr] = args else {
+        return Err(ScriptError::new(
+            "Object.entries() expects exactly one argument",
+        ));
+    };
+    let source = eval_expr(source_expr, env, host)?;
+    let entries = object_own_string_values(&source, env, host)?
+        .into_iter()
+        .map(|(key, value)| Value::Array(ArrayHandle::new(vec![Value::String(key), value])))
+        .collect();
+    Ok(values_array(entries))
+}
+
+fn object_namespace_get_own_property_symbols<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [source_expr] = args else {
+        return Err(ScriptError::new(
+            "Object.getOwnPropertySymbols() expects exactly one argument",
+        ));
+    };
+    let source = eval_expr(source_expr, env, host)?;
+    let symbols = object_own_symbol_values(&source, env, host)?
+        .into_iter()
+        .map(Value::Symbol)
+        .collect();
+    Ok(values_array(symbols))
+}
+
+fn string_split<H: HostBindings>(
+    value: &str,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.len() > 2 {
+        return Err(ScriptError::new("split() expects at most two arguments"));
+    }
+    let separator = match args.first() {
+        Some(expr) => eval_expr(expr, env, host)?,
+        None => Value::Undefined,
+    };
+    let limit = match args.get(1) {
+        Some(expr) => index_from_value(&eval_expr(expr, env, host)?).unwrap_or(usize::MAX),
+        None => usize::MAX,
+    };
+    let items = if limit == 0 {
+        Vec::new()
+    } else if matches!(separator, Value::Undefined | Value::Null) {
+        vec![Value::String(value.to_string())]
+    } else {
+        let separator = as_string(&separator);
+        if separator.is_empty() {
+            value
+                .chars()
+                .take(limit)
+                .map(|ch| Value::String(ch.to_string()))
+                .collect()
+        } else {
+            value
+                .split(&separator)
+                .take(limit)
+                .map(|part| Value::String(part.to_string()))
+                .collect()
+        }
+    };
+    Ok(Value::Array(ArrayHandle::new(items)))
+}
+
+fn string_replace<H: HostBindings>(
+    value: &str,
+    args: &[Expr],
+    all: bool,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(ScriptError::new(if all {
+            "replaceAll() expects exactly two arguments"
+        } else {
+            "replace() expects exactly two arguments"
+        }));
+    }
+
+    let search = as_string(&eval_expr(&args[0], env, host)?);
+    let replacement = eval_expr(&args[1], env, host)?;
+
+    let mut output = String::new();
+    let mut remainder = value;
+    let mut offset = 0usize;
+    let mut replaced_any = false;
+
+    while let Some(index) = remainder.find(&search) {
+        replaced_any = true;
+        output.push_str(&remainder[..index]);
+        let matched = &remainder[index..index + search.len()];
+        let replacement_value = match &replacement {
+            Value::Function(function) => call_script_function_value(
+                function,
+                &[
+                    Value::String(matched.to_string()),
+                    Value::Number((offset + index) as f64),
+                    Value::String(value.to_string()),
+                ],
+                Value::Undefined,
+                env,
+                host,
+            )?,
+            other => other.clone(),
+        };
+        output.push_str(&as_string(&replacement_value));
+        remainder = &remainder[index + search.len()..];
+        offset += index + search.len();
+        if !all {
+            break;
+        }
+    }
+
+    if replaced_any {
+        output.push_str(remainder);
+        Ok(Value::String(output))
+    } else if all {
+        Ok(Value::String(value.to_string()))
+    } else {
+        Ok(Value::String(value.replacen(
+            &search,
+            &as_string(&replacement),
+            1,
+        )))
+    }
+}
+
+fn string_contains<H: HostBindings>(
+    value: &str,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [search_expr] = args else {
+        return Err(ScriptError::new("includes() expects exactly one argument"));
+    };
+    let search = as_string(&eval_expr(search_expr, env, host)?);
+    Ok(Value::Boolean(value.contains(&search)))
+}
+
+fn string_starts_with<H: HostBindings>(
+    value: &str,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [search_expr] = args else {
+        return Err(ScriptError::new(
+            "startsWith() expects exactly one argument",
+        ));
+    };
+    let search = as_string(&eval_expr(search_expr, env, host)?);
+    Ok(Value::Boolean(value.starts_with(&search)))
+}
+
+fn string_ends_with<H: HostBindings>(
+    value: &str,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [search_expr] = args else {
+        return Err(ScriptError::new("endsWith() expects exactly one argument"));
+    };
+    let search = as_string(&eval_expr(search_expr, env, host)?);
+    Ok(Value::Boolean(value.ends_with(&search)))
+}
+
+fn string_index_of<H: HostBindings>(
+    value: &str,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [search_expr] = args else {
+        return Err(ScriptError::new("indexOf() expects exactly one argument"));
+    };
+    let search = as_string(&eval_expr(search_expr, env, host)?);
+    Ok(Value::Number(
+        value
+            .find(&search)
+            .map(|index| index as f64)
+            .unwrap_or(-1.0),
+    ))
+}
+
+fn string_last_index_of<H: HostBindings>(
+    value: &str,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [search_expr] = args else {
+        return Err(ScriptError::new(
+            "lastIndexOf() expects exactly one argument",
+        ));
+    };
+    let search = as_string(&eval_expr(search_expr, env, host)?);
+    Ok(Value::Number(
+        value
+            .rfind(&search)
+            .map(|index| index as f64)
+            .unwrap_or(-1.0),
+    ))
+}
+
+fn string_slice<H: HostBindings>(
+    value: &str,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.len() > 2 {
+        return Err(ScriptError::new("slice() expects at most two arguments"));
+    }
+    let chars: Vec<char> = value.chars().collect();
+    let len = chars.len() as i64;
+    let start = match args.first() {
+        Some(expr) => integer_from_value(&eval_expr(expr, env, host)?, "slice()")?,
+        None => 0,
+    };
+    let end = match args.get(1) {
+        Some(expr) => integer_from_value(&eval_expr(expr, env, host)?, "slice()")?,
+        None => len,
+    };
+    let start = if start < 0 {
+        (len + start).max(0)
+    } else {
+        start.min(len)
+    } as usize;
+    let end = if end < 0 {
+        (len + end).max(0)
+    } else {
+        end.min(len)
+    } as usize;
+    Ok(Value::String(
+        chars[start.min(chars.len())..end.min(chars.len())]
+            .iter()
+            .collect(),
+    ))
+}
+
+fn string_substring<H: HostBindings>(
+    value: &str,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.len() > 2 {
+        return Err(ScriptError::new(
+            "substring() expects at most two arguments",
+        ));
+    }
+    let chars: Vec<char> = value.chars().collect();
+    let len = chars.len() as i64;
+    let mut start = match args.first() {
+        Some(expr) => integer_from_value(&eval_expr(expr, env, host)?, "substring()")?,
+        None => 0,
+    };
+    let mut end = match args.get(1) {
+        Some(expr) => integer_from_value(&eval_expr(expr, env, host)?, "substring()")?,
+        None => len,
+    };
+    if start > end {
+        std::mem::swap(&mut start, &mut end);
+    }
+    let start = start.clamp(0, len) as usize;
+    let end = end.clamp(0, len) as usize;
+    Ok(Value::String(chars[start..end].iter().collect()))
+}
+
+fn string_char_at<H: HostBindings>(
+    value: &str,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.len() > 1 {
+        return Err(ScriptError::new("charAt() expects at most one argument"));
+    }
+    let index = match args.first() {
+        Some(expr) => index_from_value(&eval_expr(expr, env, host)?).unwrap_or(0),
+        None => 0,
+    };
+    Ok(Value::String(
+        value
+            .chars()
+            .nth(index)
+            .map(|ch| ch.to_string())
+            .unwrap_or_default(),
+    ))
+}
+
+fn string_char_code_at<H: HostBindings>(
+    value: &str,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.len() > 1 {
+        return Err(ScriptError::new(
+            "charCodeAt() expects at most one argument",
+        ));
+    }
+    let index = match args.first() {
+        Some(expr) => index_from_value(&eval_expr(expr, env, host)?).unwrap_or(0),
+        None => 0,
+    };
+    Ok(match value.chars().nth(index) {
+        Some(ch) => Value::Number(ch as u32 as f64),
+        None => Value::Number(f64::NAN),
+    })
+}
+
+fn string_concat<H: HostBindings>(
+    value: &str,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let mut out = value.to_string();
+    for expr in args {
+        out.push_str(&as_string(&eval_expr(expr, env, host)?));
+    }
+    Ok(Value::String(out))
+}
+
+fn string_repeat<H: HostBindings>(
+    value: &str,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [count_expr] = args else {
+        return Err(ScriptError::new("repeat() expects exactly one argument"));
+    };
+    let count = index_from_value(&eval_expr(count_expr, env, host)?)
+        .ok_or_else(|| ScriptError::new("repeat() expects a non-negative integer"))?;
+    Ok(Value::String(value.repeat(count)))
+}
+
+fn string_normalize<H: HostBindings>(
+    value: &str,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.len() > 1 {
+        return Err(ScriptError::new("normalize() expects at most one argument"));
+    }
+    let form = match args.first() {
+        Some(expr) => as_string(&eval_expr(expr, env, host)?),
+        None => "NFC".to_string(),
+    };
+    let normalized = match form.as_str() {
+        "NFC" => value.nfc().collect::<String>(),
+        "NFD" => value.nfd().collect::<String>(),
+        "NFKC" => value.nfkc().collect::<String>(),
+        "NFKD" => value.nfkd().collect::<String>(),
+        other => {
+            return Err(ScriptError::new(format!(
+                "normalize() received unsupported form: {other}"
+            )));
+        }
+    };
+    Ok(Value::String(normalized))
+}
+
+fn string_namespace_from_char_code<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let values = eval_call_argument_values(args, env, host)?;
+    let mut out = String::new();
+    for value in values {
+        let code = number_from_value(&value).unwrap_or(0.0);
+        let code_unit = (code as u32) & 0xFFFF;
+        out.push(char::from_u32(code_unit).unwrap_or('\u{FFFD}'));
+    }
+    Ok(Value::String(out))
+}
+
+fn number_namespace_is_finite<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [value_expr] = args else {
+        return Err(ScriptError::new(
+            "Number.isFinite() expects exactly one argument",
+        ));
+    };
+    Ok(Value::Boolean(matches!(
+        eval_expr(value_expr, env, host)?,
+        Value::Number(value) if value.is_finite()
+    )))
+}
+
+fn number_namespace_is_nan<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [value_expr] = args else {
+        return Err(ScriptError::new(
+            "Number.isNaN() expects exactly one argument",
+        ));
+    };
+    Ok(Value::Boolean(matches!(
+        eval_expr(value_expr, env, host)?,
+        Value::Number(value) if value.is_nan()
+    )))
+}
+
+fn number_namespace_parse_float<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [value_expr] = args else {
+        return Err(ScriptError::new(
+            "Number.parseFloat() expects exactly one argument",
+        ));
+    };
+    let value = as_string(&eval_expr(value_expr, env, host)?);
+    Ok(Value::Number(
+        value.trim().parse::<f64>().unwrap_or(f64::NAN),
+    ))
+}
+
+fn number_namespace_parse_int<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(ScriptError::new(
+            "Number.parseInt() expects one or two arguments",
+        ));
+    }
+    let value = as_string(&eval_expr(&args[0], env, host)?);
+    let radix = match args.get(1) {
+        Some(expr) => index_from_value(&eval_expr(expr, env, host)?).unwrap_or(10) as u32,
+        None => 10,
+    };
+    let parsed = match radix {
+        10 => value.trim().parse::<i64>().ok().map(|value| value as f64),
+        16 => i64::from_str_radix(value.trim_start_matches("0x").trim_start_matches("0X"), 16)
+            .ok()
+            .map(|value| value as f64),
+        _ => i64::from_str_radix(value.trim(), radix)
+            .ok()
+            .map(|value| value as f64),
+    };
+    Ok(Value::Number(parsed.unwrap_or(f64::NAN)))
+}
+
+fn math_namespace_min<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let values = eval_call_argument_values(args, env, host)?;
+    let mut result = f64::INFINITY;
+    for value in values {
+        result = result.min(number_from_value(&value)?);
+    }
+    Ok(Value::Number(result))
+}
+
+fn math_namespace_max<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let values = eval_call_argument_values(args, env, host)?;
+    let mut result = f64::NEG_INFINITY;
+    for value in values {
+        result = result.max(number_from_value(&value)?);
+    }
+    Ok(Value::Number(result))
+}
+
+fn math_namespace_unary<H: HostBindings, F: FnOnce(f64) -> f64>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+    name: &str,
+    func: F,
+) -> Result<Value> {
+    let [value_expr] = args else {
+        return Err(ScriptError::new(format!(
+            "{name}() expects exactly one argument"
+        )));
+    };
+    let value = number_from_value(&eval_expr(value_expr, env, host)?)?;
+    Ok(Value::Number(func(value)))
+}
+
+fn math_namespace_abs<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    math_namespace_unary(args, env, host, "Math.abs", f64::abs)
+}
+
+fn math_namespace_floor<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    math_namespace_unary(args, env, host, "Math.floor", f64::floor)
+}
+
+fn math_namespace_ceil<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    math_namespace_unary(args, env, host, "Math.ceil", f64::ceil)
+}
+
+fn math_namespace_round<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    math_namespace_unary(args, env, host, "Math.round", f64::round)
+}
+
+fn math_namespace_trunc<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    math_namespace_unary(args, env, host, "Math.trunc", f64::trunc)
+}
+
+fn math_namespace_sign<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    math_namespace_unary(args, env, host, "Math.sign", f64::signum)
+}
+
+fn math_namespace_pow<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [base_expr, exponent_expr] = args else {
+        return Err(ScriptError::new("Math.pow() expects exactly two arguments"));
+    };
+    let base = number_from_value(&eval_expr(base_expr, env, host)?)?;
+    let exponent = number_from_value(&eval_expr(exponent_expr, env, host)?)?;
+    Ok(Value::Number(base.powf(exponent)))
+}
+
+fn math_namespace_sqrt<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    math_namespace_unary(args, env, host, "Math.sqrt", f64::sqrt)
+}
+
+fn css_namespace_escape<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [value_expr] = args else {
+        return Err(ScriptError::new(
+            "CSS.escape() expects exactly one argument",
+        ));
+    };
+    let value = as_string(&eval_expr(value_expr, env, host)?);
+    Ok(Value::String(css_escape_ident(&value)))
+}
+
+fn date_namespace_now<H: HostBindings>(
+    args: &[Expr],
+    _env: &mut BTreeMap<String, Value>,
+    _host: &mut H,
+) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new("Date.now() expects no arguments"));
+    }
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| ScriptError::new("system clock is before the Unix epoch"))?;
+    Ok(Value::Number(now.as_millis() as f64))
+}
+
+fn date_namespace_utc<H: HostBindings>(
+    _args: &[Expr],
+    _env: &mut BTreeMap<String, Value>,
+    _host: &mut H,
+) -> Result<Value> {
+    Err(ScriptError::phase_not_ready("Date.UTC"))
+}
+
+fn date_namespace_parse<H: HostBindings>(
+    _args: &[Expr],
+    _env: &mut BTreeMap<String, Value>,
+    _host: &mut H,
+) -> Result<Value> {
+    Err(ScriptError::phase_not_ready("Date.parse"))
+}
+
+fn array_join<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.len() > 1 {
+        return Err(ScriptError::new("join() expects at most one argument"));
+    }
+    let separator = match args.first() {
+        Some(expr) => as_string(&eval_expr(expr, env, host)?),
+        None => ",".to_string(),
+    };
+    Ok(Value::String(array_to_string(array, &separator, None)))
+}
+
+fn array_map<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let (callback_expr, this_arg_expr) = match args {
+        [callback_expr] => (callback_expr, None),
+        [callback_expr, this_arg_expr] => (callback_expr, Some(this_arg_expr)),
+        _ => {
+            return Err(ScriptError::new("map() expects one or two arguments"));
+        }
+    };
+    let callback = match eval_expr(callback_expr, env, host)? {
+        Value::Function(function) => function,
+        _ => return Err(ScriptError::new("map() requires a function callback")),
+    };
+    let this_value = match this_arg_expr {
+        Some(expr) => eval_expr(expr, env, host)?,
+        None => Value::Undefined,
+    };
+    let items = array.0.borrow().items.clone();
+    let mut out = Vec::with_capacity(items.len());
+    for (index, item) in items.into_iter().enumerate() {
+        let mapped = call_script_function_value(
+            &callback,
+            &[
+                item.clone(),
+                Value::Number(index as f64),
+                Value::Array(array.clone()),
+            ],
+            this_value.clone(),
+            env,
+            host,
+        )?;
+        out.push(mapped);
+    }
+    Ok(Value::Array(ArrayHandle::new(out)))
+}
+
+fn array_filter<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let (callback_expr, this_arg_expr) = match args {
+        [callback_expr] => (callback_expr, None),
+        [callback_expr, this_arg_expr] => (callback_expr, Some(this_arg_expr)),
+        _ => {
+            return Err(ScriptError::new("filter() expects one or two arguments"));
+        }
+    };
+    let callback = match eval_expr(callback_expr, env, host)? {
+        Value::Function(function) => function,
+        _ => return Err(ScriptError::new("filter() requires a function callback")),
+    };
+    let this_value = match this_arg_expr {
+        Some(expr) => eval_expr(expr, env, host)?,
+        None => Value::Undefined,
+    };
+    let items = array.0.borrow().items.clone();
+    let mut out = Vec::new();
+    for (index, item) in items.into_iter().enumerate() {
+        let keep = call_script_function_value(
+            &callback,
+            &[
+                item.clone(),
+                Value::Number(index as f64),
+                Value::Array(array.clone()),
+            ],
+            this_value.clone(),
+            env,
+            host,
+        )?;
+        if is_truthy(&keep) {
+            out.push(item);
+        }
+    }
+    Ok(Value::Array(ArrayHandle::new(out)))
+}
+
+fn array_for_each<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let (callback_expr, this_arg_expr) = match args {
+        [callback_expr] => (callback_expr, None),
+        [callback_expr, this_arg_expr] => (callback_expr, Some(this_arg_expr)),
+        _ => {
+            return Err(ScriptError::new("forEach() expects one or two arguments"));
+        }
+    };
+    let callback = match eval_expr(callback_expr, env, host)? {
+        Value::Function(function) => function,
+        _ => return Err(ScriptError::new("forEach() requires a function callback")),
+    };
+    let this_value = match this_arg_expr {
+        Some(expr) => eval_expr(expr, env, host)?,
+        None => Value::Undefined,
+    };
+    let items = array.0.borrow().items.clone();
+    for (index, item) in items.into_iter().enumerate() {
+        let _ = call_script_function_value(
+            &callback,
+            &[
+                item,
+                Value::Number(index as f64),
+                Value::Array(array.clone()),
+            ],
+            this_value.clone(),
+            env,
+            host,
+        )?;
+    }
+    Ok(Value::Undefined)
+}
+
+fn array_flat_map<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let (callback_expr, this_arg_expr) = match args {
+        [callback_expr] => (callback_expr, None),
+        [callback_expr, this_arg_expr] => (callback_expr, Some(this_arg_expr)),
+        _ => {
+            return Err(ScriptError::new("flatMap() expects one or two arguments"));
+        }
+    };
+    let callback = match eval_expr(callback_expr, env, host)? {
+        Value::Function(function) => function,
+        _ => return Err(ScriptError::new("flatMap() requires a function callback")),
+    };
+    let this_value = match this_arg_expr {
+        Some(expr) => eval_expr(expr, env, host)?,
+        None => Value::Undefined,
+    };
+    let items = array.0.borrow().items.clone();
+    let mut out = Vec::new();
+    for (index, item) in items.into_iter().enumerate() {
+        let mapped = call_script_function_value(
+            &callback,
+            &[
+                item.clone(),
+                Value::Number(index as f64),
+                Value::Array(array.clone()),
+            ],
+            this_value.clone(),
+            env,
+            host,
+        )?;
+        match mapped {
+            Value::Array(result) => out.extend(result.0.borrow().items.clone()),
+            other => out.push(other),
+        }
+    }
+    Ok(Value::Array(ArrayHandle::new(out)))
+}
+
+fn array_flat<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.len() > 1 {
+        return Err(ScriptError::new("flat() expects at most one argument"));
+    }
+    let depth = match args.first() {
+        Some(expr) => integer_from_value(&eval_expr(expr, env, host)?, "flat()")?,
+        None => 1,
+    };
+    if depth <= 0 {
+        return Ok(Value::Array(ArrayHandle::new(
+            array.0.borrow().items.clone(),
+        )));
+    }
+    let mut out = Vec::new();
+    for item in array.0.borrow().items.clone() {
+        match item {
+            Value::Array(result) => out.extend(result.0.borrow().items.clone()),
+            other => out.push(other),
+        }
+    }
+    Ok(Value::Array(ArrayHandle::new(out)))
+}
+
+fn array_push<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let mut state = array.0.borrow_mut();
+    for expr in args {
+        state.items.push(eval_expr(expr, env, host)?);
+    }
+    Ok(Value::Number(state.items.len() as f64))
+}
+
+fn array_pop<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    args: &[Expr],
+    _env: &mut BTreeMap<String, Value>,
+    _host: &mut H,
+) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new("pop() expects no arguments"));
+    }
+    Ok(array.0.borrow_mut().items.pop().unwrap_or(Value::Undefined))
+}
+
+fn array_slice<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.len() > 2 {
+        return Err(ScriptError::new("slice() expects at most two arguments"));
+    }
+    let items = array.0.borrow().items.clone();
+    let len = items.len() as i64;
+    let start = match args.first() {
+        Some(expr) => integer_from_value(&eval_expr(expr, env, host)?, "slice()")?,
+        None => 0,
+    };
+    let end = match args.get(1) {
+        Some(expr) => integer_from_value(&eval_expr(expr, env, host)?, "slice()")?,
+        None => len,
+    };
+    let start = if start < 0 {
+        (len + start).max(0)
+    } else {
+        start.min(len)
+    } as usize;
+    let end = if end < 0 {
+        (len + end).max(0)
+    } else {
+        end.min(len)
+    } as usize;
+    let slice = if end <= start {
+        Vec::new()
+    } else {
+        items[start..end].to_vec()
+    };
+    Ok(Value::Array(ArrayHandle::new(slice)))
+}
+
+fn array_concat<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let mut out = array.0.borrow().items.clone();
+    for expr in args {
+        match eval_expr(expr, env, host)? {
+            Value::Array(result) => out.extend(result.0.borrow().items.clone()),
+            other => out.push(other),
+        }
+    }
+    Ok(Value::Array(ArrayHandle::new(out)))
+}
+
+fn array_sort<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let mut items = array.0.borrow().items.clone();
+    match args {
+        [] => items.sort_by_key(|value| as_string(value)),
+        [callback_expr] => {
+            let callback = match eval_expr(callback_expr, env, host)? {
+                Value::Function(function) => function,
+                _ => return Err(ScriptError::new("sort() requires a function callback")),
+            };
+            items.sort_by(|left, right| {
+                let result = call_script_function_value(
+                    &callback,
+                    &[left.clone(), right.clone()],
+                    Value::Undefined,
+                    env,
+                    host,
+                )
+                .unwrap_or(Value::Number(0.0));
+                let number = match result {
+                    Value::Number(number) => number,
+                    _ => 0.0,
+                };
+                number
+                    .partial_cmp(&0.0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+        _ => return Err(ScriptError::new("sort() expects zero or one argument")),
+    }
+    array.0.borrow_mut().items = items;
+    Ok(Value::Array(array.clone()))
+}
+
+fn array_includes<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(ScriptError::new("includes() expects one or two arguments"));
+    }
+
+    let search = eval_expr(&args[0], env, host)?;
+    let from_index = match args.get(1) {
+        Some(expr) => integer_from_value(&eval_expr(expr, env, host)?, "includes()")?,
+        None => 0,
+    };
+    let items = array.0.borrow().items.clone();
+    let len = items.len() as i64;
+    let start = if from_index < 0 {
+        (len + from_index).max(0)
+    } else {
+        from_index.min(len)
+    } as usize;
+
+    Ok(Value::Boolean(items[start..].iter().any(|item| {
+        eval_equality(item, &search, true)
+            || (matches!(item, Value::Number(number) if number.is_nan())
+                && matches!(search, Value::Number(number) if number.is_nan()))
+    })))
+}
+
+fn array_index_of<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+    last: bool,
+) -> Result<Value> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(ScriptError::new("indexOf() expects one or two arguments"));
+    }
+
+    let search = eval_expr(&args[0], env, host)?;
+    let from_index = match args.get(1) {
+        Some(expr) => integer_from_value(&eval_expr(expr, env, host)?, "indexOf()")?,
+        None => {
+            if last {
+                i64::MAX
+            } else {
+                0
+            }
+        }
+    };
+    let items = array.0.borrow().items.clone();
+    let len = items.len() as i64;
+
+    let found = if last {
+        let end = if from_index < 0 {
+            (len + from_index).max(-1)
+        } else {
+            from_index.min(len.saturating_sub(1))
+        };
+        (0..=end.max(-1))
+            .rev()
+            .find(|index| {
+                items
+                    .get(*index as usize)
+                    .map(|item| eval_equality(item, &search, true))
+                    .unwrap_or(false)
+            })
+            .map(|index| index as i64)
+    } else {
+        let start = if from_index < 0 {
+            (len + from_index).max(0)
+        } else {
+            from_index.min(len)
+        } as usize;
+        (start..items.len())
+            .find(|index| {
+                items
+                    .get(*index)
+                    .map(|item| eval_equality(item, &search, true))
+                    .unwrap_or(false)
+            })
+            .map(|index| index as i64)
+    };
+
+    Ok(Value::Number(
+        found.map(|index| index as f64).unwrap_or(-1.0),
+    ))
+}
+
+fn array_reverse<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    args: &[Expr],
+    _env: &mut BTreeMap<String, Value>,
+    _host: &mut H,
+) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new("reverse() expects no arguments"));
+    }
+
+    array.0.borrow_mut().items.reverse();
+    Ok(Value::Array(array.clone()))
+}
+
+fn array_reduce<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let (callback_expr, initial_expr) = match args {
+        [callback_expr] => (callback_expr, None),
+        [callback_expr, initial_expr] => (callback_expr, Some(initial_expr)),
+        _ => {
+            return Err(ScriptError::new("reduce() expects one or two arguments"));
+        }
+    };
+    let callback = match eval_expr(callback_expr, env, host)? {
+        Value::Function(function) => function,
+        _ => return Err(ScriptError::new("reduce() requires a function callback")),
+    };
+    let items = array.0.borrow().items.clone();
+    let mut index = 0usize;
+    let mut accumulator = match initial_expr {
+        Some(expr) => eval_expr(expr, env, host)?,
+        None => {
+            let Some(first) = items.first().cloned() else {
+                return Err(ScriptError::new(
+                    "reduce() of empty array with no initial value",
+                ));
+            };
+            index = 1;
+            first
+        }
+    };
+
+    for (offset, item) in items.into_iter().enumerate().skip(index) {
+        accumulator = call_script_function_value(
+            &callback,
+            &[
+                accumulator.clone(),
+                item,
+                Value::Number(offset as f64),
+                Value::Array(array.clone()),
+            ],
+            Value::Undefined,
+            env,
+            host,
+        )?;
+    }
+
+    Ok(accumulator)
+}
+
+fn map_get<H: HostBindings>(
+    map: &MapHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [key_expr, ..] = args else {
+        return Err(ScriptError::new("get() expects at least one argument"));
+    };
+    let key = map_key_from_value(&eval_expr(key_expr, env, host)?);
+    Ok(map
+        .0
+        .borrow()
+        .entries
+        .iter()
+        .find(|(candidate, _)| *candidate == key)
+        .map(|(_, value)| value.clone())
+        .unwrap_or(Value::Undefined))
+}
+
+fn map_set<H: HostBindings>(
+    map: &MapHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [key_expr, value_expr, ..] = args else {
+        return Err(ScriptError::new("set() expects at least two arguments"));
+    };
+    let key = map_key_from_value(&eval_expr(key_expr, env, host)?);
+    let value = eval_expr(value_expr, env, host)?;
+    let mut state = map.0.borrow_mut();
+    if let Some((_, existing)) = state
+        .entries
+        .iter_mut()
+        .find(|(candidate, _)| *candidate == key)
+    {
+        *existing = value;
+    } else {
+        state.entries.push((key, value));
+    }
+    Ok(Value::Map(map.clone()))
+}
+
+fn map_has<H: HostBindings>(
+    map: &MapHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [key_expr, ..] = args else {
+        return Err(ScriptError::new("has() expects at least one argument"));
+    };
+    let key = map_key_from_value(&eval_expr(key_expr, env, host)?);
+    Ok(Value::Boolean(
+        map.0
+            .borrow()
+            .entries
+            .iter()
+            .any(|(candidate, _)| *candidate == key),
+    ))
+}
+
+fn map_delete<H: HostBindings>(
+    map: &MapHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [key_expr, ..] = args else {
+        return Err(ScriptError::new("delete() expects at least one argument"));
+    };
+    let key = map_key_from_value(&eval_expr(key_expr, env, host)?);
+    let mut state = map.0.borrow_mut();
+    let len_before = state.entries.len();
+    state.entries.retain(|(candidate, _)| *candidate != key);
+    Ok(Value::Boolean(state.entries.len() != len_before))
+}
+
+fn map_clear<H: HostBindings>(
+    map: &MapHandle,
+    args: &[Expr],
+    _env: &mut BTreeMap<String, Value>,
+    _host: &mut H,
+) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new("clear() expects no arguments"));
+    }
+    map.0.borrow_mut().entries.clear();
+    Ok(Value::Undefined)
+}
+
+fn map_keys<H: HostBindings>(map: &MapHandle, _host: &mut H) -> Result<Value> {
+    Ok(collection_iterator(
+        map.0
+            .borrow()
+            .entries
+            .iter()
+            .map(|(key, _)| map_key_to_value(key))
+            .collect(),
+    ))
+}
+
+fn map_values<H: HostBindings>(map: &MapHandle, _host: &mut H) -> Result<Value> {
+    Ok(collection_iterator(
+        map.0
+            .borrow()
+            .entries
+            .iter()
+            .map(|(_, value)| value.clone())
+            .collect(),
+    ))
+}
+
+fn map_entries<H: HostBindings>(map: &MapHandle, _host: &mut H) -> Result<Value> {
+    Ok(collection_iterator(
+        map.0
+            .borrow()
+            .entries
+            .iter()
+            .map(|(key, value)| {
+                Value::Array(ArrayHandle::new(vec![map_key_to_value(key), value.clone()]))
+            })
+            .collect(),
+    ))
+}
+
+fn map_for_each<H: HostBindings>(
+    map: &MapHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let (callback_expr, this_arg_expr) = match args {
+        [callback_expr] => (callback_expr, None),
+        [callback_expr, this_arg_expr] => (callback_expr, Some(this_arg_expr)),
+        _ => {
+            return Err(ScriptError::new("forEach() expects one or two arguments"));
+        }
+    };
+    let callback = match eval_expr(callback_expr, env, host)? {
+        Value::Function(function) => function,
+        _ => return Err(ScriptError::new("forEach() requires a function callback")),
+    };
+    let this_value = match this_arg_expr {
+        Some(expr) => eval_expr(expr, env, host)?,
+        None => Value::Undefined,
+    };
+    let entries = map.0.borrow().entries.clone();
+    for (key, value) in entries {
+        let _ = call_script_function_value(
+            &callback,
+            &[
+                value.clone(),
+                map_key_to_value(&key),
+                Value::Map(map.clone()),
+            ],
+            this_value.clone(),
+            env,
+            host,
+        )?;
+    }
+    Ok(Value::Undefined)
+}
+
+fn date_constructor<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let _ = (args, env, host);
+    Err(ScriptError::phase_not_ready("Date"))
+}
+
+fn intl_construct<H: HostBindings>(
+    property: &str,
+    args: &[Expr],
+    _env: &mut BTreeMap<String, Value>,
+    _host: &mut H,
+) -> Result<Value> {
+    let _ = args;
+    Err(ScriptError::phase_not_ready(&format!("Intl.{property}")))
 }
 
 fn scroll_coordinate(value: &Value, method: &str) -> Result<i64> {

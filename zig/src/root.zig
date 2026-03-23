@@ -1295,6 +1295,20 @@ test "contract: Harness.fromHtml mutates CSSMediaRule mediaText during bootstrap
     );
 }
 
+test "contract: Harness.fromHtml mutates CSSMediaRule conditionText during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<style id='sheet'>@media screen and (min-width: 1px) { .primary { color: red; } .secondary { color: blue; } }</style><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); const before = String(rule) + ':' + rule.conditionText + ':' + String(rule.media) + ':' + rule.media.mediaText + ':' + String(rule.cssRules.length) + ':' + rule.cssRules.item(0).selectorText + ':' + rule.cssRules.item(1).selectorText; rule.conditionText = 'tv, speech'; const current = document.styleSheets.item(0).cssRules.item(0); out.textContent = before + '|' + String(current) + ':' + current.conditionText + ':' + String(current.media) + ':' + current.media.mediaText + ':' + String(current.cssRules.length) + ':' + current.cssRules.item(0).selectorText + ':' + current.cssRules.item(1).selectorText + ':' + current.cssText + ':' + document.getElementById('sheet').textContent;</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSMediaRule]:screen and (min-width: 1px):screen and (min-width: 1px):screen and (min-width: 1px):2:.primary:.secondary|[object CSSMediaRule]:tv, speech:tv, speech:tv, speech:2:.primary:.secondary:@media tv, speech { .primary { color: red; }\n.secondary { color: blue; } }:@media tv, speech { .primary { color: red; }\n.secondary { color: blue; } }",
+    );
+}
+
 test "failure: Harness.fromHtml rejects document.styleSheets media assignment" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -1899,13 +1913,13 @@ test "contract: Harness.fromHtml runs document.styleSheets @media cssRules durin
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
         allocator,
-        "<style>@media screen { .primary { color: red; } .secondary { color: blue; } }</style><div id='out'></div><script>const media = document.styleSheets.item(0).cssRules.item(0); const nested = media.cssRules; const list = media.media; document.getElementById('out').textContent = String(media) + ':' + media.conditionText + ':' + String(list) + ':' + String(list.length) + ':' + list.item(0) + ':' + String(nested.length) + ':' + nested.item(0).selectorText + ':' + nested.item(1).selectorText + ':' + nested.item(0).cssText;</script>",
+        "<style>@media screen { .primary { color: red; } .secondary { color: blue; } }</style><div id='out'></div><script>const media = document.styleSheets.item(0).cssRules.item(0); const nested = media.cssRules; const list = media.media; const matches = String(media.matches); document.getElementById('out').textContent = matches + ':' + String(media) + ':' + media.conditionText + ':' + String(list) + ':' + String(list.length) + ':' + list.item(0) + ':' + String(nested.length) + ':' + nested.item(0).selectorText + ':' + nested.item(1).selectorText + ':' + nested.item(0).cssText;</script>",
     );
     defer subject.deinit();
 
     try subject.assertValue(
         "#out",
-        "[object CSSMediaRule]:screen:screen:1:screen:2:.primary:.secondary:.primary { color: red; }",
+        "false:[object CSSMediaRule]:screen:screen:1:screen:2:.primary:.secondary:.primary { color: red; }",
     );
 }
 
@@ -1920,17 +1934,39 @@ test "failure: Harness.fromHtml rejects non-media media access" {
     );
 }
 
+test "failure: Harness.fromHtml rejects CSSMediaRule-specific matches access on non-media rules" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<style>@supports (display: grid) { .primary { color: red; } }</style><script>document.styleSheets.item(0).cssRules.item(0).matches;</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects CSSMediaRule-specific conditionText access on non-media rules" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<style>@keyframes fade { from { opacity: 0; } }</style><script>document.styleSheets.item(0).cssRules.item(0).conditionText = 'screen';</script>",
+        ),
+    );
+}
+
 test "contract: Harness.fromHtml runs document.styleSheets @supports cssRules during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
         allocator,
-        "<style>@supports (display: grid) { .primary { color: red; } .secondary { color: blue; } }</style><div id='out'></div><script>const supports = document.styleSheets.item(0).cssRules.item(0); const nested = supports.cssRules; document.getElementById('out').textContent = String(supports) + ':' + supports.conditionText + ':' + String(nested.length) + ':' + nested.item(0).selectorText + ':' + nested.item(1).selectorText + ':' + nested.item(0).cssText;</script>",
+        "<style>@supports (display: grid) { .primary { color: red; } .secondary { color: blue; } }</style><div id='out'></div><script>const supports = document.styleSheets.item(0).cssRules.item(0); const nested = supports.cssRules; const before = String(supports) + ':' + supports.conditionText + ':' + String(nested.length) + ':' + nested.item(0).selectorText + ':' + nested.item(1).selectorText + ':' + nested.item(0).cssText; supports.conditionText = 'not (display: grid)'; const updated = document.styleSheets.item(0).cssRules.item(0); document.getElementById('out').textContent = before + '|' + String(updated) + ':' + updated.conditionText + ':' + updated.cssText;</script>",
     );
     defer subject.deinit();
 
     try subject.assertValue(
         "#out",
-        "[object CSSSupportsRule]:(display: grid):2:.primary:.secondary:.primary { color: red; }",
+        "[object CSSSupportsRule]:(display: grid):2:.primary:.secondary:.primary { color: red; }|[object CSSSupportsRule]:not (display: grid):@supports not (display: grid) { .primary { color: red; }\n.secondary { color: blue; } }",
     );
 }
 
@@ -1938,13 +1974,60 @@ test "contract: Harness.fromHtml runs document.styleSheets @supports-condition c
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
         allocator,
-        "<style>@supports-condition --thicker-underlines { text-decoration-thickness: 0.2em; text-underline-offset: 0.3em; }</style><div id='out'></div><script>const rule = document.styleSheets.item(0).cssRules.item(0); document.getElementById('out').textContent = String(rule) + ':' + rule.name + ':' + String(rule.parentStyleSheet) + ':' + String(rule.parentRule) + ':' + String(rule.cssRules.length) + ':' + rule.cssText;</script>",
+        "<style>@supports-condition --thicker-underlines { text-decoration-thickness: 0.2em; text-underline-offset: 0.3em; }</style><div id='out'></div><script>const rule = document.styleSheets.item(0).cssRules.item(0); const before = String(rule) + ':' + rule.name + ':' + String(rule.parentStyleSheet) + ':' + String(rule.parentRule) + ':' + String(rule.cssRules.length) + ':' + rule.cssText; rule.cssText = '@supports-condition --thicker-underlines { text-decoration-thickness: 0.4em; text-underline-offset: 0.6em; }'; const updated = document.styleSheets.item(0).cssRules.item(0); document.getElementById('out').textContent = before + '|' + String(updated) + ':' + updated.name + ':' + String(updated.parentStyleSheet) + ':' + String(updated.parentRule) + ':' + String(updated.cssRules.length) + ':' + updated.cssText;</script>",
     );
     defer subject.deinit();
 
     try subject.assertValue(
         "#out",
-        "[object CSSSupportsConditionRule]:--thicker-underlines:[object CSSStyleSheet]:null:0:@supports-condition --thicker-underlines { text-decoration-thickness: 0.2em; text-underline-offset: 0.3em; }",
+        "[object CSSSupportsConditionRule]:--thicker-underlines:[object CSSStyleSheet]:null:0:@supports-condition --thicker-underlines { text-decoration-thickness: 0.2em; text-underline-offset: 0.3em; }|[object CSSSupportsConditionRule]:--thicker-underlines:[object CSSStyleSheet]:null:0:@supports-condition --thicker-underlines { text-decoration-thickness: 0.4em; text-underline-offset: 0.6em; }",
+    );
+}
+
+test "failure: Harness.fromHtml rejects cssText mutations on non-supports-condition rules" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<style>@media screen { .primary { color: red; } }</style><script>document.styleSheets.item(0).cssRules.item(0).cssText = '@supports-condition --thicker-underlines { text-decoration-thickness: 0.4em; }';</script>",
+        ),
+    );
+}
+
+test "contract: Harness.fromHtml mutates CSSSupportsRule and CSSContainerRule cssText during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<style>@supports (display: grid) { .supports { color: red; } .secondary { color: blue; } } @container card (min-width: 1px) { .container { color: purple; } .tertiary { color: green; } }</style><div id='out'></div><script>const rules = document.styleSheets.item(0).cssRules; const supports = rules.item(0); const container = rules.item(1); const beforeSupports = String(supports) + ':' + supports.conditionText + ':' + String(supports.cssRules.length) + ':' + supports.cssRules.item(0).selectorText + ':' + supports.cssRules.item(1).selectorText; const beforeContainer = String(container) + ':' + container.containerName + ':' + container.containerQuery + ':' + container.conditionText + ':' + String(container.cssRules.length) + ':' + container.cssRules.item(0).selectorText + ':' + container.cssRules.item(1).selectorText; supports.cssText = '@supports (display: flex) { .supports { color: green; } .secondary { color: cyan; } }'; container.cssText = '@container card (min-width: 2px) { .container { color: orange; } .tertiary { color: yellow; } }'; const updatedSupports = document.styleSheets.item(0).cssRules.item(0); const updatedContainer = document.styleSheets.item(0).cssRules.item(1); document.getElementById('out').textContent = beforeSupports + '|' + beforeContainer + '|' + String(updatedSupports) + ':' + updatedSupports.conditionText + ':' + String(updatedSupports.cssRules.length) + ':' + updatedSupports.cssRules.item(0).selectorText + ':' + updatedSupports.cssRules.item(1).selectorText + ':' + updatedSupports.cssText + '|' + String(updatedContainer) + ':' + updatedContainer.containerName + ':' + updatedContainer.containerQuery + ':' + updatedContainer.conditionText + ':' + String(updatedContainer.cssRules.length) + ':' + updatedContainer.cssRules.item(0).selectorText + ':' + updatedContainer.cssRules.item(1).selectorText + ':' + updatedContainer.cssText;</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSSupportsRule]:(display: grid):2:.supports:.secondary|[object CSSContainerRule]:card:(min-width: 1px):card (min-width: 1px):2:.container:.tertiary|[object CSSSupportsRule]:(display: flex):2:.supports:.secondary:@supports (display: flex) { .supports { color: green; } .secondary { color: cyan; } }|[object CSSContainerRule]:card:(min-width: 2px):card (min-width: 2px):2:.container:.tertiary:@container card (min-width: 2px) { .container { color: orange; } .tertiary { color: yellow; } }",
+    );
+}
+
+test "failure: Harness.fromHtml rejects malformed CSSSupportsRule.cssText mutations" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<style>@supports (display: grid) { .primary { color: red; } }</style><script>document.styleSheets.item(0).cssRules.item(0).cssText = '.broken { color: blue; }';</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects malformed CSSContainerRule.cssText mutations" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<style>@container card (min-width: 1px) { .primary { color: red; } }</style><script>document.styleSheets.item(0).cssRules.item(0).cssText = '.broken { color: blue; }';</script>",
+        ),
     );
 }
 
@@ -1952,13 +2035,13 @@ test "contract: Harness.fromHtml runs document.styleSheets @container cssRules d
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
         allocator,
-        "<style>@container card (min-width: 1px) { .primary { color: red; } .secondary { color: blue; } }</style><div id='out'></div><script>const rule = document.styleSheets.item(0).cssRules.item(0); const nested = rule.cssRules; document.getElementById('out').textContent = String(rule) + ':' + rule.containerName + ':' + rule.containerQuery + ':' + rule.conditionText + ':' + String(nested.length) + ':' + nested.item(0).selectorText + ':' + nested.item(1).selectorText + ':' + nested.item(0).cssText + ':' + rule.cssText;</script>",
+        "<style>@container card (min-width: 1px) { .primary { color: red; } .secondary { color: blue; } }</style><div id='out'></div><script>const rule = document.styleSheets.item(0).cssRules.item(0); const nested = rule.cssRules; const before = String(rule) + ':' + rule.containerName + ':' + rule.containerQuery + ':' + rule.conditionText + ':' + String(nested.length) + ':' + nested.item(0).selectorText + ':' + nested.item(1).selectorText + ':' + nested.item(0).cssText + ':' + rule.cssText; rule.conditionText = 'card (min-width: 2px)'; const updated = document.styleSheets.item(0).cssRules.item(0); document.getElementById('out').textContent = before + '|' + String(updated) + ':' + updated.containerName + ':' + updated.containerQuery + ':' + updated.conditionText + ':' + updated.cssText;</script>",
     );
     defer subject.deinit();
 
     try subject.assertValue(
         "#out",
-        "[object CSSContainerRule]:card:(min-width: 1px):card (min-width: 1px):2:.primary:.secondary:.primary { color: red; }:@container card (min-width: 1px) { .primary { color: red; } .secondary { color: blue; } }",
+        "[object CSSContainerRule]:card:(min-width: 1px):card (min-width: 1px):2:.primary:.secondary:.primary { color: red; }:@container card (min-width: 1px) { .primary { color: red; } .secondary { color: blue; } }|[object CSSContainerRule]:card:(min-width: 2px):card (min-width: 2px):@container card (min-width: 2px) { .primary { color: red; }\n.secondary { color: blue; } }",
     );
 }
 
@@ -2018,17 +2101,59 @@ test "contract: Harness.fromHtml runs document.styleSheets @keyframes cssRules d
     );
 }
 
+test "contract: Harness.fromHtml mutates CSSKeyframeRule keyText during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<style>@keyframes pulse { from { opacity: 0; } to { opacity: 1; } }</style><div id='out'></div><script>const keyframes = document.styleSheets.item(0).cssRules.item(0); const frame = keyframes.cssRules.item(0); const before = String(keyframes) + ':' + keyframes.name + ':' + frame.keyText + ':' + frame.cssText; frame.keyText = '25%'; const updated = document.styleSheets.item(0).cssRules.item(0).cssRules.item(0); document.getElementById('out').textContent = before + '|' + String(updated) + ':' + updated.keyText + ':' + updated.cssText;</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSKeyframesRule]:pulse:from:from { opacity: 0; }|[object CSSKeyframeRule]:25%:25% { opacity: 0; }",
+    );
+}
+
+test "contract: Harness.fromHtml mutates CSSKeyframesRule rules during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<style>@keyframes pulse { from { opacity: 0; } }</style><div id='out'></div><script>const keyframes = document.styleSheets.item(0).cssRules.item(0); const before = String(keyframes) + ':' + keyframes.name + ':' + String(keyframes.cssRules.length) + ':' + keyframes.cssRules.item(0).keyText; keyframes.appendRule('50% { opacity: 0.5; }'); const appended = document.styleSheets.item(0).cssRules.item(0); const found = appended.findRule('50%'); appended.deleteRule('from'); const deleted = document.styleSheets.item(0).cssRules.item(0); document.getElementById('out').textContent = before + '|' + String(appended) + ':' + String(appended.cssRules.length) + ':' + appended.cssRules.item(1).keyText + ':' + String(found) + ':' + found.keyText + ':' + found.cssText + '|' + String(deleted) + ':' + String(deleted.cssRules.length) + ':' + deleted.cssRules.item(0).keyText + ':' + deleted.cssText;</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSKeyframesRule]:pulse:1:from|[object CSSKeyframesRule]:2:50%:[object CSSKeyframeRule]:50%:50% { opacity: 0.5; }|[object CSSKeyframesRule]:1:50%:@keyframes pulse { 50% { opacity: 0.5; } }",
+    );
+}
+
 test "contract: Harness.fromHtml runs document.styleSheets @font-face cssRules during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
         allocator,
-        "<style>@font-face { font-family: x; src: url(x.woff); }</style><div id='out'></div><script>const rule = document.styleSheets.item(0).cssRules.item(0); const style = rule.style; const before = String(rule) + ':' + rule.cssText + ':' + String(style) + ':' + style.cssText + ':' + style.getPropertyValue('font-family') + ':' + style.getPropertyValue('src'); style.setProperty('font-family', 'y'); style.setProperty('src', 'url(y.woff)'); document.getElementById('out').textContent = before + '|' + String(rule) + ':' + rule.cssText + ':' + style.cssText + ':' + style.getPropertyValue('font-family') + ':' + style.getPropertyValue('src');</script>",
+        "<style>@font-face { font-family: x; src: url(x.woff); }</style><div id='out'></div><script>const rule = document.styleSheets.item(0).cssRules.item(0); const style = rule.style; const before = String(rule) + ':' + rule.cssText + ':' + String(style) + ':' + style.cssText + ':' + style.getPropertyValue('font-family') + ':' + style.getPropertyValue('src'); style.setProperty('font-family', 'y'); style.setProperty('src', 'url(y.woff)'); const updated = document.styleSheets.item(0).cssRules.item(0); document.getElementById('out').textContent = before + '|' + String(updated) + ':' + updated.cssText + ':' + updated.style.cssText + ':' + updated.style.getPropertyValue('font-family') + ':' + updated.style.getPropertyValue('src');</script>",
     );
     defer subject.deinit();
 
     try subject.assertValue(
         "#out",
         "[object CSSFontFaceRule]:@font-face { font-family: x; src: url(x.woff); }:font-family: x; src: url(x.woff);:font-family: x; src: url(x.woff);:x:url(x.woff)|[object CSSFontFaceRule]:@font-face { font-family: y; src: url(y.woff); }:font-family: y; src: url(y.woff);:y:url(y.woff)",
+    );
+}
+
+test "contract: Harness.fromHtml runs document.styleSheets @font-face cssText during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<style>@font-face { font-family: x; src: url(x.woff); }</style><div id='out'></div><script>const rule = document.styleSheets.item(0).cssRules.item(0); const before = String(rule) + ':' + rule.cssText + ':' + rule.style.cssText + ':' + rule.style.getPropertyValue('font-family') + ':' + rule.style.getPropertyValue('src'); rule.cssText = '@font-face { font-family: y; src: url(y.woff); }'; const updated = document.styleSheets.item(0).cssRules.item(0); document.getElementById('out').textContent = before + '|' + String(updated) + ':' + updated.cssText + ':' + updated.style.cssText + ':' + updated.style.getPropertyValue('font-family') + ':' + updated.style.getPropertyValue('src');</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSFontFaceRule]:@font-face { font-family: x; src: url(x.woff); }:font-family: x; src: url(x.woff);:x:url(x.woff)|[object CSSFontFaceRule]:@font-face { font-family: y; src: url(y.woff); }:font-family: y; src: url(y.woff);:y:url(y.woff)",
     );
 }
 
@@ -2046,6 +2171,20 @@ test "contract: Harness.fromHtml runs document.styleSheets @font-feature-values 
     );
 }
 
+test "contract: Harness.fromHtml mutates CSSFontFeatureValuesRule cssText during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<style>@font-feature-values test { .x { color: red; } }</style><div id='out'></div><script>const sheet = document.styleSheets.item(0); const rule = sheet.cssRules.item(0); const before = String(rule) + ':' + rule.fontFamily + ':' + rule.cssText; rule.cssText = '@font-feature-values updated { .y { color: blue; } }'; const current = sheet.cssRules.item(0); document.getElementById('out').textContent = before + '|' + String(current) + ':' + current.fontFamily + ':' + current.cssText;</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSFontFeatureValuesRule]:test:@font-feature-values test { .x { color: red; } }|[object CSSFontFeatureValuesRule]:updated:@font-feature-values updated { .y { color: blue; } }",
+    );
+}
+
 test "contract: Harness.fromHtml runs document.styleSheets @font-palette-values cssRules during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -2060,6 +2199,20 @@ test "contract: Harness.fromHtml runs document.styleSheets @font-palette-values 
     );
 }
 
+test "contract: Harness.fromHtml mutates CSSFontPaletteValuesRule cssText during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<style>@font-palette-values --palette { font-family: Bungee Spice; base-palette: light; override-colors: 0 red; }</style><div id='out'></div><script>const sheet = document.styleSheets.item(0); const rule = sheet.cssRules.item(0); const before = String(rule) + ':' + rule.name + ':' + rule.fontFamily + ':' + rule.basePalette + ':' + rule.overrideColors + ':' + rule.cssText; rule.cssText = '@font-palette-values --theme { font-family: Bungee Spice; base-palette: dark; override-colors: 0 blue; }'; const current = document.styleSheets.item(0).cssRules.item(0); document.getElementById('out').textContent = before + '|' + String(current) + ':' + current.name + ':' + current.fontFamily + ':' + current.basePalette + ':' + current.overrideColors + ':' + current.cssText;</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSFontPaletteValuesRule]:--palette:Bungee Spice:light:0 red:@font-palette-values --palette { font-family: Bungee Spice; base-palette: light; override-colors: 0 red; }|[object CSSFontPaletteValuesRule]:--theme:Bungee Spice:dark:0 blue:@font-palette-values --theme { font-family: Bungee Spice; base-palette: dark; override-colors: 0 blue; }",
+    );
+}
+
 test "contract: Harness.fromHtml runs document.styleSheets @color-profile cssRules during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -2071,6 +2224,20 @@ test "contract: Harness.fromHtml runs document.styleSheets @color-profile cssRul
     try subject.assertValue(
         "#out",
         "[object CSSColorProfileRule]:--swopc:url(http://example.org/swop-coated.icc):perceptual:cyan, magenta, yellow, black:@color-profile --swopc { src: url(http://example.org/swop-coated.icc); rendering-intent: perceptual; components: cyan, magenta, yellow, black; }",
+    );
+}
+
+test "contract: Harness.fromHtml mutates CSSColorProfileRule cssText during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<style>@color-profile --swopc { src: url(http://example.org/swop-coated.icc); rendering-intent: perceptual; components: cyan, magenta, yellow, black; }</style><div id='out'></div><script>const sheet = document.styleSheets.item(0); const rule = sheet.cssRules.item(0); const before = String(rule) + ':' + rule.name + ':' + rule.src + ':' + rule.renderingIntent + ':' + rule.components + ':' + rule.cssText; rule.cssText = '@color-profile --swopc { src: url(http://example.org/swop-updated.icc); rendering-intent: perceptual; components: cyan, magenta, yellow, black; }'; const current = sheet.cssRules.item(0); document.getElementById('out').textContent = before + '|' + String(current) + ':' + current.name + ':' + current.src + ':' + current.renderingIntent + ':' + current.components + ':' + current.cssText;</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSColorProfileRule]:--swopc:url(http://example.org/swop-coated.icc):perceptual:cyan, magenta, yellow, black:@color-profile --swopc { src: url(http://example.org/swop-coated.icc); rendering-intent: perceptual; components: cyan, magenta, yellow, black; }|[object CSSColorProfileRule]:--swopc:url(http://example.org/swop-updated.icc):perceptual:cyan, magenta, yellow, black:@color-profile --swopc { src: url(http://example.org/swop-updated.icc); rendering-intent: perceptual; components: cyan, magenta, yellow, black; }",
     );
 }
 
@@ -2321,13 +2488,13 @@ test "contract: Harness.fromHtml runs document.styleSheets @page cssRules during
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
         allocator,
-        "<style>@page :first { margin: 1cm; }</style><div id='out'></div><script>const rule = document.styleSheets.item(0).cssRules.item(0); const style = rule.style; document.getElementById('out').textContent = String(rule) + ':' + rule.selectorText + ':' + String(style) + ':' + style.cssText + ':' + style.getPropertyValue('margin');</script>",
+        "<style>@page :first { margin: 1cm; }</style><div id='out'></div><script>const rule = document.styleSheets.item(0).cssRules.item(0); const style = rule.style; const before = String(rule) + ':' + rule.selectorText + ':' + String(style) + ':' + style.cssText + ':' + style.getPropertyValue('margin'); style.cssText = 'margin: 2cm;'; const updated = document.styleSheets.item(0).cssRules.item(0); document.getElementById('out').textContent = before + '|' + String(updated) + ':' + updated.selectorText + ':' + String(updated.style) + ':' + updated.style.cssText + ':' + updated.style.getPropertyValue('margin');</script>",
     );
     defer subject.deinit();
 
     try subject.assertValue(
         "#out",
-        "[object CSSPageRule]::first:margin: 1cm;:margin: 1cm;:1cm",
+        "[object CSSPageRule]::first:margin: 1cm;:margin: 1cm;:1cm|[object CSSPageRule]::first:margin: 2cm;:margin: 2cm;:2cm",
     );
 }
 
@@ -2384,6 +2551,20 @@ test "contract: Harness.fromHtml runs document.styleSheets @property cssRules du
     try subject.assertValue(
         "#out",
         "[object CSSPropertyRule]:--accent:\"<color>\":false:red:@property --accent { syntax: \"<color>\"; inherits: false; initial-value: red; }",
+    );
+}
+
+test "contract: Harness.fromHtml mutates CSSCounterStyleRule and CSSPropertyRule cssText during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<style>@counter-style thumbs { system: cyclic; symbols: a b; negative: '-' '+'; prefix: pre; suffix: post; range: 1 3; pad: 2 0; fallback: decimal; speak-as: bullets; additive-symbols: 1 '*' 2 '**'; } @property --accent { syntax: \"<color>\"; inherits: false; initial-value: red; }</style><div id='out'></div><script>const sheet = document.styleSheets.item(0); const counter = sheet.cssRules.item(0); const property = sheet.cssRules.item(1); counter.cssText = \"@counter-style glyphs { system: fixed; symbols: a b; negative: '-' '+'; prefix: pre; suffix: post; range: 1 3; pad: 2 0; fallback: decimal; speak-as: bullets; additive-symbols: 1 '*' 2 '**'; }\"; property.cssText = '@property --gap { syntax: \"<length>\"; inherits: true; initial-value: 2px; }'; const updatedCounter = sheet.cssRules.item(0); const updatedProperty = sheet.cssRules.item(1); document.getElementById('out').textContent = String(updatedCounter) + ':' + updatedCounter.name + ':' + updatedCounter.system + ':' + updatedCounter.cssText + '|' + String(updatedProperty) + ':' + updatedProperty.name + ':' + updatedProperty.syntax + ':' + String(updatedProperty.inherits) + ':' + updatedProperty.initialValue + ':' + updatedProperty.cssText;</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSCounterStyleRule]:glyphs:fixed:@counter-style glyphs { system: fixed; symbols: a b; negative: '-' '+'; prefix: pre; suffix: post; range: 1 3; pad: 2 0; fallback: decimal; speak-as: bullets; additive-symbols: 1 '*' 2 '**'; }|[object CSSPropertyRule]:--gap:\"<length>\":true:2px:@property --gap { syntax: \"<length>\"; inherits: true; initial-value: 2px; }",
     );
 }
 
@@ -2456,6 +2637,17 @@ test "failure: Harness.fromHtml rejects malformed document.styleSheets @counter-
     );
 }
 
+test "failure: Harness.fromHtml rejects malformed document.styleSheets @counter-style cssText mutations" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<style>@counter-style thumbs { system: cyclic; symbols: a b; negative: '-' '+'; prefix: pre; suffix: post; range: 1 3; pad: 2 0; fallback: decimal; speak-as: bullets; additive-symbols: 1 '*' 2 '**'; }</style><script>document.styleSheets.item(0).cssRules.item(0).cssText = '.broken { color: blue; }';</script>",
+        ),
+    );
+}
+
 test "failure: Harness.fromHtml rejects malformed document.styleSheets @property access" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -2463,6 +2655,17 @@ test "failure: Harness.fromHtml rejects malformed document.styleSheets @property
         Harness.fromHtml(
             allocator,
             "<style>@property --accent { inherits: false; initial-value: red; }</style><script>document.styleSheets.item(0).cssRules.length;</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects malformed document.styleSheets @property cssText mutations" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<style>@property --accent { syntax: \"<color>\"; inherits: false; initial-value: red; }</style><script>document.styleSheets.item(0).cssRules.item(0).cssText = '.broken { color: blue; }';</script>",
         ),
     );
 }
@@ -2478,6 +2681,28 @@ test "failure: Harness.fromHtml rejects malformed document.styleSheets @font-pal
     );
 }
 
+test "failure: Harness.fromHtml rejects malformed document.styleSheets @font-palette-values cssText mutations" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<style>@font-palette-values --palette { font-family: Bungee Spice; base-palette: light; override-colors: 0 red; }</style><script>document.styleSheets.item(0).cssRules.item(0).cssText = '.broken { color: blue; }';</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects malformed document.styleSheets @font-feature-values cssText mutations" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<style>@font-feature-values test { .x { color: red; } }</style><script>document.styleSheets.item(0).cssRules.item(0).cssText = '.broken { color: blue; }';</script>",
+        ),
+    );
+}
+
 test "failure: Harness.fromHtml rejects malformed document.styleSheets @color-profile access" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -2485,6 +2710,17 @@ test "failure: Harness.fromHtml rejects malformed document.styleSheets @color-pr
         Harness.fromHtml(
             allocator,
             "<style>@color-profile swopc { src: url(http://example.org/swop-coated.icc); }</style><script>document.styleSheets.item(0).cssRules.length;</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects malformed document.styleSheets @color-profile cssText mutations" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<style>@color-profile --swopc { src: url(http://example.org/swop-coated.icc); rendering-intent: perceptual; components: cyan, magenta, yellow, black; }</style><script>document.styleSheets.item(0).cssRules.item(0).cssText = '.broken { color: blue; }';</script>",
         ),
     );
 }
@@ -2528,7 +2764,7 @@ test "failure: Harness.fromHtml rejects CSSPageRule.style mutations" {
         error.ScriptRuntime,
         Harness.fromHtml(
             allocator,
-            "<style>@page :first { margin: 1cm; }</style><script>document.styleSheets.item(0).cssRules.item(0).style.cssText = 'margin: 2cm;';</script>",
+            "<style>@media screen { .primary { color: red; } }</style><script>document.styleSheets.item(0).cssRules.item(0).style;</script>",
         ),
     );
 }
@@ -2579,6 +2815,17 @@ test "failure: Harness.fromHtml rejects malformed CSSMediaRule.cssText mutations
         Harness.fromHtml(
             allocator,
             "<style>@media screen { .primary { color: red; } }</style><script>document.styleSheets.item(0).cssRules.item(0).cssText = '.broken { color: blue; }';</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects malformed CSSMediaRule.conditionText mutations" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<style>@media screen { .primary { color: red; } }</style><script>document.styleSheets.item(0).cssRules.item(0).conditionText = '}';</script>",
         ),
     );
 }
@@ -2720,6 +2967,17 @@ test "failure: Harness.fromHtml rejects CSSSupportsConditionRule-specific access
     );
 }
 
+test "failure: Harness.fromHtml rejects conditionText mutations on non-conditional rules" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<style>@keyframes fade { from { opacity: 0; } }</style><script>document.styleSheets.item(0).cssRules.item(0).conditionText = 'print';</script>",
+        ),
+    );
+}
+
 test "failure: Harness.fromHtml rejects malformed document.styleSheets @container access" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -2792,7 +3050,40 @@ test "failure: Harness.fromHtml rejects CSSFontFaceRule-specific access on non-f
         error.ScriptRuntime,
         Harness.fromHtml(
             allocator,
-            "<style>.primary { color: red; }</style><script>document.styleSheets.item(0).cssRules.item(0).style.setProperty('font-family', 'y');</script>",
+            "<style>@media screen { .primary { color: red; } }</style><script>document.styleSheets.item(0).cssRules.item(0).style;</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects CSSFontFaceRule.cssText mutations on non-font-face rules" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<style>@media screen { .primary { color: red; } }</style><script>document.styleSheets.item(0).cssRules.item(0).cssText = '@font-face { font-family: y; src: url(y.woff); }';</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects CSSKeyframeRule.keyText mutations on non-keyframe rules" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<style>@media screen { .primary { color: red; } }</style><script>document.styleSheets.item(0).cssRules.item(0).keyText = '25%';</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects CSSKeyframesRule appendRule mutations on non-keyframe rules" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<style>@media screen { .primary { color: red; } }</style><script>document.styleSheets.item(0).cssRules.item(0).appendRule('50% { opacity: 0.5; }');</script>",
         ),
     );
 }

@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::fmt;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 mod evaluator;
 mod parser;
@@ -295,6 +296,144 @@ pub enum RadioNodeListTarget {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum PropertyKey {
+    String(String),
+    Symbol(u64),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum PropertyValue {
+    Data(ScriptValue),
+    Accessor {
+        getter: Option<ScriptFunction>,
+        setter: Option<ScriptFunction>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ObjectState {
+    properties: Vec<(PropertyKey, PropertyValue)>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ObjectHandle(Rc<RefCell<ObjectState>>);
+
+impl ObjectHandle {
+    pub fn new() -> Self {
+        Self(Rc::new(RefCell::new(ObjectState {
+            properties: Vec::new(),
+        })))
+    }
+
+    pub fn identity(&self) -> usize {
+        Rc::as_ptr(&self.0) as usize
+    }
+}
+
+impl PartialEq for ObjectHandle {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ArrayState {
+    items: Vec<ScriptValue>,
+    properties: Vec<(PropertyKey, PropertyValue)>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ArrayHandle(Rc<RefCell<ArrayState>>);
+
+impl ArrayHandle {
+    pub fn new(items: Vec<ScriptValue>) -> Self {
+        Self(Rc::new(RefCell::new(ArrayState {
+            items,
+            properties: Vec::new(),
+        })))
+    }
+
+    pub fn identity(&self) -> usize {
+        Rc::as_ptr(&self.0) as usize
+    }
+}
+
+impl PartialEq for ArrayHandle {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct MapState {
+    entries: Vec<(MapKey, ScriptValue)>,
+    properties: Vec<(PropertyKey, PropertyValue)>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MapHandle(Rc<RefCell<MapState>>);
+
+impl MapHandle {
+    pub fn new() -> Self {
+        Self(Rc::new(RefCell::new(MapState {
+            entries: Vec::new(),
+            properties: Vec::new(),
+        })))
+    }
+
+    pub fn identity(&self) -> usize {
+        Rc::as_ptr(&self.0) as usize
+    }
+}
+
+impl PartialEq for MapHandle {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum MapKey {
+    Undefined,
+    Null,
+    Boolean(bool),
+    Number(u64),
+    String(String),
+    Symbol(u64),
+    Object(usize),
+    Array(usize),
+    Map(usize),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SymbolValue {
+    id: u64,
+    description: Option<String>,
+}
+
+impl SymbolValue {
+    pub fn new(description: Option<String>) -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+        Self {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            description,
+        }
+    }
+
+    pub fn from_parts(id: u64, description: Option<String>) -> Self {
+        Self { id, description }
+    }
+
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum StyleSheetTarget {
     OwnerNode(ElementHandle),
 }
@@ -582,6 +721,10 @@ pub enum ScriptValue {
     Boolean(bool),
     Number(f64),
     String(String),
+    Object(ObjectHandle),
+    Array(ArrayHandle),
+    Map(MapHandle),
+    Symbol(SymbolValue),
     Element(ElementHandle),
     Attribute(AttributeHandle),
     ClassList(ElementHandle),
@@ -595,6 +738,7 @@ pub enum ScriptValue {
     StringList(StringListState),
     MimeTypeArray(MimeTypeArrayState),
     Navigator,
+    Clipboard,
     History,
     Screen,
     ScreenOrientation(ScreenOrientationState),
@@ -607,14 +751,18 @@ pub enum ScriptValue {
     IteratorResult(Box<IteratorResult>),
     Document,
     Window,
+    ObjectNamespace,
+    ArrayNamespace,
+    IntlNamespace,
     Event(ScriptEventHandle),
     Function(ScriptFunction),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ScriptFunction {
     pub params: Vec<String>,
     pub body_source: String,
+    pub captured_bindings: Rc<BTreeMap<String, ScriptValue>>,
 }
 
 impl ScriptFunction {
@@ -622,7 +770,16 @@ impl ScriptFunction {
         Self {
             params,
             body_source: body_source.into(),
+            captured_bindings: Rc::new(BTreeMap::new()),
         }
+    }
+
+    pub fn with_captured_bindings(
+        mut self,
+        captured_bindings: BTreeMap<String, ScriptValue>,
+    ) -> Self {
+        self.captured_bindings = Rc::new(captured_bindings);
+        self
     }
 }
 
@@ -920,6 +1077,30 @@ pub trait HostBindings {
         Err(ScriptError::phase_not_ready("window.print"))
     }
 
+    fn window_request_animation_frame(&mut self, _callback: ScriptFunction) -> Result<u64> {
+        Err(ScriptError::phase_not_ready("window.requestAnimationFrame"))
+    }
+
+    fn window_cancel_animation_frame(&mut self, _handle: u64) -> Result<()> {
+        Err(ScriptError::phase_not_ready("window.cancelAnimationFrame"))
+    }
+
+    fn window_set_timeout(&mut self, _callback: ScriptFunction, _delay_ms: i64) -> Result<u64> {
+        Err(ScriptError::phase_not_ready("window.setTimeout"))
+    }
+
+    fn window_clear_timeout(&mut self, _handle: u64) -> Result<()> {
+        Err(ScriptError::phase_not_ready("window.clearTimeout"))
+    }
+
+    fn window_set_interval(&mut self, _callback: ScriptFunction, _delay_ms: i64) -> Result<u64> {
+        Err(ScriptError::phase_not_ready("window.setInterval"))
+    }
+
+    fn window_clear_interval(&mut self, _handle: u64) -> Result<()> {
+        Err(ScriptError::phase_not_ready("window.clearInterval"))
+    }
+
     fn window_alert(&mut self, _message: &str) -> Result<()> {
         Err(ScriptError::phase_not_ready("window.alert"))
     }
@@ -1007,6 +1188,16 @@ pub trait HostBindings {
 
     fn window_navigator_mime_types(&mut self) -> Result<Vec<String>> {
         Err(ScriptError::phase_not_ready("window.navigator.mimeTypes"))
+    }
+
+    fn clipboard_write_text(&mut self, _text: &str) -> Result<()> {
+        Err(ScriptError::phase_not_ready(
+            "navigator.clipboard.writeText",
+        ))
+    }
+
+    fn clipboard_read_text(&mut self) -> Result<String> {
+        Err(ScriptError::phase_not_ready("navigator.clipboard.readText"))
     }
 
     fn window_navigator_cookie_enabled(&mut self) -> Result<bool> {
@@ -1903,7 +2094,12 @@ impl Evaluator {
         host: &mut H,
         mut initial_bindings: BTreeMap<String, ScriptValue>,
     ) -> Result<()> {
-        evaluator::eval_program_with_bindings(program, host, &mut initial_bindings)
+        match evaluator::eval_program_with_bindings(program, host, &mut initial_bindings)? {
+            evaluator::EvalControl::Continue => Ok(()),
+            evaluator::EvalControl::Return(_) => Err(ScriptError::new("return outside function")),
+            evaluator::EvalControl::Break => Err(ScriptError::new("break outside loop")),
+            evaluator::EvalControl::ContinueLoop => Err(ScriptError::new("continue outside loop")),
+        }
     }
 }
 

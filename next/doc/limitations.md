@@ -72,7 +72,7 @@ What does not exist yet:
 
 ## Important Consequence
 
-Public methods such as `focus`, `blur`, `set_select_value`, `fetch`, `confirm`, `prompt`, `read_clipboard`, `write_clipboard`, `print`, `open`, `close`, `scroll_to`, `scroll_by`, `navigate`, `set_files`, and `capture_download` are now supported and dispatch or capture through the same deterministic runtime.
+Public methods such as `focus`, `blur`, `set_select_value`, `fetch`, `confirm`, `prompt`, `read_clipboard`, `write_clipboard`, `print`, `open`, `close`, `scroll_to`, `scroll_by`, `navigate`, `set_files`, and `capture_download` are now supported and dispatch or capture through the same deterministic runtime. The script-visible `navigator.clipboard.writeText()` / `navigator.clipboard.readText()` surface is a synchronous compatibility shim over the same mock-backed clipboard family rather than a full permissioned Promise-based browser implementation.
 
 ## Still Out of Scope
 

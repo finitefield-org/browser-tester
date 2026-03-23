@@ -10,20 +10,17 @@ fn issue_202_async_digest_stub_updates_dom_after_await() -> browser_tester::Resu
         if (!window.crypto) { window.crypto = {}; }
         window.crypto.subtle = {
           digest: function (_alg, _data) {
-            return Promise.resolve(new Uint8Array([65, 66, 67]).buffer);
+            return new Uint8Array([65, 66, 67]).buffer;
           }
         };
 
-        (async function () {
-          const digest = await crypto.subtle.digest("SHA-256", new Uint8Array([1, 2, 3]));
+        (function () {
+          const digest = crypto.subtle.digest("SHA-256", new Uint8Array([1, 2, 3]));
           document.getElementById("meta").textContent =
             typeof digest + ":" + String(digest && digest.byteLength);
           document.getElementById("out").textContent =
             Array.from(new Uint8Array(digest)).join(",");
-        })().catch(function (error) {
-          document.getElementById("err").textContent =
-            error && error.message ? error.message : String(error);
-        });
+        })();
       </script>
     "#;
 

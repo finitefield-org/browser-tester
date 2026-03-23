@@ -78,8 +78,12 @@ impl fmt::Display for Error {
             Self::HtmlParse(err) => write!(f, "HTML parse error: {err}"),
             Self::JsSetup(err) => write!(f, "JS setup error: {err}"),
             Self::Script(err) => write!(f, "Script error: {err}"),
-            Self::ScriptParse(message) => write!(f, "Script parse error: {message}"),
-            Self::ScriptRuntime(message) => write!(f, "Script runtime error: {message}"),
+            Self::ScriptParse(message) => {
+                write!(f, "Script error (parse): {message}")
+            }
+            Self::ScriptRuntime(message) => {
+                write!(f, "Script error (runtime): {message}")
+            }
             Self::Selector(err) => write!(f, "Selector error: {err}"),
             Self::Dom(err) => write!(f, "DOM error: {err}"),
             Self::Event(err) => write!(f, "Event error: {err}"),
@@ -296,12 +300,14 @@ impl Harness {
                 "advance_time requires a non-negative delta",
             )));
         }
-        self.session.scheduler_mut().advance_time(delta_ms);
+        self.session
+            .advance_time(delta_ms)
+            .map_err(map_session_error)?;
         Ok(())
     }
 
     pub fn flush(&mut self) -> Result<()> {
-        self.session.scheduler_mut().flush();
+        self.session.flush().map_err(map_session_error)?;
         Ok(())
     }
 
@@ -448,7 +454,7 @@ impl Harness {
     }
 
     pub fn run_due_timers(&mut self) -> Result<usize> {
-        Ok(self.session.scheduler_mut().run_due_timers().len())
+        self.session.run_due_timers().map_err(map_session_error)
     }
 
     pub fn fetch(&mut self, url: &str) -> Result<FetchResponse> {

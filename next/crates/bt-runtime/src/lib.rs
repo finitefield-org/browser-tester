@@ -93,6 +93,12 @@ impl Scheduler {
         id
     }
 
+    pub fn cancel_timer(&mut self, id: u64) -> bool {
+        let before = self.timers.len();
+        self.timers.retain(|timer| timer.id != id);
+        before != self.timers.len()
+    }
+
     pub fn pending_timers(&self) -> &[ScheduledTimer] {
         &self.timers
     }
@@ -728,11 +734,24 @@ impl From<ScriptError> for SessionError {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 struct ScriptListenerRecord {
     target: SessionEventTarget,
     event_type: String,
     capture: bool,
+    handler: ScriptFunction,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum ScheduledScriptTimerKind {
+    AnimationFrame,
+    Timeout,
+    Interval { interval_ms: i64 },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ScheduledScriptTimerRecord {
+    kind: ScheduledScriptTimerKind,
     handler: ScriptFunction,
 }
 
@@ -921,6 +940,7 @@ pub struct Session {
     config: SessionConfig,
     debug: DebugState,
     script_event_listeners: Vec<ScriptListenerRecord>,
+    scheduled_script_timers: BTreeMap<u64, ScheduledScriptTimerRecord>,
     default_actions: Vec<DefaultActionKind>,
     focused_node: Option<NodeId>,
     current_script: Option<NodeId>,
@@ -979,6 +999,7 @@ impl Session {
             config,
             debug: DebugState::default(),
             script_event_listeners: Vec::new(),
+            scheduled_script_timers: BTreeMap::new(),
             default_actions: vec![
                 DefaultActionKind::CheckboxToggle,
                 DefaultActionKind::SubmitButton,
@@ -1015,6 +1036,35 @@ impl Session {
 
     pub fn scheduler_mut(&mut self) -> &mut Scheduler {
         &mut self.scheduler
+    }
+
+    pub fn advance_time(&mut self, delta_ms: i64) -> Result<usize, SessionError> {
+        self.scheduler.now_ms = self.scheduler.now_ms.saturating_add(delta_ms);
+        let due_timers = self.scheduler.run_due_timers();
+        self.run_due_script_timers(due_timers)
+    }
+
+    pub fn flush(&mut self) -> Result<usize, SessionError> {
+        let mut executed = 0usize;
+        let mut steps = 0usize;
+        while let Some(next_due) = self.scheduler.timers.first().map(|timer| timer.at_ms) {
+            self.scheduler.now_ms = self.scheduler.now_ms.max(next_due);
+            let due_timers = self.scheduler.run_due_timers();
+            executed = executed.saturating_add(self.run_due_script_timers(due_timers)?);
+            steps += 1;
+            if steps > self.scheduler.step_limit() {
+                return Err(SessionError::Mock(
+                    "timer flush exceeded the scheduler step limit".to_string(),
+                ));
+            }
+        }
+        self.scheduler.microtasks = 0;
+        Ok(executed)
+    }
+
+    pub fn run_due_timers(&mut self) -> Result<usize, SessionError> {
+        let due_timers = self.scheduler.run_due_timers();
+        self.run_due_script_timers(due_timers)
     }
 
     pub fn mocks(&self) -> &MockRegistry {
@@ -1612,7 +1662,7 @@ impl Session {
             event.set_current_target(Some(Self::script_listener_target(target)));
             event.set_phase(phase);
             let source_name = format!("event:{event_type}:{}:{index}", Self::phase_label(phase));
-            let bindings = Self::listener_bindings(&listener.handler, event);
+            let bindings = Self::listener_bindings(target, &listener.handler, event);
             self.eval_script_source_with_bindings(
                 &listener.handler.body_source,
                 &source_name,
@@ -1765,11 +1815,13 @@ impl Session {
     }
 
     fn listener_bindings(
+        target: SessionEventTarget,
         handler: &ScriptFunction,
         event: &ScriptEventHandle,
     ) -> BTreeMap<String, ScriptValue> {
-        let mut bindings = BTreeMap::new();
+        let mut bindings = (*handler.captured_bindings).clone();
         bindings.insert("event".to_string(), ScriptValue::Event(event.clone()));
+        bindings.insert("this".to_string(), Self::listener_this_value(target));
 
         for (index, param) in handler.params.iter().enumerate() {
             if index == 0 {
@@ -1780,6 +1832,16 @@ impl Session {
         }
 
         bindings
+    }
+
+    fn listener_this_value(target: SessionEventTarget) -> ScriptValue {
+        match target {
+            SessionEventTarget::Window => ScriptValue::Window,
+            SessionEventTarget::Document => ScriptValue::Document,
+            SessionEventTarget::Element(node_id) => {
+                ScriptValue::Element(Self::node_id_to_handle(node_id))
+            }
+        }
     }
 
     fn script_listener_target(target: SessionEventTarget) -> ListenerTarget {
@@ -3708,6 +3770,97 @@ impl Session {
             handler,
         });
     }
+
+    fn schedule_script_timer(
+        &mut self,
+        kind: ScheduledScriptTimerKind,
+        delay_ms: i64,
+        handler: ScriptFunction,
+    ) -> u64 {
+        let due_at = self.scheduler.now_ms.saturating_add(delay_ms.max(0));
+        let id = self.scheduler.queue_timer(due_at);
+        self.scheduled_script_timers
+            .insert(id, ScheduledScriptTimerRecord { kind, handler });
+        id
+    }
+
+    fn cancel_script_timer(&mut self, id: u64) {
+        self.scheduler.cancel_timer(id);
+        self.scheduled_script_timers.remove(&id);
+    }
+
+    fn run_timer_callback(
+        &mut self,
+        callback: &ScriptFunction,
+        this_value: ScriptValue,
+        args: &[ScriptValue],
+        source_name: &str,
+    ) -> Result<(), SessionError> {
+        let mut bindings = (*callback.captured_bindings).clone();
+
+        bindings.insert("this".to_string(), this_value);
+
+        for (index, param) in callback.params.iter().enumerate() {
+            let value = args.get(index).cloned().unwrap_or(ScriptValue::Undefined);
+            bindings.insert(param.clone(), value);
+        }
+
+        self.eval_script_source_with_bindings(&callback.body_source, source_name, bindings)
+    }
+
+    fn run_due_script_timers(
+        &mut self,
+        due_timers: Vec<ScheduledTimer>,
+    ) -> Result<usize, SessionError> {
+        let mut executed = 0usize;
+
+        for timer in due_timers {
+            let Some(record) = self.scheduled_script_timers.get(&timer.id).cloned() else {
+                continue;
+            };
+
+            executed = executed.saturating_add(1);
+            let source_name = match &record.kind {
+                ScheduledScriptTimerKind::AnimationFrame => {
+                    format!("timer:requestAnimationFrame:{}", timer.id)
+                }
+                ScheduledScriptTimerKind::Timeout => format!("timer:setTimeout:{}", timer.id),
+                ScheduledScriptTimerKind::Interval { .. } => {
+                    format!("timer:setInterval:{}", timer.id)
+                }
+            };
+            let args = match &record.kind {
+                ScheduledScriptTimerKind::AnimationFrame => {
+                    vec![ScriptValue::Number(self.scheduler.now_ms as f64)]
+                }
+                ScheduledScriptTimerKind::Timeout | ScheduledScriptTimerKind::Interval { .. } => {
+                    Vec::new()
+                }
+            };
+
+            self.run_timer_callback(&record.handler, ScriptValue::Window, &args, &source_name)?;
+
+            match &record.kind {
+                ScheduledScriptTimerKind::AnimationFrame | ScheduledScriptTimerKind::Timeout => {
+                    self.scheduled_script_timers.remove(&timer.id);
+                }
+                ScheduledScriptTimerKind::Interval { interval_ms } => {
+                    if self.scheduled_script_timers.contains_key(&timer.id) {
+                        self.scheduled_script_timers.remove(&timer.id);
+                        self.schedule_script_timer(
+                            ScheduledScriptTimerKind::Interval {
+                                interval_ms: *interval_ms,
+                            },
+                            *interval_ms,
+                            record.handler,
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(executed)
+    }
 }
 
 impl HostBindings for Session {
@@ -3922,6 +4075,50 @@ impl HostBindings for Session {
         Session::print(self).map_err(|error| ScriptError::new(error.to_string()))
     }
 
+    fn window_request_animation_frame(
+        &mut self,
+        callback: ScriptFunction,
+    ) -> bt_script::Result<u64> {
+        Ok(self.schedule_script_timer(ScheduledScriptTimerKind::AnimationFrame, 16, callback))
+    }
+
+    fn window_cancel_animation_frame(&mut self, handle: u64) -> bt_script::Result<()> {
+        self.cancel_script_timer(handle);
+        Ok(())
+    }
+
+    fn window_set_timeout(
+        &mut self,
+        callback: ScriptFunction,
+        delay_ms: i64,
+    ) -> bt_script::Result<u64> {
+        Ok(self.schedule_script_timer(ScheduledScriptTimerKind::Timeout, delay_ms, callback))
+    }
+
+    fn window_clear_timeout(&mut self, handle: u64) -> bt_script::Result<()> {
+        self.cancel_script_timer(handle);
+        Ok(())
+    }
+
+    fn window_set_interval(
+        &mut self,
+        callback: ScriptFunction,
+        delay_ms: i64,
+    ) -> bt_script::Result<u64> {
+        Ok(self.schedule_script_timer(
+            ScheduledScriptTimerKind::Interval {
+                interval_ms: delay_ms.max(0),
+            },
+            delay_ms,
+            callback,
+        ))
+    }
+
+    fn window_clear_interval(&mut self, handle: u64) -> bt_script::Result<()> {
+        self.cancel_script_timer(handle);
+        Ok(())
+    }
+
     fn window_alert(&mut self, message: &str) -> bt_script::Result<()> {
         Session::alert(self, message);
         Ok(())
@@ -3993,6 +4190,15 @@ impl HostBindings for Session {
 
     fn window_navigator_mime_types(&mut self) -> bt_script::Result<Vec<String>> {
         Ok(Session::window_navigator_mime_types(self))
+    }
+
+    fn clipboard_write_text(&mut self, text: &str) -> bt_script::Result<()> {
+        Session::write_clipboard(self, text);
+        Ok(())
+    }
+
+    fn clipboard_read_text(&mut self) -> bt_script::Result<String> {
+        Session::read_clipboard(self).map_err(|error| ScriptError::new(error.to_string()))
     }
 
     fn window_navigator_cookie_enabled(&mut self) -> bt_script::Result<bool> {

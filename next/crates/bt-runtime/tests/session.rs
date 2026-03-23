@@ -5091,6 +5091,36 @@ fn session_exposes_window_navigator_metadata() {
 }
 
 #[test]
+fn session_exposes_window_navigator_clipboard_access() {
+    let mut session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some("<div id='out'></div>".to_string()),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should build");
+    let mut runtime = ScriptRuntime::new();
+
+    runtime
+        .eval_program(
+            "window.navigator.clipboard.writeText('copied'); document.getElementById('out').textContent = String(window.navigator.clipboard) + ':' + window.navigator.clipboard.readText();",
+            "inline-script",
+            &mut session,
+        )
+        .expect("window.navigator.clipboard should resolve through Session");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "[object Clipboard]:copied"
+    );
+    assert_eq!(
+        session.mocks().clipboard().writes(),
+        &["copied".to_string()]
+    );
+    assert_eq!(session.mocks().clipboard().seeded_text(), Some("copied"));
+}
+
+#[test]
 fn session_exposes_window_navigator_languages_alias() {
     let session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
@@ -5696,6 +5726,28 @@ fn session_sets_file_input_files_and_dispatches_change_events() {
         session.mocks().file_input().selections()[0].files,
         vec!["report.csv".to_string()]
     );
+}
+
+#[test]
+fn session_registers_function_listener_with_this_binding() {
+    let mut session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<button id='button' data-value='ok'>go</button><div id='out'></div><script>const button = document.getElementById('button'); const out = document.getElementById('out'); button.addEventListener('click', function () { out.textContent = this.getAttribute('data-value'); });</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should build");
+
+    let button_id = session.dom().select("#button").unwrap()[0];
+    let out_id = session.dom().select("#out").unwrap()[0];
+
+    session
+        .click_node(button_id)
+        .expect("click should dispatch function listener");
+
+    assert_eq!(session.dom().text_content_for_node(out_id), "ok");
 }
 
 #[test]

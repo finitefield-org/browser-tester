@@ -257,6 +257,8 @@ Why this order:
 - dialogs, clipboard, print, close, open, and scroll are simpler than fetch/navigation
 - fetch and location tend to widen the service surface quickly
 
+Clipboard is exposed as a deterministic mock-backed compatibility shim through `navigator.clipboard.writeText()` / `navigator.clipboard.readText()` so tests can exercise copy and read flows without a browser permission model.
+
 ### Slice 8: Selector Expansion
 
 Goal:

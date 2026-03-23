@@ -960,7 +960,7 @@ test "regression: phase 17s2 CSSStyleSheet rules/addRule/removeRule resolve on t
 
 test "regression: phase 17e CSSMediaRule cssRules resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
-    const original = "<div id='root'><style>@media screen { .primary { color: red; } .secondary { color: blue; } }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const media = document.styleSheets.item(0).cssRules.item(0); const nested = media.cssRules; const list = media.media; out.textContent = String(media) + ':' + media.conditionText + ':' + String(list) + ':' + String(list.length) + ':' + list.item(0) + ':' + String(nested.length) + ':' + nested.item(0).selectorText + ':' + nested.item(1).selectorText + ':' + nested.item(0).cssText;</script>";
+    const original = "<div id='root'><style>@media screen { .primary { color: red; } .secondary { color: blue; } }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const media = document.styleSheets.item(0).cssRules.item(0); const nested = media.cssRules; const list = media.media; const matches = String(media.matches); out.textContent = matches + ':' + String(media) + ':' + media.conditionText + ':' + String(list) + ':' + String(list.length) + ':' + list.item(0) + ':' + String(nested.length) + ':' + nested.item(0).selectorText + ':' + nested.item(1).selectorText + ':' + nested.item(0).cssText;</script>";
     var html_bytes = try allocator.dupe(u8, original);
     defer allocator.free(html_bytes);
 
@@ -971,14 +971,32 @@ test "regression: phase 17e CSSMediaRule cssRules resolve on the copied html sna
 
     try subject.assertValue(
         "#out",
-        "[object CSSMediaRule]:screen:screen:1:screen:2:.primary:.secondary:.primary { color: red; }",
+        "false:[object CSSMediaRule]:screen:screen:1:screen:2:.primary:.secondary:.primary { color: red; }",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17e1 CSSMediaRule.conditionText resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style id='sheet'>@media screen and (min-width: 1px) { .primary { color: red; } .secondary { color: blue; } }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); const before = String(rule) + ':' + rule.conditionText + ':' + String(rule.media) + ':' + rule.media.mediaText + ':' + String(rule.cssRules.length) + ':' + rule.cssRules.item(0).selectorText + ':' + rule.cssRules.item(1).selectorText; rule.conditionText = 'tv, speech'; const current = document.styleSheets.item(0).cssRules.item(0); out.textContent = before + '|' + String(current) + ':' + current.conditionText + ':' + String(current.media) + ':' + current.media.mediaText + ':' + String(current.cssRules.length) + ':' + current.cssRules.item(0).selectorText + ':' + current.cssRules.item(1).selectorText + ':' + current.cssText + ':' + document.getElementById('sheet').textContent;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSMediaRule]:screen and (min-width: 1px):screen and (min-width: 1px):screen and (min-width: 1px):2:.primary:.secondary|[object CSSMediaRule]:tv, speech:tv, speech:tv, speech:2:.primary:.secondary:@media tv, speech { .primary { color: red; }\n.secondary { color: blue; } }:@media tv, speech { .primary { color: red; }\n.secondary { color: blue; } }",
     );
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
 test "regression: phase 17q CSSMediaRule media resolves on the copied html snapshot" {
     const allocator = std.testing.allocator;
-    const original = "<div id='out'></div><style>@media screen and (min-width: 1px) { .primary { color: red; } }</style><script>const rule = document.styleSheets.item(0).cssRules.item(0); const list = rule.media; const before = String(rule) + ':' + rule.conditionText + ':' + String(list) + ':' + String(list.length) + ':' + list.item(0); list.appendMedium('print'); list.deleteMedium('screen and (min-width: 1px)'); list.mediaText = 'tv, speech'; const refreshed = document.styleSheets.item(0).cssRules.item(0); document.getElementById('out').textContent = before + ':' + list.mediaText + ':' + String(list.length) + ':' + list.item(0) + ':' + list.item(1) + ':' + refreshed.conditionText + ':' + refreshed.media.mediaText + ':' + String(refreshed.media.length) + ':' + refreshed.media.item(0) + ':' + refreshed.media.item(1);</script>";
+    const original = "<div id='out'></div><style>@media screen and (min-width: 1px) { .primary { color: red; } }</style><script>const rule = document.styleSheets.item(0).cssRules.item(0); const list = rule.media; const before = String(rule.matches) + ':' + String(rule) + ':' + rule.conditionText + ':' + String(list) + ':' + String(list.length) + ':' + list.item(0); list.appendMedium('print'); list.deleteMedium('screen and (min-width: 1px)'); list.mediaText = 'tv, speech'; const refreshed = document.styleSheets.item(0).cssRules.item(0); document.getElementById('out').textContent = before + ':' + String(refreshed.matches) + ':' + refreshed.media.mediaText + ':' + String(refreshed.media.length) + ':' + refreshed.media.item(0) + ':' + refreshed.media.item(1) + ':' + refreshed.conditionText + ':' + refreshed.media.mediaText + ':' + String(refreshed.media.length) + ':' + refreshed.media.item(0) + ':' + refreshed.media.item(1);</script>";
     var html_bytes = try allocator.dupe(u8, original);
     defer allocator.free(html_bytes);
 
@@ -989,7 +1007,7 @@ test "regression: phase 17q CSSMediaRule media resolves on the copied html snaps
 
     try subject.assertValue(
         "#out",
-        "[object CSSMediaRule]:screen and (min-width: 1px):screen and (min-width: 1px):1:screen and (min-width: 1px):tv, speech:2:tv:speech:tv, speech:tv, speech:2:tv:speech",
+        "false:[object CSSMediaRule]:screen and (min-width: 1px):screen and (min-width: 1px):1:screen and (min-width: 1px):false:tv, speech:2:tv:speech:tv, speech:tv, speech:2:tv:speech",
     );
     const html = subject.html().?;
     try std.testing.expect(std.mem.indexOf(u8, html, "Z") == null);
@@ -1214,7 +1232,7 @@ test "regression: phase 17r10 stylesheet owner element fetchPriority resolves on
 
 test "regression: phase 17f CSSSupportsRule cssRules resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
-    const original = "<div id='root'><style>@supports (display: grid) { .primary { color: red; } .secondary { color: blue; } }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const supports = document.styleSheets.item(0).cssRules.item(0); const nested = supports.cssRules; out.textContent = String(supports) + ':' + supports.conditionText + ':' + String(nested.length) + ':' + nested.item(0).selectorText + ':' + nested.item(1).selectorText + ':' + nested.item(0).cssText;</script>";
+    const original = "<div id='root'><style>@supports (display: grid) { .primary { color: red; } .secondary { color: blue; } }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const supports = document.styleSheets.item(0).cssRules.item(0); const nested = supports.cssRules; const before = String(supports) + ':' + supports.conditionText + ':' + String(nested.length) + ':' + nested.item(0).selectorText + ':' + nested.item(1).selectorText + ':' + nested.item(0).cssText; supports.conditionText = 'not (display: grid)'; const updated = document.styleSheets.item(0).cssRules.item(0); out.textContent = before + '|' + String(updated) + ':' + updated.conditionText + ':' + updated.cssText;</script>";
     var html_bytes = try allocator.dupe(u8, original);
     defer allocator.free(html_bytes);
 
@@ -1225,14 +1243,14 @@ test "regression: phase 17f CSSSupportsRule cssRules resolve on the copied html 
 
     try subject.assertValue(
         "#out",
-        "[object CSSSupportsRule]:(display: grid):2:.primary:.secondary:.primary { color: red; }",
+        "[object CSSSupportsRule]:(display: grid):2:.primary:.secondary:.primary { color: red; }|[object CSSSupportsRule]:not (display: grid):@supports not (display: grid) { .primary { color: red; }\n.secondary { color: blue; } }",
     );
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
 test "regression: phase 17g CSSKeyframesRule cssRules resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
-    const original = "<div id='root'><style>@keyframes pulse { from { opacity: 0; } to { opacity: 1; } }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const keyframes = document.styleSheets.item(0).cssRules.item(0); const nested = keyframes.cssRules; out.textContent = String(keyframes) + ':' + keyframes.name + ':' + String(nested.length) + ':' + nested.item(0).keyText + ':' + nested.item(1).keyText + ':' + nested.item(1).cssText;</script>";
+    const original = "<div id='root'><style>@keyframes pulse { from { opacity: 0; } to { opacity: 1; } }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const keyframes = document.styleSheets.item(0).cssRules.item(0); const nested = keyframes.cssRules; const before = String(keyframes) + ':' + keyframes.name + ':' + String(nested.length) + ':' + nested.item(0).keyText + ':' + nested.item(1).keyText + ':' + nested.item(1).cssText; nested.item(0).keyText = '25%'; const updated = document.styleSheets.item(0).cssRules.item(0).cssRules.item(0); out.textContent = before + '|' + String(updated) + ':' + updated.keyText + ':' + updated.cssText;</script>";
     var html_bytes = try allocator.dupe(u8, original);
     defer allocator.free(html_bytes);
 
@@ -1243,14 +1261,32 @@ test "regression: phase 17g CSSKeyframesRule cssRules resolve on the copied html
 
     try subject.assertValue(
         "#out",
-        "[object CSSKeyframesRule]:pulse:2:from:to:to { opacity: 1; }",
+        "[object CSSKeyframesRule]:pulse:2:from:to:to { opacity: 1; }|[object CSSKeyframeRule]:25%:25% { opacity: 0; }",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17g1 CSSKeyframesRule appendRule deleteRule and findRule resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style>@keyframes pulse { from { opacity: 0; } }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const keyframes = document.styleSheets.item(0).cssRules.item(0); const before = String(keyframes) + ':' + keyframes.name + ':' + String(keyframes.cssRules.length) + ':' + keyframes.cssRules.item(0).keyText; keyframes.appendRule('50% { opacity: 0.5; }'); const appended = document.styleSheets.item(0).cssRules.item(0); const found = appended.findRule('50%'); appended.deleteRule('from'); const deleted = document.styleSheets.item(0).cssRules.item(0); out.textContent = before + '|' + String(appended) + ':' + String(appended.cssRules.length) + ':' + appended.cssRules.item(1).keyText + ':' + String(found) + ':' + found.keyText + ':' + found.cssText + '|' + String(deleted) + ':' + String(deleted.cssRules.length) + ':' + deleted.cssRules.item(0).keyText + ':' + deleted.cssText;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSKeyframesRule]:pulse:1:from|[object CSSKeyframesRule]:2:50%:[object CSSKeyframeRule]:50%:50% { opacity: 0.5; }|[object CSSKeyframesRule]:1:50%:@keyframes pulse { 50% { opacity: 0.5; } }",
     );
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
 test "regression: phase 17h CSSFontFaceRule cssRules resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
-    const original = "<div id='root'><style>@font-face { font-family: x; src: url(x.woff); }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); const style = rule.style; const before = String(rule) + ':' + rule.cssText + ':' + String(style) + ':' + style.cssText + ':' + style.getPropertyValue('font-family') + ':' + style.getPropertyValue('src'); style.setProperty('font-family', 'y'); style.setProperty('src', 'url(y.woff)'); out.textContent = before + '|' + String(rule) + ':' + rule.cssText + ':' + style.cssText + ':' + style.getPropertyValue('font-family') + ':' + style.getPropertyValue('src');</script>";
+    const original = "<div id='root'><style>@font-face { font-family: x; src: url(x.woff); }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); const style = rule.style; const before = String(rule) + ':' + rule.cssText + ':' + String(style) + ':' + style.cssText + ':' + style.getPropertyValue('font-family') + ':' + style.getPropertyValue('src'); style.setProperty('font-family', 'y'); style.setProperty('src', 'url(y.woff)'); const updated = document.styleSheets.item(0).cssRules.item(0); out.textContent = before + '|' + String(updated) + ':' + updated.cssText + ':' + updated.style.cssText + ':' + updated.style.getPropertyValue('font-family') + ':' + updated.style.getPropertyValue('src');</script>";
     var html_bytes = try allocator.dupe(u8, original);
     defer allocator.free(html_bytes);
 
@@ -1262,6 +1298,24 @@ test "regression: phase 17h CSSFontFaceRule cssRules resolve on the copied html 
     try subject.assertValue(
         "#out",
         "[object CSSFontFaceRule]:@font-face { font-family: x; src: url(x.woff); }:font-family: x; src: url(x.woff);:font-family: x; src: url(x.woff);:x:url(x.woff)|[object CSSFontFaceRule]:@font-face { font-family: y; src: url(y.woff); }:font-family: y; src: url(y.woff);:y:url(y.woff)",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17h1 CSSFontFaceRule cssText resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style>@font-face { font-family: x; src: url(x.woff); }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); const before = String(rule) + ':' + rule.cssText + ':' + rule.style.cssText + ':' + rule.style.getPropertyValue('font-family') + ':' + rule.style.getPropertyValue('src'); rule.cssText = '@font-face { font-family: y; src: url(y.woff); }'; const updated = document.styleSheets.item(0).cssRules.item(0); out.textContent = before + '|' + String(updated) + ':' + updated.cssText + ':' + updated.style.cssText + ':' + updated.style.getPropertyValue('font-family') + ':' + updated.style.getPropertyValue('src');</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSFontFaceRule]:@font-face { font-family: x; src: url(x.woff); }:font-family: x; src: url(x.woff);:x:url(x.woff)|[object CSSFontFaceRule]:@font-face { font-family: y; src: url(y.woff); }:font-family: y; src: url(y.woff);:y:url(y.woff)",
     );
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
@@ -1284,6 +1338,24 @@ test "regression: phase 17i CSSFontFeatureValuesRule cssRules resolve on the cop
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: phase 17i1 CSSFontFeatureValuesRule cssText mutations resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style>@font-feature-values test { .x { color: red; } }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const sheet = document.styleSheets.item(0); const rule = sheet.cssRules.item(0); const before = String(rule) + ':' + rule.fontFamily + ':' + rule.cssText; rule.cssText = '@font-feature-values updated { .y { color: blue; } }'; const current = sheet.cssRules.item(0); out.textContent = before + '|' + String(current) + ':' + current.fontFamily + ':' + current.cssText;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSFontFeatureValuesRule]:test:@font-feature-values test { .x { color: red; } }|[object CSSFontFeatureValuesRule]:updated:@font-feature-values updated { .y { color: blue; } }",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
 test "regression: phase 17i2 CSSFontPaletteValuesRule cssRules resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<div id='root'><style>@font-palette-values --palette { font-family: Bungee Spice; base-palette: light; override-colors: 0 red; }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); out.textContent = String(rule) + ':' + rule.name + ':' + rule.fontFamily + ':' + rule.basePalette + ':' + rule.overrideColors + ':' + rule.cssText;</script>";
@@ -1302,6 +1374,24 @@ test "regression: phase 17i2 CSSFontPaletteValuesRule cssRules resolve on the co
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
+test "regression: phase 17i2j CSSFontPaletteValuesRule cssText mutations resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style>@font-palette-values --palette { font-family: Bungee Spice; base-palette: light; override-colors: 0 red; }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const sheet = document.styleSheets.item(0); const rule = sheet.cssRules.item(0); const before = String(rule) + ':' + rule.name + ':' + rule.fontFamily + ':' + rule.basePalette + ':' + rule.overrideColors + ':' + rule.cssText; rule.cssText = '@font-palette-values --theme { font-family: Bungee Spice; base-palette: dark; override-colors: 0 blue; }'; const current = document.styleSheets.item(0).cssRules.item(0); out.textContent = before + '|' + String(current) + ':' + current.name + ':' + current.fontFamily + ':' + current.basePalette + ':' + current.overrideColors + ':' + current.cssText;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSFontPaletteValuesRule]:--palette:Bungee Spice:light:0 red:@font-palette-values --palette { font-family: Bungee Spice; base-palette: light; override-colors: 0 red; }|[object CSSFontPaletteValuesRule]:--theme:Bungee Spice:dark:0 blue:@font-palette-values --theme { font-family: Bungee Spice; base-palette: dark; override-colors: 0 blue; }",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
 test "regression: phase 17i3 CSSColorProfileRule cssRules resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<div id='root'><style>@color-profile --swopc { src: url(http://example.org/swop-coated.icc); rendering-intent: perceptual; components: cyan, magenta, yellow, black; }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); out.textContent = String(rule) + ':' + rule.name + ':' + rule.src + ':' + rule.renderingIntent + ':' + rule.components + ':' + rule.cssText;</script>";
@@ -1316,6 +1406,24 @@ test "regression: phase 17i3 CSSColorProfileRule cssRules resolve on the copied 
     try subject.assertValue(
         "#out",
         "[object CSSColorProfileRule]:--swopc:url(http://example.org/swop-coated.icc):perceptual:cyan, magenta, yellow, black:@color-profile --swopc { src: url(http://example.org/swop-coated.icc); rendering-intent: perceptual; components: cyan, magenta, yellow, black; }",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17i3j CSSColorProfileRule cssText mutations resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style>@color-profile --swopc { src: url(http://example.org/swop-coated.icc); rendering-intent: perceptual; components: cyan, magenta, yellow, black; }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const sheet = document.styleSheets.item(0); const rule = sheet.cssRules.item(0); const before = String(rule) + ':' + rule.name + ':' + rule.src + ':' + rule.renderingIntent + ':' + rule.components + ':' + rule.cssText; rule.cssText = '@color-profile --swopc { src: url(http://example.org/swop-updated.icc); rendering-intent: perceptual; components: cyan, magenta, yellow, black; }'; const current = sheet.cssRules.item(0); out.textContent = before + '|' + String(current) + ':' + current.name + ':' + current.src + ':' + current.renderingIntent + ':' + current.components + ':' + current.cssText;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSColorProfileRule]:--swopc:url(http://example.org/swop-coated.icc):perceptual:cyan, magenta, yellow, black:@color-profile --swopc { src: url(http://example.org/swop-coated.icc); rendering-intent: perceptual; components: cyan, magenta, yellow, black; }|[object CSSColorProfileRule]:--swopc:url(http://example.org/swop-updated.icc):perceptual:cyan, magenta, yellow, black:@color-profile --swopc { src: url(http://example.org/swop-updated.icc); rendering-intent: perceptual; components: cyan, magenta, yellow, black; }",
     );
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
@@ -1376,7 +1484,7 @@ test "regression: phase 17i6 CSSRule.parentRule resolve on the copied html snaps
 
 test "regression: phase 17j CSSContainerRule cssRules resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
-    const original = "<div id='root'><style>@container card (min-width: 1px) { .primary { color: red; } .secondary { color: blue; } }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); const nested = rule.cssRules; out.textContent = String(rule) + ':' + rule.containerName + ':' + rule.containerQuery + ':' + rule.conditionText + ':' + String(nested.length) + ':' + nested.item(0).selectorText + ':' + nested.item(1).selectorText + ':' + nested.item(0).cssText + ':' + rule.cssText;</script>";
+    const original = "<div id='root'><style>@container card (min-width: 1px) { .primary { color: red; } .secondary { color: blue; } }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); const nested = rule.cssRules; const before = String(rule) + ':' + rule.containerName + ':' + rule.containerQuery + ':' + rule.conditionText + ':' + String(nested.length) + ':' + nested.item(0).selectorText + ':' + nested.item(1).selectorText + ':' + nested.item(0).cssText + ':' + rule.cssText; rule.conditionText = 'card (min-width: 2px)'; const updated = document.styleSheets.item(0).cssRules.item(0); out.textContent = before + '|' + String(updated) + ':' + updated.containerName + ':' + updated.containerQuery + ':' + updated.conditionText + ':' + updated.cssText;</script>";
     var html_bytes = try allocator.dupe(u8, original);
     defer allocator.free(html_bytes);
 
@@ -1387,14 +1495,32 @@ test "regression: phase 17j CSSContainerRule cssRules resolve on the copied html
 
     try subject.assertValue(
         "#out",
-        "[object CSSContainerRule]:card:(min-width: 1px):card (min-width: 1px):2:.primary:.secondary:.primary { color: red; }:@container card (min-width: 1px) { .primary { color: red; } .secondary { color: blue; } }",
+        "[object CSSContainerRule]:card:(min-width: 1px):card (min-width: 1px):2:.primary:.secondary:.primary { color: red; }:@container card (min-width: 1px) { .primary { color: red; } .secondary { color: blue; } }|[object CSSContainerRule]:card:(min-width: 2px):card (min-width: 2px):@container card (min-width: 2px) { .primary { color: red; }\n.secondary { color: blue; } }",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17j1 CSSSupportsRule and CSSContainerRule cssText resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style>@supports (display: grid) { .supports { color: red; } .secondary { color: blue; } } @container card (min-width: 1px) { .container { color: purple; } .tertiary { color: green; } }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rules = document.styleSheets.item(0).cssRules; const supports = rules.item(0); const container = rules.item(1); const beforeSupports = String(supports) + ':' + supports.conditionText + ':' + String(supports.cssRules.length) + ':' + supports.cssRules.item(0).selectorText + ':' + supports.cssRules.item(1).selectorText; const beforeContainer = String(container) + ':' + container.containerName + ':' + container.containerQuery + ':' + container.conditionText + ':' + String(container.cssRules.length) + ':' + container.cssRules.item(0).selectorText + ':' + container.cssRules.item(1).selectorText; supports.cssText = '@supports (display: flex) { .supports { color: green; } .secondary { color: cyan; } }'; container.cssText = '@container card (min-width: 2px) { .container { color: orange; } .tertiary { color: yellow; } }'; const updatedSupports = document.styleSheets.item(0).cssRules.item(0); const updatedContainer = document.styleSheets.item(0).cssRules.item(1); out.textContent = beforeSupports + '|' + beforeContainer + '|' + String(updatedSupports) + ':' + updatedSupports.conditionText + ':' + String(updatedSupports.cssRules.length) + ':' + updatedSupports.cssRules.item(0).selectorText + ':' + updatedSupports.cssRules.item(1).selectorText + ':' + updatedSupports.cssText + '|' + String(updatedContainer) + ':' + updatedContainer.containerName + ':' + updatedContainer.containerQuery + ':' + updatedContainer.conditionText + ':' + String(updatedContainer.cssRules.length) + ':' + updatedContainer.cssRules.item(0).selectorText + ':' + updatedContainer.cssRules.item(1).selectorText + ':' + updatedContainer.cssText;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSSupportsRule]:(display: grid):2:.supports:.secondary|[object CSSContainerRule]:card:(min-width: 1px):card (min-width: 1px):2:.container:.tertiary|[object CSSSupportsRule]:(display: flex):2:.supports:.secondary:@supports (display: flex) { .supports { color: green; } .secondary { color: cyan; } }|[object CSSContainerRule]:card:(min-width: 2px):card (min-width: 2px):2:.container:.tertiary:@container card (min-width: 2px) { .container { color: orange; } .tertiary { color: yellow; } }",
     );
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
 test "regression: phase 17k CSSSupportsConditionRule cssRules resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
-    const original = "<div id='root'><style>@supports-condition --thicker-underlines { text-decoration-thickness: 0.2em; text-underline-offset: 0.3em; }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); out.textContent = String(rule) + ':' + rule.name + ':' + String(rule.parentStyleSheet) + ':' + String(rule.parentRule) + ':' + String(rule.cssRules.length) + ':' + rule.cssText;</script>";
+    const original = "<div id='root'><style>@supports-condition --thicker-underlines { text-decoration-thickness: 0.2em; text-underline-offset: 0.3em; }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); const before = String(rule) + ':' + rule.name + ':' + String(rule.parentStyleSheet) + ':' + String(rule.parentRule) + ':' + String(rule.cssRules.length) + ':' + rule.cssText; rule.cssText = '@supports-condition --thicker-underlines { text-decoration-thickness: 0.4em; text-underline-offset: 0.6em; }'; const updated = document.styleSheets.item(0).cssRules.item(0); out.textContent = before + '|' + String(updated) + ':' + updated.name + ':' + String(updated.parentStyleSheet) + ':' + String(updated.parentRule) + ':' + String(updated.cssRules.length) + ':' + updated.cssText;</script>";
     var html_bytes = try allocator.dupe(u8, original);
     defer allocator.free(html_bytes);
 
@@ -1405,7 +1531,7 @@ test "regression: phase 17k CSSSupportsConditionRule cssRules resolve on the cop
 
     try subject.assertValue(
         "#out",
-        "[object CSSSupportsConditionRule]:--thicker-underlines:[object CSSStyleSheet]:null:0:@supports-condition --thicker-underlines { text-decoration-thickness: 0.2em; text-underline-offset: 0.3em; }",
+        "[object CSSSupportsConditionRule]:--thicker-underlines:[object CSSStyleSheet]:null:0:@supports-condition --thicker-underlines { text-decoration-thickness: 0.2em; text-underline-offset: 0.3em; }|[object CSSSupportsConditionRule]:--thicker-underlines:[object CSSStyleSheet]:null:0:@supports-condition --thicker-underlines { text-decoration-thickness: 0.4em; text-underline-offset: 0.6em; }",
     );
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
@@ -1574,7 +1700,7 @@ test "regression: phase 17m CSSNamespaceRule cssRules resolve on the copied html
 
 test "regression: phase 17n CSSPageRule cssRules resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
-    const original = "<div id='root'><style>@page :first { margin: 1cm; }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); const style = rule.style; out.textContent = String(rule) + ':' + rule.selectorText + ':' + String(style) + ':' + style.cssText + ':' + style.getPropertyValue('margin');</script>";
+    const original = "<div id='root'><style>@page :first { margin: 1cm; }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const rule = document.styleSheets.item(0).cssRules.item(0); const style = rule.style; const before = String(rule) + ':' + rule.selectorText + ':' + String(style) + ':' + style.cssText + ':' + style.getPropertyValue('margin'); style.cssText = 'margin: 2cm;'; const updated = document.styleSheets.item(0).cssRules.item(0); out.textContent = before + '|' + String(updated) + ':' + updated.selectorText + ':' + String(updated.style) + ':' + updated.style.cssText + ':' + updated.style.getPropertyValue('margin');</script>";
     var html_bytes = try allocator.dupe(u8, original);
     defer allocator.free(html_bytes);
 
@@ -1585,7 +1711,7 @@ test "regression: phase 17n CSSPageRule cssRules resolve on the copied html snap
 
     try subject.assertValue(
         "#out",
-        "[object CSSPageRule]::first:margin: 1cm;:margin: 1cm;:1cm",
+        "[object CSSPageRule]::first:margin: 1cm;:margin: 1cm;:1cm|[object CSSPageRule]::first:margin: 2cm;:margin: 2cm;:2cm",
     );
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
@@ -1727,6 +1853,24 @@ test "regression: phase 17p2 CSSPropertyRule cssRules resolve on the copied html
     try subject.assertValue(
         "#out",
         "[object CSSPropertyRule]:--accent:\"<color>\":false:red:@property --accent { syntax: \"<color>\"; inherits: false; initial-value: red; }",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17p2j CSSCounterStyleRule and CSSPropertyRule cssText mutations resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<div id='root'><style>@counter-style thumbs { system: cyclic; symbols: a b; negative: '-' '+'; prefix: pre; suffix: post; range: 1 3; pad: 2 0; fallback: decimal; speak-as: bullets; additive-symbols: 1 '*' 2 '**'; } @property --accent { syntax: \"<color>\"; inherits: false; initial-value: red; }</style></div><div id='out'></div><script>const out = document.getElementById('out'); const sheet = document.styleSheets.item(0); const counter = sheet.cssRules.item(0); const property = sheet.cssRules.item(1); counter.cssText = \"@counter-style glyphs { system: fixed; symbols: a b; negative: '-' '+'; prefix: pre; suffix: post; range: 1 3; pad: 2 0; fallback: decimal; speak-as: bullets; additive-symbols: 1 '*' 2 '**'; }\"; property.cssText = '@property --gap { syntax: \"<length>\"; inherits: true; initial-value: 2px; }'; const updatedCounter = sheet.cssRules.item(0); const updatedProperty = sheet.cssRules.item(1); out.textContent = String(updatedCounter) + ':' + updatedCounter.name + ':' + updatedCounter.system + ':' + updatedCounter.cssText + '|' + String(updatedProperty) + ':' + updatedProperty.name + ':' + updatedProperty.syntax + ':' + String(updatedProperty.inherits) + ':' + updatedProperty.initialValue + ':' + updatedProperty.cssText;</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "[object CSSCounterStyleRule]:glyphs:fixed:@counter-style glyphs { system: fixed; symbols: a b; negative: '-' '+'; prefix: pre; suffix: post; range: 1 3; pad: 2 0; fallback: decimal; speak-as: bullets; additive-symbols: 1 '*' 2 '**'; }|[object CSSPropertyRule]:--gap:\"<length>\":true:2px:@property --gap { syntax: \"<length>\"; inherits: true; initial-value: 2px; }",
     );
     try std.testing.expectEqualStrings(original, subject.html().?);
 }

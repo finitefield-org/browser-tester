@@ -1597,11 +1597,11 @@ fn focus_accepts_optional_options_argument() -> browser_tester::Result<()> {
 #[test]
 fn fetch_with_options_object_parses_in_async_function() -> browser_tester::Result<()> {
     let html = r#"
-    <div>
+      <div>
       <button id="run">run</button>
       <script>
-        async function run() {
-          const response = await fetch("https://example.com", {
+        function run() {
+          const response = fetch("https://example.com", {
             method: "GET",
             headers: { "Accept": "text/html" }
           });

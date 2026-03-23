@@ -10,6 +10,8 @@ use bt_script::{
 struct NoopHost {
     microtasks: usize,
     navigator_mime_types_calls: usize,
+    clipboard_text: Option<String>,
+    clipboard_writes: Vec<String>,
 }
 
 impl HostBindings for NoopHost {
@@ -21,6 +23,18 @@ impl HostBindings for NoopHost {
     fn window_navigator_mime_types(&mut self) -> bt_script::Result<Vec<String>> {
         self.navigator_mime_types_calls += 1;
         Ok(Vec::new())
+    }
+
+    fn clipboard_write_text(&mut self, text: &str) -> bt_script::Result<()> {
+        self.clipboard_writes.push(text.to_string());
+        self.clipboard_text = Some(text.to_string());
+        Ok(())
+    }
+
+    fn clipboard_read_text(&mut self) -> bt_script::Result<String> {
+        self.clipboard_text
+            .clone()
+            .ok_or_else(|| bt_script::ScriptError::new("clipboard text has not been seeded"))
     }
 }
 
@@ -203,6 +217,8 @@ struct RecordingHost {
     navigator_language: String,
     navigator_languages_calls: usize,
     navigator_mime_types_calls: usize,
+    clipboard_text: Option<String>,
+    clipboard_writes: Vec<String>,
     navigator_cookie_enabled: bool,
     navigator_on_line: bool,
     window_scroll_calls: Vec<(String, i64, i64)>,
@@ -1136,6 +1152,18 @@ impl HostBindings for RecordingHost {
     fn window_navigator_mime_types(&mut self) -> bt_script::Result<Vec<String>> {
         self.navigator_mime_types_calls += 1;
         Ok(Vec::new())
+    }
+
+    fn clipboard_write_text(&mut self, text: &str) -> bt_script::Result<()> {
+        self.clipboard_writes.push(text.to_string());
+        self.clipboard_text = Some(text.to_string());
+        Ok(())
+    }
+
+    fn clipboard_read_text(&mut self) -> bt_script::Result<String> {
+        self.clipboard_text
+            .clone()
+            .ok_or_else(|| bt_script::ScriptError::new("clipboard text has not been seeded"))
     }
 
     fn window_navigator_cookie_enabled(&mut self) -> bt_script::Result<bool> {
@@ -5106,6 +5134,46 @@ fn runtime_resolves_window_navigator_plugins_iterator_helpers() {
             .get(&ElementHandle::new(3))
             .map(String::as_str),
         Some("0:first-embed:0:first-embed:0:first-embed:2;1:second-embed:2;")
+    );
+}
+
+#[test]
+fn runtime_resolves_window_navigator_clipboard_access() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost {
+        clipboard_text: Some("seeded".to_string()),
+        ..Default::default()
+    };
+
+    runtime
+        .eval_program(
+            "const clipboard = window.navigator.clipboard; clipboard.writeText('copied'); clipboard.readText();",
+            "inline-script",
+            &mut host,
+        )
+        .expect("window.navigator.clipboard should resolve through host bindings");
+
+    assert_eq!(host.clipboard_writes, vec!["copied".to_string()]);
+    assert_eq!(host.clipboard_text.as_deref(), Some("copied"));
+}
+
+#[test]
+fn runtime_rejects_window_navigator_clipboard_read_text_without_seed() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = NoopHost::default();
+
+    let error = runtime
+        .eval_program(
+            "window.navigator.clipboard.readText();",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("clipboard reads should require a seed");
+
+    assert!(
+        error
+            .to_string()
+            .contains("clipboard text has not been seeded")
     );
 }
 

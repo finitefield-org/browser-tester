@@ -1057,6 +1057,7 @@ const CssSupportsRuleState = struct {
     condition_text: []const u8,
     css_text: []const u8,
     css_rules: []Value,
+    source_index: ?usize = null,
     parent_style_sheet: ?dom.NodeId = null,
     parent_rule: ?*const CssRuleState = null,
 };
@@ -1065,6 +1066,7 @@ const CssSupportsConditionRuleState = struct {
     name: []const u8,
     css_text: []const u8,
     css_rules: []Value,
+    source_index: ?usize = null,
     parent_style_sheet: ?dom.NodeId = null,
     parent_rule: ?*const CssRuleState = null,
 };
@@ -1081,6 +1083,7 @@ const CssContainerRuleState = struct {
     condition_text: []const u8,
     css_text: []const u8,
     css_rules: []Value,
+    source_index: ?usize = null,
     parent_style_sheet: ?dom.NodeId = null,
     parent_rule: ?*const CssRuleState = null,
 };
@@ -1101,6 +1104,7 @@ const CssKeyframesRuleState = struct {
     name: []const u8,
     css_text: []const u8,
     css_rules: []Value,
+    source_index: ?usize = null,
     parent_style_sheet: ?dom.NodeId = null,
     parent_rule: ?*const CssRuleState = null,
 };
@@ -1108,6 +1112,7 @@ const CssKeyframesRuleState = struct {
 const CssKeyframeRuleState = struct {
     key_text: []const u8,
     css_text: []const u8,
+    source_index: ?usize = null,
     parent_style_sheet: ?dom.NodeId = null,
     parent_rule: ?*const CssRuleState = null,
 };
@@ -1122,6 +1127,7 @@ const CssFontFaceRuleState = struct {
 const CssFontFeatureValuesRuleState = struct {
     font_family: []const u8,
     css_text: []const u8,
+    source_index: ?usize = null,
     parent_style_sheet: ?dom.NodeId = null,
     parent_rule: ?*const CssRuleState = null,
 };
@@ -1132,6 +1138,7 @@ const CssFontPaletteValuesRuleState = struct {
     base_palette: []const u8 = "",
     override_colors: []const u8 = "",
     css_text: []const u8,
+    source_index: ?usize = null,
     parent_style_sheet: ?dom.NodeId = null,
     parent_rule: ?*const CssRuleState = null,
 };
@@ -1142,6 +1149,7 @@ const CssColorProfileRuleState = struct {
     rendering_intent: []const u8,
     components: []const u8,
     css_text: []const u8,
+    source_index: ?usize = null,
     parent_style_sheet: ?dom.NodeId = null,
     parent_rule: ?*const CssRuleState = null,
 };
@@ -1192,6 +1200,7 @@ const CssCounterStyleRuleState = struct {
     speak_as: []const u8 = "",
     additive_symbols: []const u8 = "",
     css_text: []const u8,
+    source_index: ?usize = null,
     parent_style_sheet: ?dom.NodeId = null,
     parent_rule: ?*const CssRuleState = null,
 };
@@ -1202,6 +1211,7 @@ const CssPropertyRuleState = struct {
     inherits: bool,
     initial_value: []const u8,
     css_text: []const u8,
+    source_index: ?usize = null,
     parent_style_sheet: ?dom.NodeId = null,
     parent_rule: ?*const CssRuleState = null,
 };
@@ -2605,6 +2615,64 @@ fn evalAssignment(
                         );
                         return;
                     },
+                    .supports => |supports| {
+                        if (supports.parent_rule != null or supports.parent_style_sheet == null or supports.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = supports.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = supports.source_index orelse return error.ScriptRuntime;
+                        const rule_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .supports) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
+                    .container => |container| {
+                        if (container.parent_rule != null or container.parent_style_sheet == null or container.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = container.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = container.source_index orelse return error.ScriptRuntime;
+                        const rule_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .container) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
                     .page => |page| {
                         if (page.parent_rule != null or page.parent_style_sheet == null or page.source_index == null) {
                             return error.ScriptRuntime;
@@ -2631,6 +2699,458 @@ fn evalAssignment(
                             current_rules,
                             parsed_rules[0],
                             source_index,
+                        );
+                        return;
+                    },
+                    .font_face => |font_face| {
+                        if (font_face.parent_rule != null or font_face.parent_style_sheet == null or font_face.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = font_face.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = font_face.source_index orelse return error.ScriptRuntime;
+                        const rule_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .font_face) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
+                    .font_feature_values => |font_feature_values| {
+                        if (font_feature_values.parent_rule != null or font_feature_values.parent_style_sheet == null or font_feature_values.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = font_feature_values.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = font_feature_values.source_index orelse return error.ScriptRuntime;
+                        const rule_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .font_feature_values) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
+                    .supports_condition => |supports_condition| {
+                        if (supports_condition.parent_rule != null or supports_condition.parent_style_sheet == null or supports_condition.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = supports_condition.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = supports_condition.source_index orelse return error.ScriptRuntime;
+                        const rule_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .supports_condition) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
+                    .counter_style => |counter_style| {
+                        if (counter_style.parent_rule != null or counter_style.parent_style_sheet == null or counter_style.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = counter_style.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = counter_style.source_index orelse return error.ScriptRuntime;
+                        const rule_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .counter_style) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
+                    .property => |property_rule| {
+                        if (property_rule.parent_rule != null or property_rule.parent_style_sheet == null or property_rule.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = property_rule.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = property_rule.source_index orelse return error.ScriptRuntime;
+                        const rule_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .property) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
+                    .font_palette_values => |font_palette_values| {
+                        if (font_palette_values.parent_rule != null or font_palette_values.parent_style_sheet == null or font_palette_values.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = font_palette_values.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = font_palette_values.source_index orelse return error.ScriptRuntime;
+                        const rule_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .font_palette_values) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
+                    .color_profile => |color_profile| {
+                        if (color_profile.parent_rule != null or color_profile.parent_style_sheet == null or color_profile.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = color_profile.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = color_profile.source_index orelse return error.ScriptRuntime;
+                        const rule_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .color_profile) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
+                    else => return error.ScriptRuntime,
+                }
+            }
+
+            if (std.mem.eql(u8, target.property, "conditionText")) {
+                switch (rule) {
+                    .supports => |supports| {
+                        if (supports.parent_rule != null or supports.parent_style_sheet == null or supports.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = supports.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = supports.source_index orelse return error.ScriptRuntime;
+                        const condition_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const current_rule = current_rules[source_index];
+                        if (current_rule != .css_rule) return error.ScriptRuntime;
+                        const current_supports = switch (current_rule.css_rule) {
+                            .supports => |current_supports| current_supports,
+                            else => return error.ScriptRuntime,
+                        };
+
+                        var nested_text: std.ArrayList(u8) = .empty;
+                        defer nested_text.deinit(allocator);
+                        for (current_supports.css_rules, 0..) |nested_rule, nested_index| {
+                            if (nested_index != 0) try nested_text.append(allocator, '\n');
+                            try nested_text.appendSlice(allocator, cssRuleCssText(nested_rule));
+                        }
+
+                        var rule_text: std.ArrayList(u8) = .empty;
+                        defer rule_text.deinit(allocator);
+                        try rule_text.appendSlice(allocator, "@supports ");
+                        try rule_text.appendSlice(allocator, condition_text);
+                        try rule_text.appendSlice(allocator, " { ");
+                        try rule_text.appendSlice(allocator, nested_text.items);
+                        try rule_text.appendSlice(allocator, " }");
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text.items);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .supports) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
+                    .container => |container| {
+                        if (container.parent_rule != null or container.parent_style_sheet == null or container.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = container.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = container.source_index orelse return error.ScriptRuntime;
+                        const condition_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const current_rule = current_rules[source_index];
+                        if (current_rule != .css_rule) return error.ScriptRuntime;
+                        const current_container = switch (current_rule.css_rule) {
+                            .container => |current_container| current_container,
+                            else => return error.ScriptRuntime,
+                        };
+
+                        var nested_text: std.ArrayList(u8) = .empty;
+                        defer nested_text.deinit(allocator);
+                        for (current_container.css_rules, 0..) |nested_rule, nested_index| {
+                            if (nested_index != 0) try nested_text.append(allocator, '\n');
+                            try nested_text.appendSlice(allocator, cssRuleCssText(nested_rule));
+                        }
+
+                        var rule_text: std.ArrayList(u8) = .empty;
+                        defer rule_text.deinit(allocator);
+                        try rule_text.appendSlice(allocator, "@container ");
+                        try rule_text.appendSlice(allocator, condition_text);
+                        try rule_text.appendSlice(allocator, " { ");
+                        try rule_text.appendSlice(allocator, nested_text.items);
+                        try rule_text.appendSlice(allocator, " }");
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text.items);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .container) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
+                    .media => |media| {
+                        if (media.parent_rule != null or media.parent_style_sheet == null or media.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = media.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = media.source_index orelse return error.ScriptRuntime;
+                        const condition_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const current_rule = current_rules[source_index];
+                        if (current_rule != .css_rule) return error.ScriptRuntime;
+                        const current_media = switch (current_rule.css_rule) {
+                            .media => |current_media| current_media,
+                            else => return error.ScriptRuntime,
+                        };
+
+                        var nested_text: std.ArrayList(u8) = .empty;
+                        defer nested_text.deinit(allocator);
+                        for (current_media.css_rules, 0..) |nested_rule, nested_index| {
+                            if (nested_index != 0) try nested_text.append(allocator, '\n');
+                            try nested_text.appendSlice(allocator, cssRuleCssText(nested_rule));
+                        }
+
+                        var rule_text: std.ArrayList(u8) = .empty;
+                        defer rule_text.deinit(allocator);
+                        try rule_text.appendSlice(allocator, "@media ");
+                        try rule_text.appendSlice(allocator, condition_text);
+                        try rule_text.appendSlice(allocator, " { ");
+                        try rule_text.appendSlice(allocator, nested_text.items);
+                        try rule_text.appendSlice(allocator, " }");
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text.items);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .media) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
+                    else => return error.ScriptRuntime,
+                }
+            }
+
+            if (std.mem.eql(u8, target.property, "keyText")) {
+                switch (rule) {
+                    .keyframe => |keyframe| {
+                        if (keyframe.parent_rule == null or keyframe.parent_style_sheet == null or keyframe.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const parent_rule = keyframe.parent_rule orelse return error.ScriptRuntime;
+                        const keyframes_rule = switch (parent_rule.*) {
+                            .keyframes => |current_keyframes| current_keyframes,
+                            else => return error.ScriptRuntime,
+                        };
+                        const sheet_id = keyframe.parent_style_sheet orelse return error.ScriptRuntime;
+                        const keyframes_index = keyframes_rule.source_index orelse return error.ScriptRuntime;
+                        const keyframe_index = keyframe.source_index orelse return error.ScriptRuntime;
+                        const key_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (keyframes_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const current_rule = current_rules[keyframes_index];
+                        if (current_rule != .css_rule) return error.ScriptRuntime;
+                        const current_keyframes = switch (current_rule.css_rule) {
+                            .keyframes => |current_keyframes| current_keyframes,
+                            else => return error.ScriptRuntime,
+                        };
+                        if (keyframe_index >= current_keyframes.css_rules.len) return error.ScriptRuntime;
+
+                        const current_keyframe_rule = current_keyframes.css_rules[keyframe_index];
+                        if (current_keyframe_rule != .css_rule) return error.ScriptRuntime;
+                        const current_keyframe = switch (current_keyframe_rule.css_rule) {
+                            .keyframe => |current_keyframe| current_keyframe,
+                            else => return error.ScriptRuntime,
+                        };
+
+                        const declarations = std.mem.trim(u8, try cssRuleStyleDeclarationText(current_keyframe.css_text), " \t\r\n");
+                        var rule_text: std.ArrayList(u8) = .empty;
+                        defer rule_text.deinit(allocator);
+                        try rule_text.appendSlice(allocator, key_text);
+                        try rule_text.appendSlice(allocator, " { ");
+                        try rule_text.appendSlice(allocator, declarations);
+                        try rule_text.appendSlice(allocator, " }");
+
+                        const parsed_keyframe_rules = try parseKeyframesRuleValues(allocator, rule_text.items);
+                        defer allocator.free(parsed_keyframe_rules);
+                        if (parsed_keyframe_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_keyframe_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_keyframe_rules[0].css_rule != .keyframe) return error.ScriptRuntime;
+                        const replacement_keyframe_rule = parsed_keyframe_rules[0];
+
+                        var nested_rules = try allocator.dupe(Value, current_keyframes.css_rules);
+                        defer allocator.free(nested_rules);
+                        nested_rules[keyframe_index] = replacement_keyframe_rule;
+
+                        var nested_text: std.ArrayList(u8) = .empty;
+                        defer nested_text.deinit(allocator);
+                        for (nested_rules, 0..) |nested_rule, nested_index| {
+                            if (nested_index != 0) try nested_text.append(allocator, '\n');
+                            try nested_text.appendSlice(allocator, cssRuleCssText(nested_rule));
+                        }
+
+                        var outer_text: std.ArrayList(u8) = .empty;
+                        defer outer_text.deinit(allocator);
+                        try outer_text.appendSlice(allocator, "@keyframes ");
+                        try outer_text.appendSlice(allocator, current_keyframes.name);
+                        try outer_text.appendSlice(allocator, " { ");
+                        try outer_text.appendSlice(allocator, nested_text.items);
+                        try outer_text.appendSlice(allocator, " }");
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, outer_text.items);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .keyframes) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            keyframes_index,
                         );
                         return;
                     },
@@ -5458,6 +5978,9 @@ fn evalMember(
                     if (std.mem.eql(u8, member.property, "cssText")) {
                         break :blk Value{ .string = media.css_text };
                     }
+                    if (std.mem.eql(u8, member.property, "matches")) {
+                        break :blk Value{ .boolean = host.matchMediaCurrent(media.condition_text) };
+                    }
                     if (std.mem.eql(u8, member.property, "conditionText")) {
                         break :blk Value{ .string = media.condition_text };
                     }
@@ -5675,7 +6198,7 @@ fn evalMember(
                             try cssRuleStyleDeclarationText(page.css_text),
                             page.parent_style_sheet,
                             page.source_index,
-                            false,
+                            true,
                         );
                     }
                     break :blk error.ScriptRuntime;
@@ -8046,7 +8569,99 @@ fn evalMethodCall(
             if (args.len != 0) return error.ScriptRuntime;
             break :blk Value{ .string = "[object CSSRuleList]" };
         } else error.ScriptRuntime,
-        .css_rule => |rule| if (std.mem.eql(u8, method, "toString")) blk: {
+        .css_rule => |rule| if (std.mem.eql(u8, method, "appendRule")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            switch (rule) {
+                .keyframes => |keyframes| {
+                    const current_keyframes = try cssKeyframesRuleLiveSnapshot(allocator, host, keyframes) orelse return error.ScriptRuntime;
+                    const rule_text_value = try evalExpr(allocator, host, bindings, args[0]);
+                    const rule_text = try asString(allocator, rule_text_value);
+                    const parsed_rules = try parseKeyframesRuleValues(allocator, rule_text);
+                    defer allocator.free(parsed_rules);
+                    if (parsed_rules.len != 1) return error.ScriptRuntime;
+                    if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                    if (parsed_rules[0].css_rule != .keyframe) return error.ScriptRuntime;
+
+                    var nested_rules = try allocator.dupe(Value, current_keyframes.css_rules);
+                    defer allocator.free(nested_rules);
+                    nested_rules = try allocator.realloc(nested_rules, current_keyframes.css_rules.len + 1);
+                    nested_rules[current_keyframes.css_rules.len] = parsed_rules[0];
+
+                    try cssKeyframesRuleReplaceNestedRules(allocator, host, current_keyframes, nested_rules);
+                    break :blk Value{ .undefined_value = {} };
+                },
+                else => return error.ScriptRuntime,
+            }
+        } else if (std.mem.eql(u8, method, "deleteRule")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            switch (rule) {
+                .keyframes => |keyframes| {
+                    const current_keyframes = try cssKeyframesRuleLiveSnapshot(allocator, host, keyframes) orelse return error.ScriptRuntime;
+                    const key_text_value = try evalExpr(allocator, host, bindings, args[0]);
+                    const key_text = try asString(allocator, key_text_value);
+
+                    var match_index: ?usize = null;
+                    for (current_keyframes.css_rules, 0..) |nested_rule, index| {
+                        if (nested_rule != .css_rule) continue;
+                        if (nested_rule.css_rule != .keyframe) continue;
+                        if (std.mem.eql(u8, nested_rule.css_rule.keyframe.key_text, key_text)) {
+                            match_index = index;
+                            break;
+                        }
+                    }
+                    if (match_index == null) return error.ScriptRuntime;
+
+                    var nested_rules = try allocator.alloc(Value, current_keyframes.css_rules.len - 1);
+                    defer allocator.free(nested_rules);
+                    var write_index: usize = 0;
+                    for (current_keyframes.css_rules, 0..) |nested_rule, index| {
+                        if (index == match_index.?) continue;
+                        nested_rules[write_index] = nested_rule;
+                        write_index += 1;
+                    }
+
+                    try cssKeyframesRuleReplaceNestedRules(allocator, host, current_keyframes, nested_rules);
+                    break :blk Value{ .undefined_value = {} };
+                },
+                else => return error.ScriptRuntime,
+            }
+        } else if (std.mem.eql(u8, method, "findRule")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            switch (rule) {
+                .keyframes => |keyframes| {
+                    const current_keyframes = try cssKeyframesRuleLiveSnapshot(allocator, host, keyframes) orelse return error.ScriptRuntime;
+                    const key_text_value = try evalExpr(allocator, host, bindings, args[0]);
+                    const key_text = try asString(allocator, key_text_value);
+
+                    const cloned_current = try cssRuleValueCloneForReturn(
+                        allocator,
+                        Value{ .css_rule = .{ .keyframes = current_keyframes } },
+                        current_keyframes.parent_style_sheet,
+                        current_keyframes.parent_rule,
+                        current_keyframes.source_index orelse 0,
+                    );
+                    if (cloned_current != .css_rule) return error.ScriptRuntime;
+                    const cloned_keyframes = switch (cloned_current.css_rule) {
+                        .keyframes => |cloned_keyframes| cloned_keyframes,
+                        else => return error.ScriptRuntime,
+                    };
+
+                    for (cloned_keyframes.css_rules) |nested_rule| {
+                        if (nested_rule != .css_rule) continue;
+                        const nested_keyframe = switch (nested_rule.css_rule) {
+                            .keyframe => |nested_keyframe| nested_keyframe,
+                            else => continue,
+                        };
+                        if (std.mem.eql(u8, nested_keyframe.key_text, key_text)) {
+                            break :blk nested_rule;
+                        }
+                    }
+
+                    break :blk Value{ .null_value = {} };
+                },
+                else => return error.ScriptRuntime,
+            }
+        } else if (std.mem.eql(u8, method, "toString")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk Value{ .string = switch (rule) {
                 .style => "[object CSSStyleRule]",
@@ -10082,6 +10697,76 @@ fn cssStyleRuleLiveSnapshot(
     };
 }
 
+fn cssKeyframesRuleLiveSnapshot(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    keyframes: CssKeyframesRuleState,
+) errors.Result(?CssKeyframesRuleState) {
+    if (keyframes.parent_rule != null or keyframes.parent_style_sheet == null or keyframes.source_index == null) {
+        return null;
+    }
+
+    const sheet_id = keyframes.parent_style_sheet orelse return null;
+    const source_index = keyframes.source_index orelse return null;
+    const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+    defer allocator.free(current_rules);
+    if (source_index >= current_rules.len) return null;
+
+    const current_rule = current_rules[source_index];
+    if (current_rule != .css_rule) return null;
+    return switch (current_rule.css_rule) {
+        .keyframes => |current_keyframes| current_keyframes,
+        else => null,
+    };
+}
+
+fn cssKeyframesRuleReplaceNestedRules(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    current_keyframes: CssKeyframesRuleState,
+    nested_rules: []const Value,
+) errors.Result(void) {
+    const sheet_id = current_keyframes.parent_style_sheet orelse return error.ScriptRuntime;
+    const source_index = current_keyframes.source_index orelse return error.ScriptRuntime;
+    const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+    defer allocator.free(current_rules);
+    if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+    const current_rule = current_rules[source_index];
+    if (current_rule != .css_rule) return error.ScriptRuntime;
+    if (current_rule.css_rule != .keyframes) return error.ScriptRuntime;
+
+    var nested_text: std.ArrayList(u8) = .empty;
+    defer nested_text.deinit(allocator);
+    for (nested_rules, 0..) |nested_rule, index| {
+        if (index != 0) try nested_text.append(allocator, '\n');
+        try nested_text.appendSlice(allocator, cssRuleCssText(nested_rule));
+    }
+
+    var rule_text: std.ArrayList(u8) = .empty;
+    defer rule_text.deinit(allocator);
+    try rule_text.appendSlice(allocator, "@keyframes ");
+    try rule_text.appendSlice(allocator, current_keyframes.name);
+    try rule_text.appendSlice(allocator, " { ");
+    try rule_text.appendSlice(allocator, nested_text.items);
+    try rule_text.appendSlice(allocator, " }");
+
+    const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text.items);
+    defer allocator.free(parsed_rules);
+    if (parsed_rules.len != 1) return error.ScriptRuntime;
+    if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+    if (parsed_rules[0].css_rule != .keyframes) return error.ScriptRuntime;
+
+    try styleSheetReplaceParsedRule(
+        allocator,
+        host,
+        sheet_id,
+        current_rules,
+        parsed_rules[0],
+        source_index,
+    );
+}
+
 fn styleSheetReplaceParsedRule(
     allocator: std.mem.Allocator,
     host: anytype,
@@ -10115,9 +10800,9 @@ fn cssRuleValuesAnnotate(
     parent_style_sheet: ?dom.NodeId,
     parent_rule: ?*const CssRuleState,
 ) void {
-    for (values) |*value| {
+    for (values, 0..) |*value, index| {
         switch (value.*) {
-            .css_rule => |*rule| cssRuleSetParents(rule, parent_style_sheet, parent_rule),
+            .css_rule => |*rule| cssRuleSetParents(rule, parent_style_sheet, parent_rule, index),
             else => {},
         }
     }
@@ -10178,6 +10863,7 @@ fn cssRuleValueCloneForReturn(
                 .supports => |*supports| {
                     supports.parent_style_sheet = parent_style_sheet;
                     supports.parent_rule = parent_rule;
+                    supports.source_index = source_index;
                     supports.css_rules = try cssRuleValuesCloneForReturn(
                         allocator,
                         supports.css_rules,
@@ -10188,6 +10874,7 @@ fn cssRuleValueCloneForReturn(
                 .supports_condition => |*supports_condition| {
                     supports_condition.parent_style_sheet = parent_style_sheet;
                     supports_condition.parent_rule = parent_rule;
+                    supports_condition.source_index = source_index;
                     supports_condition.css_rules = try cssRuleValuesCloneForReturn(
                         allocator,
                         supports_condition.css_rules,
@@ -10208,6 +10895,7 @@ fn cssRuleValueCloneForReturn(
                 .container => |*container| {
                     container.parent_style_sheet = parent_style_sheet;
                     container.parent_rule = parent_rule;
+                    container.source_index = source_index;
                     container.css_rules = try cssRuleValuesCloneForReturn(
                         allocator,
                         container.css_rules,
@@ -10228,6 +10916,7 @@ fn cssRuleValueCloneForReturn(
                 .keyframes => |*keyframes| {
                     keyframes.parent_style_sheet = parent_style_sheet;
                     keyframes.parent_rule = parent_rule;
+                    keyframes.source_index = source_index;
                     keyframes.css_rules = try cssRuleValuesCloneForReturn(
                         allocator,
                         keyframes.css_rules,
@@ -10238,6 +10927,7 @@ fn cssRuleValueCloneForReturn(
                 .keyframe => |*keyframe| {
                     keyframe.parent_style_sheet = parent_style_sheet;
                     keyframe.parent_rule = parent_rule;
+                    keyframe.source_index = source_index;
                 },
                 .font_face => |*font_face| {
                     font_face.parent_style_sheet = parent_style_sheet;
@@ -10247,14 +10937,17 @@ fn cssRuleValueCloneForReturn(
                 .font_feature_values => |*font_feature_values| {
                     font_feature_values.parent_style_sheet = parent_style_sheet;
                     font_feature_values.parent_rule = parent_rule;
+                    font_feature_values.source_index = source_index;
                 },
                 .font_palette_values => |*font_palette_values| {
                     font_palette_values.parent_style_sheet = parent_style_sheet;
                     font_palette_values.parent_rule = parent_rule;
+                    font_palette_values.source_index = source_index;
                 },
                 .color_profile => |*color_profile| {
                     color_profile.parent_style_sheet = parent_style_sheet;
                     color_profile.parent_rule = parent_rule;
+                    color_profile.source_index = source_index;
                 },
                 .scope => |*scope| {
                     scope.parent_style_sheet = parent_style_sheet;
@@ -10288,10 +10981,12 @@ fn cssRuleValueCloneForReturn(
                 .counter_style => |*counter_style| {
                     counter_style.parent_style_sheet = parent_style_sheet;
                     counter_style.parent_rule = parent_rule;
+                    counter_style.source_index = source_index;
                 },
                 .property => |*property_rule| {
                     property_rule.parent_style_sheet = parent_style_sheet;
                     property_rule.parent_rule = parent_rule;
+                    property_rule.source_index = source_index;
                 },
                 .charset => |*charset_rule| {
                     charset_rule.parent_style_sheet = parent_style_sheet;
@@ -10317,25 +11012,30 @@ fn cssRuleSetParents(
     rule: *CssRuleState,
     parent_style_sheet: ?dom.NodeId,
     parent_rule: ?*const CssRuleState,
+    source_index: usize,
 ) void {
     switch (rule.*) {
         .style => |*style| {
             style.parent_style_sheet = parent_style_sheet;
             style.parent_rule = parent_rule;
+            style.source_index = source_index;
         },
         .media => |*media| {
             media.parent_style_sheet = parent_style_sheet;
             media.parent_rule = parent_rule;
+            media.source_index = source_index;
             cssRuleValuesAnnotate(media.css_rules, parent_style_sheet, rule);
         },
         .supports => |*supports| {
             supports.parent_style_sheet = parent_style_sheet;
             supports.parent_rule = parent_rule;
+            supports.source_index = source_index;
             cssRuleValuesAnnotate(supports.css_rules, parent_style_sheet, rule);
         },
         .supports_condition => |*supports_condition| {
             supports_condition.parent_style_sheet = parent_style_sheet;
             supports_condition.parent_rule = parent_rule;
+            supports_condition.source_index = source_index;
             cssRuleValuesAnnotate(supports_condition.css_rules, parent_style_sheet, rule);
         },
         .document => |*document| {
@@ -10346,6 +11046,7 @@ fn cssRuleSetParents(
         .container => |*container| {
             container.parent_style_sheet = parent_style_sheet;
             container.parent_rule = parent_rule;
+            container.source_index = source_index;
             cssRuleValuesAnnotate(container.css_rules, parent_style_sheet, rule);
         },
         .starting_style => |*starting_style| {
@@ -10356,11 +11057,13 @@ fn cssRuleSetParents(
         .keyframes => |*keyframes| {
             keyframes.parent_style_sheet = parent_style_sheet;
             keyframes.parent_rule = parent_rule;
+            keyframes.source_index = source_index;
             cssRuleValuesAnnotate(keyframes.css_rules, parent_style_sheet, rule);
         },
         .keyframe => |*keyframe| {
             keyframe.parent_style_sheet = parent_style_sheet;
             keyframe.parent_rule = parent_rule;
+            keyframe.source_index = source_index;
         },
         .font_face => |*font_face| {
             font_face.parent_style_sheet = parent_style_sheet;
@@ -10369,14 +11072,17 @@ fn cssRuleSetParents(
         .font_feature_values => |*font_feature_values| {
             font_feature_values.parent_style_sheet = parent_style_sheet;
             font_feature_values.parent_rule = parent_rule;
+            font_feature_values.source_index = source_index;
         },
         .font_palette_values => |*font_palette_values| {
             font_palette_values.parent_style_sheet = parent_style_sheet;
             font_palette_values.parent_rule = parent_rule;
+            font_palette_values.source_index = source_index;
         },
         .color_profile => |*color_profile| {
             color_profile.parent_style_sheet = parent_style_sheet;
             color_profile.parent_rule = parent_rule;
+            color_profile.source_index = source_index;
         },
         .scope => |*scope| {
             scope.parent_style_sheet = parent_style_sheet;
@@ -10399,10 +11105,12 @@ fn cssRuleSetParents(
         .counter_style => |*counter_style| {
             counter_style.parent_style_sheet = parent_style_sheet;
             counter_style.parent_rule = parent_rule;
+            counter_style.source_index = source_index;
         },
         .property => |*property_rule| {
             property_rule.parent_style_sheet = parent_style_sheet;
             property_rule.parent_rule = parent_rule;
+            property_rule.source_index = source_index;
         },
         .charset => |*charset_rule| {
             charset_rule.parent_style_sheet = parent_style_sheet;
