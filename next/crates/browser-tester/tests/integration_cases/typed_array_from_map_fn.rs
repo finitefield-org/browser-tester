@@ -6,7 +6,7 @@ fn typed_array_from_supports_map_function_argument() -> browser_tester::Result<(
       <div id="out"></div>
       <script>
         const binary = "AZ";
-        const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+        const bytes = Array.from(binary, (char) => char.charCodeAt(0));
         document.getElementById("out").textContent = Array.from(bytes).join(",");
       </script>
     "#;

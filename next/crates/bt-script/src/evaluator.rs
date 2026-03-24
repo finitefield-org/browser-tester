@@ -1,6 +1,14 @@
-use std::collections::BTreeMap;
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet};
+use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use chrono::{
+    DateTime, Datelike, Duration, Local, LocalResult, NaiveDate, NaiveTime, Offset, TimeZone,
+    Timelike, Utc,
+};
+use chrono_tz::Tz;
+use fancy_regex::{Regex as FancyRegex, RegexBuilder};
 use unicode_normalization::UnicodeNormalization;
 use url::Url;
 
@@ -9,8 +17,9 @@ use crate::syntax::{
     ObjectPropertyName, Program, Statement,
 };
 use crate::{
-    ArrayHandle, AttributeHandle, CollectionEntryHandle, CollectionIteratorHandle, ElementHandle,
-    HostBindings, HtmlCollectionNamedItem, HtmlCollectionScope, HtmlCollectionTarget,
+    ArrayHandle, AttributeHandle, CollectionEntryHandle, CollectionIteratorHandle, DateValue,
+    ElementHandle, HostBindings, HtmlCollectionNamedItem, HtmlCollectionScope,
+    HtmlCollectionTarget, IntlCollatorValue, IntlDateTimeFormatValue, IntlNumberFormatValue,
     ListenerTarget, MapHandle, MapKey, MediaQueryListState, MimeTypeArrayState, NodeHandle,
     NodeListTarget, PropertyKey, PropertyValue, RadioNodeListTarget, Result, ScriptError,
     ScriptValue as Value, StorageTarget, StringListState, StyleSheetListTarget, StyleSheetTarget,
@@ -55,7 +64,15 @@ fn as_string(value: &Value) -> String {
         Value::Null => "null".to_string(),
         Value::Boolean(value) => value.to_string(),
         Value::Number(value) => {
-            if value.fract() == 0.0 {
+            if value.is_nan() {
+                "NaN".to_string()
+            } else if value.is_infinite() {
+                if value.is_sign_negative() {
+                    "-Infinity".to_string()
+                } else {
+                    "Infinity".to_string()
+                }
+            } else if value.fract() == 0.0 {
                 (*value as i64).to_string()
             } else {
                 value.to_string()
@@ -69,8 +86,24 @@ fn as_string(value: &Value) -> String {
             Some(description) => format!("Symbol({description})"),
             None => "Symbol()".to_string(),
         },
+        Value::RegExp(value) => {
+            let mut out = String::from("/");
+            out.push_str(value.pattern());
+            out.push('/');
+            out.push_str(value.flags());
+            out
+        }
+        Value::Date(value) => match value.epoch_ms {
+            Some(epoch_ms) => {
+                date_to_iso_string(epoch_ms).unwrap_or_else(|| "Invalid Date".to_string())
+            }
+            None => "Invalid Date".to_string(),
+        },
         Value::ArrayNamespace => "[function Array]".to_string(),
         Value::IntlNamespace => "[object Intl]".to_string(),
+        Value::IntlNumberFormat(_) => "[object Intl.NumberFormat]".to_string(),
+        Value::IntlDateTimeFormat(_) => "[object Intl.DateTimeFormat]".to_string(),
+        Value::IntlCollator(_) => "[object Intl.Collator]".to_string(),
         Value::Element(_) => "[object Element]".to_string(),
         Value::Attribute(_) => "[object Attr]".to_string(),
         Value::ClassList(_) => "[object DOMTokenList]".to_string(),
@@ -100,6 +133,45 @@ fn as_string(value: &Value) -> String {
         Value::Event(_) => "[object Event]".to_string(),
         Value::Function(_) => "[function]".to_string(),
     }
+}
+
+fn error_object_from_message<H: HostBindings>(
+    message: impl Into<String>,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let object = crate::ObjectHandle::new();
+    let message = message.into();
+    object_set_property_value(
+        &object,
+        property_key_from_string("message"),
+        Value::String(message.clone()),
+        env,
+        host,
+    )?;
+    object_set_property_value(
+        &object,
+        property_key_from_string("name"),
+        Value::String("Error".to_string()),
+        env,
+        host,
+    )?;
+    Ok(Value::Object(object))
+}
+
+fn exception_message_from_value<H: HostBindings>(
+    value: &Value,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<String> {
+    if let Value::Object(_) = value
+        && let Some(message) =
+            property_value_on_value(value, &property_key_from_string("message"), env, host)?
+    {
+        return Ok(as_string(&message));
+    }
+
+    Ok(as_string(value))
 }
 
 fn content_editable_reflection(value: Option<&str>) -> &'static str {
@@ -1074,6 +1146,77 @@ fn eval_statement<H: HostBindings>(
 
             Ok(EvalControl::Continue)
         }
+        Statement::ForIn {
+            binding,
+            iterable,
+            body,
+        } => {
+            let source = eval_expr(iterable, env, host)?;
+            let keys = match source {
+                Value::Object(object) => object_own_string_keys(&object),
+                Value::Array(array) => array_own_property_values(&array, env, host)?
+                    .into_iter()
+                    .filter_map(|(key, _)| property_key_to_string(&key).map(str::to_string))
+                    .collect(),
+                _ => return Err(ScriptError::new("for-in expects an object")),
+            };
+
+            for key in keys {
+                env.insert(binding.clone(), Value::String(key));
+                match eval_statements(body, env, host)? {
+                    EvalControl::Continue | EvalControl::ContinueLoop => {}
+                    EvalControl::Break => break,
+                    EvalControl::Return(value) => return Ok(EvalControl::Return(value)),
+                }
+            }
+
+            Ok(EvalControl::Continue)
+        }
+        Statement::ForOf {
+            binding,
+            iterable,
+            body,
+        } => {
+            let source = eval_expr(iterable, env, host)?;
+            let items = array_from_value(source, env, host)?;
+
+            for item in items {
+                env.insert(binding.clone(), item);
+                match eval_statements(body, env, host)? {
+                    EvalControl::Continue | EvalControl::ContinueLoop => {}
+                    EvalControl::Break => break,
+                    EvalControl::Return(value) => return Ok(EvalControl::Return(value)),
+                }
+            }
+
+            Ok(EvalControl::Continue)
+        }
+        Statement::TryCatch {
+            try_body,
+            catch_binding,
+            catch_body,
+        } => match eval_statements(try_body, env, host) {
+            Ok(control) => Ok(control),
+            Err(error) => {
+                let catch_value = error_object_from_message(error.message(), env, host)?;
+                let previous = env.insert(catch_binding.clone(), catch_value);
+                let result = eval_statements(catch_body, env, host);
+                match previous {
+                    Some(value) => {
+                        env.insert(catch_binding.clone(), value);
+                    }
+                    None => {
+                        env.remove(catch_binding);
+                    }
+                }
+                result
+            }
+        },
+        Statement::Throw(expr) => {
+            let value = eval_expr(expr, env, host)?;
+            let message = exception_message_from_value(&value, env, host)?;
+            Err(ScriptError::new(message))
+        }
         Statement::Assignment { target, value } => {
             let value = eval_expr(value, env, host)?;
             eval_assign(target, value, env, host)?;
@@ -1663,6 +1806,10 @@ fn eval_assign<H: HostBindings>(
                 (Value::Element(element), "lang") => {
                     host.element_set_attribute(element, "lang", &as_string(&value))
                 }
+                (Value::RegExp(_), "lastIndex") => Ok(()),
+                (Value::RegExp(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on regexp value"
+                ))),
                 (Value::Element(element), "contentEditable") => {
                     let value = as_string(&value);
                     let normalized = value.trim().to_ascii_lowercase();
@@ -1742,6 +1889,16 @@ fn eval_assign<H: HostBindings>(
                 (Value::IteratorResult(_), property) => Err(ScriptError::new(format!(
                     "cannot assign to `{property}` on iterator result value"
                 ))),
+                (Value::Date(_), property) => Err(unsupported_member_access(property, "date")),
+                (Value::IntlNumberFormat(_), property) => {
+                    Err(unsupported_member_access(property, "intl number format"))
+                }
+                (Value::IntlDateTimeFormat(_), property) => {
+                    Err(unsupported_member_access(property, "intl date time format"))
+                }
+                (Value::IntlCollator(_), property) => {
+                    Err(unsupported_member_access(property, "intl collator"))
+                }
                 (Value::Document, "title") => {
                     host.document_set_title(&as_string(&value))?;
                     Ok(())
@@ -1773,6 +1930,11 @@ fn eval_assign<H: HostBindings>(
                 (Value::Window, "location") => {
                     host.document_set_location(&as_string(&value))?;
                     Ok(())
+                }
+                (Value::Window, property) if window_property_is_reserved(property) => {
+                    Err(ScriptError::new(format!(
+                        "unsupported assignment target on window: {property}"
+                    )))
                 }
                 (Value::Storage(target), property) if storage_property_is_reserved(property) => {
                     Err(ScriptError::new(format!(
@@ -1884,10 +2046,22 @@ fn eval_expr<H: HostBindings>(
                 .map_err(|_| ScriptError::new(format!("invalid number literal: {value}")))?;
             Ok(Value::Number(parsed))
         }
+        Expr::RegexLiteral { pattern, flags } => Ok(Value::RegExp(crate::RegExpValue::new(
+            pattern.clone(),
+            flags.clone(),
+        ))),
         Expr::Boolean(value) => Ok(Value::Boolean(*value)),
         Expr::Null => Ok(Value::Null),
         Expr::Undefined => Ok(Value::Undefined),
         Expr::Member { object, property } => eval_member(object, property, env, host),
+        Expr::OptionalMember { object, property } => {
+            eval_optional_member(object, property, env, host)
+        }
+        Expr::OptionalMemberCall {
+            object,
+            property,
+            args,
+        } => eval_optional_member_call(object, property, args, env, host),
         Expr::ComputedMember { object, property } => {
             eval_computed_member(object, property, env, host)
         }
@@ -1975,16 +2149,27 @@ fn eval_expr<H: HostBindings>(
             left,
             right,
             operator,
-        } => {
-            let left = eval_number(left, env, host, "comparison")?;
-            let right = eval_number(right, env, host, "comparison")?;
-            Ok(Value::Boolean(match operator {
-                ComparisonOperator::LessThan => left < right,
-                ComparisonOperator::LessThanOrEqual => left <= right,
-                ComparisonOperator::GreaterThan => left > right,
-                ComparisonOperator::GreaterThanOrEqual => left >= right,
-            }))
-        }
+        } => Ok(Value::Boolean(match operator {
+            ComparisonOperator::InstanceOf => is_instance_of_constructor(
+                &eval_expr(left, env, host)?,
+                &eval_expr(right, env, host)?,
+                host,
+            )?,
+            ComparisonOperator::LessThan
+            | ComparisonOperator::LessThanOrEqual
+            | ComparisonOperator::GreaterThan
+            | ComparisonOperator::GreaterThanOrEqual => {
+                let left = eval_number(left, env, host, "comparison")?;
+                let right = eval_number(right, env, host, "comparison")?;
+                match operator {
+                    ComparisonOperator::LessThan => left < right,
+                    ComparisonOperator::LessThanOrEqual => left <= right,
+                    ComparisonOperator::GreaterThan => left > right,
+                    ComparisonOperator::GreaterThanOrEqual => left >= right,
+                    ComparisonOperator::InstanceOf => unreachable!(),
+                }
+            }
+        })),
         Expr::UnaryNeg(expr) => {
             let value = eval_expr(expr, env, host)?;
             match value {
@@ -2072,10 +2257,44 @@ fn eval_identifier(name: &str, env: &BTreeMap<String, Value>) -> Result<Value> {
         "localStorage" => Ok(Value::Storage(StorageTarget::Local)),
         "sessionStorage" => Ok(Value::Storage(StorageTarget::Session)),
         "Object" => Ok(Value::ObjectNamespace),
-        "Array" => Ok(Value::ArrayNamespace),
+        "Array" | "Uint8Array" => Ok(Value::ArrayNamespace),
         "String" => Ok(Value::ObjectNamespace),
         "Number" => Ok(Value::ObjectNamespace),
         "Date" => Ok(Value::ObjectNamespace),
+        "Boolean" => Ok(native_global_function("Boolean")),
+        "decodeURI" => Ok(native_global_function("decodeURI")),
+        "decodeURIComponent" => Ok(native_global_function("decodeURIComponent")),
+        "encodeURI" => Ok(native_global_function("encodeURI")),
+        "encodeURIComponent" => Ok(native_global_function("encodeURIComponent")),
+        "Node" => Ok(html_constructor_function("Node")),
+        "Element" => Ok(html_constructor_function("Element")),
+        "HTMLElement" => Ok(html_constructor_function("HTMLElement")),
+        "HTMLButtonElement" => Ok(html_constructor_function("HTMLButtonElement")),
+        "HTMLSelectElement" => Ok(html_constructor_function("HTMLSelectElement")),
+        "HTMLInputElement" => Ok(html_constructor_function("HTMLInputElement")),
+        "HTMLTextAreaElement" => Ok(html_constructor_function("HTMLTextAreaElement")),
+        "HTMLFormElement" => Ok(html_constructor_function("HTMLFormElement")),
+        "HTMLOptionElement" => Ok(html_constructor_function("HTMLOptionElement")),
+        "HTMLOptGroupElement" => Ok(html_constructor_function("HTMLOptGroupElement")),
+        "HTMLFieldSetElement" => Ok(html_constructor_function("HTMLFieldSetElement")),
+        "HTMLLabelElement" => Ok(html_constructor_function("HTMLLabelElement")),
+        "HTMLImageElement" => Ok(html_constructor_function("HTMLImageElement")),
+        "HTMLAnchorElement" => Ok(html_constructor_function("HTMLAnchorElement")),
+        "HTMLAreaElement" => Ok(html_constructor_function("HTMLAreaElement")),
+        "HTMLMapElement" => Ok(html_constructor_function("HTMLMapElement")),
+        "HTMLTableElement" => Ok(html_constructor_function("HTMLTableElement")),
+        "HTMLTableSectionElement" => Ok(html_constructor_function("HTMLTableSectionElement")),
+        "HTMLTableRowElement" => Ok(html_constructor_function("HTMLTableRowElement")),
+        "HTMLTableCellElement" => Ok(html_constructor_function("HTMLTableCellElement")),
+        "HTMLUListElement" => Ok(html_constructor_function("HTMLUListElement")),
+        "HTMLOListElement" => Ok(html_constructor_function("HTMLOListElement")),
+        "HTMLLIElement" => Ok(html_constructor_function("HTMLLIElement")),
+        "HTMLObjectElement" => Ok(html_constructor_function("HTMLObjectElement")),
+        "HTMLEmbedElement" => Ok(html_constructor_function("HTMLEmbedElement")),
+        "HTMLLegendElement" => Ok(html_constructor_function("HTMLLegendElement")),
+        "HTMLDListElement" => Ok(html_constructor_function("HTMLDListElement")),
+        "HTMLScriptElement" => Ok(html_constructor_function("HTMLScriptElement")),
+        "HTMLStyleElement" => Ok(html_constructor_function("HTMLStyleElement")),
         "Math" => Ok(Value::IntlNamespace),
         "CSS" => Ok(Value::IntlNamespace),
         "Intl" => Ok(Value::IntlNamespace),
@@ -2143,6 +2362,37 @@ fn eval_member<H: HostBindings>(
         }
         Value::Document if property == "baseURI" => Ok(Value::String(host.document_base_uri()?)),
         Value::Document if property == "origin" => Ok(Value::String(host.document_origin()?)),
+        Value::Document
+            if matches!(
+                property,
+                "createElement"
+                    | "createElementNS"
+                    | "createTextNode"
+                    | "createComment"
+                    | "createAttribute"
+                    | "createAttributeNS"
+                    | "createDocumentFragment"
+                    | "importNode"
+                    | "normalize"
+                    | "removeChild"
+                    | "open"
+                    | "close"
+                    | "write"
+                    | "writeln"
+                    | "contains"
+                    | "isSameNode"
+                    | "isEqualNode"
+                    | "compareDocumentPosition"
+                    | "hasChildNodes"
+                    | "hasFocus"
+                    | "querySelector"
+                    | "querySelectorAll"
+                    | "getElementById"
+                    | "getElementsByName"
+            ) =>
+        {
+            Ok(native_method_function(Value::Document, property))
+        }
         Value::Document if property == "referrer" => Ok(Value::String(host.document_referrer()?)),
         Value::Document if property == "cookie" => Ok(Value::String(host.document_cookie()?)),
         Value::Document if property == "currentScript" => {
@@ -2238,6 +2488,87 @@ fn eval_member<H: HostBindings>(
             Ok(Value::HtmlCollection(HtmlCollectionTarget::DocumentPlugins))
         }
         Value::Window if property == "document" => Ok(Value::Document),
+        Value::Window if property == "Node" => Ok(html_constructor_function("Node")),
+        Value::Window if property == "Element" => Ok(html_constructor_function("Element")),
+        Value::Window if property == "HTMLElement" => Ok(html_constructor_function("HTMLElement")),
+        Value::Window if property == "HTMLButtonElement" => {
+            Ok(html_constructor_function("HTMLButtonElement"))
+        }
+        Value::Window if property == "HTMLSelectElement" => {
+            Ok(html_constructor_function("HTMLSelectElement"))
+        }
+        Value::Window if property == "HTMLInputElement" => {
+            Ok(html_constructor_function("HTMLInputElement"))
+        }
+        Value::Window if property == "HTMLTextAreaElement" => {
+            Ok(html_constructor_function("HTMLTextAreaElement"))
+        }
+        Value::Window if property == "HTMLFormElement" => {
+            Ok(html_constructor_function("HTMLFormElement"))
+        }
+        Value::Window if property == "HTMLOptionElement" => {
+            Ok(html_constructor_function("HTMLOptionElement"))
+        }
+        Value::Window if property == "HTMLOptGroupElement" => {
+            Ok(html_constructor_function("HTMLOptGroupElement"))
+        }
+        Value::Window if property == "HTMLFieldSetElement" => {
+            Ok(html_constructor_function("HTMLFieldSetElement"))
+        }
+        Value::Window if property == "HTMLLabelElement" => {
+            Ok(html_constructor_function("HTMLLabelElement"))
+        }
+        Value::Window if property == "HTMLImageElement" => {
+            Ok(html_constructor_function("HTMLImageElement"))
+        }
+        Value::Window if property == "HTMLAnchorElement" => {
+            Ok(html_constructor_function("HTMLAnchorElement"))
+        }
+        Value::Window if property == "HTMLAreaElement" => {
+            Ok(html_constructor_function("HTMLAreaElement"))
+        }
+        Value::Window if property == "HTMLMapElement" => {
+            Ok(html_constructor_function("HTMLMapElement"))
+        }
+        Value::Window if property == "HTMLTableElement" => {
+            Ok(html_constructor_function("HTMLTableElement"))
+        }
+        Value::Window if property == "HTMLTableSectionElement" => {
+            Ok(html_constructor_function("HTMLTableSectionElement"))
+        }
+        Value::Window if property == "HTMLTableRowElement" => {
+            Ok(html_constructor_function("HTMLTableRowElement"))
+        }
+        Value::Window if property == "HTMLTableCellElement" => {
+            Ok(html_constructor_function("HTMLTableCellElement"))
+        }
+        Value::Window if property == "HTMLUListElement" => {
+            Ok(html_constructor_function("HTMLUListElement"))
+        }
+        Value::Window if property == "HTMLOListElement" => {
+            Ok(html_constructor_function("HTMLOListElement"))
+        }
+        Value::Window if property == "HTMLLIElement" => {
+            Ok(html_constructor_function("HTMLLIElement"))
+        }
+        Value::Window if property == "HTMLObjectElement" => {
+            Ok(html_constructor_function("HTMLObjectElement"))
+        }
+        Value::Window if property == "HTMLEmbedElement" => {
+            Ok(html_constructor_function("HTMLEmbedElement"))
+        }
+        Value::Window if property == "HTMLLegendElement" => {
+            Ok(html_constructor_function("HTMLLegendElement"))
+        }
+        Value::Window if property == "HTMLDListElement" => {
+            Ok(html_constructor_function("HTMLDListElement"))
+        }
+        Value::Window if property == "HTMLScriptElement" => {
+            Ok(html_constructor_function("HTMLScriptElement"))
+        }
+        Value::Window if property == "HTMLStyleElement" => {
+            Ok(html_constructor_function("HTMLStyleElement"))
+        }
         Value::Window if property == "self" => Ok(Value::Window),
         Value::Window if property == "window" => Ok(Value::Window),
         Value::Window if property == "parent" => Ok(Value::Window),
@@ -2457,6 +2788,22 @@ fn eval_member<H: HostBindings>(
         {
             Ok(native_method_function(Value::History, property))
         }
+        Value::RegExp(value) if matches!(property, "test" | "exec" | "toString" | "valueOf") => Ok(
+            native_method_function(Value::RegExp(value.clone()), property),
+        ),
+        Value::RegExp(value) if property == "source" => {
+            Ok(Value::String(value.pattern().to_string()))
+        }
+        Value::RegExp(value) if property == "flags" => Ok(Value::String(value.flags().to_string())),
+        Value::RegExp(value) if property == "global" => Ok(Value::Boolean(value.is_global())),
+        Value::RegExp(value) if property == "ignoreCase" => {
+            Ok(Value::Boolean(value.is_ignore_case()))
+        }
+        Value::RegExp(value) if property == "multiline" => Ok(Value::Boolean(value.is_multiline())),
+        Value::RegExp(value) if property == "dotAll" => Ok(Value::Boolean(value.is_dot_all())),
+        Value::RegExp(value) if property == "unicode" => Ok(Value::Boolean(value.is_unicode())),
+        Value::RegExp(value) if property == "sticky" => Ok(Value::Boolean(value.is_sticky())),
+        Value::RegExp(_) if property == "lastIndex" => Ok(Value::Number(0.0)),
         Value::String(value) if property == "length" => {
             Ok(Value::Number(value.chars().count() as f64))
         }
@@ -2469,6 +2816,8 @@ fn eval_member<H: HostBindings>(
                     | "split"
                     | "replace"
                     | "replaceAll"
+                    | "match"
+                    | "search"
                     | "toLowerCase"
                     | "toUpperCase"
                     | "includes"
@@ -3269,6 +3618,20 @@ fn eval_member<H: HostBindings>(
         Value::MimeTypeArray(list) if property == "length" => {
             Ok(Value::Number(list.length() as f64))
         }
+        Value::ObjectNamespace if property == "prototype" => {
+            let prototype = crate::ObjectHandle::new();
+            object_set_property_value(
+                &prototype,
+                PropertyKey::String("hasOwnProperty".to_string()),
+                Value::Function(crate::ScriptFunction::new(
+                    Vec::new(),
+                    format!("{NATIVE_METHOD_PREFIX}hasOwnProperty"),
+                )),
+                env,
+                host,
+            )?;
+            Ok(Value::Object(prototype))
+        }
         Value::ObjectNamespace
             if matches!(
                 property,
@@ -3276,6 +3639,7 @@ fn eval_member<H: HostBindings>(
                     | "keys"
                     | "values"
                     | "entries"
+                    | "fromEntries"
                     | "getOwnPropertySymbols"
                     | "fromCharCode"
                     | "isFinite"
@@ -3297,6 +3661,7 @@ fn eval_member<H: HostBindings>(
                 property,
                 "NumberFormat"
                     | "DateTimeFormat"
+                    | "Collator"
                     | "min"
                     | "max"
                     | "abs"
@@ -3319,6 +3684,86 @@ fn eval_member<H: HostBindings>(
         Value::Clipboard => Err(unsupported_member_access(property, "clipboard")),
         Value::History => Err(unsupported_member_access(property, "history")),
         Value::Screen => Err(unsupported_member_access(property, "screen")),
+        Value::RegExp(value) if property == "source" => {
+            Ok(Value::String(value.pattern().to_string()))
+        }
+        Value::RegExp(value) if property == "flags" => Ok(Value::String(value.flags().to_string())),
+        Value::RegExp(value) if property == "global" => Ok(Value::Boolean(value.is_global())),
+        Value::RegExp(value) if property == "ignoreCase" => {
+            Ok(Value::Boolean(value.is_ignore_case()))
+        }
+        Value::RegExp(value) if property == "multiline" => Ok(Value::Boolean(value.is_multiline())),
+        Value::RegExp(value) if property == "dotAll" => Ok(Value::Boolean(value.is_dot_all())),
+        Value::RegExp(value) if property == "unicode" => Ok(Value::Boolean(value.is_unicode())),
+        Value::RegExp(value) if property == "sticky" => Ok(Value::Boolean(value.is_sticky())),
+        Value::RegExp(_) if property == "lastIndex" => Ok(Value::Number(0.0)),
+        Value::RegExp(value) if matches!(property, "test" | "exec" | "toString" | "valueOf") => Ok(
+            native_method_function(Value::RegExp(value.clone()), property),
+        ),
+        Value::RegExp(_) => Err(unsupported_member_access(property, "regexp")),
+        Value::Date(value)
+            if matches!(
+                property,
+                "toLocaleDateString"
+                    | "toLocaleString"
+                    | "toISOString"
+                    | "toJSON"
+                    | "toString"
+                    | "valueOf"
+                    | "getTime"
+            ) =>
+        {
+            Ok(native_method_function(Value::Date(value.clone()), property))
+        }
+        Value::Date(value)
+            if matches!(
+                property,
+                "getFullYear"
+                    | "getUTCFullYear"
+                    | "getMonth"
+                    | "getUTCMonth"
+                    | "getDate"
+                    | "getUTCDate"
+                    | "getHours"
+                    | "getUTCHours"
+                    | "getMinutes"
+                    | "getUTCMinutes"
+                    | "getSeconds"
+                    | "getUTCSeconds"
+                    | "getMilliseconds"
+                    | "getUTCMilliseconds"
+                    | "getTimezoneOffset"
+            ) =>
+        {
+            Ok(native_method_function(Value::Date(value.clone()), property))
+        }
+        Value::Date(_) => Err(unsupported_member_access(property, "date")),
+        Value::IntlNumberFormat(value)
+            if matches!(property, "format" | "resolvedOptions" | "formatToParts") =>
+        {
+            Ok(native_method_function(
+                Value::IntlNumberFormat(value.clone()),
+                property,
+            ))
+        }
+        Value::IntlNumberFormat(_) => {
+            Err(unsupported_member_access(property, "intl number format"))
+        }
+        Value::IntlDateTimeFormat(value)
+            if matches!(property, "format" | "resolvedOptions" | "formatToParts") =>
+        {
+            Ok(native_method_function(
+                Value::IntlDateTimeFormat(value.clone()),
+                property,
+            ))
+        }
+        Value::IntlDateTimeFormat(_) => {
+            Err(unsupported_member_access(property, "intl datetime format"))
+        }
+        Value::IntlCollator(value) if matches!(property, "compare" | "resolvedOptions") => Ok(
+            native_method_function(Value::IntlCollator(value.clone()), property),
+        ),
+        Value::IntlCollator(_) => Err(unsupported_member_access(property, "intl collator")),
         Value::Element(_) => Err(unsupported_member_access(property, "element")),
         Value::ClassList(_) => Err(unsupported_member_access(property, "class list")),
         Value::Attribute(_) => Err(unsupported_member_access(property, "attr")),
@@ -3372,7 +3817,7 @@ fn eval_member<H: HostBindings>(
         Value::TemplateContent(_) if property == "namespaceURI" => Ok(Value::Null),
         Value::TemplateContent(_) if property == "ownerDocument" => Ok(Value::Document),
         Value::Document => Err(unsupported_member_access(property, "document")),
-        Value::Window => Err(unsupported_member_access(property, "window")),
+        Value::Window => Ok(Value::Undefined),
         Value::String(_) => Err(unsupported_member_access(property, "string")),
         Value::Number(_) => Err(unsupported_member_access(property, "number")),
         Value::Boolean(_) => Err(unsupported_member_access(property, "boolean")),
@@ -3402,6 +3847,10 @@ fn eval_member<H: HostBindings>(
         Value::CollectionIterator(_) => Err(unsupported_member_access(property, "iterator")),
         Value::IteratorResult(_) => Err(unsupported_member_access(property, "iterator result")),
         Value::CollectionEntry(_) => Err(unsupported_member_access(property, "iterator entry")),
+        Value::Function(function) if property == "call" => Ok(native_method_function(
+            Value::Function(function.clone()),
+            property,
+        )),
         Value::Function(_) => Err(unsupported_member_access(property, "function")),
         Value::TemplateContent(_) => Err(unsupported_member_access(property, "template content")),
     }
@@ -3415,26 +3864,23 @@ fn eval_call<H: HostBindings>(
 ) -> Result<Value> {
     match callee {
         Expr::Identifier(name) if name == "String" => {
-            let value = match args.len() {
-                0 => Value::Undefined,
-                1 => eval_expr(&args[0], env, host)?,
-                _ => return Err(ScriptError::new("String() accepts at most one argument")),
+            let value = match args.first() {
+                Some(expr) => eval_expr(expr, env, host)?,
+                None => Value::Undefined,
             };
             Ok(Value::String(as_string(&value)))
         }
         Expr::Identifier(name) if name == "Boolean" => {
-            let value = match args.len() {
-                0 => Value::Undefined,
-                1 => eval_expr(&args[0], env, host)?,
-                _ => return Err(ScriptError::new("Boolean() accepts at most one argument")),
+            let value = match args.first() {
+                Some(expr) => eval_expr(expr, env, host)?,
+                None => Value::Undefined,
             };
             Ok(Value::Boolean(is_truthy(&value)))
         }
         Expr::Identifier(name) if name == "Number" => {
-            let value = match args.len() {
-                0 => Value::Undefined,
-                1 => eval_expr(&args[0], env, host)?,
-                _ => return Err(ScriptError::new("Number() accepts at most one argument")),
+            let value = match args.first() {
+                Some(expr) => eval_expr(expr, env, host)?,
+                None => Value::Undefined,
             };
             Ok(Value::Number(number_from_value(&value)?))
         }
@@ -3478,6 +3924,45 @@ fn eval_call<H: HostBindings>(
     }
 }
 
+fn eval_optional_member<H: HostBindings>(
+    object: &Expr,
+    property: &str,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let object_value = eval_expr(object, env, host)?;
+    if matches!(object_value, Value::Null | Value::Undefined) {
+        return Ok(Value::Undefined);
+    }
+
+    Ok(
+        match property_value_on_value(
+            &object_value,
+            &property_key_from_string(property),
+            env,
+            host,
+        )? {
+            Some(value) => value,
+            None => Value::Undefined,
+        },
+    )
+}
+
+fn eval_optional_member_call<H: HostBindings>(
+    object: &Expr,
+    property: &str,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let object_value = eval_expr(object, env, host)?;
+    if matches!(object_value, Value::Null | Value::Undefined) {
+        return Ok(Value::Undefined);
+    }
+
+    eval_method_call(object_value, property, args, env, host)
+}
+
 fn call_script_function<H: HostBindings>(
     function: &crate::ScriptFunction,
     args: &[Expr],
@@ -3495,30 +3980,20 @@ fn call_script_function_with_this<H: HostBindings>(
     env: &mut BTreeMap<String, Value>,
     host: &mut H,
 ) -> Result<Value> {
-    let mut bindings = env.clone();
-    bindings.extend(
-        function
-            .captured_bindings
-            .iter()
-            .map(|(key, value)| (key.clone(), value.clone())),
-    );
+    let mut bindings = function.captured_bindings.as_ref().clone();
+    bindings.extend(env.clone());
     let outer_names: Vec<String> = env.keys().cloned().collect();
+    let bound_names = function_bound_names(function);
 
     bindings.insert("this".to_string(), this_value);
 
-    for (index, param) in function.params.iter().enumerate() {
-        let value = match args.get(index) {
-            Some(expr) => eval_expr(expr, env, host)?,
-            None => Value::Undefined,
-        };
-        bindings.insert(param.clone(), value);
-    }
-
     let program = crate::parser::parse_program(&function.body_source)?;
+    let local_names = collect_declared_names_from_program(&program);
+    bind_function_arguments_from_exprs(function, args, env, host, &mut bindings)?;
     let control = eval_program_with_bindings(&program, host, &mut bindings)?;
 
     for name in outer_names {
-        if name == "this" || function.params.iter().any(|param| param == &name) {
+        if name == "this" || bound_names.contains(&name) || local_names.contains(&name) {
             continue;
         }
         if let Some(value) = bindings.get(&name).cloned() {
@@ -3554,6 +4029,9 @@ fn eval_call_argument_values<H: HostBindings>(
 
 const NATIVE_METHOD_PREFIX: &str = "__native_method__:";
 const NATIVE_METHOD_RECEIVER_KEY: &str = "__native_method_receiver";
+const NATIVE_GLOBAL_FUNCTION_PREFIX: &str = "__native_global_function__:";
+const HTML_CONSTRUCTOR_PREFIX: &str = "__html_constructor__:";
+const HTML_NAMESPACE_URI: &str = "http://www.w3.org/1999/xhtml";
 
 fn native_method_function(receiver: Value, method: &str) -> Value {
     let mut captured_bindings = BTreeMap::new();
@@ -3564,6 +4042,210 @@ fn native_method_function(receiver: Value, method: &str) -> Value {
     )
 }
 
+fn native_global_function(name: &str) -> Value {
+    Value::Function(crate::ScriptFunction::new(
+        Vec::new(),
+        format!("{NATIVE_GLOBAL_FUNCTION_PREFIX}{name}"),
+    ))
+}
+
+fn html_constructor_function(name: &str) -> Value {
+    Value::Function(crate::ScriptFunction::new(
+        Vec::new(),
+        format!("{HTML_CONSTRUCTOR_PREFIX}{name}"),
+    ))
+}
+
+fn html_constructor_name(function: &crate::ScriptFunction) -> Option<&str> {
+    function.body_source.strip_prefix(HTML_CONSTRUCTOR_PREFIX)
+}
+
+fn native_global_function_name(function: &crate::ScriptFunction) -> Option<&str> {
+    function
+        .body_source
+        .strip_prefix(NATIVE_GLOBAL_FUNCTION_PREFIX)
+}
+
+fn is_html_namespace_element<H: HostBindings>(
+    element: &ElementHandle,
+    host: &mut H,
+) -> Result<bool> {
+    Ok(matches!(
+        host.node_namespace_uri(NodeHandle::new(element.raw()))?,
+        Some(namespace) if namespace == HTML_NAMESPACE_URI
+    ))
+}
+
+fn html_element_tag_matches<H: HostBindings>(
+    element: &ElementHandle,
+    expected: &[&str],
+    host: &mut H,
+) -> Result<bool> {
+    if !is_html_namespace_element(element, host)? {
+        return Ok(false);
+    }
+    Ok(expected.iter().any(|tag| {
+        host.element_tag_name(*element)
+            .is_ok_and(|actual| actual == *tag)
+    }))
+}
+
+fn is_instance_of_constructor<H: HostBindings>(
+    value: &Value,
+    constructor: &Value,
+    host: &mut H,
+) -> Result<bool> {
+    match constructor {
+        Value::Function(function) => {
+            let Some(name) = html_constructor_name(function) else {
+                return Ok(false);
+            };
+            match name {
+                "Node" => Ok(matches!(
+                    value,
+                    Value::Document
+                        | Value::Element(_)
+                        | Value::Node(_)
+                        | Value::TemplateContent(_)
+                        | Value::Attribute(_)
+                )),
+                "Element" => Ok(matches!(value, Value::Element(_))),
+                "HTMLElement" => match value {
+                    Value::Element(element) => is_html_namespace_element(element, host),
+                    _ => Ok(false),
+                },
+                "HTMLButtonElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["button"], host),
+                    _ => Ok(false),
+                },
+                "HTMLSelectElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["select"], host),
+                    _ => Ok(false),
+                },
+                "HTMLInputElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["input"], host),
+                    _ => Ok(false),
+                },
+                "HTMLTextAreaElement" => match value {
+                    Value::Element(element) => {
+                        html_element_tag_matches(element, &["textarea"], host)
+                    }
+                    _ => Ok(false),
+                },
+                "HTMLFormElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["form"], host),
+                    _ => Ok(false),
+                },
+                "HTMLOptionElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["option"], host),
+                    _ => Ok(false),
+                },
+                "HTMLOptGroupElement" => match value {
+                    Value::Element(element) => {
+                        html_element_tag_matches(element, &["optgroup"], host)
+                    }
+                    _ => Ok(false),
+                },
+                "HTMLFieldSetElement" => match value {
+                    Value::Element(element) => {
+                        html_element_tag_matches(element, &["fieldset"], host)
+                    }
+                    _ => Ok(false),
+                },
+                "HTMLLabelElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["label"], host),
+                    _ => Ok(false),
+                },
+                "HTMLImageElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["img"], host),
+                    _ => Ok(false),
+                },
+                "HTMLAnchorElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["a"], host),
+                    _ => Ok(false),
+                },
+                "HTMLAreaElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["area"], host),
+                    _ => Ok(false),
+                },
+                "HTMLMapElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["map"], host),
+                    _ => Ok(false),
+                },
+                "HTMLTableElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["table"], host),
+                    _ => Ok(false),
+                },
+                "HTMLTableSectionElement" => match value {
+                    Value::Element(element) => {
+                        html_element_tag_matches(element, &["thead", "tbody", "tfoot"], host)
+                    }
+                    _ => Ok(false),
+                },
+                "HTMLTableRowElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["tr"], host),
+                    _ => Ok(false),
+                },
+                "HTMLTableCellElement" => match value {
+                    Value::Element(element) => {
+                        html_element_tag_matches(element, &["td", "th"], host)
+                    }
+                    _ => Ok(false),
+                },
+                "HTMLUListElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["ul"], host),
+                    _ => Ok(false),
+                },
+                "HTMLOListElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["ol"], host),
+                    _ => Ok(false),
+                },
+                "HTMLLIElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["li"], host),
+                    _ => Ok(false),
+                },
+                "HTMLObjectElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["object"], host),
+                    _ => Ok(false),
+                },
+                "HTMLEmbedElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["embed"], host),
+                    _ => Ok(false),
+                },
+                "HTMLLegendElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["legend"], host),
+                    _ => Ok(false),
+                },
+                "HTMLDListElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["dl"], host),
+                    _ => Ok(false),
+                },
+                "HTMLScriptElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["script"], host),
+                    _ => Ok(false),
+                },
+                "HTMLStyleElement" => match value {
+                    Value::Element(element) => html_element_tag_matches(element, &["style"], host),
+                    _ => Ok(false),
+                },
+                _ => Ok(false),
+            }
+        }
+        Value::ObjectNamespace => Ok(!matches!(
+            value,
+            Value::Undefined
+                | Value::Null
+                | Value::Boolean(_)
+                | Value::Number(_)
+                | Value::String(_)
+        )),
+        Value::ArrayNamespace => Ok(matches!(value, Value::Array(_))),
+        _ => Err(ScriptError::new(
+            "right-hand side of instanceof is not a constructor",
+        )),
+    }
+}
+
 fn call_script_function_value<H: HostBindings>(
     function: &crate::ScriptFunction,
     args: &[Value],
@@ -3571,31 +4253,30 @@ fn call_script_function_value<H: HostBindings>(
     env: &mut BTreeMap<String, Value>,
     host: &mut H,
 ) -> Result<Value> {
+    if html_constructor_name(function).is_some() {
+        return Err(ScriptError::new("invalid function target"));
+    }
+    if let Some(name) = native_global_function_name(function) {
+        return call_native_global_function(name, args, env, host);
+    }
     if let Some(method) = function.body_source.strip_prefix(NATIVE_METHOD_PREFIX) {
         return call_native_function(function, method, args, this_value, env, host);
     }
 
-    let mut bindings = env.clone();
-    bindings.extend(
-        function
-            .captured_bindings
-            .iter()
-            .map(|(key, value)| (key.clone(), value.clone())),
-    );
+    let mut bindings = function.captured_bindings.as_ref().clone();
+    bindings.extend(env.clone());
     let outer_names: Vec<String> = env.keys().cloned().collect();
+    let bound_names = function_bound_names(function);
 
     bindings.insert("this".to_string(), this_value);
 
-    for (index, param) in function.params.iter().enumerate() {
-        let value = args.get(index).cloned().unwrap_or(Value::Undefined);
-        bindings.insert(param.clone(), value);
-    }
-
     let program = crate::parser::parse_program(&function.body_source)?;
+    let local_names = collect_declared_names_from_program(&program);
+    bind_function_arguments_from_values(function, args, env, host, &mut bindings)?;
     let control = eval_program_with_bindings(&program, host, &mut bindings)?;
 
     for name in outer_names {
-        if name == "this" || function.params.iter().any(|param| param == &name) {
+        if name == "this" || bound_names.contains(&name) || local_names.contains(&name) {
             continue;
         }
         if let Some(value) = bindings.get(&name).cloned() {
@@ -3609,6 +4290,211 @@ fn call_script_function_value<H: HostBindings>(
         EvalControl::Break => Err(ScriptError::new("break outside loop")),
         EvalControl::ContinueLoop => Err(ScriptError::new("continue outside loop")),
     }
+}
+
+fn call_native_global_function<H: HostBindings>(
+    name: &str,
+    args: &[Value],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    match name {
+        "Boolean" => {
+            let value = args.first().cloned().unwrap_or(Value::Undefined);
+            Ok(Value::Boolean(is_truthy(&value)))
+        }
+        "decodeURI" => {
+            let [value] = args else {
+                return Err(ScriptError::new("decodeURI() expects exactly one argument"));
+            };
+            Ok(Value::String(percent_decode_uri(&as_string(value), true)))
+        }
+        "decodeURIComponent" => {
+            let [value] = args else {
+                return Err(ScriptError::new(
+                    "decodeURIComponent() expects exactly one argument",
+                ));
+            };
+            Ok(Value::String(percent_decode_uri(&as_string(value), false)))
+        }
+        "encodeURI" => {
+            let [value] = args else {
+                return Err(ScriptError::new("encodeURI() expects exactly one argument"));
+            };
+            Ok(Value::String(percent_encode_uri(&as_string(value), true)))
+        }
+        "encodeURIComponent" => {
+            let [value] = args else {
+                return Err(ScriptError::new(
+                    "encodeURIComponent() expects exactly one argument",
+                ));
+            };
+            Ok(Value::String(percent_encode_uri(&as_string(value), false)))
+        }
+        other => Err(ScriptError::new(format!(
+            "unsupported native global function: {other}"
+        ))),
+    }
+}
+
+fn collect_declared_names_from_program(program: &Program) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    collect_declared_names_from_statements(&program.statements, &mut names);
+    names
+}
+
+fn collect_declared_names_from_statements(statements: &[Statement], names: &mut BTreeSet<String>) {
+    for statement in statements {
+        collect_declared_names_from_statement(statement, names);
+    }
+}
+
+fn collect_declared_names_from_statement(statement: &Statement, names: &mut BTreeSet<String>) {
+    match statement {
+        Statement::VariableDeclaration { name, .. } => {
+            names.insert(name.clone());
+        }
+        Statement::FunctionDeclaration { name, .. } => {
+            names.insert(name.clone());
+        }
+        Statement::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_declared_names_from_statements(then_branch, names);
+            if let Some(else_branch) = else_branch {
+                collect_declared_names_from_statements(else_branch, names);
+            }
+        }
+        Statement::While { body, .. } => {
+            collect_declared_names_from_statements(body, names);
+        }
+        Statement::For { init, body, .. } => {
+            if let Some(init) = init.as_ref() {
+                collect_declared_names_from_statement(init, names);
+            }
+            collect_declared_names_from_statements(body, names);
+        }
+        Statement::ForIn { binding, body, .. } | Statement::ForOf { binding, body, .. } => {
+            names.insert(binding.clone());
+            collect_declared_names_from_statements(body, names);
+        }
+        Statement::TryCatch {
+            try_body,
+            catch_binding,
+            catch_body,
+        } => {
+            names.insert(catch_binding.clone());
+            collect_declared_names_from_statements(try_body, names);
+            collect_declared_names_from_statements(catch_body, names);
+        }
+        Statement::Return(_)
+        | Statement::Break
+        | Statement::Continue
+        | Statement::Throw(_)
+        | Statement::Assignment { .. }
+        | Statement::Expression(_) => {}
+    }
+}
+
+fn function_bound_names(function: &crate::ScriptFunction) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for param in &function.params {
+        if let Some(expanded) = decode_array_destructure_param(param) {
+            names.extend(expanded);
+        } else if let Some(expanded) = decode_object_destructure_param(param) {
+            names.extend(expanded);
+        } else {
+            names.insert(param.clone());
+        }
+    }
+    names
+}
+
+fn decode_array_destructure_param(param: &str) -> Option<Vec<String>> {
+    param.strip_prefix("__array_destructure__:").map(|names| {
+        if names.is_empty() {
+            Vec::new()
+        } else {
+            names
+                .split(',')
+                .filter_map(|name| {
+                    let name = name.trim();
+                    if name.is_empty() {
+                        None
+                    } else {
+                        Some(name.to_string())
+                    }
+                })
+                .collect()
+        }
+    })
+}
+
+fn decode_object_destructure_param(param: &str) -> Option<Vec<String>> {
+    param.strip_prefix("__object_destructure__:").map(|names| {
+        if names.is_empty() {
+            Vec::new()
+        } else {
+            names
+                .split(',')
+                .filter_map(|name| {
+                    let name = name.trim();
+                    if name.is_empty() {
+                        None
+                    } else {
+                        Some(name.to_string())
+                    }
+                })
+                .collect()
+        }
+    })
+}
+
+fn bind_function_arguments_from_exprs<H: HostBindings>(
+    function: &crate::ScriptFunction,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+    bindings: &mut BTreeMap<String, Value>,
+) -> Result<()> {
+    let mut values = Vec::with_capacity(args.len());
+    for arg in args {
+        values.push(eval_expr(arg, env, host)?);
+    }
+    bind_function_arguments_from_values(function, &values, env, host, bindings)
+}
+
+fn bind_function_arguments_from_values<H: HostBindings>(
+    function: &crate::ScriptFunction,
+    args: &[Value],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+    bindings: &mut BTreeMap<String, Value>,
+) -> Result<()> {
+    for (index, param) in function.params.iter().enumerate() {
+        let value = args.get(index).cloned().unwrap_or(Value::Undefined);
+        if let Some(names) = decode_array_destructure_param(param) {
+            let items = array_from_value(value, env, host)?;
+            for (item_index, name) in names.into_iter().enumerate() {
+                bindings.insert(
+                    name,
+                    items.get(item_index).cloned().unwrap_or(Value::Undefined),
+                );
+            }
+        } else if let Some(names) = decode_object_destructure_param(param) {
+            for name in names {
+                let key = property_key_from_string(name.clone());
+                let bound =
+                    property_value_on_value(&value, &key, env, host)?.unwrap_or(Value::Undefined);
+                bindings.insert(name, bound);
+            }
+        } else {
+            bindings.insert(param.clone(), value);
+        }
+    }
+    Ok(())
 }
 
 fn call_native_function<H: HostBindings>(
@@ -4310,6 +5196,76 @@ fn location_path_bounds(url: &str) -> Option<(usize, usize)> {
     Some((path_start, path_end))
 }
 
+fn percent_decode_uri(value: &str, preserve_reserved: bool) -> String {
+    let reserved = b";/?:@&=+$,#";
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
+            {
+                let byte = (hi << 4) | lo;
+                if preserve_reserved && reserved.contains(&byte) {
+                    out.extend_from_slice(&bytes[index..index + 3]);
+                } else {
+                    out.push(byte);
+                }
+                index += 3;
+                continue;
+            }
+        }
+
+        out.push(bytes[index]);
+        index += 1;
+    }
+
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn percent_encode_uri(value: &str, preserve_reserved: bool) -> String {
+    let reserved = ";/?:@&=+$,#";
+    let mut out = String::new();
+    for ch in value.chars() {
+        let keep = matches!(
+            ch,
+            'A'..='Z'
+                | 'a'..='z'
+                | '0'..='9'
+                | '-'
+                | '_'
+                | '.'
+                | '!'
+                | '~'
+                | '*'
+                | '\''
+                | '('
+                | ')'
+        ) || (preserve_reserved && reserved.contains(ch));
+        if keep {
+            out.push(ch);
+            continue;
+        }
+
+        let mut buf = [0u8; 4];
+        for byte in ch.encode_utf8(&mut buf).as_bytes() {
+            out.push('%');
+            out.push_str(&format!("{byte:02X}"));
+        }
+    }
+    out
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 fn eval_method_call<H: HostBindings>(
     object: Value,
     method: &str,
@@ -4622,8 +5578,8 @@ fn eval_method_call<H: HostBindings>(
                 Ok(Value::Undefined)
             }
             "focus" => {
-                if !args.is_empty() {
-                    return Err(ScriptError::new("focus() expects no arguments"));
+                if args.len() > 1 {
+                    return Err(ScriptError::new("focus() expects at most one argument"));
                 }
                 host.element_focus(element)?;
                 Ok(Value::Undefined)
@@ -4978,6 +5934,8 @@ fn eval_method_call<H: HostBindings>(
             "split" => string_split(&value, args, env, host),
             "replace" => string_replace(&value, args, false, env, host),
             "replaceAll" => string_replace(&value, args, true, env, host),
+            "match" => string_match(&value, args, env, host),
+            "search" => string_search(&value, args, env, host),
             "toLowerCase" => {
                 if !args.is_empty() {
                     return Err(ScriptError::new("toLowerCase() expects no arguments"));
@@ -5001,9 +5959,86 @@ fn eval_method_call<H: HostBindings>(
             "charCodeAt" => string_char_code_at(&value, args, env, host),
             "concat" => string_concat(&value, args, env, host),
             "repeat" => string_repeat(&value, args, env, host),
+            "padStart" => string_pad_start(&value, args, env, host),
             "normalize" => string_normalize(&value, args, env, host),
             other => Err(ScriptError::new(format!(
                 "unsupported string method: {other}"
+            ))),
+        },
+        Value::RegExp(value) => match method {
+            "test" => {
+                let [arg] = args else {
+                    return Err(ScriptError::new("test() expects exactly one argument"));
+                };
+                let text = as_string(&eval_expr(arg, env, host)?);
+                regex_test(&text, &value)
+            }
+            "exec" => {
+                let [arg] = args else {
+                    return Err(ScriptError::new("exec() expects exactly one argument"));
+                };
+                let text = as_string(&eval_expr(arg, env, host)?);
+                regex_exec(&text, &value)
+            }
+            "toString" | "valueOf" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new(format!("{method}() expects no arguments")));
+                }
+                Ok(Value::String(as_string(&Value::RegExp(value.clone()))))
+            }
+            other => Err(ScriptError::new(format!(
+                "unsupported regexp method: {other}"
+            ))),
+        },
+        Value::Date(date) => match method {
+            "toLocaleDateString" => date_to_locale_date_string(&date, args, env, host),
+            "toLocaleString" => date_to_locale_string(&date, args, env, host),
+            "toISOString" => date_to_iso_string_method(&date, args, env, host),
+            "toJSON" => date_to_json(&date, args, env, host),
+            "toString" => date_to_string(&date, args, env, host),
+            "valueOf" | "getTime" => date_value_of(&date, args),
+            "getFullYear" => date_get_year(&date, args, false, false),
+            "getUTCFullYear" => date_get_year(&date, args, true, false),
+            "getMonth" => date_get_month(&date, args, false),
+            "getUTCMonth" => date_get_month(&date, args, true),
+            "getDate" => date_get_day(&date, args, false),
+            "getUTCDate" => date_get_day(&date, args, true),
+            "getHours" => date_get_hours(&date, args, false),
+            "getUTCHours" => date_get_hours(&date, args, true),
+            "getMinutes" => date_get_minutes(&date, args, false),
+            "getUTCMinutes" => date_get_minutes(&date, args, true),
+            "getSeconds" => date_get_seconds(&date, args, false),
+            "getUTCSeconds" => date_get_seconds(&date, args, true),
+            "getMilliseconds" => date_get_milliseconds(&date, args, false),
+            "getUTCMilliseconds" => date_get_milliseconds(&date, args, true),
+            "getTimezoneOffset" => date_get_timezone_offset(&date, args),
+            other => Err(ScriptError::new(format!(
+                "unsupported Date method: {other}"
+            ))),
+        },
+        Value::IntlNumberFormat(formatter) => match method {
+            "format" => intl_number_format_format(&formatter, args, env, host),
+            "resolvedOptions" => intl_number_format_resolved_options(&formatter, args, env, host),
+            "formatToParts" => intl_number_format_to_parts(&formatter, args, env, host),
+            other => Err(ScriptError::new(format!(
+                "unsupported Intl.NumberFormat method: {other}"
+            ))),
+        },
+        Value::IntlDateTimeFormat(formatter) => match method {
+            "format" => intl_date_time_format_format(&formatter, args, env, host),
+            "resolvedOptions" => {
+                intl_date_time_format_resolved_options(&formatter, args, env, host)
+            }
+            "formatToParts" => intl_date_time_format_to_parts(&formatter, args, env, host),
+            other => Err(ScriptError::new(format!(
+                "unsupported Intl.DateTimeFormat method: {other}"
+            ))),
+        },
+        Value::IntlCollator(collator) => match method {
+            "compare" => intl_collator_compare(&collator, args, env, host),
+            "resolvedOptions" => intl_collator_resolved_options(&collator, args, env, host),
+            other => Err(ScriptError::new(format!(
+                "unsupported Intl.Collator method: {other}"
             ))),
         },
         Value::ObjectNamespace => match method {
@@ -5011,6 +6046,7 @@ fn eval_method_call<H: HostBindings>(
             "keys" => object_namespace_keys(args, env, host),
             "values" => object_namespace_values(args, env, host),
             "entries" => object_namespace_entries(args, env, host),
+            "fromEntries" => object_namespace_from_entries(args, env, host),
             "getOwnPropertySymbols" => object_namespace_get_own_property_symbols(args, env, host),
             "fromCharCode" => string_namespace_from_char_code(args, env, host),
             "isFinite" => number_namespace_is_finite(args, env, host),
@@ -5031,7 +6067,27 @@ fn eval_method_call<H: HostBindings>(
                 "unsupported Array method: {other}"
             ))),
         },
+        Value::Function(function) if method == "call" => {
+            let this_value = match args.first() {
+                Some(expr) => eval_expr(expr, env, host)?,
+                None => Value::Undefined,
+            };
+            let values = eval_call_argument_values(&args[1..], env, host)?;
+            call_script_function_value(&function, &values, this_value, env, host)
+        }
         Value::Object(object) => match method {
+            "hasOwnProperty" => {
+                let [key_expr] = args else {
+                    return Err(ScriptError::new(
+                        "hasOwnProperty() expects exactly one argument",
+                    ));
+                };
+                let key = property_key_from_value(&eval_expr(key_expr, env, host)?);
+                Ok(Value::Boolean(
+                    property_value_on_value(&Value::Object(object.clone()), &key, env, host)?
+                        .is_some(),
+                ))
+            }
             "toString" => {
                 if !args.is_empty() {
                     return Err(ScriptError::new("toString() expects no arguments"));
@@ -5044,17 +6100,35 @@ fn eval_method_call<H: HostBindings>(
                 }
                 Ok(Value::Object(object))
             }
-            other => Err(ScriptError::new(format!(
-                "unsupported Object instance method: {other}"
-            ))),
+            other => match property_value_on_value(
+                &Value::Object(object.clone()),
+                &property_key_from_string(other),
+                env,
+                host,
+            )? {
+                Some(Value::Function(function)) => {
+                    let values = args
+                        .iter()
+                        .map(|expr| eval_expr(expr, env, host))
+                        .collect::<Result<Vec<_>>>()?;
+                    call_script_function_value(&function, &values, Value::Object(object), env, host)
+                }
+                Some(_) | None => Err(ScriptError::new(format!(
+                    "unsupported Object instance method: {other}"
+                ))),
+            },
         },
         Value::Array(array) => match method {
             "join" => array_join(&array, args, env, host),
             "map" => array_map(&array, args, env, host),
             "filter" => array_filter(&array, args, env, host),
             "forEach" => array_for_each(&array, args, env, host),
+            "some" => array_some(&array, args, env, host),
+            "every" => array_every(&array, args, env, host),
+            "subarray" => array_slice(&array, args, env, host),
             "flatMap" => array_flat_map(&array, args, env, host),
             "flat" => array_flat(&array, args, env, host),
+            "fill" => array_fill(&array, args, env, host),
             "push" => array_push(&array, args, env, host),
             "pop" => array_pop(&array, args, env, host),
             "slice" => array_slice(&array, args, env, host),
@@ -5220,9 +6294,15 @@ fn eval_method_call<H: HostBindings>(
         Value::IteratorResult(_) => Err(ScriptError::new(format!(
             "cannot call `{method}` on an iterator result value"
         ))),
-        Value::Number(_) => Err(ScriptError::new(format!(
-            "unsupported method call on number value: {method}"
-        ))),
+        Value::Number(number) => match method {
+            "toFixed" => number_method_to_fixed(number, args, env, host),
+            "toExponential" => number_method_to_exponential(number, args, env, host),
+            "toPrecision" => number_method_to_precision(number, args, env, host),
+            "toString" => number_method_to_string(number, args, env, host),
+            other => Err(ScriptError::new(format!(
+                "unsupported method call on number value: {other}"
+            ))),
+        },
         Value::Boolean(_) => Err(ScriptError::new(format!(
             "unsupported method call on boolean value: {method}"
         ))),
@@ -7614,6 +8694,39 @@ fn storage_property_is_reserved(property: &str) -> bool {
     )
 }
 
+fn window_property_is_reserved(property: &str) -> bool {
+    matches!(
+        property,
+        "closed"
+            | "document"
+            | "frameElement"
+            | "frames"
+            | "history"
+            | "length"
+            | "navigator"
+            | "opener"
+            | "origin"
+            | "parent"
+            | "screen"
+            | "self"
+            | "top"
+            | "window"
+            | "devicePixelRatio"
+            | "innerWidth"
+            | "innerHeight"
+            | "outerWidth"
+            | "outerHeight"
+            | "screenX"
+            | "screenY"
+            | "screenLeft"
+            | "screenTop"
+            | "scrollX"
+            | "scrollY"
+            | "pageXOffset"
+            | "pageYOffset"
+    )
+}
+
 fn html_collection_property_is_reserved(collection: &HtmlCollectionTarget, property: &str) -> bool {
     matches!(
         property,
@@ -7763,7 +8876,11 @@ fn eval_typeof(value: &Value) -> &'static str {
         Value::String(_) => "string",
         Value::ObjectNamespace | Value::ArrayNamespace => "function",
         Value::IntlNamespace => "object",
-        Value::Object(_) | Value::Array(_) | Value::Map(_) | Value::Symbol(_) => "object",
+        Value::Object(_)
+        | Value::Array(_)
+        | Value::Map(_)
+        | Value::Symbol(_)
+        | Value::RegExp(_) => "object",
         Value::Function(_) => "function",
         _ => "object",
     }
@@ -7779,6 +8896,11 @@ fn is_truthy(value: &Value) -> bool {
         | Value::Array(_)
         | Value::Map(_)
         | Value::Symbol(_)
+        | Value::RegExp(_)
+        | Value::Date(_)
+        | Value::IntlNumberFormat(_)
+        | Value::IntlDateTimeFormat(_)
+        | Value::IntlCollator(_)
         | Value::ObjectNamespace
         | Value::ArrayNamespace
         | Value::IntlNamespace
@@ -7796,6 +8918,10 @@ fn is_truthy(value: &Value) -> bool {
         | Value::Node(_)
         | Value::NodeList(_)
         | Value::RadioNodeList(_)
+        | Value::Date(_)
+        | Value::IntlNumberFormat(_)
+        | Value::IntlDateTimeFormat(_)
+        | Value::IntlCollator(_)
         | Value::Storage(_)
         | Value::MediaQueryList(_)
         | Value::StringList(_)
@@ -8002,6 +9128,12 @@ fn array_property_value<H: HostBindings>(
 ) -> Result<Option<Value>> {
     if property_key_matches_string(key, "length") {
         return Ok(Some(Value::Number(array.0.borrow().items.len() as f64)));
+    }
+    if property_key_matches_string(key, "byteLength") {
+        return Ok(Some(Value::Number(array.0.borrow().items.len() as f64)));
+    }
+    if property_key_matches_string(key, "buffer") {
+        return Ok(Some(Value::Array(array.clone())));
     }
 
     if let Some(index) = array_index_from_key(key) {
@@ -8491,6 +9623,25 @@ fn array_from_value<H: HostBindings>(
             .chars()
             .map(|ch| Value::String(ch.to_string()))
             .collect()),
+        Value::NamedNodeMap(element) => named_node_map_current_values(element, host),
+        Value::HtmlCollection(collection) => Ok(html_collection_items(&collection, host)?
+            .into_iter()
+            .map(Value::Element)
+            .collect()),
+        Value::NodeList(target) => Ok(node_list_items(&target, host)?
+            .into_iter()
+            .map(NodeListItem::into_value)
+            .collect()),
+        Value::RadioNodeList(target) => Ok(radio_node_list_items(&target, host)?
+            .into_iter()
+            .map(Value::Element)
+            .collect()),
+        Value::StringList(list) => Ok(list.items().iter().cloned().map(Value::String).collect()),
+        Value::MimeTypeArray(list) => Ok(list.items().iter().cloned().map(Value::String).collect()),
+        Value::StyleSheetList(target) => Ok(style_sheet_list_items(&target, host)?
+            .into_iter()
+            .map(|handle| Value::StyleSheet(StyleSheetTarget::OwnerNode(handle)))
+            .collect()),
         Value::CollectionIterator(iterator) => {
             let mut out = Vec::new();
             loop {
@@ -8538,17 +9689,15 @@ fn array_from_value<H: HostBindings>(
         | Value::ClassList(_)
         | Value::Dataset(_)
         | Value::TemplateContent(_)
-        | Value::NamedNodeMap(_)
-        | Value::HtmlCollection(_)
-        | Value::StyleSheetList(_)
         | Value::StyleSheet(_)
         | Value::Node(_)
-        | Value::NodeList(_)
-        | Value::RadioNodeList(_)
+        | Value::Date(_)
+        | Value::IntlNumberFormat(_)
+        | Value::IntlDateTimeFormat(_)
+        | Value::IntlCollator(_)
         | Value::Storage(_)
         | Value::MediaQueryList(_)
-        | Value::StringList(_)
-        | Value::MimeTypeArray(_)
+        | Value::RegExp(_)
         | Value::Navigator
         | Value::Clipboard
         | Value::History
@@ -8573,16 +9722,38 @@ fn array_namespace_from<H: HostBindings>(
         return Ok(Value::Array(ArrayHandle::new(Vec::new())));
     }
 
-    if args.len() > 1 {
+    if args.len() > 3 {
         return Err(ScriptError::new(
-            "Array.from() expects at most one argument",
+            "Array.from() expects at most three arguments",
         ));
     }
 
     let source = eval_expr(&args[0], env, host)?;
-    Ok(Value::Array(ArrayHandle::new(array_from_value(
-        source, env, host,
-    )?)))
+    let mut items = array_from_value(source, env, host)?;
+    if let Some(map_expr) = args.get(1) {
+        let map_fn = match eval_expr(map_expr, env, host)? {
+            Value::Function(function) => function,
+            _ => return Err(ScriptError::new("Array.from() expects a function callback")),
+        };
+        let this_value = match args.get(2) {
+            Some(expr) => eval_expr(expr, env, host)?,
+            None => Value::Undefined,
+        };
+        let source_array = Value::Array(ArrayHandle::new(items.clone()));
+        let mut mapped = Vec::with_capacity(items.len());
+        for (index, item) in items.into_iter().enumerate() {
+            let result = call_script_function_value(
+                &map_fn,
+                &[item, Value::Number(index as f64), source_array.clone()],
+                this_value.clone(),
+                env,
+                host,
+            )?;
+            mapped.push(result);
+        }
+        items = mapped;
+    }
+    Ok(Value::Array(ArrayHandle::new(items)))
 }
 
 fn array_namespace_is_array(
@@ -8717,12 +9888,19 @@ fn eval_computed_member<H: HostBindings>(
         }
     }
 
-    Ok(
-        match property_value_on_value(&object_value, &key, env, host)? {
+    Ok(match object_value {
+        Value::String(value) => match index_from_value(&property_value) {
+            Some(index) => match value.chars().nth(index) {
+                Some(ch) => Value::String(ch.to_string()),
+                None => Value::Undefined,
+            },
+            None => Value::Undefined,
+        },
+        other => match property_value_on_value(&other, &key, env, host)? {
             Some(value) => value,
             None => Value::Undefined,
         },
-    )
+    })
 }
 
 fn eval_new<H: HostBindings>(
@@ -8743,9 +9921,11 @@ fn eval_new<H: HostBindings>(
             }
             Ok(Value::Object(object))
         }
-        Expr::Identifier(name) if name == "Array" => {
+        Expr::Identifier(name) if name == "Array" || name == "Uint8Array" => {
             if args.len() > 1 {
-                return Err(ScriptError::new("Array() expects at most one argument"));
+                return Err(ScriptError::new(format!(
+                    "{name}() expects at most one argument"
+                )));
             }
             if let Some(expr) = args.first() {
                 let value = eval_expr(expr, env, host)?;
@@ -8765,6 +9945,33 @@ fn eval_new<H: HostBindings>(
             } else {
                 Ok(Value::Array(ArrayHandle::new(Vec::new())))
             }
+        }
+        Expr::Identifier(name) if name == "Error" => {
+            if args.len() > 1 {
+                return Err(ScriptError::new("Error() expects at most one argument"));
+            }
+
+            let message = match args.first() {
+                Some(expr) => as_string(&eval_expr(expr, env, host)?),
+                None => String::new(),
+            };
+
+            let object = crate::ObjectHandle::new();
+            object_set_property_value(
+                &object,
+                property_key_from_string("message"),
+                Value::String(message),
+                env,
+                host,
+            )?;
+            object_set_property_value(
+                &object,
+                property_key_from_string("name"),
+                Value::String("Error".to_string()),
+                env,
+                host,
+            )?;
+            Ok(Value::Object(object))
         }
         Expr::Identifier(name) if name == "Map" => {
             let map = crate::MapHandle::new();
@@ -8804,10 +10011,13 @@ fn eval_new<H: HostBindings>(
             Ok(value)
         }
         Expr::Member { object, property } => {
-            if let Expr::Identifier(name) = &**object {
-                if name == "Intl" && (property == "NumberFormat" || property == "DateTimeFormat") {
-                    return intl_construct(property, args, env, host);
-                }
+            if matches!(eval_expr(object, env, host)?, Value::IntlNamespace)
+                && matches!(
+                    property.as_str(),
+                    "NumberFormat" | "DateTimeFormat" | "Collator"
+                )
+            {
+                return intl_construct(property, args, env, host);
             }
             Err(ScriptError::new("invalid new target"))
         }
@@ -8917,6 +10127,37 @@ fn object_namespace_entries<H: HostBindings>(
     Ok(values_array(entries))
 }
 
+fn object_namespace_from_entries<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [entries_expr] = args else {
+        return Err(ScriptError::new(
+            "Object.fromEntries() expects exactly one argument",
+        ));
+    };
+    let entries = array_from_value(eval_expr(entries_expr, env, host)?, env, host)?;
+    let object = crate::ObjectHandle::new();
+    for entry in entries {
+        let Value::Array(pair) = entry else {
+            return Err(ScriptError::new(
+                "Object.fromEntries() expects iterable pairs",
+            ));
+        };
+        let items = pair.0.borrow().items.clone();
+        if items.is_empty() {
+            return Err(ScriptError::new(
+                "Object.fromEntries() expects iterable pairs",
+            ));
+        }
+        let key = property_key_from_value(&items[0]);
+        let value = items.get(1).cloned().unwrap_or(Value::Undefined);
+        object_set_property_value(&object, key, value, env, host)?;
+    }
+    Ok(Value::Object(object))
+}
+
 fn object_namespace_get_own_property_symbols<H: HostBindings>(
     args: &[Expr],
     env: &mut BTreeMap<String, Value>,
@@ -8952,24 +10193,32 @@ fn string_split<H: HostBindings>(
         Some(expr) => index_from_value(&eval_expr(expr, env, host)?).unwrap_or(usize::MAX),
         None => usize::MAX,
     };
-    let items = if limit == 0 {
-        Vec::new()
-    } else if matches!(separator, Value::Undefined | Value::Null) {
-        vec![Value::String(value.to_string())]
-    } else {
-        let separator = as_string(&separator);
-        if separator.is_empty() {
-            value
-                .chars()
-                .take(limit)
-                .map(|ch| Value::String(ch.to_string()))
-                .collect()
-        } else {
-            value
-                .split(&separator)
-                .take(limit)
-                .map(|part| Value::String(part.to_string()))
-                .collect()
+    let items = match separator {
+        Value::Undefined | Value::Null => {
+            if limit == 0 {
+                Vec::new()
+            } else {
+                vec![Value::String(value.to_string())]
+            }
+        }
+        Value::RegExp(regex) => regex_split(value, &regex, limit)?,
+        other => {
+            let separator = as_string(&other);
+            if limit == 0 {
+                Vec::new()
+            } else if separator.is_empty() {
+                value
+                    .chars()
+                    .take(limit)
+                    .map(|ch| Value::String(ch.to_string()))
+                    .collect()
+            } else {
+                value
+                    .split(&separator)
+                    .take(limit)
+                    .map(|part| Value::String(part.to_string()))
+                    .collect()
+            }
         }
     };
     Ok(Value::Array(ArrayHandle::new(items)))
@@ -8990,51 +10239,273 @@ fn string_replace<H: HostBindings>(
         }));
     }
 
-    let search = as_string(&eval_expr(&args[0], env, host)?);
+    let search = eval_expr(&args[0], env, host)?;
     let replacement = eval_expr(&args[1], env, host)?;
 
-    let mut output = String::new();
-    let mut remainder = value;
-    let mut offset = 0usize;
-    let mut replaced_any = false;
+    match search {
+        Value::RegExp(regex) => regex_replace(value, &regex, replacement, all, env, host),
+        other => {
+            let search = as_string(&other);
+            let mut output = String::new();
+            let mut remainder = value;
+            let mut offset = 0usize;
+            let mut replaced_any = false;
 
-    while let Some(index) = remainder.find(&search) {
+            while let Some(index) = remainder.find(&search) {
+                replaced_any = true;
+                output.push_str(&remainder[..index]);
+                let matched = &remainder[index..index + search.len()];
+                let replacement_value = match &replacement {
+                    Value::Function(function) => call_script_function_value(
+                        function,
+                        &[
+                            Value::String(matched.to_string()),
+                            Value::Number((offset + index) as f64),
+                            Value::String(value.to_string()),
+                        ],
+                        Value::Undefined,
+                        env,
+                        host,
+                    )?,
+                    other => other.clone(),
+                };
+                output.push_str(&as_string(&replacement_value));
+                remainder = &remainder[index + search.len()..];
+                offset += index + search.len();
+                if !all {
+                    break;
+                }
+            }
+
+            if replaced_any {
+                output.push_str(remainder);
+                Ok(Value::String(output))
+            } else if all {
+                Ok(Value::String(value.to_string()))
+            } else {
+                Ok(Value::String(value.replacen(
+                    &search,
+                    &as_string(&replacement),
+                    1,
+                )))
+            }
+        }
+    }
+}
+
+fn string_match<H: HostBindings>(
+    value: &str,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [search_expr] = args else {
+        return Err(ScriptError::new("match() expects exactly one argument"));
+    };
+    let search = eval_expr(search_expr, env, host)?;
+    match search {
+        Value::RegExp(regex) => regex_match(value, &regex),
+        other => {
+            let search = as_string(&other);
+            if let Some(index) = value.find(&search) {
+                Ok(Value::Array(ArrayHandle::new(vec![Value::String(
+                    value[index..index + search.len()].to_string(),
+                )])))
+            } else {
+                Ok(Value::Null)
+            }
+        }
+    }
+}
+
+fn string_search<H: HostBindings>(
+    value: &str,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [search_expr] = args else {
+        return Err(ScriptError::new("search() expects exactly one argument"));
+    };
+    let search = eval_expr(search_expr, env, host)?;
+    match search {
+        Value::RegExp(regex) => regex_search(value, &regex),
+        other => {
+            let search = as_string(&other);
+            Ok(Value::Number(
+                value
+                    .find(&search)
+                    .map(|index| index as f64)
+                    .unwrap_or(-1.0),
+            ))
+        }
+    }
+}
+
+fn regex_builder(regex: &crate::RegExpValue) -> Result<FancyRegex> {
+    let mut builder = RegexBuilder::new(regex.pattern());
+    builder.case_insensitive(regex.is_ignore_case());
+    builder.multi_line(regex.is_multiline());
+    builder.dot_matches_new_line(regex.is_dot_all());
+    builder
+        .build()
+        .map_err(|error| ScriptError::new(format!("invalid regular expression: {error}")))
+}
+
+fn regex_capture_values(_text: &str, captures: &fancy_regex::Captures<'_>) -> Vec<Value> {
+    let mut values = Vec::new();
+    values.push(Value::String(
+        captures
+            .get(0)
+            .map(|matched| matched.as_str().to_string())
+            .unwrap_or_default(),
+    ));
+    for index in 1..captures.len() {
+        values.push(match captures.get(index) {
+            Some(matched) => Value::String(matched.as_str().to_string()),
+            None => Value::Undefined,
+        });
+    }
+    values
+}
+
+fn regex_exec(value: &str, regex: &crate::RegExpValue) -> Result<Value> {
+    let compiled = regex_builder(regex)?;
+    let captures = compiled
+        .captures(value)
+        .map_err(|error| ScriptError::new(format!("invalid regular expression: {error}")))?;
+    Ok(match captures {
+        Some(captures) => Value::Array(ArrayHandle::new(regex_capture_values(value, &captures))),
+        None => Value::Null,
+    })
+}
+
+fn regex_test(value: &str, regex: &crate::RegExpValue) -> Result<Value> {
+    let compiled = regex_builder(regex)?;
+    let matched = compiled
+        .is_match(value)
+        .map_err(|error| ScriptError::new(format!("invalid regular expression: {error}")))?;
+    Ok(Value::Boolean(matched))
+}
+
+fn regex_match(value: &str, regex: &crate::RegExpValue) -> Result<Value> {
+    let compiled = regex_builder(regex)?;
+    if regex.is_global() {
+        let mut values = Vec::new();
+        for result in compiled.find_iter(value) {
+            let matched = result.map_err(|error| {
+                ScriptError::new(format!("invalid regular expression: {error}"))
+            })?;
+            values.push(Value::String(matched.as_str().to_string()));
+        }
+        if values.is_empty() {
+            Ok(Value::Null)
+        } else {
+            Ok(Value::Array(ArrayHandle::new(values)))
+        }
+    } else {
+        let captures = compiled
+            .captures(value)
+            .map_err(|error| ScriptError::new(format!("invalid regular expression: {error}")))?;
+        Ok(match captures {
+            Some(captures) => {
+                Value::Array(ArrayHandle::new(regex_capture_values(value, &captures)))
+            }
+            None => Value::Null,
+        })
+    }
+}
+
+fn regex_search(value: &str, regex: &crate::RegExpValue) -> Result<Value> {
+    let compiled = regex_builder(regex)?;
+    let matched = compiled
+        .find(value)
+        .map_err(|error| ScriptError::new(format!("invalid regular expression: {error}")))?;
+    Ok(match matched {
+        Some(matched) => Value::Number(matched.start() as f64),
+        None => Value::Number(-1.0),
+    })
+}
+
+fn regex_split(value: &str, regex: &crate::RegExpValue, limit: usize) -> Result<Vec<Value>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let compiled = regex_builder(regex)?;
+    let mut items = Vec::new();
+    let mut last_end = 0usize;
+    for result in compiled.find_iter(value) {
+        if items.len() + 1 == limit {
+            break;
+        }
+        let matched = result
+            .map_err(|error| ScriptError::new(format!("invalid regular expression: {error}")))?;
+        items.push(Value::String(value[last_end..matched.start()].to_string()));
+        last_end = matched.end();
+    }
+
+    if items.len() < limit {
+        items.push(Value::String(value[last_end..].to_string()));
+    }
+
+    Ok(items)
+}
+
+fn regex_replace<H: HostBindings>(
+    value: &str,
+    regex: &crate::RegExpValue,
+    replacement: Value,
+    all: bool,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if all && !regex.is_global() {
+        return Err(ScriptError::new(
+            "replaceAll() expects a global regular expression",
+        ));
+    }
+
+    let compiled = regex_builder(regex)?;
+    let mut output = String::new();
+    let mut last_end = 0usize;
+    let mut replaced_any = false;
+    for result in compiled.captures_iter(value) {
+        let captures = result
+            .map_err(|error| ScriptError::new(format!("invalid regular expression: {error}")))?;
+        let Some(matched) = captures.get(0) else {
+            continue;
+        };
         replaced_any = true;
-        output.push_str(&remainder[..index]);
-        let matched = &remainder[index..index + search.len()];
+        output.push_str(&value[last_end..matched.start()]);
+        let mut args = Vec::new();
+        args.push(Value::String(matched.as_str().to_string()));
+        for index in 1..captures.len() {
+            args.push(match captures.get(index) {
+                Some(capture) => Value::String(capture.as_str().to_string()),
+                None => Value::Undefined,
+            });
+        }
+        args.push(Value::Number(matched.start() as f64));
+        args.push(Value::String(value.to_string()));
         let replacement_value = match &replacement {
-            Value::Function(function) => call_script_function_value(
-                function,
-                &[
-                    Value::String(matched.to_string()),
-                    Value::Number((offset + index) as f64),
-                    Value::String(value.to_string()),
-                ],
-                Value::Undefined,
-                env,
-                host,
-            )?,
+            Value::Function(function) => {
+                call_script_function_value(function, &args, Value::Undefined, env, host)?
+            }
             other => other.clone(),
         };
         output.push_str(&as_string(&replacement_value));
-        remainder = &remainder[index + search.len()..];
-        offset += index + search.len();
-        if !all {
+        last_end = matched.end();
+        if !regex.is_global() {
             break;
         }
     }
 
     if replaced_any {
-        output.push_str(remainder);
+        output.push_str(&value[last_end..]);
         Ok(Value::String(output))
-    } else if all {
-        Ok(Value::String(value.to_string()))
     } else {
-        Ok(Value::String(value.replacen(
-            &search,
-            &as_string(&replacement),
-            1,
-        )))
+        Ok(Value::String(value.to_string()))
     }
 }
 
@@ -9252,6 +10723,39 @@ fn string_repeat<H: HostBindings>(
     Ok(Value::String(value.repeat(count)))
 }
 
+fn string_pad_start<H: HostBindings>(
+    value: &str,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [target_expr, ..] = args else {
+        return Err(ScriptError::new("padStart() expects at least one argument"));
+    };
+    let target_length = index_from_value(&eval_expr(target_expr, env, host)?)
+        .ok_or_else(|| ScriptError::new("padStart() expects a non-negative integer"))?;
+    let value_chars: Vec<char> = value.chars().collect();
+    if target_length <= value_chars.len() {
+        return Ok(Value::String(value.to_string()));
+    }
+
+    let pad_string = match args.get(1) {
+        Some(expr) => as_string(&eval_expr(expr, env, host)?),
+        None => " ".to_string(),
+    };
+    if pad_string.is_empty() {
+        return Ok(Value::String(value.to_string()));
+    }
+
+    let pad_needed = target_length - value_chars.len();
+    let mut prefix = String::new();
+    while prefix.chars().count() < pad_needed {
+        prefix.push_str(&pad_string);
+    }
+    let prefix: String = prefix.chars().take(pad_needed).collect();
+    Ok(Value::String(format!("{prefix}{value}")))
+}
+
 fn string_normalize<H: HostBindings>(
     value: &str,
     args: &[Expr],
@@ -9367,6 +10871,344 @@ fn number_namespace_parse_int<H: HostBindings>(
             .map(|value| value as f64),
     };
     Ok(Value::Number(parsed.unwrap_or(f64::NAN)))
+}
+
+fn number_method_to_fixed<H: HostBindings>(
+    value: f64,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.len() > 1 {
+        return Err(ScriptError::new(
+            "Number.prototype.toFixed() expects at most one argument",
+        ));
+    }
+
+    let digits = match args.first() {
+        Some(expr) => {
+            let digits_value = eval_expr(expr, env, host)?;
+            match digits_value {
+                Value::Undefined | Value::Null => 0.0,
+                Value::Number(number) => number,
+                Value::Boolean(value) => {
+                    if value {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                }
+                Value::String(value) => {
+                    if value.trim().is_empty() {
+                        0.0
+                    } else {
+                        value.trim().parse::<f64>().map_err(|_| {
+                            ScriptError::new("Number.prototype.toFixed() digits must be numeric")
+                        })?
+                    }
+                }
+                _ => {
+                    return Err(ScriptError::new(
+                        "cannot convert value to fixed-point digits",
+                    ));
+                }
+            }
+        }
+        None => 0.0,
+    };
+
+    if !digits.is_finite() {
+        return Err(ScriptError::new(
+            "Number.prototype.toFixed() digits must be finite",
+        ));
+    }
+
+    let digits = digits.trunc();
+    if !(0.0..=100.0).contains(&digits) {
+        return Err(ScriptError::new(
+            "Number.prototype.toFixed() digits must be between 0 and 100",
+        ));
+    }
+
+    let precision = digits as usize;
+    let formatted = if value.is_nan() {
+        "NaN".to_string()
+    } else if value.is_infinite() {
+        if value.is_sign_negative() {
+            "-Infinity".to_string()
+        } else {
+            "Infinity".to_string()
+        }
+    } else {
+        let normalized = if value == 0.0 { 0.0 } else { value };
+        format!("{normalized:.precision$}", precision = precision)
+    };
+
+    Ok(Value::String(formatted))
+}
+
+fn number_method_to_exponential<H: HostBindings>(
+    value: f64,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.len() > 1 {
+        return Err(ScriptError::new(
+            "Number.prototype.toExponential() expects at most one argument",
+        ));
+    }
+
+    let fraction_digits = match args.first() {
+        Some(expr) => {
+            let digits_value = eval_expr(expr, env, host)?;
+            match digits_value {
+                Value::Undefined | Value::Null => 0.0,
+                Value::Number(number) => number,
+                Value::Boolean(value) => {
+                    if value {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                }
+                Value::String(value) => {
+                    if value.trim().is_empty() {
+                        0.0
+                    } else {
+                        value.trim().parse::<f64>().map_err(|_| {
+                            ScriptError::new(
+                                "Number.prototype.toExponential() digits must be numeric",
+                            )
+                        })?
+                    }
+                }
+                _ => {
+                    return Err(ScriptError::new(
+                        "cannot convert value to exponential digits",
+                    ));
+                }
+            }
+        }
+        None => 0.0,
+    };
+
+    if !fraction_digits.is_finite() {
+        return Err(ScriptError::new(
+            "Number.prototype.toExponential() digits must be finite",
+        ));
+    }
+
+    let fraction_digits = fraction_digits.trunc();
+    if !(0.0..=100.0).contains(&fraction_digits) {
+        return Err(ScriptError::new(
+            "Number.prototype.toExponential() digits must be between 0 and 100",
+        ));
+    }
+
+    let fraction_digits = fraction_digits as usize;
+    let formatted = if value.is_nan() {
+        "NaN".to_string()
+    } else if value.is_infinite() {
+        if value.is_sign_negative() {
+            "-Infinity".to_string()
+        } else {
+            "Infinity".to_string()
+        }
+    } else {
+        let normalized = if value == 0.0 { 0.0 } else { value.abs() };
+        let (mantissa, exponent) = scientific_notation_components(normalized, fraction_digits);
+        let mut output = scientific_notation_string(&mantissa, exponent);
+        if value.is_sign_negative() && value != 0.0 {
+            output.insert(0, '-');
+        }
+        output
+    };
+
+    Ok(Value::String(formatted))
+}
+
+fn number_method_to_precision<H: HostBindings>(
+    value: f64,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.len() > 1 {
+        return Err(ScriptError::new(
+            "Number.prototype.toPrecision() expects at most one argument",
+        ));
+    }
+
+    if args.is_empty() {
+        return Ok(Value::String(as_string(&Value::Number(value))));
+    }
+
+    let precision = {
+        let precision_value = eval_expr(&args[0], env, host)?;
+        match precision_value {
+            Value::Undefined | Value::Null => 1.0,
+            Value::Number(number) => number,
+            Value::Boolean(value) => {
+                if value {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            Value::String(value) => {
+                if value.trim().is_empty() {
+                    1.0
+                } else {
+                    value.trim().parse::<f64>().map_err(|_| {
+                        ScriptError::new("Number.prototype.toPrecision() precision must be numeric")
+                    })?
+                }
+            }
+            _ => {
+                return Err(ScriptError::new("cannot convert value to precision digits"));
+            }
+        }
+    };
+
+    if !precision.is_finite() {
+        return Err(ScriptError::new(
+            "Number.prototype.toPrecision() precision must be finite",
+        ));
+    }
+
+    let precision = precision.trunc();
+    if !(1.0..=100.0).contains(&precision) {
+        return Err(ScriptError::new(
+            "Number.prototype.toPrecision() precision must be between 1 and 100",
+        ));
+    }
+
+    let precision = precision as usize;
+    let formatted = if value.is_nan() {
+        "NaN".to_string()
+    } else if value.is_infinite() {
+        if value.is_sign_negative() {
+            "-Infinity".to_string()
+        } else {
+            "Infinity".to_string()
+        }
+    } else if value == 0.0 {
+        let (mantissa, exponent) = scientific_notation_components(0.0, precision.saturating_sub(1));
+        scientific_notation_to_fixed(&mantissa, exponent)
+    } else {
+        let abs = value.abs();
+        let (mantissa, exponent) = scientific_notation_components(abs, precision.saturating_sub(1));
+        let mut output = if exponent < -6 || exponent >= precision as i32 {
+            scientific_notation_string(&mantissa, exponent)
+        } else {
+            scientific_notation_to_fixed(&mantissa, exponent)
+        };
+        if value.is_sign_negative() {
+            output.insert(0, '-');
+        }
+        output
+    };
+
+    Ok(Value::String(formatted))
+}
+
+fn scientific_notation_components(value: f64, fraction_digits: usize) -> (String, i32) {
+    let raw = format!("{:.*e}", fraction_digits, value);
+    let (mantissa, exponent) = raw.split_once('e').unwrap_or((raw.as_str(), "0"));
+    let exponent = exponent.parse::<i32>().unwrap_or(0);
+    (mantissa.to_string(), exponent)
+}
+
+fn scientific_notation_string(mantissa: &str, exponent: i32) -> String {
+    format!("{mantissa}e{exponent:+}")
+}
+
+fn scientific_notation_to_fixed(mantissa: &str, exponent: i32) -> String {
+    let digits = mantissa.replace('.', "");
+    let decimal_pos = 1isize + exponent as isize;
+    if decimal_pos <= 0 {
+        let mut output = String::from("0.");
+        output.push_str(&"0".repeat((-decimal_pos) as usize));
+        output.push_str(&digits);
+        output
+    } else if decimal_pos as usize >= digits.len() {
+        let mut output = digits;
+        output.push_str(&"0".repeat(decimal_pos as usize - output.len()));
+        output
+    } else {
+        let split = decimal_pos as usize;
+        let mut output = String::new();
+        output.push_str(&digits[..split]);
+        output.push('.');
+        output.push_str(&digits[split..]);
+        output
+    }
+}
+
+fn number_method_to_string<H: HostBindings>(
+    value: f64,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.len() > 1 {
+        return Err(ScriptError::new(
+            "Number.prototype.toString() expects at most one argument",
+        ));
+    }
+
+    let radix = match args.first() {
+        Some(expr) => {
+            let radix_value = eval_expr(expr, env, host)?;
+            match radix_value {
+                Value::Undefined | Value::Null => 10,
+                other => integer_from_value(&other, "Number.prototype.toString() radix")? as u32,
+            }
+        }
+        None => 10,
+    };
+
+    if !(2..=36).contains(&radix) {
+        return Err(ScriptError::new(
+            "Number.prototype.toString() radix must be between 2 and 36",
+        ));
+    }
+
+    if value.is_nan() {
+        return Ok(Value::String("NaN".to_string()));
+    }
+    if value.is_infinite() {
+        return Ok(Value::String(if value.is_sign_negative() {
+            "-Infinity".to_string()
+        } else {
+            "Infinity".to_string()
+        }));
+    }
+
+    if radix == 10 {
+        return Ok(Value::String(as_string(&Value::Number(value))));
+    }
+
+    let negative = value.is_sign_negative() && value != 0.0;
+    let mut integer = value.abs().trunc() as u128;
+    let digits = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut out = String::new();
+    if integer == 0 {
+        out.push('0');
+    } else {
+        while integer > 0 {
+            let digit = (integer % radix as u128) as usize;
+            out.push(digits[digit] as char);
+            integer /= radix as u128;
+        }
+        out = out.chars().rev().collect();
+    }
+
+    if negative {
+        out.insert(0, '-');
+    }
+    Ok(Value::String(out))
 }
 
 fn math_namespace_min<H: HostBindings>(
@@ -9509,19 +11351,1363 @@ fn date_namespace_now<H: HostBindings>(
 }
 
 fn date_namespace_utc<H: HostBindings>(
-    _args: &[Expr],
-    _env: &mut BTreeMap<String, Value>,
-    _host: &mut H,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
 ) -> Result<Value> {
-    Err(ScriptError::phase_not_ready("Date.UTC"))
+    if args.len() < 2 {
+        return Ok(Value::Number(f64::NAN));
+    }
+    Ok(Value::Number(
+        date_epoch_from_component_args(args, env, host, false)?
+            .map(|value| value as f64)
+            .unwrap_or(f64::NAN),
+    ))
 }
 
 fn date_namespace_parse<H: HostBindings>(
-    _args: &[Expr],
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [value_expr] = args else {
+        return Err(ScriptError::new(
+            "Date.parse() expects exactly one argument",
+        ));
+    };
+    let value = as_string(&eval_expr(value_expr, env, host)?);
+    Ok(Value::Number(
+        date_parse_string(&value)
+            .map(|value| value as f64)
+            .unwrap_or(f64::NAN),
+    ))
+}
+
+fn value_is_nullish(value: &Value) -> bool {
+    matches!(value, Value::Null | Value::Undefined)
+}
+
+fn clip_epoch_ms(value: f64) -> Option<i64> {
+    if value.is_finite() && value.abs() <= 8_640_000_000_000_000.0 {
+        Some(value.trunc() as i64)
+    } else {
+        None
+    }
+}
+
+fn date_epoch_ms_from_value(value: &Value) -> Option<i64> {
+    match value {
+        Value::Date(date) => date.epoch_ms,
+        Value::String(value) => date_parse_string(value),
+        other => number_from_value(other).ok().and_then(clip_epoch_ms),
+    }
+}
+
+fn date_parse_string(value: &str) -> Option<i64> {
+    if let Ok(datetime) = DateTime::parse_from_rfc3339(value) {
+        return Some(datetime.timestamp_millis());
+    }
+
+    if let Ok(date) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+        return date
+            .and_hms_milli_opt(0, 0, 0, 0)
+            .map(|datetime| Utc.from_utc_datetime(&datetime).timestamp_millis());
+    }
+
+    None
+}
+
+fn date_datetime_utc(epoch_ms: i64) -> Option<DateTime<Utc>> {
+    Utc.timestamp_millis_opt(epoch_ms).single()
+}
+
+fn date_datetime_local(epoch_ms: i64) -> Option<DateTime<Local>> {
+    Local.timestamp_millis_opt(epoch_ms).single()
+}
+
+fn date_to_iso_string(epoch_ms: i64) -> Option<String> {
+    let datetime = date_datetime_utc(epoch_ms)?;
+    Some(datetime.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
+}
+
+fn date_value_from_value(value: &Value) -> DateValue {
+    DateValue {
+        epoch_ms: date_epoch_ms_from_value(value),
+    }
+}
+
+fn date_component_from_expr<H: HostBindings>(
+    expr: Option<&Expr>,
+    default: i64,
+    required: bool,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Option<i64>> {
+    match expr {
+        Some(expr) => {
+            let value = eval_expr(expr, env, host)?;
+            if value_is_nullish(&value) {
+                if required {
+                    Ok(None)
+                } else {
+                    Ok(Some(default))
+                }
+            } else {
+                Ok(number_from_value(&value).ok().and_then(clip_epoch_ms))
+            }
+        }
+        None if required => Ok(None),
+        None => Ok(Some(default)),
+    }
+}
+
+fn date_epoch_from_component_args<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+    local_time: bool,
+) -> Result<Option<i64>> {
+    if args.len() < 2 {
+        return Ok(None);
+    }
+
+    let year = match date_component_from_expr(args.first(), 0, true, env, host)? {
+        Some(year) => year,
+        None => return Ok(None),
+    };
+    let month = match date_component_from_expr(args.get(1), 0, true, env, host)? {
+        Some(month) => month,
+        None => return Ok(None),
+    };
+    let day = match date_component_from_expr(args.get(2), 1, false, env, host)? {
+        Some(day) => day,
+        None => return Ok(None),
+    };
+    let hour = match date_component_from_expr(args.get(3), 0, false, env, host)? {
+        Some(hour) => hour,
+        None => return Ok(None),
+    };
+    let minute = match date_component_from_expr(args.get(4), 0, false, env, host)? {
+        Some(minute) => minute,
+        None => return Ok(None),
+    };
+    let second = match date_component_from_expr(args.get(5), 0, false, env, host)? {
+        Some(second) => second,
+        None => return Ok(None),
+    };
+    let millisecond = match date_component_from_expr(args.get(6), 0, false, env, host)? {
+        Some(millisecond) => millisecond,
+        None => return Ok(None),
+    };
+
+    let year = if (0..=99).contains(&year) {
+        year + 1900
+    } else {
+        year
+    };
+    let Some(total_months) = year
+        .checked_mul(12)
+        .and_then(|value| value.checked_add(month))
+    else {
+        return Ok(None);
+    };
+    let normalized_year = total_months.div_euclid(12);
+    let normalized_month = total_months.rem_euclid(12) + 1;
+    let Some(normalized_year) = i32::try_from(normalized_year).ok() else {
+        return Ok(None);
+    };
+
+    let Some(naive) = NaiveDate::from_ymd_opt(normalized_year, normalized_month as u32, 1)
+        .and_then(|date| date.and_hms_milli_opt(0, 0, 0, 0))
+    else {
+        return Ok(None);
+    };
+    let naive = naive
+        + Duration::days(day - 1)
+        + Duration::hours(hour)
+        + Duration::minutes(minute)
+        + Duration::seconds(second)
+        + Duration::milliseconds(millisecond);
+
+    if local_time {
+        match Local.from_local_datetime(&naive) {
+            LocalResult::Single(datetime) => {
+                Ok(Some(datetime.with_timezone(&Utc).timestamp_millis()))
+            }
+            LocalResult::Ambiguous(datetime, _) => {
+                Ok(Some(datetime.with_timezone(&Utc).timestamp_millis()))
+            }
+            LocalResult::None => Ok(Some(Utc.from_utc_datetime(&naive).timestamp_millis())),
+        }
+    } else {
+        Ok(Some(Utc.from_utc_datetime(&naive).timestamp_millis()))
+    }
+}
+
+fn date_zoned_parts(
+    epoch_ms: i64,
+    time_zone: Option<&str>,
+) -> Option<(i32, u32, u32, u32, u32, u32, i32)> {
+    let utc = date_datetime_utc(epoch_ms)?;
+    match time_zone {
+        Some(time_zone) if !time_zone.trim().is_empty() => {
+            let zone = Tz::from_str(time_zone).ok()?;
+            let datetime = utc.with_timezone(&zone);
+            let offset_minutes = datetime.offset().fix().local_minus_utc() / 60;
+            Some((
+                datetime.year(),
+                datetime.month(),
+                datetime.day(),
+                datetime.hour(),
+                datetime.minute(),
+                datetime.second(),
+                offset_minutes,
+            ))
+        }
+        _ => {
+            let datetime = utc.with_timezone(&Local);
+            let offset_minutes = datetime.offset().fix().local_minus_utc() / 60;
+            Some((
+                datetime.year(),
+                datetime.month(),
+                datetime.day(),
+                datetime.hour(),
+                datetime.minute(),
+                datetime.second(),
+                offset_minutes,
+            ))
+        }
+    }
+}
+
+fn date_component_string(value: u32, style: Option<&str>) -> String {
+    if matches!(style, Some("2-digit")) {
+        format!("{value:02}")
+    } else {
+        value.to_string()
+    }
+}
+
+fn date_format_parts(
+    epoch_ms: i64,
+    formatter: &IntlDateTimeFormatValue,
+) -> Option<Vec<(String, String)>> {
+    let (year, month, day, hour, minute, second, _) =
+        date_zoned_parts(epoch_ms, formatter.time_zone.as_deref())?;
+
+    let mut parts = Vec::new();
+    let year_style = formatter.year.as_deref();
+    let month_style = formatter.month.as_deref();
+    let day_style = formatter.day.as_deref();
+    let hour_style = formatter.hour.as_deref();
+    let minute_style = formatter.minute.as_deref();
+    let second_style = formatter.second.as_deref();
+    let use_hour12 = formatter.hour12.unwrap_or(false);
+
+    let hour_value = if use_hour12 {
+        let hour = hour % 12;
+        if hour == 0 { 12 } else { hour }
+    } else {
+        hour
+    };
+
+    let want_date = year_style.is_some() || month_style.is_some() || day_style.is_some();
+    let want_time = hour_style.is_some() || minute_style.is_some() || second_style.is_some();
+
+    if let Some(style) = year_style {
+        parts.push((
+            "year".to_string(),
+            date_component_string(year as u32, Some(style)),
+        ));
+    }
+    if let Some(style) = month_style {
+        if !parts.is_empty() {
+            parts.push(("literal".to_string(), "-".to_string()));
+        }
+        parts.push((
+            "month".to_string(),
+            date_component_string(month, Some(style)),
+        ));
+    }
+    if let Some(style) = day_style {
+        if !parts.is_empty() {
+            parts.push(("literal".to_string(), "-".to_string()));
+        }
+        parts.push(("day".to_string(), date_component_string(day, Some(style))));
+    }
+    if want_date && want_time {
+        parts.push(("literal".to_string(), " ".to_string()));
+    }
+    if let Some(style) = hour_style {
+        parts.push((
+            "hour".to_string(),
+            date_component_string(hour_value, Some(style)),
+        ));
+    }
+    if let Some(style) = minute_style {
+        if !parts.is_empty() {
+            parts.push(("literal".to_string(), ":".to_string()));
+        }
+        parts.push((
+            "minute".to_string(),
+            date_component_string(minute, Some(style)),
+        ));
+    }
+    if let Some(style) = second_style {
+        if !parts.is_empty() {
+            parts.push(("literal".to_string(), ":".to_string()));
+        }
+        parts.push((
+            "second".to_string(),
+            date_component_string(second, Some(style)),
+        ));
+    }
+    if use_hour12 && hour_style.is_some() {
+        if !parts.is_empty() {
+            parts.push(("literal".to_string(), " ".to_string()));
+        }
+        parts.push((
+            "dayPeriod".to_string(),
+            if hour < 12 {
+                "AM".to_string()
+            } else {
+                "PM".to_string()
+            },
+        ));
+    }
+
+    Some(parts)
+}
+
+fn date_format_string(epoch_ms: i64, formatter: &IntlDateTimeFormatValue) -> Option<String> {
+    let parts = date_format_parts(epoch_ms, formatter)?;
+    Some(parts.into_iter().map(|(_, value)| value).collect())
+}
+
+fn date_format_locale_string(epoch_ms: i64, locale: &str, include_time: bool) -> Option<String> {
+    let formatter = IntlDateTimeFormatValue {
+        locale: locale.to_string(),
+        time_zone: None,
+        year: Some("numeric".to_string()),
+        month: Some("numeric".to_string()),
+        day: Some("numeric".to_string()),
+        hour: if include_time {
+            Some("numeric".to_string())
+        } else {
+            None
+        },
+        minute: if include_time {
+            Some("2-digit".to_string())
+        } else {
+            None
+        },
+        second: if include_time {
+            Some("2-digit".to_string())
+        } else {
+            None
+        },
+        hour12: if include_time { Some(true) } else { None },
+    };
+
+    let mut parts = date_format_parts(epoch_ms, &formatter)?;
+    if locale.starts_with("en-GB") {
+        let (year, month, day, hour, minute, second, _) = date_zoned_parts(epoch_ms, None)?;
+        let mut out = String::new();
+        out.push_str(&date_component_string(day, Some("numeric")));
+        out.push('/');
+        out.push_str(&date_component_string(month, Some("numeric")));
+        out.push('/');
+        out.push_str(&date_component_string(year as u32, Some("numeric")));
+        if include_time {
+            let (display_hour, suffix) = match hour {
+                0 => (12, "AM"),
+                1..=11 => (hour, "AM"),
+                12 => (12, "PM"),
+                _ => (hour - 12, "PM"),
+            };
+            out.push_str(", ");
+            out.push_str(&date_component_string(display_hour, Some("numeric")));
+            out.push(':');
+            out.push_str(&date_component_string(minute, Some("2-digit")));
+            out.push(':');
+            out.push_str(&date_component_string(second, Some("2-digit")));
+            out.push(' ');
+            out.push_str(suffix);
+        }
+        return Some(out);
+    }
+
+    Some(parts.drain(..).map(|(_, value)| value).collect())
+}
+
+fn object_value_from_pairs<H: HostBindings>(
+    pairs: Vec<(&str, Value)>,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let object = crate::ObjectHandle::new();
+    for (name, value) in pairs {
+        object_set_property_value(&object, property_key_from_string(name), value, env, host)?;
+    }
+    Ok(Value::Object(object))
+}
+
+fn part_array_from_pairs<H: HostBindings>(
+    parts: Vec<(String, String)>,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let mut items = Vec::new();
+    for (part_type, part_value) in parts {
+        let object = crate::ObjectHandle::new();
+        object_set_property_value(
+            &object,
+            property_key_from_string("type"),
+            Value::String(part_type),
+            env,
+            host,
+        )?;
+        object_set_property_value(
+            &object,
+            property_key_from_string("value"),
+            Value::String(part_value),
+            env,
+            host,
+        )?;
+        items.push(Value::Object(object));
+    }
+    Ok(Value::Array(ArrayHandle::new(items)))
+}
+
+fn option_value_from_object<H: HostBindings>(
+    options: Option<&Value>,
+    name: &str,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Option<Value>> {
+    match options {
+        Some(options) => {
+            property_value_on_value(options, &property_key_from_string(name), env, host)
+        }
+        None => Ok(None),
+    }
+}
+
+fn option_string_from_object<H: HostBindings>(
+    options: Option<&Value>,
+    name: &str,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Option<String>> {
+    Ok(match option_value_from_object(options, name, env, host)? {
+        Some(value) if !value_is_nullish(&value) => Some(as_string(&value)),
+        _ => None,
+    })
+}
+
+fn option_bool_from_object<H: HostBindings>(
+    options: Option<&Value>,
+    name: &str,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Option<bool>> {
+    Ok(match option_value_from_object(options, name, env, host)? {
+        Some(value) if !value_is_nullish(&value) => Some(is_truthy(&value)),
+        _ => None,
+    })
+}
+
+fn option_usize_from_object<H: HostBindings>(
+    options: Option<&Value>,
+    name: &str,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Option<usize>> {
+    Ok(match option_value_from_object(options, name, env, host)? {
+        Some(value) if !value_is_nullish(&value) => {
+            let number = number_from_value(&value).ok();
+            number.map(|number| number.trunc().max(0.0) as usize)
+        }
+        _ => None,
+    })
+}
+
+fn currency_minor_digits(currency: Option<&str>) -> usize {
+    match currency {
+        Some("JPY") => 0,
+        Some("KRW") => 0,
+        Some("CLP") => 0,
+        _ => 2,
+    }
+}
+
+fn currency_symbol(currency: Option<&str>) -> Option<&'static str> {
+    match currency {
+        Some("JPY") => Some("￥"),
+        Some("USD") => Some("$"),
+        Some("EUR") => Some("€"),
+        Some("GBP") => Some("£"),
+        Some("CNY") => Some("¥"),
+        Some("KRW") => Some("₩"),
+        _ => None,
+    }
+}
+
+fn group_integer_digits(integer: &str) -> String {
+    let mut out = String::new();
+    let mut count = 0usize;
+    for ch in integer.chars().rev() {
+        if count == 3 {
+            out.push(',');
+            count = 0;
+        }
+        out.push(ch);
+        count += 1;
+    }
+    out.chars().rev().collect()
+}
+
+fn format_significant_number(value: f64, digits: usize) -> String {
+    if value == 0.0 {
+        return "0".to_string();
+    }
+
+    let digits = digits.max(1);
+    let scientific = format!("{:.*e}", digits - 1, value.abs());
+    let Some((mantissa, exponent)) = scientific.split_once('e') else {
+        return scientific;
+    };
+    let exponent = exponent.parse::<i32>().unwrap_or(0);
+    let mut mantissa_digits: String = mantissa.chars().filter(|ch| *ch != '.').collect();
+    if mantissa_digits.is_empty() {
+        mantissa_digits.push('0');
+    }
+
+    let decimal_index = 1 + exponent;
+    if decimal_index <= 0 {
+        let mut out = String::from("0.");
+        out.push_str(&"0".repeat(decimal_index.unsigned_abs() as usize));
+        out.push_str(&mantissa_digits);
+        return out;
+    }
+
+    let decimal_index = decimal_index as usize;
+    if decimal_index >= mantissa_digits.len() {
+        let mut out = mantissa_digits;
+        out.push_str(&"0".repeat(decimal_index - out.len()));
+        return out;
+    }
+
+    let (left, right) = mantissa_digits.split_at(decimal_index);
+    let mut out = left.to_string();
+    out.push('.');
+    out.push_str(right);
+    out
+}
+
+fn format_decimal_number(value: f64, formatter: &IntlNumberFormatValue) -> String {
+    if value.is_nan() {
+        return "NaN".to_string();
+    }
+    if value.is_infinite() {
+        return if value.is_sign_negative() {
+            "-Infinity".to_string()
+        } else {
+            "Infinity".to_string()
+        };
+    }
+
+    let negative = value.is_sign_negative() && value != 0.0;
+    let abs = value.abs();
+    let mut body = if let Some(max_significant_digits) = formatter.maximum_significant_digits {
+        format_significant_number(abs, max_significant_digits)
+    } else if let Some(min_significant_digits) = formatter.minimum_significant_digits {
+        format_significant_number(abs, min_significant_digits)
+    } else {
+        let default_fraction_digits = match formatter.style.as_str() {
+            "currency" => currency_minor_digits(formatter.currency.as_deref()),
+            _ => 3,
+        };
+        let min_fraction_digits = formatter
+            .minimum_fraction_digits
+            .unwrap_or(default_fraction_digits);
+        let max_fraction_digits = formatter
+            .maximum_fraction_digits
+            .unwrap_or(default_fraction_digits)
+            .max(min_fraction_digits);
+        let precision = max_fraction_digits;
+        let mut rendered = format!("{abs:.precision$}", precision = precision);
+        if let Some((integer, fraction)) = rendered.split_once('.') {
+            let fraction = fraction.trim_end_matches('0');
+            let fraction = if fraction.len() < min_fraction_digits {
+                let mut padded = fraction.to_string();
+                padded.push_str(&"0".repeat(min_fraction_digits - fraction.len()));
+                padded
+            } else {
+                fraction.to_string()
+            };
+            rendered = if fraction.is_empty() && min_fraction_digits == 0 {
+                integer.to_string()
+            } else {
+                format!("{integer}.{fraction}")
+            };
+        } else if min_fraction_digits > 0 {
+            rendered.push('.');
+            rendered.push_str(&"0".repeat(min_fraction_digits));
+        }
+        rendered
+    };
+
+    if formatter.use_grouping {
+        if let Some((integer, fraction)) = body.split_once('.') {
+            let mut grouped = group_integer_digits(integer);
+            grouped.push('.');
+            grouped.push_str(fraction);
+            body = grouped;
+        } else {
+            body = group_integer_digits(&body);
+        }
+    }
+
+    if let Some(min_integer_digits) = formatter
+        .minimum_integer_digits
+        .checked_sub(body.split('.').next().map(|part| part.len()).unwrap_or(0))
+    {
+        if min_integer_digits > 0 {
+            if let Some((integer, fraction)) = body.split_once('.') {
+                let mut padded = "0".repeat(min_integer_digits);
+                padded.push_str(integer);
+                padded.push('.');
+                padded.push_str(fraction);
+                body = padded;
+            } else {
+                let mut padded = "0".repeat(min_integer_digits);
+                padded.push_str(&body);
+                body = padded;
+            }
+        }
+    }
+
+    let symbol = if formatter.style == "currency" {
+        currency_symbol(formatter.currency.as_deref()).unwrap_or("")
+    } else {
+        ""
+    };
+
+    let mut out = String::new();
+    if negative {
+        out.push('-');
+    }
+    out.push_str(symbol);
+    out.push_str(&body);
+    out
+}
+
+fn format_number_parts(value: f64, formatter: &IntlNumberFormatValue) -> Vec<(String, String)> {
+    let formatted = format_decimal_number(value, formatter);
+    let mut parts = Vec::new();
+    let mut rest = formatted.as_str();
+
+    if let Some(stripped) = rest.strip_prefix('-') {
+        parts.push(("minusSign".to_string(), "-".to_string()));
+        rest = stripped;
+    }
+
+    if formatter.style == "currency" {
+        if let Some(symbol) = currency_symbol(formatter.currency.as_deref()) {
+            if let Some(stripped) = rest.strip_prefix(symbol) {
+                parts.push(("currency".to_string(), symbol.to_string()));
+                rest = stripped;
+            }
+        }
+    }
+
+    if let Some((integer, fraction)) = rest.split_once('.') {
+        for segment in integer.split(',') {
+            if !segment.is_empty() {
+                parts.push(("integer".to_string(), segment.to_string()));
+            }
+            if segment != integer.rsplit(',').next().unwrap_or(integer) {
+                parts.push(("group".to_string(), ",".to_string()));
+            }
+        }
+        parts.push(("decimal".to_string(), ".".to_string()));
+        if !fraction.is_empty() {
+            parts.push(("fraction".to_string(), fraction.to_string()));
+        }
+    } else {
+        for segment in rest.split(',') {
+            if !segment.is_empty() {
+                parts.push(("integer".to_string(), segment.to_string()));
+            }
+            if segment != rest.rsplit(',').next().unwrap_or(rest) {
+                parts.push(("group".to_string(), ",".to_string()));
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        parts.push(("integer".to_string(), formatted));
+    }
+
+    parts
+}
+
+fn parse_intl_number_format<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<IntlNumberFormatValue> {
+    let locale = match args.first() {
+        Some(expr) => as_string(&eval_expr(expr, env, host)?),
+        None => "en-US".to_string(),
+    };
+    let options = match args.get(1) {
+        Some(expr) => Some(eval_expr(expr, env, host)?),
+        None => None,
+    };
+    let style = option_string_from_object(options.as_ref(), "style", env, host)?
+        .unwrap_or_else(|| "decimal".to_string());
+    let currency = option_string_from_object(options.as_ref(), "currency", env, host)?;
+    let use_grouping =
+        option_bool_from_object(options.as_ref(), "useGrouping", env, host)?.unwrap_or(true);
+    let minimum_integer_digits =
+        option_usize_from_object(options.as_ref(), "minimumIntegerDigits", env, host)?
+            .unwrap_or(1)
+            .max(1);
+    let minimum_fraction_digits =
+        option_usize_from_object(options.as_ref(), "minimumFractionDigits", env, host)?;
+    let maximum_fraction_digits =
+        option_usize_from_object(options.as_ref(), "maximumFractionDigits", env, host)?;
+    let minimum_significant_digits =
+        option_usize_from_object(options.as_ref(), "minimumSignificantDigits", env, host)?;
+    let maximum_significant_digits =
+        option_usize_from_object(options.as_ref(), "maximumSignificantDigits", env, host)?;
+
+    let default_fraction_digits = match style.as_str() {
+        "currency" => currency_minor_digits(currency.as_deref()),
+        _ => 0,
+    };
+
+    let minimum_fraction_digits = minimum_fraction_digits.or(Some(default_fraction_digits));
+    let maximum_fraction_digits = maximum_fraction_digits.or(Some(match style.as_str() {
+        "currency" => currency_minor_digits(currency.as_deref()),
+        _ => 3,
+    }));
+
+    Ok(IntlNumberFormatValue {
+        locale,
+        style,
+        currency,
+        use_grouping,
+        minimum_integer_digits,
+        minimum_fraction_digits,
+        maximum_fraction_digits: match (minimum_fraction_digits, maximum_fraction_digits) {
+            (Some(min), Some(max)) => Some(min.max(max)),
+            (Some(min), None) => Some(min),
+            (None, Some(max)) => Some(max),
+            (None, None) => None,
+        },
+        minimum_significant_digits,
+        maximum_significant_digits,
+    })
+}
+
+fn parse_intl_date_time_format<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<IntlDateTimeFormatValue> {
+    let locale = match args.first() {
+        Some(expr) => as_string(&eval_expr(expr, env, host)?),
+        None => "en-US".to_string(),
+    };
+    let options = match args.get(1) {
+        Some(expr) => Some(eval_expr(expr, env, host)?),
+        None => None,
+    };
+    Ok(IntlDateTimeFormatValue {
+        locale,
+        time_zone: option_string_from_object(options.as_ref(), "timeZone", env, host)?,
+        year: option_string_from_object(options.as_ref(), "year", env, host)?,
+        month: option_string_from_object(options.as_ref(), "month", env, host)?,
+        day: option_string_from_object(options.as_ref(), "day", env, host)?,
+        hour: option_string_from_object(options.as_ref(), "hour", env, host)?,
+        minute: option_string_from_object(options.as_ref(), "minute", env, host)?,
+        second: option_string_from_object(options.as_ref(), "second", env, host)?,
+        hour12: option_bool_from_object(options.as_ref(), "hour12", env, host)?,
+    })
+}
+
+fn parse_intl_collator<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<IntlCollatorValue> {
+    let locale = match args.first() {
+        Some(expr) => as_string(&eval_expr(expr, env, host)?),
+        None => "en-US".to_string(),
+    };
+    let options = match args.get(1) {
+        Some(expr) => Some(eval_expr(expr, env, host)?),
+        None => None,
+    };
+    Ok(IntlCollatorValue {
+        locale,
+        numeric: option_bool_from_object(options.as_ref(), "numeric", env, host)?.unwrap_or(false),
+        sensitivity: option_string_from_object(options.as_ref(), "sensitivity", env, host)?,
+        usage: option_string_from_object(options.as_ref(), "usage", env, host)?,
+    })
+}
+
+fn intl_number_format_render(formatter: &IntlNumberFormatValue, value: f64) -> String {
+    format_decimal_number(value, formatter)
+}
+
+fn intl_number_format_parts_for_value(
+    formatter: &IntlNumberFormatValue,
+    value: f64,
+) -> Vec<(String, String)> {
+    format_number_parts(value, formatter)
+}
+
+fn intl_date_time_format_render(
+    formatter: &IntlDateTimeFormatValue,
+    epoch_ms: i64,
+) -> Option<String> {
+    date_format_string(epoch_ms, formatter)
+}
+
+fn intl_date_time_format_parts_for_epoch(
+    formatter: &IntlDateTimeFormatValue,
+    epoch_ms: i64,
+) -> Option<Vec<(String, String)>> {
+    date_format_parts(epoch_ms, formatter)
+}
+
+fn intl_collator_compare_values(collator: &IntlCollatorValue, left: &str, right: &str) -> Ordering {
+    if collator.numeric {
+        let left_tokens = tokenize_collation_key(left, collator.locale.as_str());
+        let right_tokens = tokenize_collation_key(right, collator.locale.as_str());
+        return compare_collation_tokens(&left_tokens, &right_tokens);
+    }
+
+    compare_collation_strings(left, right, collator.locale.as_str())
+}
+
+fn tokenize_collation_key(value: &str, locale: &str) -> Vec<CollationToken> {
+    let mut tokens = Vec::new();
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.peek().copied() {
+        if ch.is_ascii_digit() {
+            let mut digits = String::new();
+            while let Some(next) = chars.peek().copied() {
+                if next.is_ascii_digit() {
+                    digits.push(next);
+                    let _ = chars.next();
+                } else {
+                    break;
+                }
+            }
+            tokens.push(CollationToken::Number(digits.parse::<u128>().unwrap_or(0)));
+        } else {
+            let mut text = String::new();
+            while let Some(next) = chars.peek().copied() {
+                if !next.is_ascii_digit() {
+                    text.push(next);
+                    let _ = chars.next();
+                } else {
+                    break;
+                }
+            }
+            tokens.push(CollationToken::Text(collation_key_for_locale(
+                &text, locale,
+            )));
+        }
+    }
+    tokens
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum CollationToken {
+    Number(u128),
+    Text(String),
+}
+
+fn compare_collation_tokens(left: &[CollationToken], right: &[CollationToken]) -> Ordering {
+    for (left_token, right_token) in left.iter().zip(right.iter()) {
+        let ordering = match (left_token, right_token) {
+            (CollationToken::Number(lhs), CollationToken::Number(rhs)) => lhs.cmp(rhs),
+            (CollationToken::Text(lhs), CollationToken::Text(rhs)) => lhs.cmp(rhs),
+            (CollationToken::Number(_), CollationToken::Text(_)) => Ordering::Less,
+            (CollationToken::Text(_), CollationToken::Number(_)) => Ordering::Greater,
+        };
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+
+    left.len().cmp(&right.len())
+}
+
+fn compare_collation_strings(left: &str, right: &str, locale: &str) -> Ordering {
+    let left_key = collation_key_for_locale(left, locale);
+    let right_key = collation_key_for_locale(right, locale);
+    left_key.cmp(&right_key)
+}
+
+fn collation_key_for_locale(value: &str, locale: &str) -> String {
+    if locale.starts_with("sv") {
+        let mut out = String::new();
+        for ch in value.chars() {
+            match ch.to_lowercase().collect::<String>().as_str() {
+                "å" => out.push_str("~a"),
+                "ä" => out.push_str("~b"),
+                "ö" => out.push_str("~c"),
+                other => out.push_str(other),
+            }
+        }
+        out
+    } else {
+        value.to_lowercase()
+    }
+}
+
+fn date_to_locale_date_string<H: HostBindings>(
+    date: &DateValue,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let locale = match args.first() {
+        Some(expr) => as_string(&eval_expr(expr, env, host)?),
+        None => "en-US".to_string(),
+    };
+    Ok(Value::String(match date.epoch_ms {
+        Some(epoch_ms) => {
+            let Some((year, month, day, _, _, _, _)) = date_zoned_parts(epoch_ms, None) else {
+                return Ok(Value::String("Invalid Date".to_string()));
+            };
+            if locale.starts_with("en-GB") {
+                format!("{}/{}/{}", day, month, year)
+            } else {
+                format!("{}/{}/{}", month, day, year)
+            }
+        }
+        None => "Invalid Date".to_string(),
+    }))
+}
+
+fn date_to_locale_string<H: HostBindings>(
+    date: &DateValue,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let locale = match args.first() {
+        Some(expr) => as_string(&eval_expr(expr, env, host)?),
+        None => "en-US".to_string(),
+    };
+    Ok(Value::String(match date.epoch_ms {
+        Some(epoch_ms) => {
+            let Some((year, month, day, hour, minute, second, _)) =
+                date_zoned_parts(epoch_ms, None)
+            else {
+                return Ok(Value::String("Invalid Date".to_string()));
+            };
+            let (display_hour, suffix) = match hour {
+                0 => (12, "AM"),
+                1..=11 => (hour, "AM"),
+                12 => (12, "PM"),
+                _ => (hour - 12, "PM"),
+            };
+            if locale.starts_with("en-GB") {
+                format!(
+                    "{}/{}/{} {:02}:{:02}:{:02} {}",
+                    day, month, year, display_hour, minute, second, suffix
+                )
+            } else {
+                format!(
+                    "{}/{}/{} {:02}:{:02}:{:02} {}",
+                    month, day, year, display_hour, minute, second, suffix
+                )
+            }
+        }
+        None => "Invalid Date".to_string(),
+    }))
+}
+
+fn date_to_iso_string_method<H: HostBindings>(
+    date: &DateValue,
+    args: &[Expr],
     _env: &mut BTreeMap<String, Value>,
     _host: &mut H,
 ) -> Result<Value> {
-    Err(ScriptError::phase_not_ready("Date.parse"))
+    if !args.is_empty() {
+        return Err(ScriptError::new(
+            "Date.prototype.toISOString() expects no arguments",
+        ));
+    }
+    match date.epoch_ms.and_then(date_to_iso_string) {
+        Some(string) => Ok(Value::String(string)),
+        None => Err(ScriptError::new("Invalid time value")),
+    }
+}
+
+fn date_to_json<H: HostBindings>(
+    date: &DateValue,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new(
+            "Date.prototype.toJSON() expects no arguments",
+        ));
+    }
+    match date.epoch_ms.and_then(date_to_iso_string) {
+        Some(string) => Ok(Value::String(string)),
+        None => Ok(Value::Null),
+    }
+}
+
+fn date_to_string<H: HostBindings>(
+    date: &DateValue,
+    args: &[Expr],
+    _env: &mut BTreeMap<String, Value>,
+    _host: &mut H,
+) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new(
+            "Date.prototype.toString() expects no arguments",
+        ));
+    }
+    Ok(Value::String(match date.epoch_ms {
+        Some(epoch_ms) => {
+            if let Some((year, month, day, hour, minute, second, offset_minutes)) =
+                date_zoned_parts(epoch_ms, None)
+            {
+                let sign = if offset_minutes < 0 { "-" } else { "+" };
+                let offset_minutes = offset_minutes.abs();
+                let offset_hours = offset_minutes / 60;
+                let offset_remaining = offset_minutes % 60;
+                format!(
+                    "{:04}-{:02}-{:02} {:02}:{:02}:{:02} GMT{}{:02}{:02}",
+                    year, month, day, hour, minute, second, sign, offset_hours, offset_remaining
+                )
+            } else {
+                "Invalid Date".to_string()
+            }
+        }
+        None => "Invalid Date".to_string(),
+    }))
+}
+
+fn date_value_of(date: &DateValue, args: &[Expr]) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new(
+            "Date.prototype.valueOf() expects no arguments",
+        ));
+    }
+    Ok(Value::Number(
+        date.epoch_ms.map(|value| value as f64).unwrap_or(f64::NAN),
+    ))
+}
+
+fn date_get_year(date: &DateValue, args: &[Expr], utc: bool, _legacy: bool) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new("Date getter expects no arguments"));
+    }
+    Ok(Value::Number(match date.epoch_ms {
+        Some(epoch_ms) => if utc {
+            date_datetime_utc(epoch_ms).map(|dt| dt.year() as f64)
+        } else {
+            date_datetime_local(epoch_ms).map(|dt| dt.year() as f64)
+        }
+        .unwrap_or(f64::NAN),
+        None => f64::NAN,
+    }))
+}
+
+fn date_get_month(date: &DateValue, args: &[Expr], utc: bool) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new("Date getter expects no arguments"));
+    }
+    Ok(Value::Number(match date.epoch_ms {
+        Some(epoch_ms) => if utc {
+            date_datetime_utc(epoch_ms).map(|dt| dt.month0() as f64)
+        } else {
+            date_datetime_local(epoch_ms).map(|dt| dt.month0() as f64)
+        }
+        .unwrap_or(f64::NAN),
+        None => f64::NAN,
+    }))
+}
+
+fn date_get_day(date: &DateValue, args: &[Expr], utc: bool) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new("Date getter expects no arguments"));
+    }
+    Ok(Value::Number(match date.epoch_ms {
+        Some(epoch_ms) => if utc {
+            date_datetime_utc(epoch_ms).map(|dt| dt.day() as f64)
+        } else {
+            date_datetime_local(epoch_ms).map(|dt| dt.day() as f64)
+        }
+        .unwrap_or(f64::NAN),
+        None => f64::NAN,
+    }))
+}
+
+fn date_get_hours(date: &DateValue, args: &[Expr], utc: bool) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new("Date getter expects no arguments"));
+    }
+    Ok(Value::Number(match date.epoch_ms {
+        Some(epoch_ms) => if utc {
+            date_datetime_utc(epoch_ms).map(|dt| dt.hour() as f64)
+        } else {
+            date_datetime_local(epoch_ms).map(|dt| dt.hour() as f64)
+        }
+        .unwrap_or(f64::NAN),
+        None => f64::NAN,
+    }))
+}
+
+fn date_get_minutes(date: &DateValue, args: &[Expr], utc: bool) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new("Date getter expects no arguments"));
+    }
+    Ok(Value::Number(match date.epoch_ms {
+        Some(epoch_ms) => if utc {
+            date_datetime_utc(epoch_ms).map(|dt| dt.minute() as f64)
+        } else {
+            date_datetime_local(epoch_ms).map(|dt| dt.minute() as f64)
+        }
+        .unwrap_or(f64::NAN),
+        None => f64::NAN,
+    }))
+}
+
+fn date_get_seconds(date: &DateValue, args: &[Expr], utc: bool) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new("Date getter expects no arguments"));
+    }
+    Ok(Value::Number(match date.epoch_ms {
+        Some(epoch_ms) => if utc {
+            date_datetime_utc(epoch_ms).map(|dt| dt.second() as f64)
+        } else {
+            date_datetime_local(epoch_ms).map(|dt| dt.second() as f64)
+        }
+        .unwrap_or(f64::NAN),
+        None => f64::NAN,
+    }))
+}
+
+fn date_get_milliseconds(date: &DateValue, args: &[Expr], utc: bool) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new("Date getter expects no arguments"));
+    }
+    Ok(Value::Number(match date.epoch_ms {
+        Some(epoch_ms) => if utc {
+            date_datetime_utc(epoch_ms).map(|dt| dt.timestamp_subsec_millis() as f64)
+        } else {
+            date_datetime_local(epoch_ms).map(|dt| dt.timestamp_subsec_millis() as f64)
+        }
+        .unwrap_or(f64::NAN),
+        None => f64::NAN,
+    }))
+}
+
+fn date_get_timezone_offset(date: &DateValue, args: &[Expr]) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new(
+            "Date.prototype.getTimezoneOffset() expects no arguments",
+        ));
+    }
+    Ok(Value::Number(match date.epoch_ms {
+        Some(epoch_ms) => {
+            let offset = date_zoned_parts(epoch_ms, None)
+                .map(|(_, _, _, _, _, _, offset)| offset)
+                .unwrap_or(0);
+            (-offset) as f64
+        }
+        None => f64::NAN,
+    }))
+}
+
+fn date_to_locale_epoch_string(date: &DateValue, locale: &str, include_time: bool) -> String {
+    match date.epoch_ms {
+        Some(epoch_ms) => date_format_locale_string(epoch_ms, locale, include_time)
+            .unwrap_or_else(|| "Invalid Date".to_string()),
+        None => "Invalid Date".to_string(),
+    }
+}
+
+fn intl_number_format_format<H: HostBindings>(
+    formatter: &IntlNumberFormatValue,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let value = match args.first() {
+        Some(expr) => number_from_value(&eval_expr(expr, env, host)?).unwrap_or(f64::NAN),
+        None => f64::NAN,
+    };
+    Ok(Value::String(intl_number_format_render(formatter, value)))
+}
+
+fn intl_number_format_resolved_options<H: HostBindings>(
+    formatter: &IntlNumberFormatValue,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new(
+            "Intl.NumberFormat.prototype.resolvedOptions() expects no arguments",
+        ));
+    }
+    object_value_from_pairs(
+        vec![
+            ("locale", Value::String(formatter.locale.clone())),
+            ("style", Value::String(formatter.style.clone())),
+            ("useGrouping", Value::Boolean(formatter.use_grouping)),
+            (
+                "minimumIntegerDigits",
+                Value::Number(formatter.minimum_integer_digits as f64),
+            ),
+        ],
+        env,
+        host,
+    )
+}
+
+fn intl_number_format_to_parts<H: HostBindings>(
+    formatter: &IntlNumberFormatValue,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let value = match args.first() {
+        Some(expr) => number_from_value(&eval_expr(expr, env, host)?).unwrap_or(f64::NAN),
+        None => f64::NAN,
+    };
+    part_array_from_pairs(
+        intl_number_format_parts_for_value(formatter, value),
+        env,
+        host,
+    )
+}
+
+fn intl_date_time_format_format<H: HostBindings>(
+    formatter: &IntlDateTimeFormatValue,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let epoch_ms = match args.first() {
+        Some(expr) => date_epoch_ms_from_value(&eval_expr(expr, env, host)?),
+        None => date_epoch_ms_from_value(&Value::Date(DateValue {
+            epoch_ms: Some(Utc::now().timestamp_millis()),
+        })),
+    };
+    Ok(Value::String(match epoch_ms {
+        Some(epoch_ms) => intl_date_time_format_render(formatter, epoch_ms)
+            .unwrap_or_else(|| "Invalid Date".to_string()),
+        None => "Invalid Date".to_string(),
+    }))
+}
+
+fn intl_date_time_format_resolved_options<H: HostBindings>(
+    formatter: &IntlDateTimeFormatValue,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new(
+            "Intl.DateTimeFormat.prototype.resolvedOptions() expects no arguments",
+        ));
+    }
+    object_value_from_pairs(
+        vec![
+            ("locale", Value::String(formatter.locale.clone())),
+            (
+                "timeZone",
+                Value::String(
+                    formatter
+                        .time_zone
+                        .clone()
+                        .unwrap_or_else(|| "UTC".to_string()),
+                ),
+            ),
+        ],
+        env,
+        host,
+    )
+}
+
+fn intl_date_time_format_to_parts<H: HostBindings>(
+    formatter: &IntlDateTimeFormatValue,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let epoch_ms = match args.first() {
+        Some(expr) => date_epoch_ms_from_value(&eval_expr(expr, env, host)?),
+        None => date_epoch_ms_from_value(&Value::Date(DateValue {
+            epoch_ms: Some(Utc::now().timestamp_millis()),
+        })),
+    };
+    match epoch_ms.and_then(|epoch_ms| intl_date_time_format_parts_for_epoch(formatter, epoch_ms)) {
+        Some(parts) => part_array_from_pairs(parts, env, host),
+        None => Ok(Value::Array(ArrayHandle::new(Vec::new()))),
+    }
+}
+
+fn intl_collator_compare<H: HostBindings>(
+    collator: &IntlCollatorValue,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let left = match args.first() {
+        Some(expr) => as_string(&eval_expr(expr, env, host)?),
+        None => String::new(),
+    };
+    let right = match args.get(1) {
+        Some(expr) => as_string(&eval_expr(expr, env, host)?),
+        None => String::new(),
+    };
+    Ok(Value::Number(
+        match intl_collator_compare_values(collator, &left, &right) {
+            Ordering::Less => -1.0,
+            Ordering::Equal => 0.0,
+            Ordering::Greater => 1.0,
+        },
+    ))
+}
+
+fn intl_collator_resolved_options<H: HostBindings>(
+    collator: &IntlCollatorValue,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new(
+            "Intl.Collator.prototype.resolvedOptions() expects no arguments",
+        ));
+    }
+    object_value_from_pairs(
+        vec![
+            ("locale", Value::String(collator.locale.clone())),
+            ("numeric", Value::Boolean(collator.numeric)),
+        ],
+        env,
+        host,
+    )
 }
 
 fn array_join<H: HostBindings>(
@@ -9660,6 +12846,88 @@ fn array_for_each<H: HostBindings>(
     Ok(Value::Undefined)
 }
 
+fn array_some<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let (callback_expr, this_arg_expr) = match args {
+        [callback_expr] => (callback_expr, None),
+        [callback_expr, this_arg_expr] => (callback_expr, Some(this_arg_expr)),
+        _ => {
+            return Err(ScriptError::new("some() expects one or two arguments"));
+        }
+    };
+    let callback = match eval_expr(callback_expr, env, host)? {
+        Value::Function(function) => function,
+        _ => return Err(ScriptError::new("some() requires a function callback")),
+    };
+    let this_value = match this_arg_expr {
+        Some(expr) => eval_expr(expr, env, host)?,
+        None => Value::Undefined,
+    };
+    let items = array.0.borrow().items.clone();
+    for (index, item) in items.into_iter().enumerate() {
+        let keep = call_script_function_value(
+            &callback,
+            &[
+                item.clone(),
+                Value::Number(index as f64),
+                Value::Array(array.clone()),
+            ],
+            this_value.clone(),
+            env,
+            host,
+        )?;
+        if is_truthy(&keep) {
+            return Ok(Value::Boolean(true));
+        }
+    }
+    Ok(Value::Boolean(false))
+}
+
+fn array_every<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let (callback_expr, this_arg_expr) = match args {
+        [callback_expr] => (callback_expr, None),
+        [callback_expr, this_arg_expr] => (callback_expr, Some(this_arg_expr)),
+        _ => {
+            return Err(ScriptError::new("every() expects one or two arguments"));
+        }
+    };
+    let callback = match eval_expr(callback_expr, env, host)? {
+        Value::Function(function) => function,
+        _ => return Err(ScriptError::new("every() requires a function callback")),
+    };
+    let this_value = match this_arg_expr {
+        Some(expr) => eval_expr(expr, env, host)?,
+        None => Value::Undefined,
+    };
+    let items = array.0.borrow().items.clone();
+    for (index, item) in items.into_iter().enumerate() {
+        let keep = call_script_function_value(
+            &callback,
+            &[
+                item.clone(),
+                Value::Number(index as f64),
+                Value::Array(array.clone()),
+            ],
+            this_value.clone(),
+            env,
+            host,
+        )?;
+        if !is_truthy(&keep) {
+            return Ok(Value::Boolean(false));
+        }
+    }
+    Ok(Value::Boolean(true))
+}
+
 fn array_flat_map<H: HostBindings>(
     array: &crate::ArrayHandle,
     args: &[Expr],
@@ -9729,6 +12997,45 @@ fn array_flat<H: HostBindings>(
         }
     }
     Ok(Value::Array(ArrayHandle::new(out)))
+}
+
+fn array_fill<H: HostBindings>(
+    array: &crate::ArrayHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if args.is_empty() || args.len() > 3 {
+        return Err(ScriptError::new("fill() expects one to three arguments"));
+    }
+
+    let value = eval_expr(&args[0], env, host)?;
+    let len = array.0.borrow().items.len() as i64;
+    let start = match args.get(1) {
+        Some(expr) => integer_from_value(&eval_expr(expr, env, host)?, "fill()")?,
+        None => 0,
+    };
+    let end = match args.get(2) {
+        Some(expr) => integer_from_value(&eval_expr(expr, env, host)?, "fill()")?,
+        None => len,
+    };
+
+    let start = if start < 0 {
+        (len + start).max(0)
+    } else {
+        start.min(len)
+    } as usize;
+    let end = if end < 0 {
+        (len + end).max(0)
+    } else {
+        end.min(len)
+    } as usize;
+
+    let mut state = array.0.borrow_mut();
+    for index in start..end.min(state.items.len()) {
+        state.items[index] = value.clone();
+    }
+    Ok(Value::Array(array.clone()))
 }
 
 fn array_push<H: HostBindings>(
@@ -10172,18 +13479,46 @@ fn date_constructor<H: HostBindings>(
     env: &mut BTreeMap<String, Value>,
     host: &mut H,
 ) -> Result<Value> {
-    let _ = (args, env, host);
-    Err(ScriptError::phase_not_ready("Date"))
+    let value = match args.len() {
+        0 => Value::Date(DateValue {
+            epoch_ms: Some(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|_| ScriptError::new("system clock is before the Unix epoch"))?
+                    .as_millis() as i64,
+            ),
+        }),
+        1 => {
+            let arg = eval_expr(&args[0], env, host)?;
+            Value::Date(DateValue {
+                epoch_ms: date_epoch_ms_from_value(&arg),
+            })
+        }
+        _ => Value::Date(DateValue {
+            epoch_ms: date_epoch_from_component_args(args, env, host, true)?,
+        }),
+    };
+    Ok(value)
 }
 
 fn intl_construct<H: HostBindings>(
     property: &str,
     args: &[Expr],
-    _env: &mut BTreeMap<String, Value>,
-    _host: &mut H,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
 ) -> Result<Value> {
-    let _ = args;
-    Err(ScriptError::phase_not_ready(&format!("Intl.{property}")))
+    match property {
+        "NumberFormat" => Ok(Value::IntlNumberFormat(parse_intl_number_format(
+            args, env, host,
+        )?)),
+        "DateTimeFormat" => Ok(Value::IntlDateTimeFormat(parse_intl_date_time_format(
+            args, env, host,
+        )?)),
+        "Collator" => Ok(Value::IntlCollator(parse_intl_collator(args, env, host)?)),
+        other => Err(ScriptError::new(format!(
+            "unsupported Intl constructor: {other}"
+        ))),
+    }
 }
 
 fn scroll_coordinate(value: &Value, method: &str) -> Result<i64> {

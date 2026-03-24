@@ -5738,3 +5738,98 @@ fn session_supports_namespaced_attribute_nodes_explicitly() {
         "1:null:2:[object Attr]:svg:stroke:urn:test:stroke:svg:azure:[object Element]:[object Element]:[object Attr]:null:null"
     );
 }
+
+#[test]
+fn session_supports_optional_chaining_member_calls_regression() {
+    let mut session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<button id='btn'>run</button><p id='out'></p><script>const actionEls = { close: document.getElementById('btn') }; actionEls.close?.addEventListener('click', () => { document.getElementById('out').textContent = 'ok'; });</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should build");
+
+    let button_id = session.dom().select("#btn").unwrap()[0];
+    let out_id = session.dom().select("#out").unwrap()[0];
+
+    session
+        .click_node(button_id)
+        .expect("click should trigger the optional-chaining listener");
+
+    assert_eq!(session.dom().text_content_for_node(out_id), "ok");
+}
+
+#[test]
+fn session_supports_dom_constructors_and_instanceof_checks_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<button id='btn'>run</button><select id='sel'><option>One</option></select><p id='out'></p><script>const button = document.getElementById('btn'); const select = document.getElementById('sel'); document.getElementById('out').textContent = [typeof HTMLButtonElement, String(window.HTMLButtonElement === HTMLButtonElement), String(button instanceof HTMLButtonElement), String(button instanceof HTMLElement), String(button instanceof Element), String(document instanceof Node), String(select instanceof HTMLSelectElement), String(window.HTMLSelectElement === HTMLSelectElement)].join('|');</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should build");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "function|true|true|true|true|true|true|true"
+    );
+}
+
+#[test]
+fn session_supports_number_to_fixed_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='out'></div><script>const quotePair = \"\\\"\\\"\"; const label = `ABC-001 (${quotePair.length} 件)`; const formatted = Math.max(0, 4.2).toFixed(2); document.getElementById('out').textContent = `${label}|${formatted}`;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should build");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "ABC-001 (2 件)|4.20"
+    );
+}
+
+#[test]
+fn session_supports_number_to_precision_and_exponential_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='out'></div><script>const quotePair = \"\\\"\\\"\"; const label = `ABC-001 (${quotePair.length} 件)`; const parts = [Number(12.345).toPrecision(4), Math.max(0, 4.2).toExponential(2), Number(10000).toPrecision(10)]; document.getElementById('out').textContent = `${label}|${parts.join('|')}`;</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should build");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "ABC-001 (2 件)|12.35|4.20e+0|10000.00000"
+    );
+}
+
+#[test]
+fn session_supports_regex_literal_lookahead_regression() {
+    let session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<main id='root'><div id='out'></div><script>document.getElementById('out').textContent = '1000000'.replace(/\\B(?=(\\d{3})+(?!\\d))/g, ',');</script></main>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should build");
+
+    let out_id = session.dom().select("#out").unwrap()[0];
+    assert_eq!(session.dom().text_content_for_node(out_id), "1,000,000");
+}

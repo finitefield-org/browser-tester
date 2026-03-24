@@ -1024,6 +1024,7 @@ README は次だけを書く。
 - evaluator
 - `window` / `document` / `Element` binding
 - inline script 実行
+- `Number.prototype.toFixed()` / `Number.prototype.toPrecision()` / `Number.prototype.toExponential()` の数値フォーマット
 
 完了条件:
 

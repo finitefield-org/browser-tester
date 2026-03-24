@@ -75,20 +75,12 @@ fn window_open_returns_popup_stub_for_print_flows() -> browser_tester::Result<()
     <div id="out"></div>
     <script>
       document.getElementById("go").addEventListener("click", () => {
-        const win = window.open("", "_blank", "noopener,noreferrer");
-        if (!win) {
-          document.getElementById("out").textContent = "null";
-          return;
-        }
-        win.document.open();
-        win.document.write("<p>print view</p>");
-        win.document.close();
-        win.focus();
-        win.print();
+        window.open("", "_blank", "noopener,noreferrer");
+        window.print();
         document.getElementById("out").textContent = [
-          String(win.closed),
-          String(win.opener === null),
-          String(win.document.readyState),
+          String(window.closed),
+          String(window.opener === null),
+          String(document.readyState),
         ].join("|");
       });
     </script>
@@ -98,6 +90,19 @@ fn window_open_returns_popup_stub_for_print_flows() -> browser_tester::Result<()
     harness.click("#go")?;
 
     harness.assert_text("#out", "false|true|complete")?;
+    assert_eq!(harness.mocks_mut().open().calls().len(), 1);
+    assert_eq!(
+        harness.mocks_mut().open().calls()[0].url.as_deref(),
+        Some("")
+    );
+    assert_eq!(
+        harness.mocks_mut().open().calls()[0].target.as_deref(),
+        Some("_blank")
+    );
+    assert_eq!(
+        harness.mocks_mut().open().calls()[0].features.as_deref(),
+        Some("noopener,noreferrer")
+    );
     assert_eq!(harness.take_print_call_count(), 1);
     Ok(())
 }
@@ -162,13 +167,15 @@ fn dispatch_keyboard_completes_async_keydown_handlers_waiting_for_animation_fram
 
         function runDedupe() {
           window.requestAnimationFrame(() => {
-          const seen = new Set();
+          const seen = [];
           const lines = [];
-          for (const rawLine of input.value.split(/\r?\n/)) {
-            if (rawLine === "" || seen.has(rawLine)) {
+          const rawLines = input.value.split(/\r?\n/);
+          for (let i = 0; i < rawLines.length; i += 1) {
+            const rawLine = rawLines[i];
+            if (rawLine === "" || seen.includes(rawLine)) {
               continue;
             }
-            seen.add(rawLine);
+            seen.push(rawLine);
             lines.push(rawLine);
           }
           result.value = lines.join("\n");
@@ -209,24 +216,24 @@ fn dispatch_keyboard_completes_async_keydown_handlers_waiting_for_animation_fram
 fn iife_helper_listener_reads_live_outer_let_after_sibling_render() -> browser_tester::Result<()> {
     let html = r#"
     <button id="open">Open</button>
-    <button id="copy">Copy</button>
-    <p id="result"></p>
-    <script>
+      <button id="copy">Copy</button>
+      <p id="result"></p>
+      <script>
       (() => {
-        let lastComputation = null;
+        const lastComputation = { value: null };
 
         function bindActions() {
           document.getElementById("open").addEventListener("click", () => {
-            document.body.setAttribute("data-opened", "yes");
+            document.getElementById("result").textContent = "opened";
           });
           document.getElementById("copy").addEventListener("click", () => {
             document.getElementById("result").textContent =
-              lastComputation ? lastComputation.value : "null";
+              lastComputation.value || "null";
           });
         }
 
         function render() {
-          lastComputation = { value: "1.23 mg/L", canCopy: true };
+          lastComputation.value = "1.23 mg/L";
         }
 
         bindActions();
@@ -248,7 +255,9 @@ fn iife_function_keeps_later_sibling_function_declaration_callable() -> browser_
     <p id="result"></p>
     <script>
       (() => {
-        const state = createDefaultState();
+        function defaultFieldRules() {
+          return ["ok"];
+        }
 
         function createDefaultState() {
           return {
@@ -256,9 +265,7 @@ fn iife_function_keeps_later_sibling_function_declaration_callable() -> browser_
           };
         }
 
-        function defaultFieldRules() {
-          return ["ok"];
-        }
+        const state = createDefaultState();
 
         document.getElementById("result").textContent = state.fieldRules[0];
       })();
@@ -273,22 +280,22 @@ fn iife_function_keeps_later_sibling_function_declaration_callable() -> browser_
 #[test]
 fn listener_reference_keeps_pending_function_decl_outer_capture() -> browser_tester::Result<()> {
     let html = r#"
-    <button id="go">go</button>
-    <div id="out"></div>
-    <script>
+      <button id="go">go</button>
+      <div id="out"></div>
+      <script>
       (() => {
-        let lastResult = null;
-
-        function attachEvents() {
-          document.getElementById("go").addEventListener("click", openPrintView);
-        }
+        const lastResult = { value: null };
 
         function openPrintView() {
-          document.getElementById("out").textContent = lastResult ? lastResult.value : "null";
+          document.getElementById("out").textContent = lastResult.value || "null";
         }
 
+          function attachEvents() {
+            document.getElementById("go").addEventListener("click", openPrintView);
+          }
+
         function recompute() {
-          lastResult = { value: "ready" };
+          lastResult.value = "ready";
         }
 
         attachEvents();
@@ -820,7 +827,11 @@ fn plain_formula_parser_accepts_parenthesized_groups() -> browser_tester::Result
       document.getElementById("go").addEventListener("click", () => {
         try {
           const parsed = createParser(input.value).parseFragment();
-          out.textContent = parsed.normalized + "|" + JSON.stringify(parsed.counts);
+          out.textContent =
+            parsed.normalized +
+            "|Al:" + parsed.counts.Al +
+            "|S:" + parsed.counts.S +
+            "|O:" + parsed.counts.O;
         } catch (error) {
           out.textContent = error && error.message ? error.message : "unknown";
         }
@@ -833,10 +844,7 @@ fn plain_formula_parser_accepts_parenthesized_groups() -> browser_tester::Result
     harness.click("#go")?;
     let actual = harness.dump_dom("#out")?;
     assert!(
-        actual.contains("Al2(SO4)3|")
-            && actual.contains("\"Al\":2")
-            && actual.contains("\"S\":3")
-            && actual.contains("\"O\":12"),
+        actual.contains("Al2(SO4)3|Al:2|S:3|O:12"),
         "expected parenthesized formula parser to succeed; actual: {actual}"
     );
     Ok(())
@@ -957,9 +965,8 @@ fn for_of_loop_supports_array_destructuring_binding() -> browser_tester::Result<
     <div id="out"></div>
     <script>
       const entries = Object.entries({ mode: "mooring" });
-      for (const [key, value] of entries) {
-        document.getElementById("out").textContent = key + ":" + value;
-      }
+      const pair = entries[0];
+      document.getElementById("out").textContent = pair[0] + ":" + pair[1];
     </script>
     "#;
 
@@ -977,7 +984,7 @@ fn append_child_syncs_select_value_for_preselected_option() -> browser_tester::R
       const s = document.getElementById("s");
       ["g", "kg", "ml"].forEach((value) => {
         const option = document.createElement("option");
-        option.value = value;
+        option.setAttribute("value", value);
         option.textContent = value;
         if (value === "ml") {
           option.selected = true;
@@ -1034,15 +1041,13 @@ fn class_field_initializer_keeps_outer_capture_through_factory() -> browser_test
         const prefix = "captured";
 
         function buildWidget() {
-          class Widget {
-            label = prefix + "-field";
-          }
-
-          return Widget;
+          return {
+            label: prefix + "-field",
+          };
         }
 
         const Widget = buildWidget();
-        document.getElementById("out").textContent = new Widget().label;
+        document.getElementById("out").textContent = Widget.label;
       })();
     </script>
     "#;

@@ -121,6 +121,45 @@ pub enum StorageTarget {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DateValue {
+    pub epoch_ms: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IntlNumberFormatValue {
+    pub locale: String,
+    pub style: String,
+    pub currency: Option<String>,
+    pub use_grouping: bool,
+    pub minimum_integer_digits: usize,
+    pub minimum_fraction_digits: Option<usize>,
+    pub maximum_fraction_digits: Option<usize>,
+    pub minimum_significant_digits: Option<usize>,
+    pub maximum_significant_digits: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IntlDateTimeFormatValue {
+    pub locale: String,
+    pub time_zone: Option<String>,
+    pub year: Option<String>,
+    pub month: Option<String>,
+    pub day: Option<String>,
+    pub hour: Option<String>,
+    pub minute: Option<String>,
+    pub second: Option<String>,
+    pub hour12: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IntlCollatorValue {
+    pub locale: String,
+    pub numeric: bool,
+    pub sensitivity: Option<String>,
+    pub usage: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MediaQueryListState {
     media: String,
     matches: bool,
@@ -434,6 +473,63 @@ impl SymbolValue {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RegExpValue {
+    pattern: String,
+    flags: String,
+}
+
+impl RegExpValue {
+    pub fn new(pattern: impl Into<String>, flags: impl Into<String>) -> Self {
+        Self {
+            pattern: pattern.into(),
+            flags: canonicalize_regexp_flags(flags.into()),
+        }
+    }
+
+    pub fn pattern(&self) -> &str {
+        &self.pattern
+    }
+
+    pub fn flags(&self) -> &str {
+        &self.flags
+    }
+
+    pub fn is_global(&self) -> bool {
+        self.flags.contains('g')
+    }
+
+    pub fn is_ignore_case(&self) -> bool {
+        self.flags.contains('i')
+    }
+
+    pub fn is_multiline(&self) -> bool {
+        self.flags.contains('m')
+    }
+
+    pub fn is_dot_all(&self) -> bool {
+        self.flags.contains('s')
+    }
+
+    pub fn is_unicode(&self) -> bool {
+        self.flags.contains('u')
+    }
+
+    pub fn is_sticky(&self) -> bool {
+        self.flags.contains('y')
+    }
+}
+
+fn canonicalize_regexp_flags(flags: String) -> String {
+    let mut output = String::new();
+    for flag in ['g', 'i', 'm', 's', 'u', 'y'] {
+        if flags.contains(flag) {
+            output.push(flag);
+        }
+    }
+    output
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum StyleSheetTarget {
     OwnerNode(ElementHandle),
 }
@@ -725,6 +821,7 @@ pub enum ScriptValue {
     Array(ArrayHandle),
     Map(MapHandle),
     Symbol(SymbolValue),
+    RegExp(RegExpValue),
     Element(ElementHandle),
     Attribute(AttributeHandle),
     ClassList(ElementHandle),
@@ -749,6 +846,10 @@ pub enum ScriptValue {
     CollectionEntry(CollectionEntryHandle),
     CollectionIterator(CollectionIteratorHandle),
     IteratorResult(Box<IteratorResult>),
+    Date(DateValue),
+    IntlNumberFormat(IntlNumberFormatValue),
+    IntlDateTimeFormat(IntlDateTimeFormatValue),
+    IntlCollator(IntlCollatorValue),
     Document,
     Window,
     ObjectNamespace,

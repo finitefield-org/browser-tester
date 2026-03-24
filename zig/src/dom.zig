@@ -677,6 +677,18 @@ pub const DomStore = struct {
         return;
     }
 
+    pub fn createContextualFragment(self: *DomStore, context_parent: NodeId, html: []const u8) errors.Result(NodeId) {
+        var fragment_store = try DomStore.init(self.allocator);
+        defer fragment_store.deinit();
+
+        const fragment_root = try self.parseHtmlFragmentIntoStore(&fragment_store, context_parent, html);
+        const fragment_children = fragment_store.childIds(fragment_root);
+
+        const fragment = try self.createElementDetached("template");
+        try self.cloneFragmentChildrenInto(&fragment_store, fragment_children, fragment, 0, true);
+        return fragment;
+    }
+
     pub fn clearDocument(self: *DomStore) errors.Result(void) {
         const document_id = self.documentId();
         const document = self.nodeAtMut(document_id) orelse return error.DomError;

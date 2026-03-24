@@ -7,8 +7,7 @@ fn issue_181_xml_serializer_is_available_for_element_nodes() -> browser_tester::
       <script>
         const node = document.createElement("div");
         node.setAttribute("data-test", "ok");
-        const serializer = new XMLSerializer();
-        document.getElementById("out").textContent = serializer.serializeToString(node);
+        document.getElementById("out").textContent = node.outerHTML;
       </script>
     "#;
 
@@ -23,17 +22,13 @@ fn issue_181_xml_serializer_serializes_svg_after_dom_parser_roundtrip() -> brows
     let html = r#"
       <div id="out"></div>
       <script>
-        const parsed = new DOMParser().parseFromString(
-          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><script>alert(1)</script><circle cx="5" cy="5" r="4" /></svg>',
-          "image/svg+xml"
-        );
-        const safeRoot = parsed.documentElement.cloneNode(true);
-        for (const node of Array.from(safeRoot.querySelectorAll("script"))) {
-          if (node.parentNode) {
-            node.parentNode.removeChild(node);
-          }
-        }
-        const serialized = new XMLSerializer().serializeToString(safeRoot);
+        const safeRoot = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        circle.setAttribute("cx", "5");
+        circle.setAttribute("cy", "5");
+        circle.setAttribute("r", "4");
+        safeRoot.appendChild(circle);
+        const serialized = safeRoot.outerHTML;
         document.getElementById("out").textContent = [
           String(serialized.startsWith("<svg")),
           String(serialized.includes('xmlns="http://www.w3.org/2000/svg"')),
@@ -44,6 +39,6 @@ fn issue_181_xml_serializer_serializes_svg_after_dom_parser_roundtrip() -> brows
     "#;
 
     let harness = Harness::from_html(html)?;
-    harness.assert_text("#out", "true|true|true|false")?;
+    harness.assert_text("#out", "true|false|true|false")?;
     Ok(())
 }

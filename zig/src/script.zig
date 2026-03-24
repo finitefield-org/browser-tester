@@ -633,6 +633,23 @@ fn stringListEntries(
     return try collectionEntriesFromValues(allocator, values);
 }
 
+fn cssLayerStatementNameList(
+    allocator: std.mem.Allocator,
+    name_text: []const u8,
+) errors.Result(StringListState) {
+    var items: std.ArrayList([]const u8) = .empty;
+    errdefer items.deinit(allocator);
+
+    var parts = std.mem.splitScalar(u8, name_text, ',');
+    while (parts.next()) |part| {
+        const trimmed = std.mem.trim(u8, part, " \t\r\n\x0c");
+        if (trimmed.len == 0) continue;
+        try items.append(allocator, trimmed);
+    }
+
+    return .{ .items = try items.toOwnedSlice(allocator) };
+}
+
 fn tokenListIteratorValues(
     allocator: std.mem.Allocator,
     items: []const []const u8,
@@ -772,6 +789,56 @@ fn namedNodeMapEntries(
     const items = try namedNodeMapCurrentValues(allocator, host, element);
     defer allocator.free(items);
     return try collectionEntriesFromValues(allocator, items);
+}
+
+fn namedNodeMapForEach(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    element: dom.NodeId,
+    args: []*Expr,
+) errors.Result(Value) {
+    const callback_expr: *Expr = switch (args.len) {
+        1, 2 => args[0],
+        else => return error.ScriptRuntime,
+    };
+    const this_arg_expr: ?*Expr = if (args.len == 2) args[1] else null;
+
+    const callback_value = try evalExpr(allocator, host, bindings, callback_expr);
+    const callback = switch (callback_value) {
+        .function => |function| function,
+        else => return error.ScriptRuntime,
+    };
+
+    if (this_arg_expr) |expr| {
+        _ = try evalExpr(allocator, host, bindings, expr);
+    }
+
+    const items = try namedNodeMapCurrentValues(allocator, host, element);
+    defer allocator.free(items);
+
+    for (items, 0..) |item, index| {
+        const positional = [_]Value{
+            item,
+            .{ .number = @floatFromInt(index) },
+            .{ .named_node_map = .{ .element = element } },
+        };
+        var function_bindings = try functionBindings(allocator, callback, positional[0..]);
+        defer function_bindings.deinit(allocator);
+
+        const source_name = try std.fmt.allocPrint(allocator, "namednodemap:forEach:{d}", .{index});
+        defer allocator.free(source_name);
+
+        try executeScriptSource(
+            allocator,
+            host,
+            callback.body_source,
+            source_name,
+            function_bindings.items,
+        );
+    }
+
+    return Value{ .undefined_value = {} };
 }
 
 const NamedNodeMapState = struct {
@@ -1075,6 +1142,7 @@ const CssDocumentRuleState = struct {
     condition_text: []const u8,
     css_text: []const u8,
     css_rules: []Value,
+    source_index: ?usize = null,
     parent_style_sheet: ?dom.NodeId = null,
     parent_rule: ?*const CssRuleState = null,
 };
@@ -1096,6 +1164,7 @@ const CssContainerConditionParts = struct {
 const CssStartingStyleRuleState = struct {
     css_text: []const u8,
     css_rules: []Value,
+    source_index: ?usize = null,
     parent_style_sheet: ?dom.NodeId = null,
     parent_rule: ?*const CssRuleState = null,
 };
@@ -1165,6 +1234,7 @@ const CssPageRuleState = struct {
 const CssPositionTryRuleState = struct {
     name: []const u8,
     css_text: []const u8,
+    source_index: ?usize = null,
     parent_style_sheet: ?dom.NodeId = null,
     parent_rule: ?*const CssRuleState = null,
 };
@@ -1174,6 +1244,7 @@ const CssScopeRuleState = struct {
     end_text: ?[]const u8,
     css_text: []const u8,
     css_rules: []Value,
+    source_index: ?usize = null,
     parent_style_sheet: ?dom.NodeId = null,
     parent_rule: ?*const CssRuleState = null,
 };
@@ -1183,6 +1254,7 @@ const CssLayerRuleState = struct {
     css_text: []const u8,
     css_rules: []Value,
     is_statement: bool = false,
+    source_index: ?usize = null,
     parent_style_sheet: ?dom.NodeId = null,
     parent_rule: ?*const CssRuleState = null,
 };
@@ -2644,6 +2716,76 @@ fn evalAssignment(
                         );
                         return;
                     },
+                    .document => |document| {
+                        if (document.parent_rule != null or document.parent_style_sheet == null or document.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = document.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = document.source_index orelse return error.ScriptRuntime;
+                        const condition_text = try asString(allocator, value);
+                        const trimmed_condition_text = std.mem.trim(u8, condition_text, " \t\r\n\x0c");
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        if (std.mem.startsWith(u8, trimmed_condition_text, "@document")) {
+                            const parsed_rules = try parseStyleSheetRuleValues(allocator, trimmed_condition_text);
+                            defer allocator.free(parsed_rules);
+                            if (parsed_rules.len != 1) return error.ScriptRuntime;
+                            if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                            if (parsed_rules[0].css_rule != .document) return error.ScriptRuntime;
+
+                            try styleSheetReplaceParsedRule(
+                                allocator,
+                                host,
+                                sheet_id,
+                                current_rules,
+                                parsed_rules[0],
+                                source_index,
+                            );
+                            return;
+                        }
+
+                        const current_rule = current_rules[source_index];
+                        if (current_rule != .css_rule) return error.ScriptRuntime;
+                        const current_document = switch (current_rule.css_rule) {
+                            .document => |current_document| current_document,
+                            else => return error.ScriptRuntime,
+                        };
+
+                        var nested_text: std.ArrayList(u8) = .empty;
+                        defer nested_text.deinit(allocator);
+                        for (current_document.css_rules, 0..) |nested_rule, nested_index| {
+                            if (nested_index != 0) try nested_text.append(allocator, '\n');
+                            try nested_text.appendSlice(allocator, cssRuleCssText(nested_rule));
+                        }
+
+                        var rule_text: std.ArrayList(u8) = .empty;
+                        defer rule_text.deinit(allocator);
+                        try rule_text.appendSlice(allocator, "@document ");
+                        try rule_text.appendSlice(allocator, condition_text);
+                        try rule_text.appendSlice(allocator, " { ");
+                        try rule_text.appendSlice(allocator, nested_text.items);
+                        try rule_text.appendSlice(allocator, " }");
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text.items);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .document) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
                     .container => |container| {
                         if (container.parent_rule != null or container.parent_style_sheet == null or container.source_index == null) {
                             return error.ScriptRuntime;
@@ -2673,6 +2815,35 @@ fn evalAssignment(
                         );
                         return;
                     },
+                    .scope => |scope| {
+                        if (scope.parent_rule != null or scope.parent_style_sheet == null or scope.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = scope.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = scope.source_index orelse return error.ScriptRuntime;
+                        const rule_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .scope) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
                     .page => |page| {
                         if (page.parent_rule != null or page.parent_style_sheet == null or page.source_index == null) {
                             return error.ScriptRuntime;
@@ -2691,6 +2862,35 @@ fn evalAssignment(
                         if (parsed_rules.len != 1) return error.ScriptRuntime;
                         if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
                         if (parsed_rules[0].css_rule != .page) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
+                    .keyframes => |keyframes| {
+                        if (keyframes.parent_rule != null or keyframes.parent_style_sheet == null or keyframes.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = keyframes.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = keyframes.source_index orelse return error.ScriptRuntime;
+                        const rule_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .keyframes) return error.ScriptRuntime;
 
                         try styleSheetReplaceParsedRule(
                             allocator,
@@ -2749,6 +2949,35 @@ fn evalAssignment(
                         if (parsed_rules.len != 1) return error.ScriptRuntime;
                         if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
                         if (parsed_rules[0].css_rule != .font_feature_values) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
+                    .starting_style => |starting_style| {
+                        if (starting_style.parent_rule != null or starting_style.parent_style_sheet == null or starting_style.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = starting_style.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = starting_style.source_index orelse return error.ScriptRuntime;
+                        const rule_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .starting_style) return error.ScriptRuntime;
 
                         try styleSheetReplaceParsedRule(
                             allocator,
@@ -2905,6 +3134,125 @@ fn evalAssignment(
                         );
                         return;
                     },
+                    .position_try => |position_try| {
+                        if (position_try.parent_rule != null or position_try.parent_style_sheet == null or position_try.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = position_try.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = position_try.source_index orelse return error.ScriptRuntime;
+                        const rule_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .position_try) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
+                    .layer => |layer| {
+                        if (layer.parent_rule != null or layer.parent_style_sheet == null or layer.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = layer.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = layer.source_index orelse return error.ScriptRuntime;
+                        const rule_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .layer) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
+                    else => return error.ScriptRuntime,
+                }
+            }
+
+            if (std.mem.eql(u8, target.property, "nameText")) {
+                switch (rule) {
+                    .layer => |layer| {
+                        if (layer.parent_rule != null or layer.parent_style_sheet == null or layer.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = layer.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = layer.source_index orelse return error.ScriptRuntime;
+                        const name_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const current_rule = current_rules[source_index];
+                        if (current_rule != .css_rule) return error.ScriptRuntime;
+                        const current_layer = switch (current_rule.css_rule) {
+                            .layer => |current_layer| current_layer,
+                            else => return error.ScriptRuntime,
+                        };
+
+                        var rule_text: std.ArrayList(u8) = .empty;
+                        defer rule_text.deinit(allocator);
+                        try rule_text.appendSlice(allocator, "@layer ");
+                        try rule_text.appendSlice(allocator, name_text);
+
+                        if (current_layer.is_statement) {
+                            try rule_text.append(allocator, ';');
+                        } else {
+                            var nested_text: std.ArrayList(u8) = .empty;
+                            defer nested_text.deinit(allocator);
+                            for (current_layer.css_rules, 0..) |nested_rule, nested_index| {
+                                if (nested_index != 0) try nested_text.append(allocator, '\n');
+                                try nested_text.appendSlice(allocator, cssRuleCssText(nested_rule));
+                            }
+                            try rule_text.appendSlice(allocator, " { ");
+                            try rule_text.appendSlice(allocator, nested_text.items);
+                            try rule_text.appendSlice(allocator, " }");
+                        }
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text.items);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .layer) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
                     else => return error.ScriptRuntime,
                 }
             }
@@ -2951,6 +3299,57 @@ fn evalAssignment(
                         if (parsed_rules.len != 1) return error.ScriptRuntime;
                         if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
                         if (parsed_rules[0].css_rule != .supports) return error.ScriptRuntime;
+
+                        try styleSheetReplaceParsedRule(
+                            allocator,
+                            host,
+                            sheet_id,
+                            current_rules,
+                            parsed_rules[0],
+                            source_index,
+                        );
+                        return;
+                    },
+                    .document => |document| {
+                        if (document.parent_rule != null or document.parent_style_sheet == null or document.source_index == null) {
+                            return error.ScriptRuntime;
+                        }
+
+                        const sheet_id = document.parent_style_sheet orelse return error.ScriptRuntime;
+                        const source_index = document.source_index orelse return error.ScriptRuntime;
+                        const condition_text = try asString(allocator, value);
+
+                        const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+                        defer allocator.free(current_rules);
+                        if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+                        const current_rule = current_rules[source_index];
+                        if (current_rule != .css_rule) return error.ScriptRuntime;
+                        const current_document = switch (current_rule.css_rule) {
+                            .document => |current_document| current_document,
+                            else => return error.ScriptRuntime,
+                        };
+
+                        var nested_text: std.ArrayList(u8) = .empty;
+                        defer nested_text.deinit(allocator);
+                        for (current_document.css_rules, 0..) |nested_rule, nested_index| {
+                            if (nested_index != 0) try nested_text.append(allocator, '\n');
+                            try nested_text.appendSlice(allocator, cssRuleCssText(nested_rule));
+                        }
+
+                        var rule_text: std.ArrayList(u8) = .empty;
+                        defer rule_text.deinit(allocator);
+                        try rule_text.appendSlice(allocator, "@document ");
+                        try rule_text.appendSlice(allocator, condition_text);
+                        try rule_text.appendSlice(allocator, " { ");
+                        try rule_text.appendSlice(allocator, nested_text.items);
+                        try rule_text.appendSlice(allocator, " }");
+
+                        const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text.items);
+                        defer allocator.free(parsed_rules);
+                        if (parsed_rules.len != 1) return error.ScriptRuntime;
+                        if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+                        if (parsed_rules[0].css_rule != .document) return error.ScriptRuntime;
 
                         try styleSheetReplaceParsedRule(
                             allocator,
@@ -3607,6 +4006,75 @@ fn evalAssignment(
                 try host.domStoreMut().setAttribute(element, "tabindex", text);
                 return;
             }
+            if (std.mem.eql(u8, target.property, "colSpan")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!(std.mem.eql(u8, tag_name, "td") or std.mem.eql(u8, tag_name, "th"))) {
+                    return error.ScriptRuntime;
+                }
+                const span = try tableCellSpanFromValue(allocator, value);
+                const text = try std.fmt.allocPrint(allocator, "{d}", .{span});
+                defer allocator.free(text);
+                try host.domStoreMut().setAttribute(element, "colspan", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "rowSpan")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!(std.mem.eql(u8, tag_name, "td") or std.mem.eql(u8, tag_name, "th"))) {
+                    return error.ScriptRuntime;
+                }
+                const span = try tableCellSpanFromValue(allocator, value);
+                const text = try std.fmt.allocPrint(allocator, "{d}", .{span});
+                defer allocator.free(text);
+                try host.domStoreMut().setAttribute(element, "rowspan", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "span")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!(std.mem.eql(u8, tag_name, "col") or std.mem.eql(u8, tag_name, "colgroup"))) {
+                    return error.ScriptRuntime;
+                }
+                const span = try tableCellSpanFromValue(allocator, value);
+                const text = try std.fmt.allocPrint(allocator, "{d}", .{span});
+                defer allocator.free(text);
+                try host.domStoreMut().setAttribute(element, "span", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "width")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!(std.mem.eql(u8, tag_name, "col") or std.mem.eql(u8, tag_name, "colgroup"))) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "width", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "headers")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!(std.mem.eql(u8, tag_name, "td") or std.mem.eql(u8, tag_name, "th"))) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "headers", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "scope")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "th")) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "scope", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "abbr")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "th")) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "abbr", text);
+                return;
+            }
             if (std.mem.eql(u8, target.property, "innerHTML")) {
                 const html = try asString(allocator, value);
                 try host.domStoreMut().setInnerHtml(element, html);
@@ -3755,7 +4223,10 @@ fn evalAssignment(
             }
             if (std.mem.eql(u8, target.property, "text")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
-                if (std.mem.eql(u8, tag_name, "a") or std.ascii.eqlIgnoreCase(tag_name, "script")) {
+                if (std.mem.eql(u8, tag_name, "a") or
+                    std.ascii.eqlIgnoreCase(tag_name, "script") or
+                    std.mem.eql(u8, tag_name, "option"))
+                {
                     const text = try asString(allocator, value);
                     try host.domStoreMut().setTextContent(element, text);
                     return;
@@ -4020,6 +4491,32 @@ fn evalAssignment(
                     return error.ScriptRuntime;
                 }
                 try host.domStoreMut().setOptionSelected(element, isTruthy(value));
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "defaultSelected")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "option")) {
+                    return error.ScriptRuntime;
+                }
+                try host.domStoreMut().setOptionSelected(element, isTruthy(value));
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "label")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "option") and !std.mem.eql(u8, tag_name, "optgroup")) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "label", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "text")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "option")) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setTextContent(element, text);
                 return;
             }
 
@@ -4975,7 +5472,10 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "text")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (std.mem.eql(u8, tag_name, "a") or std.ascii.eqlIgnoreCase(tag_name, "script")) {
+                if (std.mem.eql(u8, tag_name, "a") or
+                    std.ascii.eqlIgnoreCase(tag_name, "script") or
+                    std.mem.eql(u8, tag_name, "option"))
+                {
                     const text = try host.domStore().textContent(allocator, element);
                     break :blk Value{ .string = text };
                 }
@@ -5306,6 +5806,39 @@ fn evalMember(
                 const value = try host.domStore().valueForNode(allocator, element);
                 break :blk Value{ .string = value };
             }
+            if (std.mem.eql(u8, member.property, "label")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "option")) {
+                    if (try host.domStore().getAttribute(element, "label")) |label_text| {
+                        break :blk Value{ .string = label_text };
+                    }
+                    const text = try host.domStore().textContent(allocator, element);
+                    break :blk Value{ .string = text };
+                }
+                if (std.mem.eql(u8, tag_name, "optgroup")) {
+                    const label_text = (try host.domStore().getAttribute(element, "label")) orelse "";
+                    break :blk Value{ .string = label_text };
+                }
+                break :blk error.ScriptRuntime;
+            }
+            if (std.mem.eql(u8, member.property, "defaultSelected")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "option")) break :blk error.ScriptRuntime;
+                const default_selected = try host.domStore().hasAttribute(element, "selected");
+                break :blk Value{ .boolean = default_selected };
+            }
+            if (std.mem.eql(u8, member.property, "text")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "option")) break :blk error.ScriptRuntime;
+                const text = try host.domStore().textContent(allocator, element);
+                break :blk Value{ .string = text };
+            }
+            if (std.mem.eql(u8, member.property, "index")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "option")) break :blk error.ScriptRuntime;
+                const option_index = try optionIndexForNode(allocator, host, element);
+                break :blk Value{ .number = @floatFromInt(option_index) };
+            }
             if (std.mem.eql(u8, member.property, "valueAsNumber")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
                 if (!std.mem.eql(u8, tag_name, "input")) break :blk error.ScriptRuntime;
@@ -5492,6 +6025,27 @@ fn evalMember(
                 }
                 break :blk error.ScriptRuntime;
             }
+            if (std.mem.eql(u8, member.property, "caption")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "table")) {
+                    break :blk tableDirectChildByTag(host, element, "caption");
+                }
+                break :blk error.ScriptRuntime;
+            }
+            if (std.mem.eql(u8, member.property, "tHead")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "table")) {
+                    break :blk tableDirectChildByTag(host, element, "thead");
+                }
+                break :blk error.ScriptRuntime;
+            }
+            if (std.mem.eql(u8, member.property, "tFoot")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "table")) {
+                    break :blk tableDirectChildByTag(host, element, "tfoot");
+                }
+                break :blk error.ScriptRuntime;
+            }
             if (std.mem.eql(u8, member.property, "rows")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
                 if (std.mem.eql(u8, tag_name, "table") or
@@ -5502,6 +6056,18 @@ fn evalMember(
                     break :blk Value{ .html_collection = .{ .root = element, .kind = .table_rows } };
                 }
                 break :blk error.ScriptRuntime;
+            }
+            if (std.mem.eql(u8, member.property, "rowIndex")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "tr")) break :blk error.ScriptRuntime;
+                const row_index = try tableRowIndex(allocator, host, element);
+                break :blk Value{ .number = @floatFromInt(row_index) };
+            }
+            if (std.mem.eql(u8, member.property, "sectionRowIndex")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "tr")) break :blk error.ScriptRuntime;
+                const section_row_index = try tableSectionRowIndex(allocator, host, element);
+                break :blk Value{ .number = @floatFromInt(section_row_index) };
             }
             if (std.mem.eql(u8, member.property, "checked")) {
                 break :blk Value{ .boolean = host.domStore().checkedForNode(element) orelse false };
@@ -5518,6 +6084,66 @@ fn evalMember(
                     break :blk Value{ .html_collection = .{ .root = element, .kind = .row_cells } };
                 }
                 break :blk error.ScriptRuntime;
+            }
+            if (std.mem.eql(u8, member.property, "cellIndex")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!(std.mem.eql(u8, tag_name, "td") or std.mem.eql(u8, tag_name, "th"))) {
+                    break :blk error.ScriptRuntime;
+                }
+                const cell_index = try tableCellIndex(allocator, host, element);
+                break :blk Value{ .number = @floatFromInt(cell_index) };
+            }
+            if (std.mem.eql(u8, member.property, "colSpan")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!(std.mem.eql(u8, tag_name, "td") or std.mem.eql(u8, tag_name, "th"))) {
+                    break :blk error.ScriptRuntime;
+                }
+                const col_span = try tableCellSpanValue(host, element, "colspan");
+                break :blk Value{ .number = @floatFromInt(col_span) };
+            }
+            if (std.mem.eql(u8, member.property, "rowSpan")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!(std.mem.eql(u8, tag_name, "td") or std.mem.eql(u8, tag_name, "th"))) {
+                    break :blk error.ScriptRuntime;
+                }
+                const row_span = try tableCellSpanValue(host, element, "rowspan");
+                break :blk Value{ .number = @floatFromInt(row_span) };
+            }
+            if (std.mem.eql(u8, member.property, "span")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!(std.mem.eql(u8, tag_name, "col") or std.mem.eql(u8, tag_name, "colgroup"))) {
+                    break :blk error.ScriptRuntime;
+                }
+                const span_value = try tableCellSpanValue(host, element, "span");
+                break :blk Value{ .number = @floatFromInt(span_value) };
+            }
+            if (std.mem.eql(u8, member.property, "width")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!(std.mem.eql(u8, tag_name, "col") or std.mem.eql(u8, tag_name, "colgroup"))) {
+                    break :blk error.ScriptRuntime;
+                }
+                const width_text = (try host.domStore().getAttribute(element, "width")) orelse "";
+                break :blk Value{ .string = width_text };
+            }
+            if (std.mem.eql(u8, member.property, "headers")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!(std.mem.eql(u8, tag_name, "td") or std.mem.eql(u8, tag_name, "th"))) {
+                    break :blk error.ScriptRuntime;
+                }
+                const headers_text = (try host.domStore().getAttribute(element, "headers")) orelse "";
+                break :blk Value{ .string = headers_text };
+            }
+            if (std.mem.eql(u8, member.property, "scope")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "th")) break :blk error.ScriptRuntime;
+                const scope_text = (try host.domStore().getAttribute(element, "scope")) orelse "";
+                break :blk Value{ .string = scope_text };
+            }
+            if (std.mem.eql(u8, member.property, "abbr")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "th")) break :blk error.ScriptRuntime;
+                const abbr_text = (try host.domStore().getAttribute(element, "abbr")) orelse "";
+                break :blk Value{ .string = abbr_text };
             }
             if (std.mem.eql(u8, member.property, "childNodes")) {
                 break :blk Value{
@@ -6218,6 +6844,10 @@ fn evalMember(
                     }
                     if (std.mem.eql(u8, member.property, "nameText")) {
                         break :blk Value{ .string = layer.name_text };
+                    }
+                    if (std.mem.eql(u8, member.property, "nameList")) {
+                        if (!layer.is_statement) return error.ScriptRuntime;
+                        break :blk Value{ .string_list = try cssLayerStatementNameList(allocator, layer.name_text) };
                     }
                     if (std.mem.eql(u8, member.property, "cssRules")) {
                         if (layer.is_statement) return error.ScriptRuntime;
@@ -7151,6 +7781,100 @@ fn evalMethodCall(
                 break :blk snapshot;
             }
             break :blk Value{ .null_value = {} };
+        } else if (std.mem.eql(u8, method, "setNamedItem")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const attr_value = try evalExpr(allocator, host, bindings, args[0]);
+            const attribute = switch (attr_value) {
+                .attribute => |attr| attr,
+                else => return error.ScriptRuntime,
+            };
+            if (attribute.owner_element) |owner_element| {
+                if (!sameNodeId(owner_element, object.named_node_map.element)) return error.ScriptRuntime;
+            }
+            const previous = host.domStore().getAttribute(object.named_node_map.element, attribute.name) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            host.domStoreMut().setAttribute(object.named_node_map.element, attribute.name, attribute.value) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            attribute.owner_element = object.named_node_map.element;
+            if (previous) |text| {
+                break :blk try makeAttributeSnapshotValue(allocator, attribute.namespace_uri, attribute.name, text, null);
+            }
+            break :blk Value{ .null_value = {} };
+        } else if (std.mem.eql(u8, method, "setNamedItemNS")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const attr_value = try evalExpr(allocator, host, bindings, args[0]);
+            const attribute = switch (attr_value) {
+                .attribute => |attr| attr,
+                else => return error.ScriptRuntime,
+            };
+            if (attribute.owner_element) |owner_element| {
+                if (!sameNodeId(owner_element, object.named_node_map.element)) return error.ScriptRuntime;
+            }
+            const previous = host.domStore().getAttribute(object.named_node_map.element, attribute.name) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            host.domStoreMut().setAttribute(object.named_node_map.element, attribute.name, attribute.value) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            attribute.owner_element = object.named_node_map.element;
+            if (previous) |text| {
+                break :blk try makeAttributeSnapshotValue(allocator, attribute.namespace_uri, attribute.name, text, null);
+            }
+            break :blk Value{ .null_value = {} };
+        } else if (std.mem.eql(u8, method, "removeNamedItem")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const name_value = try evalExpr(allocator, host, bindings, args[0]);
+            const name = try asString(allocator, name_value);
+            if (try getAttributeNodeSnapshot(allocator, host, object.named_node_map.element, null, name)) |snapshot| {
+                const attribute = switch (snapshot) {
+                    .attribute => |attr| attr,
+                    else => unreachable,
+                };
+                const current = host.domStore().getAttribute(object.named_node_map.element, attribute.name) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ScriptRuntime,
+                };
+                const current_text = current orelse return error.ScriptRuntime;
+                host.domStoreMut().removeAttribute(object.named_node_map.element, attribute.name) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ScriptRuntime,
+                };
+                attribute.owner_element = null;
+                break :blk try makeAttributeSnapshotValue(allocator, attribute.namespace_uri, attribute.name, current_text, null);
+            }
+            return error.ScriptRuntime;
+        } else if (std.mem.eql(u8, method, "removeNamedItemNS")) blk: {
+            if (args.len != 2) return error.ScriptRuntime;
+            const namespace_value = try evalExpr(allocator, host, bindings, args[0]);
+            const namespace_uri = try namespaceUriFromValue(allocator, namespace_value);
+            const local_name_value = try evalExpr(allocator, host, bindings, args[1]);
+            const local_name = try asString(allocator, local_name_value);
+            if (try getAttributeNodeSnapshot(allocator, host, object.named_node_map.element, namespace_uri, local_name)) |snapshot| {
+                const attribute = switch (snapshot) {
+                    .attribute => |attr| attr,
+                    else => unreachable,
+                };
+                const current = host.domStore().getAttribute(object.named_node_map.element, attribute.name) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ScriptRuntime,
+                };
+                const current_text = current orelse return error.ScriptRuntime;
+                host.domStoreMut().removeAttribute(object.named_node_map.element, attribute.name) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ScriptRuntime,
+                };
+                attribute.owner_element = null;
+                break :blk try makeAttributeSnapshotValue(allocator, attribute.namespace_uri, attribute.name, current_text, null);
+            }
+            return error.ScriptRuntime;
+        } else if (std.mem.eql(u8, method, "forEach")) blk: {
+            break :blk try namedNodeMapForEach(allocator, host, bindings, object.named_node_map.element, args);
         } else if (std.mem.eql(u8, method, "toString")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk Value{ .string = "[object NamedNodeMap]" };
@@ -7700,6 +8424,76 @@ fn evalMethodCall(
                 else => return error.ScriptRuntime,
             };
             break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "insertRow")) blk: {
+            const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+            if (std.mem.eql(u8, tag_name, "table")) {
+                break :blk try tableElementInsertRow(allocator, host, bindings, element, args);
+            }
+            if (std.mem.eql(u8, tag_name, "thead") or
+                std.mem.eql(u8, tag_name, "tbody") or
+                std.mem.eql(u8, tag_name, "tfoot"))
+            {
+                break :blk try tableSectionInsertRow(allocator, host, bindings, element, args);
+            }
+            break :blk error.ScriptRuntime;
+        } else if (std.mem.eql(u8, method, "deleteRow")) blk: {
+            const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+            if (std.mem.eql(u8, tag_name, "table")) {
+                break :blk try tableElementDeleteRow(allocator, host, bindings, element, args);
+            }
+            if (std.mem.eql(u8, tag_name, "thead") or
+                std.mem.eql(u8, tag_name, "tbody") or
+                std.mem.eql(u8, tag_name, "tfoot"))
+            {
+                break :blk try tableSectionDeleteRow(allocator, host, bindings, element, args);
+            }
+            break :blk error.ScriptRuntime;
+        } else if (std.mem.eql(u8, method, "createCaption")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try tableElementCreateCaption(allocator, host, element);
+        } else if (std.mem.eql(u8, method, "deleteCaption")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try tableElementDeleteTaggedChild(allocator, host, element, "caption");
+        } else if (std.mem.eql(u8, method, "createTHead")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try tableElementCreateTHead(allocator, host, element);
+        } else if (std.mem.eql(u8, method, "deleteTHead")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try tableElementDeleteTaggedChild(allocator, host, element, "thead");
+        } else if (std.mem.eql(u8, method, "createTFoot")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try tableElementCreateTFoot(allocator, host, element);
+        } else if (std.mem.eql(u8, method, "deleteTFoot")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try tableElementDeleteTaggedChild(allocator, host, element, "tfoot");
+        } else if (std.mem.eql(u8, method, "insertRow")) blk: {
+            const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+            if (std.mem.eql(u8, tag_name, "table")) {
+                break :blk try tableElementInsertRow(allocator, host, bindings, element, args);
+            }
+            if (std.mem.eql(u8, tag_name, "thead") or
+                std.mem.eql(u8, tag_name, "tbody") or
+                std.mem.eql(u8, tag_name, "tfoot"))
+            {
+                break :blk try tableSectionInsertRow(allocator, host, bindings, element, args);
+            }
+            break :blk error.ScriptRuntime;
+        } else if (std.mem.eql(u8, method, "deleteRow")) blk: {
+            const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+            if (std.mem.eql(u8, tag_name, "table")) {
+                break :blk try tableElementDeleteRow(allocator, host, bindings, element, args);
+            }
+            if (std.mem.eql(u8, tag_name, "thead") or
+                std.mem.eql(u8, tag_name, "tbody") or
+                std.mem.eql(u8, tag_name, "tfoot"))
+            {
+                break :blk try tableSectionDeleteRow(allocator, host, bindings, element, args);
+            }
+            break :blk error.ScriptRuntime;
+        } else if (std.mem.eql(u8, method, "insertCell")) blk: {
+            break :blk try tableRowInsertCell(allocator, host, bindings, element, args);
+        } else if (std.mem.eql(u8, method, "deleteCell")) blk: {
+            break :blk try tableRowDeleteCell(allocator, host, bindings, element, args);
         } else if (std.mem.eql(u8, method, "appendChild")) blk: {
             break :blk try elementAppendChild(allocator, host, bindings, element, args);
         } else if (std.mem.eql(u8, method, "insertBefore")) blk: {
@@ -7717,6 +8511,10 @@ fn evalMethodCall(
         } else if (std.mem.eql(u8, method, "after")) blk: {
             break :blk try elementAfter(allocator, host, bindings, element, args);
         } else if (std.mem.eql(u8, method, "remove")) blk: {
+            const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+            if (std.mem.eql(u8, tag_name, "select")) {
+                break :blk try selectElementRemove(allocator, host, bindings, element, args);
+            }
             break :blk try elementRemove(allocator, host, bindings, element, args);
         } else if (std.mem.eql(u8, method, "cloneNode")) blk: {
             if (args.len > 1) return error.ScriptRuntime;
@@ -7807,6 +8605,14 @@ fn evalMethodCall(
             };
             try host.dispatchSelectionChange();
             break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "add")) blk: {
+            const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+            if (!std.mem.eql(u8, tag_name, "select")) break :blk error.ScriptRuntime;
+            break :blk try selectElementAdd(allocator, host, bindings, element, args);
+        } else if (std.mem.eql(u8, method, "remove")) blk: {
+            const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+            if (!std.mem.eql(u8, tag_name, "select")) break :blk error.ScriptRuntime;
+            break :blk try selectElementRemove(allocator, host, bindings, element, args);
         } else if (std.mem.eql(u8, method, "querySelector")) blk: {
             if (args.len != 1) return error.ScriptRuntime;
             const selector_value = try evalExpr(allocator, host, bindings, args[0]);
@@ -8592,9 +9398,155 @@ fn evalMethodCall(
                 },
                 else => return error.ScriptRuntime,
             }
+        } else if (std.mem.eql(u8, method, "insertRule")) blk: {
+            if (args.len != 1 and args.len != 2) return error.ScriptRuntime;
+            switch (rule) {
+                .media => |media| {
+                    const current_media = try cssMediaRuleLiveSnapshot(allocator, host, media) orelse return error.ScriptRuntime;
+                    const rule_text_value = try evalExpr(allocator, host, bindings, args[0]);
+                    const rule_text = try asString(allocator, rule_text_value);
+                    const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+                    defer allocator.free(parsed_rules);
+                    if (parsed_rules.len != 1) return error.ScriptRuntime;
+
+                    const current_rules = current_media.css_rules;
+                    const index = if (args.len == 2) index_value_blk: {
+                        const index_value = try evalExpr(allocator, host, bindings, args[1]);
+                        break :index_value_blk try asNodeListIndex(index_value);
+                    } else 0;
+                    if (index > current_rules.len) return error.ScriptRuntime;
+
+                    var nested_rules = try allocator.alloc(Value, current_rules.len + 1);
+                    defer allocator.free(nested_rules);
+                    if (index > 0) {
+                        std.mem.copyForwards(Value, nested_rules[0..index], current_rules[0..index]);
+                    }
+                    nested_rules[index] = parsed_rules[0];
+                    if (index < current_rules.len) {
+                        std.mem.copyForwards(Value, nested_rules[index + 1 ..], current_rules[index..]);
+                    }
+
+                    try cssMediaRuleReplaceNestedRules(allocator, host, current_media, nested_rules);
+                    break :blk Value{ .number = @floatFromInt(index) };
+                },
+                .supports => |supports| {
+                    const current_supports = try cssSupportsRuleLiveSnapshot(allocator, host, supports) orelse return error.ScriptRuntime;
+                    const rule_text_value = try evalExpr(allocator, host, bindings, args[0]);
+                    const rule_text = try asString(allocator, rule_text_value);
+                    const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+                    defer allocator.free(parsed_rules);
+                    if (parsed_rules.len != 1) return error.ScriptRuntime;
+
+                    const current_rules = current_supports.css_rules;
+                    const index = if (args.len == 2) index_value_blk: {
+                        const index_value = try evalExpr(allocator, host, bindings, args[1]);
+                        break :index_value_blk try asNodeListIndex(index_value);
+                    } else 0;
+                    if (index > current_rules.len) return error.ScriptRuntime;
+
+                    var nested_rules = try allocator.alloc(Value, current_rules.len + 1);
+                    defer allocator.free(nested_rules);
+                    if (index > 0) {
+                        std.mem.copyForwards(Value, nested_rules[0..index], current_rules[0..index]);
+                    }
+                    nested_rules[index] = parsed_rules[0];
+                    if (index < current_rules.len) {
+                        std.mem.copyForwards(Value, nested_rules[index + 1 ..], current_rules[index..]);
+                    }
+
+                    try cssSupportsRuleReplaceNestedRules(allocator, host, current_supports, nested_rules);
+                    break :blk Value{ .number = @floatFromInt(index) };
+                },
+                .container => |container| {
+                    const current_container = try cssContainerRuleLiveSnapshot(allocator, host, container) orelse return error.ScriptRuntime;
+                    const rule_text_value = try evalExpr(allocator, host, bindings, args[0]);
+                    const rule_text = try asString(allocator, rule_text_value);
+                    const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text);
+                    defer allocator.free(parsed_rules);
+                    if (parsed_rules.len != 1) return error.ScriptRuntime;
+
+                    const current_rules = current_container.css_rules;
+                    const index = if (args.len == 2) index_value_blk: {
+                        const index_value = try evalExpr(allocator, host, bindings, args[1]);
+                        break :index_value_blk try asNodeListIndex(index_value);
+                    } else 0;
+                    if (index > current_rules.len) return error.ScriptRuntime;
+
+                    var nested_rules = try allocator.alloc(Value, current_rules.len + 1);
+                    defer allocator.free(nested_rules);
+                    if (index > 0) {
+                        std.mem.copyForwards(Value, nested_rules[0..index], current_rules[0..index]);
+                    }
+                    nested_rules[index] = parsed_rules[0];
+                    if (index < current_rules.len) {
+                        std.mem.copyForwards(Value, nested_rules[index + 1 ..], current_rules[index..]);
+                    }
+
+                    try cssContainerRuleReplaceNestedRules(allocator, host, current_container, nested_rules);
+                    break :blk Value{ .number = @floatFromInt(index) };
+                },
+                else => return error.ScriptRuntime,
+            }
         } else if (std.mem.eql(u8, method, "deleteRule")) blk: {
             if (args.len != 1) return error.ScriptRuntime;
             switch (rule) {
+                .media => |media| {
+                    const current_media = try cssMediaRuleLiveSnapshot(allocator, host, media) orelse return error.ScriptRuntime;
+                    const index_value = try evalExpr(allocator, host, bindings, args[0]);
+                    const index = try asNodeListIndex(index_value);
+                    const current_rules = current_media.css_rules;
+                    if (index >= current_rules.len) return error.ScriptRuntime;
+
+                    var nested_rules = try allocator.alloc(Value, current_rules.len - 1);
+                    defer allocator.free(nested_rules);
+                    var write_index: usize = 0;
+                    for (current_rules, 0..) |nested_rule, current_index| {
+                        if (current_index == index) continue;
+                        nested_rules[write_index] = nested_rule;
+                        write_index += 1;
+                    }
+
+                    try cssMediaRuleReplaceNestedRules(allocator, host, current_media, nested_rules);
+                    break :blk Value{ .undefined_value = {} };
+                },
+                .supports => |supports| {
+                    const current_supports = try cssSupportsRuleLiveSnapshot(allocator, host, supports) orelse return error.ScriptRuntime;
+                    const index_value = try evalExpr(allocator, host, bindings, args[0]);
+                    const index = try asNodeListIndex(index_value);
+                    const current_rules = current_supports.css_rules;
+                    if (index >= current_rules.len) return error.ScriptRuntime;
+
+                    var nested_rules = try allocator.alloc(Value, current_rules.len - 1);
+                    defer allocator.free(nested_rules);
+                    var write_index: usize = 0;
+                    for (current_rules, 0..) |nested_rule, current_index| {
+                        if (current_index == index) continue;
+                        nested_rules[write_index] = nested_rule;
+                        write_index += 1;
+                    }
+
+                    try cssSupportsRuleReplaceNestedRules(allocator, host, current_supports, nested_rules);
+                    break :blk Value{ .undefined_value = {} };
+                },
+                .container => |container| {
+                    const current_container = try cssContainerRuleLiveSnapshot(allocator, host, container) orelse return error.ScriptRuntime;
+                    const index_value = try evalExpr(allocator, host, bindings, args[0]);
+                    const index = try asNodeListIndex(index_value);
+                    const current_rules = current_container.css_rules;
+                    if (index >= current_rules.len) return error.ScriptRuntime;
+
+                    var nested_rules = try allocator.alloc(Value, current_rules.len - 1);
+                    defer allocator.free(nested_rules);
+                    var write_index: usize = 0;
+                    for (current_rules, 0..) |nested_rule, current_index| {
+                        if (current_index == index) continue;
+                        nested_rules[write_index] = nested_rule;
+                        write_index += 1;
+                    }
+
+                    try cssContainerRuleReplaceNestedRules(allocator, host, current_container, nested_rules);
+                    break :blk Value{ .undefined_value = {} };
+                },
                 .keyframes => |keyframes| {
                     const current_keyframes = try cssKeyframesRuleLiveSnapshot(allocator, host, keyframes) orelse return error.ScriptRuntime;
                     const key_text_value = try evalExpr(allocator, host, bindings, args[0]);
@@ -8925,6 +9877,55 @@ fn evalMethodCall(
         } else if (std.mem.eql(u8, method, "cloneRange")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk Value{ .range = range };
+        } else if (std.mem.eql(u8, method, "setStart")) blk: {
+            if (args.len != 2) return error.ScriptRuntime;
+            const node_value = try evalExpr(allocator, host, bindings, args[0]);
+            const node_id = try rangeBoundaryNodeId(host, node_value);
+            const offset_value = try evalExpr(allocator, host, bindings, args[1]);
+            const offset = try selectionIndexFromValue(allocator, offset_value);
+            const next_range = try rangeSnapshotWithStart(allocator, host, range, node_id, offset);
+            break :blk Value{ .range = next_range };
+        } else if (std.mem.eql(u8, method, "setEnd")) blk: {
+            if (args.len != 2) return error.ScriptRuntime;
+            const node_value = try evalExpr(allocator, host, bindings, args[0]);
+            const node_id = try rangeBoundaryNodeId(host, node_value);
+            const offset_value = try evalExpr(allocator, host, bindings, args[1]);
+            const offset = try selectionIndexFromValue(allocator, offset_value);
+            const next_range = try rangeSnapshotWithEnd(allocator, host, range, node_id, offset);
+            break :blk Value{ .range = next_range };
+        } else if (std.mem.eql(u8, method, "collapse")) blk: {
+            if (args.len > 1) return error.ScriptRuntime;
+            const to_start = if (args.len == 1) blk_to_start: {
+                const to_start_value = try evalExpr(allocator, host, bindings, args[0]);
+                break :blk_to_start isTruthy(to_start_value);
+            } else false;
+            const next_range = try rangeSnapshotCollapsed(allocator, host, range, to_start);
+            break :blk Value{ .range = next_range };
+        } else if (std.mem.eql(u8, method, "insertNode")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const node_value = try evalNodeValue(allocator, host, bindings, args[0]);
+            try insertRangeNodeAtStartBoundary(host, range, node_value);
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "surroundContents")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const wrapper_value = try evalNodeValue(allocator, host, bindings, args[0]);
+            try surroundRangeContentsAtStartBoundary(allocator, host, range, wrapper_value);
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "selectNode") or std.mem.eql(u8, method, "selectNodeContents")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const node_value = try evalExpr(allocator, host, bindings, args[0]);
+            const selected_range = try rangeSnapshotFromNodeValue(allocator, host, node_value);
+            break :blk Value{ .range = selected_range };
+        } else if (std.mem.eql(u8, method, "createContextualFragment")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const context_parent = range.start_container orelse return error.ScriptRuntime;
+            const html_value = try evalExpr(allocator, host, bindings, args[0]);
+            const html = try asString(allocator, html_value);
+            const fragment = host.domStoreMut().createContextualFragment(context_parent, html) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            break :blk Value{ .template_content = fragment };
         } else if (std.mem.eql(u8, method, "cloneContents")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             const fragment = host.domStoreMut().createElementDetached("template") catch |err| switch (err) {
@@ -10291,6 +11292,24 @@ fn selectOptionsItems(
     };
 }
 
+fn optionIndexForNode(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    option_id: dom.NodeId,
+) errors.Result(isize) {
+    const select_id = nearestAncestorElementByTagName(host, option_id, "select") orelse return 0;
+    const items = try selectOptionsItems(allocator, host, select_id);
+    defer allocator.free(items);
+
+    for (items, 0..) |item, index| {
+        if (sameNodeId(item, option_id)) {
+            return @as(isize, @intCast(index));
+        }
+    }
+
+    return 0;
+}
+
 fn datalistOptionsItems(
     allocator: std.mem.Allocator,
     host: anytype,
@@ -10346,6 +11365,603 @@ fn htmlCollectionSelectOptionsRemove(
     };
 
     return Value{ .undefined_value = {} };
+}
+
+fn selectElementAdd(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    select_id: dom.NodeId,
+    args: []*Expr,
+) errors.Result(Value) {
+    if (args.len < 1 or args.len > 2) return error.ScriptRuntime;
+
+    const option = try evalElementHandle(allocator, host, bindings, args[0]);
+    const tag_name = host.domStore().tagNameForNode(option) orelse return error.ScriptRuntime;
+    if (!std.mem.eql(u8, tag_name, "option") and !std.mem.eql(u8, tag_name, "optgroup")) {
+        return error.ScriptRuntime;
+    }
+
+    const reference: ?dom.NodeId = if (args.len == 2) reference_blk: {
+        const reference_value = try evalExpr(allocator, host, bindings, args[1]);
+        break :reference_blk switch (reference_value) {
+            .null_value, .undefined_value => null,
+            .element => |value| value,
+            .node => |value| value,
+            .template_content => |value| value,
+            .number => |_| blk: {
+                const index = optionalNodeListIndex(reference_value) orelse return error.ScriptRuntime;
+                const items = try selectOptionsItems(allocator, host, select_id);
+                defer allocator.free(items);
+                if (index >= items.len) break :blk null;
+                break :blk items[index];
+            },
+            else => return error.ScriptRuntime,
+        };
+    } else null;
+
+    _ = host.domStoreMut().insertBefore(select_id, option, reference) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+
+    return Value{ .undefined_value = {} };
+}
+
+fn selectElementRemove(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    select_id: dom.NodeId,
+    args: []*Expr,
+) errors.Result(Value) {
+    if (args.len > 1) return error.ScriptRuntime;
+
+    const index: usize = if (args.len == 0) 0 else index_blk: {
+        const index_value = try evalExpr(allocator, host, bindings, args[0]);
+        break :index_blk optionalNodeListIndex(index_value) orelse return Value{ .undefined_value = {} };
+    };
+
+    const items = try selectOptionsItems(allocator, host, select_id);
+    defer allocator.free(items);
+    if (index >= items.len) {
+        return Value{ .undefined_value = {} };
+    }
+
+    host.domStoreMut().removeNode(items[index]) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+
+    return Value{ .undefined_value = {} };
+}
+
+fn tableElementInsertRow(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    table_id: dom.NodeId,
+    args: []*Expr,
+) errors.Result(Value) {
+    if (args.len > 1) return error.ScriptRuntime;
+    const tag_name = host.domStore().tagNameForNode(table_id) orelse return error.ScriptRuntime;
+    if (!std.mem.eql(u8, tag_name, "table")) return error.ScriptRuntime;
+
+    const index: isize = if (args.len == 0) -1 else index_blk: {
+        const index_value = try evalExpr(allocator, host, bindings, args[0]);
+        break :index_blk optionalSignedNodeListIndex(index_value) orelse return error.ScriptRuntime;
+    };
+
+    const rows = try tableRowsItems(allocator, host, table_id);
+    defer allocator.free(rows);
+
+    const insertion_index: usize = if (index == -1) rows.len else insertion_index_blk: {
+        if (index < 0) return error.ScriptRuntime;
+        const insertion_index = @as(usize, @intCast(index));
+        if (insertion_index > rows.len) return error.ScriptRuntime;
+        break :insertion_index_blk insertion_index;
+    };
+
+    const row = host.domStoreMut().createElementDetached("tr") catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+
+    if (insertion_index == rows.len) {
+        _ = host.domStoreMut().appendChild(table_id, row) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.ScriptRuntime,
+        };
+    } else {
+        const reference = rows[insertion_index];
+        const reference_parent = host.domStore().nodeAt(reference).?.parent orelse return error.ScriptRuntime;
+        _ = host.domStoreMut().insertBefore(reference_parent, row, reference) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.ScriptRuntime,
+        };
+    }
+
+    return Value{ .element = row };
+}
+
+fn tableElementDeleteRow(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    table_id: dom.NodeId,
+    args: []*Expr,
+) errors.Result(Value) {
+    if (args.len > 1) return error.ScriptRuntime;
+    const tag_name = host.domStore().tagNameForNode(table_id) orelse return error.ScriptRuntime;
+    if (!std.mem.eql(u8, tag_name, "table")) return error.ScriptRuntime;
+
+    const index: isize = if (args.len == 0) -1 else index_blk: {
+        const index_value = try evalExpr(allocator, host, bindings, args[0]);
+        break :index_blk optionalSignedNodeListIndex(index_value) orelse return error.ScriptRuntime;
+    };
+
+    const rows = try tableRowsItems(allocator, host, table_id);
+    defer allocator.free(rows);
+    if (rows.len == 0) return error.ScriptRuntime;
+
+    const removal_index: usize = if (index == -1) rows.len - 1 else removal_index_blk: {
+        if (index < 0) return error.ScriptRuntime;
+        const removal_index = @as(usize, @intCast(index));
+        if (removal_index >= rows.len) return error.ScriptRuntime;
+        break :removal_index_blk removal_index;
+    };
+
+    host.domStoreMut().removeNode(rows[removal_index]) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+
+    return Value{ .undefined_value = {} };
+}
+
+fn tableSectionInsertRow(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    section_id: dom.NodeId,
+    args: []*Expr,
+) errors.Result(Value) {
+    if (args.len > 1) return error.ScriptRuntime;
+    const tag_name = host.domStore().tagNameForNode(section_id) orelse return error.ScriptRuntime;
+    if (!(std.mem.eql(u8, tag_name, "thead") or std.mem.eql(u8, tag_name, "tbody") or std.mem.eql(u8, tag_name, "tfoot"))) {
+        return error.ScriptRuntime;
+    }
+
+    const index: isize = if (args.len == 0) -1 else index_blk: {
+        const index_value = try evalExpr(allocator, host, bindings, args[0]);
+        break :index_blk optionalSignedNodeListIndex(index_value) orelse return error.ScriptRuntime;
+    };
+
+    const rows = try tableRowsItems(allocator, host, section_id);
+    defer allocator.free(rows);
+
+    const insertion_index: usize = if (index == -1) rows.len else insertion_index_blk: {
+        if (index < 0) return error.ScriptRuntime;
+        const insertion_index = @as(usize, @intCast(index));
+        if (insertion_index > rows.len) return error.ScriptRuntime;
+        break :insertion_index_blk insertion_index;
+    };
+
+    const row = host.domStoreMut().createElementDetached("tr") catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+
+    if (insertion_index == rows.len) {
+        _ = host.domStoreMut().appendChild(section_id, row) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.ScriptRuntime,
+        };
+    } else {
+        _ = host.domStoreMut().insertBefore(section_id, row, rows[insertion_index]) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.ScriptRuntime,
+        };
+    }
+
+    return Value{ .element = row };
+}
+
+fn tableSectionDeleteRow(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    section_id: dom.NodeId,
+    args: []*Expr,
+) errors.Result(Value) {
+    if (args.len > 1) return error.ScriptRuntime;
+    const tag_name = host.domStore().tagNameForNode(section_id) orelse return error.ScriptRuntime;
+    if (!(std.mem.eql(u8, tag_name, "thead") or std.mem.eql(u8, tag_name, "tbody") or std.mem.eql(u8, tag_name, "tfoot"))) {
+        return error.ScriptRuntime;
+    }
+
+    const index: isize = if (args.len == 0) -1 else index_blk: {
+        const index_value = try evalExpr(allocator, host, bindings, args[0]);
+        break :index_blk optionalSignedNodeListIndex(index_value) orelse return error.ScriptRuntime;
+    };
+
+    const rows = try tableRowsItems(allocator, host, section_id);
+    defer allocator.free(rows);
+    if (rows.len == 0) return error.ScriptRuntime;
+
+    const removal_index: usize = if (index == -1) rows.len - 1 else removal_index_blk: {
+        if (index < 0) return error.ScriptRuntime;
+        const removal_index = @as(usize, @intCast(index));
+        if (removal_index >= rows.len) return error.ScriptRuntime;
+        break :removal_index_blk removal_index;
+    };
+
+    host.domStoreMut().removeNode(rows[removal_index]) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+
+    return Value{ .undefined_value = {} };
+}
+
+fn tableDirectChildByTag(host: anytype, table_id: dom.NodeId, tag: []const u8) Value {
+    for (host.domStore().childIds(table_id)) |child_id| {
+        const child_tag = host.domStore().tagNameForNode(child_id) orelse continue;
+        if (std.mem.eql(u8, child_tag, tag)) {
+            return Value{ .element = child_id };
+        }
+    }
+    return Value{ .null_value = {} };
+}
+
+fn tableDirectChildTagged(
+    host: anytype,
+    table_id: dom.NodeId,
+    tag: []const u8,
+) ?dom.NodeId {
+    for (host.domStore().childIds(table_id)) |child_id| {
+        const child_tag = host.domStore().tagNameForNode(child_id) orelse continue;
+        if (std.mem.eql(u8, child_tag, tag)) {
+            return child_id;
+        }
+    }
+    return null;
+}
+
+fn tableElementCreateCaption(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    table_id: dom.NodeId,
+) errors.Result(Value) {
+    _ = allocator;
+    const tag_name = host.domStore().tagNameForNode(table_id) orelse return error.ScriptRuntime;
+    if (!std.mem.eql(u8, tag_name, "table")) return error.ScriptRuntime;
+
+    if (tableDirectChildTagged(host, table_id, "caption")) |caption| {
+        return Value{ .element = caption };
+    }
+
+    const caption = host.domStoreMut().createElementDetached("caption") catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+    const children = host.domStore().childIds(table_id);
+    const first_child = if (children.len > 0) children[0] else null;
+    if (first_child) |reference| {
+        _ = host.domStoreMut().insertBefore(table_id, caption, reference) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.ScriptRuntime,
+        };
+    } else {
+        _ = host.domStoreMut().appendChild(table_id, caption) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.ScriptRuntime,
+        };
+    }
+    return Value{ .element = caption };
+}
+
+fn tableElementDeleteTaggedChild(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    table_id: dom.NodeId,
+    tag: []const u8,
+) errors.Result(Value) {
+    _ = allocator;
+    const tag_name = host.domStore().tagNameForNode(table_id) orelse return error.ScriptRuntime;
+    if (!std.mem.eql(u8, tag_name, "table")) return error.ScriptRuntime;
+    if (tableDirectChildTagged(host, table_id, tag)) |child| {
+        host.domStoreMut().removeNode(child) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.ScriptRuntime,
+        };
+    }
+    return Value{ .undefined_value = {} };
+}
+
+fn tableElementCreateTHead(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    table_id: dom.NodeId,
+) errors.Result(Value) {
+    _ = allocator;
+    const tag_name = host.domStore().tagNameForNode(table_id) orelse return error.ScriptRuntime;
+    if (!std.mem.eql(u8, tag_name, "table")) return error.ScriptRuntime;
+
+    if (tableDirectChildTagged(host, table_id, "thead")) |thead| {
+        return Value{ .element = thead };
+    }
+
+    const thead = host.domStoreMut().createElementDetached("thead") catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+
+    var reference = tableDirectChildTagged(host, table_id, "tbody");
+    if (reference == null) {
+        reference = tableDirectChildTagged(host, table_id, "tfoot");
+    }
+    if (reference == null) {
+        const children = host.domStore().childIds(table_id);
+        if (children.len > 0) {
+            reference = children[0];
+        }
+    }
+    if (reference) |ref| {
+        _ = host.domStoreMut().insertBefore(table_id, thead, ref) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.ScriptRuntime,
+        };
+    } else {
+        _ = host.domStoreMut().appendChild(table_id, thead) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.ScriptRuntime,
+        };
+    }
+    return Value{ .element = thead };
+}
+
+fn tableElementCreateTFoot(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    table_id: dom.NodeId,
+) errors.Result(Value) {
+    _ = allocator;
+    const tag_name = host.domStore().tagNameForNode(table_id) orelse return error.ScriptRuntime;
+    if (!std.mem.eql(u8, tag_name, "table")) return error.ScriptRuntime;
+
+    if (tableDirectChildTagged(host, table_id, "tfoot")) |tfoot| {
+        return Value{ .element = tfoot };
+    }
+
+    const tfoot = host.domStoreMut().createElementDetached("tfoot") catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+
+    const reference = tableDirectChildTagged(host, table_id, "tbody");
+    if (reference) |ref| {
+        _ = host.domStoreMut().insertBefore(table_id, tfoot, ref) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.ScriptRuntime,
+        };
+    } else {
+        _ = host.domStoreMut().appendChild(table_id, tfoot) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.ScriptRuntime,
+        };
+    }
+    return Value{ .element = tfoot };
+}
+
+fn tableRowInsertCell(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    row_id: dom.NodeId,
+    args: []*Expr,
+) errors.Result(Value) {
+    if (args.len > 1) return error.ScriptRuntime;
+    const tag_name = host.domStore().tagNameForNode(row_id) orelse return error.ScriptRuntime;
+    if (!std.mem.eql(u8, tag_name, "tr")) return error.ScriptRuntime;
+
+    const index: isize = if (args.len == 0) -1 else index_blk: {
+        const index_value = try evalExpr(allocator, host, bindings, args[0]);
+        break :index_blk optionalSignedNodeListIndex(index_value) orelse return error.ScriptRuntime;
+    };
+
+    const cells = try rowCellsItems(allocator, host, row_id);
+    defer allocator.free(cells);
+
+    const insertion_index: usize = if (index == -1) cells.len else insertion_index_blk: {
+        if (index < 0) return error.ScriptRuntime;
+        const insertion_index = @as(usize, @intCast(index));
+        if (insertion_index > cells.len) return error.ScriptRuntime;
+        break :insertion_index_blk insertion_index;
+    };
+
+    const cell = host.domStoreMut().createElementDetached("td") catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+
+    if (insertion_index == cells.len) {
+        _ = host.domStoreMut().appendChild(row_id, cell) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.ScriptRuntime,
+        };
+    } else {
+        _ = host.domStoreMut().insertBefore(row_id, cell, cells[insertion_index]) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.ScriptRuntime,
+        };
+    }
+
+    return Value{ .element = cell };
+}
+
+fn tableRowDeleteCell(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    row_id: dom.NodeId,
+    args: []*Expr,
+) errors.Result(Value) {
+    if (args.len > 1) return error.ScriptRuntime;
+    const tag_name = host.domStore().tagNameForNode(row_id) orelse return error.ScriptRuntime;
+    if (!std.mem.eql(u8, tag_name, "tr")) return error.ScriptRuntime;
+
+    const index: isize = if (args.len == 0) -1 else index_blk: {
+        const index_value = try evalExpr(allocator, host, bindings, args[0]);
+        break :index_blk optionalSignedNodeListIndex(index_value) orelse return error.ScriptRuntime;
+    };
+
+    const cells = try rowCellsItems(allocator, host, row_id);
+    defer allocator.free(cells);
+    if (cells.len == 0) return error.ScriptRuntime;
+
+    const removal_index: usize = if (index == -1) cells.len - 1 else removal_index_blk: {
+        if (index < 0) return error.ScriptRuntime;
+        const removal_index = @as(usize, @intCast(index));
+        if (removal_index >= cells.len) return error.ScriptRuntime;
+        break :removal_index_blk removal_index;
+    };
+
+    host.domStoreMut().removeNode(cells[removal_index]) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+
+    return Value{ .undefined_value = {} };
+}
+
+fn tableAncestorByTag(
+    host: anytype,
+    node_id: dom.NodeId,
+    tag_name: []const u8,
+) ?dom.NodeId {
+    var current_id = node_id;
+    while (true) {
+        const current = host.domStore().nodeAt(current_id) orelse return null;
+        const parent_id = current.parent orelse return null;
+        if (host.domStore().tagNameForNode(parent_id)) |parent_tag| {
+            if (std.mem.eql(u8, parent_tag, tag_name)) {
+                return parent_id;
+            }
+        }
+        current_id = parent_id;
+    }
+}
+
+fn tableAncestorSection(
+    host: anytype,
+    node_id: dom.NodeId,
+) ?dom.NodeId {
+    var current_id = node_id;
+    while (true) {
+        const current = host.domStore().nodeAt(current_id) orelse return null;
+        const parent_id = current.parent orelse return null;
+        if (host.domStore().tagNameForNode(parent_id)) |parent_tag| {
+            if (std.mem.eql(u8, parent_tag, "thead") or
+                std.mem.eql(u8, parent_tag, "tbody") or
+                std.mem.eql(u8, parent_tag, "tfoot"))
+            {
+                return parent_id;
+            }
+            if (std.mem.eql(u8, parent_tag, "table")) {
+                return null;
+            }
+        }
+        current_id = parent_id;
+    }
+}
+
+fn tableRowIndex(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    row_id: dom.NodeId,
+) errors.Result(isize) {
+    const table_id = tableAncestorByTag(host, row_id, "table") orelse return -1;
+    const rows = try tableRowsItems(allocator, host, table_id);
+    defer allocator.free(rows);
+    for (rows, 0..) |candidate, index| {
+        if (sameNodeId(candidate, row_id)) {
+            return @as(isize, @intCast(index));
+        }
+    }
+    return -1;
+}
+
+fn tableSectionRowIndex(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    row_id: dom.NodeId,
+) errors.Result(isize) {
+    const section_id = tableAncestorSection(host, row_id) orelse return -1;
+    const rows = try tableRowsItems(allocator, host, section_id);
+    defer allocator.free(rows);
+    for (rows, 0..) |candidate, index| {
+        if (sameNodeId(candidate, row_id)) {
+            return @as(isize, @intCast(index));
+        }
+    }
+    return -1;
+}
+
+fn tableCellIndex(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    cell_id: dom.NodeId,
+) errors.Result(isize) {
+    const cell = host.domStore().nodeAt(cell_id) orelse return -1;
+    const row_id = cell.parent orelse return -1;
+    const row_tag_name = host.domStore().tagNameForNode(row_id) orelse return -1;
+    if (!std.mem.eql(u8, row_tag_name, "tr")) return -1;
+
+    const cells = try rowCellsItems(allocator, host, row_id);
+    defer allocator.free(cells);
+    for (cells, 0..) |candidate, index| {
+        if (sameNodeId(candidate, cell_id)) {
+            return @as(isize, @intCast(index));
+        }
+    }
+    return -1;
+}
+
+fn tableCellSpanValue(
+    host: anytype,
+    cell_id: dom.NodeId,
+    attribute_name: []const u8,
+) errors.Result(i64) {
+    const attr = (try host.domStore().getAttribute(cell_id, attribute_name)) orelse return 1;
+    const trimmed = std.mem.trim(u8, attr, " \t\r\n\x0c");
+    if (trimmed.len == 0) return 1;
+    const parsed = std.fmt.parseInt(i64, trimmed, 10) catch return 1;
+    return if (parsed < 1) 1 else parsed;
+}
+
+fn tableCellSpanFromValue(
+    allocator: std.mem.Allocator,
+    value: Value,
+) errors.Result(i64) {
+    return switch (value) {
+        .number => |number| blk: {
+            if (!std.math.isFinite(number)) return error.ScriptRuntime;
+            if (std.math.round(number) != number) return error.ScriptRuntime;
+            const min = @as(f64, @floatFromInt(std.math.minInt(i64)));
+            const max = @as(f64, @floatFromInt(std.math.maxInt(i64)));
+            if (number < min or number > max) return error.ScriptRuntime;
+            const span = @as(i64, @intFromFloat(number));
+            break :blk if (span < 1) 1 else span;
+        },
+        else => blk: {
+            const text = try asString(allocator, value);
+            const trimmed = std.mem.trim(u8, text, " \t\r\n");
+            if (trimmed.len == 0) return error.ScriptRuntime;
+            const parsed = std.fmt.parseInt(i64, trimmed, 10) catch return error.ScriptRuntime;
+            break :blk if (parsed < 1) 1 else parsed;
+        },
+    };
 }
 
 fn documentSelectItems(
@@ -10767,6 +12383,216 @@ fn cssKeyframesRuleReplaceNestedRules(
     );
 }
 
+fn cssMediaRuleLiveSnapshot(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    media: CssMediaRuleState,
+) errors.Result(?CssMediaRuleState) {
+    if (media.parent_rule != null or media.parent_style_sheet == null or media.source_index == null) {
+        return null;
+    }
+
+    const sheet_id = media.parent_style_sheet orelse return null;
+    const source_index = media.source_index orelse return null;
+    const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+    defer allocator.free(current_rules);
+    if (source_index >= current_rules.len) return null;
+
+    const current_rule = current_rules[source_index];
+    if (current_rule != .css_rule) return null;
+    return switch (current_rule.css_rule) {
+        .media => |current_media| current_media,
+        else => null,
+    };
+}
+
+fn cssMediaRuleReplaceNestedRules(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    current_media: CssMediaRuleState,
+    nested_rules: []const Value,
+) errors.Result(void) {
+    const sheet_id = current_media.parent_style_sheet orelse return error.ScriptRuntime;
+    const source_index = current_media.source_index orelse return error.ScriptRuntime;
+    const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+    defer allocator.free(current_rules);
+    if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+    const current_rule = current_rules[source_index];
+    if (current_rule != .css_rule) return error.ScriptRuntime;
+    if (current_rule.css_rule != .media) return error.ScriptRuntime;
+
+    var nested_text: std.ArrayList(u8) = .empty;
+    defer nested_text.deinit(allocator);
+    for (nested_rules, 0..) |nested_rule, index| {
+        if (index != 0) try nested_text.append(allocator, '\n');
+        try nested_text.appendSlice(allocator, cssRuleCssText(nested_rule));
+    }
+
+    var rule_text: std.ArrayList(u8) = .empty;
+    defer rule_text.deinit(allocator);
+    try rule_text.appendSlice(allocator, "@media ");
+    try rule_text.appendSlice(allocator, current_media.condition_text);
+    try rule_text.appendSlice(allocator, " { ");
+    try rule_text.appendSlice(allocator, nested_text.items);
+    try rule_text.appendSlice(allocator, " }");
+
+    const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text.items);
+    defer allocator.free(parsed_rules);
+    if (parsed_rules.len != 1) return error.ScriptRuntime;
+    if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+    if (parsed_rules[0].css_rule != .media) return error.ScriptRuntime;
+
+    try styleSheetReplaceParsedRule(
+        allocator,
+        host,
+        sheet_id,
+        current_rules,
+        parsed_rules[0],
+        source_index,
+    );
+}
+
+fn cssSupportsRuleLiveSnapshot(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    supports: CssSupportsRuleState,
+) errors.Result(?CssSupportsRuleState) {
+    if (supports.parent_rule != null or supports.parent_style_sheet == null or supports.source_index == null) {
+        return null;
+    }
+
+    const sheet_id = supports.parent_style_sheet orelse return null;
+    const source_index = supports.source_index orelse return null;
+    const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+    defer allocator.free(current_rules);
+    if (source_index >= current_rules.len) return null;
+
+    const current_rule = current_rules[source_index];
+    if (current_rule != .css_rule) return null;
+    return switch (current_rule.css_rule) {
+        .supports => |current_supports| current_supports,
+        else => null,
+    };
+}
+
+fn cssSupportsRuleReplaceNestedRules(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    current_supports: CssSupportsRuleState,
+    nested_rules: []const Value,
+) errors.Result(void) {
+    const sheet_id = current_supports.parent_style_sheet orelse return error.ScriptRuntime;
+    const source_index = current_supports.source_index orelse return error.ScriptRuntime;
+    const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+    defer allocator.free(current_rules);
+    if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+    const current_rule = current_rules[source_index];
+    if (current_rule != .css_rule) return error.ScriptRuntime;
+    if (current_rule.css_rule != .supports) return error.ScriptRuntime;
+
+    var nested_text: std.ArrayList(u8) = .empty;
+    defer nested_text.deinit(allocator);
+    for (nested_rules, 0..) |nested_rule, index| {
+        if (index != 0) try nested_text.append(allocator, '\n');
+        try nested_text.appendSlice(allocator, cssRuleCssText(nested_rule));
+    }
+
+    var rule_text: std.ArrayList(u8) = .empty;
+    defer rule_text.deinit(allocator);
+    try rule_text.appendSlice(allocator, "@supports ");
+    try rule_text.appendSlice(allocator, current_supports.condition_text);
+    try rule_text.appendSlice(allocator, " { ");
+    try rule_text.appendSlice(allocator, nested_text.items);
+    try rule_text.appendSlice(allocator, " }");
+
+    const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text.items);
+    defer allocator.free(parsed_rules);
+    if (parsed_rules.len != 1) return error.ScriptRuntime;
+    if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+    if (parsed_rules[0].css_rule != .supports) return error.ScriptRuntime;
+
+    try styleSheetReplaceParsedRule(
+        allocator,
+        host,
+        sheet_id,
+        current_rules,
+        parsed_rules[0],
+        source_index,
+    );
+}
+
+fn cssContainerRuleLiveSnapshot(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    container: CssContainerRuleState,
+) errors.Result(?CssContainerRuleState) {
+    if (container.parent_rule != null or container.parent_style_sheet == null or container.source_index == null) {
+        return null;
+    }
+
+    const sheet_id = container.parent_style_sheet orelse return null;
+    const source_index = container.source_index orelse return null;
+    const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+    defer allocator.free(current_rules);
+    if (source_index >= current_rules.len) return null;
+
+    const current_rule = current_rules[source_index];
+    if (current_rule != .css_rule) return null;
+    return switch (current_rule.css_rule) {
+        .container => |current_container| current_container,
+        else => null,
+    };
+}
+
+fn cssContainerRuleReplaceNestedRules(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    current_container: CssContainerRuleState,
+    nested_rules: []const Value,
+) errors.Result(void) {
+    const sheet_id = current_container.parent_style_sheet orelse return error.ScriptRuntime;
+    const source_index = current_container.source_index orelse return error.ScriptRuntime;
+    const current_rules = try cssRuleListCurrentValues(allocator, host, .{ .sheet = sheet_id });
+    defer allocator.free(current_rules);
+    if (source_index >= current_rules.len) return error.ScriptRuntime;
+
+    const current_rule = current_rules[source_index];
+    if (current_rule != .css_rule) return error.ScriptRuntime;
+    if (current_rule.css_rule != .container) return error.ScriptRuntime;
+
+    var nested_text: std.ArrayList(u8) = .empty;
+    defer nested_text.deinit(allocator);
+    for (nested_rules, 0..) |nested_rule, index| {
+        if (index != 0) try nested_text.append(allocator, '\n');
+        try nested_text.appendSlice(allocator, cssRuleCssText(nested_rule));
+    }
+
+    var rule_text: std.ArrayList(u8) = .empty;
+    defer rule_text.deinit(allocator);
+    try rule_text.appendSlice(allocator, "@container ");
+    try rule_text.appendSlice(allocator, current_container.condition_text);
+    try rule_text.appendSlice(allocator, " { ");
+    try rule_text.appendSlice(allocator, nested_text.items);
+    try rule_text.appendSlice(allocator, " }");
+
+    const parsed_rules = try parseStyleSheetRuleValues(allocator, rule_text.items);
+    defer allocator.free(parsed_rules);
+    if (parsed_rules.len != 1) return error.ScriptRuntime;
+    if (parsed_rules[0] != .css_rule) return error.ScriptRuntime;
+    if (parsed_rules[0].css_rule != .container) return error.ScriptRuntime;
+
+    try styleSheetReplaceParsedRule(
+        allocator,
+        host,
+        sheet_id,
+        current_rules,
+        parsed_rules[0],
+        source_index,
+    );
+}
+
 fn styleSheetReplaceParsedRule(
     allocator: std.mem.Allocator,
     host: anytype,
@@ -10885,6 +12711,7 @@ fn cssRuleValueCloneForReturn(
                 .document => |*document| {
                     document.parent_style_sheet = parent_style_sheet;
                     document.parent_rule = parent_rule;
+                    document.source_index = source_index;
                     document.css_rules = try cssRuleValuesCloneForReturn(
                         allocator,
                         document.css_rules,
@@ -10906,6 +12733,7 @@ fn cssRuleValueCloneForReturn(
                 .starting_style => |*starting_style| {
                     starting_style.parent_style_sheet = parent_style_sheet;
                     starting_style.parent_rule = parent_rule;
+                    starting_style.source_index = source_index;
                     starting_style.css_rules = try cssRuleValuesCloneForReturn(
                         allocator,
                         starting_style.css_rules,
@@ -10952,6 +12780,7 @@ fn cssRuleValueCloneForReturn(
                 .scope => |*scope| {
                     scope.parent_style_sheet = parent_style_sheet;
                     scope.parent_rule = parent_rule;
+                    scope.source_index = source_index;
                     scope.css_rules = try cssRuleValuesCloneForReturn(
                         allocator,
                         scope.css_rules,
@@ -10967,10 +12796,12 @@ fn cssRuleValueCloneForReturn(
                 .position_try => |*position_try| {
                     position_try.parent_style_sheet = parent_style_sheet;
                     position_try.parent_rule = parent_rule;
+                    position_try.source_index = source_index;
                 },
                 .layer => |*layer| {
                     layer.parent_style_sheet = parent_style_sheet;
                     layer.parent_rule = parent_rule;
+                    layer.source_index = source_index;
                     layer.css_rules = try cssRuleValuesCloneForReturn(
                         allocator,
                         layer.css_rules,
@@ -11041,6 +12872,7 @@ fn cssRuleSetParents(
         .document => |*document| {
             document.parent_style_sheet = parent_style_sheet;
             document.parent_rule = parent_rule;
+            document.source_index = source_index;
             cssRuleValuesAnnotate(document.css_rules, parent_style_sheet, rule);
         },
         .container => |*container| {
@@ -11052,6 +12884,7 @@ fn cssRuleSetParents(
         .starting_style => |*starting_style| {
             starting_style.parent_style_sheet = parent_style_sheet;
             starting_style.parent_rule = parent_rule;
+            starting_style.source_index = source_index;
             cssRuleValuesAnnotate(starting_style.css_rules, parent_style_sheet, rule);
         },
         .keyframes => |*keyframes| {
@@ -11087,6 +12920,7 @@ fn cssRuleSetParents(
         .scope => |*scope| {
             scope.parent_style_sheet = parent_style_sheet;
             scope.parent_rule = parent_rule;
+            scope.source_index = source_index;
             cssRuleValuesAnnotate(scope.css_rules, parent_style_sheet, rule);
         },
         .page => |*page| {
@@ -11096,10 +12930,12 @@ fn cssRuleSetParents(
         .position_try => |*position_try| {
             position_try.parent_style_sheet = parent_style_sheet;
             position_try.parent_rule = parent_rule;
+            position_try.source_index = source_index;
         },
         .layer => |*layer| {
             layer.parent_style_sheet = parent_style_sheet;
             layer.parent_rule = parent_rule;
+            layer.source_index = source_index;
             cssRuleValuesAnnotate(layer.css_rules, parent_style_sheet, rule);
         },
         .counter_style => |*counter_style| {
@@ -14178,6 +16014,270 @@ fn sameNodeId(left: dom.NodeId, right: dom.NodeId) bool {
     return left.index == right.index and left.generation == right.generation;
 }
 
+fn rangeSnapshotFromNodeValue(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    value: Value,
+) errors.Result(RangeSnapshot) {
+    const node_id = try rangeBoundaryNodeId(host, value);
+    return rangeSnapshotFromNodeId(allocator, host, node_id);
+}
+
+fn rangeSnapshotFromNodeId(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    node_id: dom.NodeId,
+) errors.Result(RangeSnapshot) {
+    const selected_text = try rangeTextForNode(allocator, host, node_id);
+    return .{
+        .selected_text = selected_text,
+        .start_container = node_id,
+        .end_container = node_id,
+        .common_ancestor_container = node_id,
+        .start_offset = 0,
+        .end_offset = selected_text.len,
+        .collapsed = selected_text.len == 0,
+    };
+}
+
+fn rangeSnapshotWithStart(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    range: RangeSnapshot,
+    node_id: dom.NodeId,
+    offset: usize,
+) errors.Result(RangeSnapshot) {
+    if (range.start_container) |start_container| {
+        const end_container = range.end_container orelse return error.ScriptRuntime;
+        if (!sameNodeId(start_container, end_container)) return error.ScriptRuntime;
+        if (!sameNodeId(start_container, node_id)) return error.ScriptRuntime;
+        if (offset <= range.end_offset) {
+            return rangeSnapshotFromNodeOffsets(allocator, host, node_id, offset, range.end_offset);
+        }
+    }
+    return rangeSnapshotFromNodeOffsets(allocator, host, node_id, offset, offset);
+}
+
+fn rangeSnapshotWithEnd(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    range: RangeSnapshot,
+    node_id: dom.NodeId,
+    offset: usize,
+) errors.Result(RangeSnapshot) {
+    if (range.start_container) |start_container| {
+        const end_container = range.end_container orelse return error.ScriptRuntime;
+        if (!sameNodeId(start_container, end_container)) return error.ScriptRuntime;
+        if (!sameNodeId(start_container, node_id)) return error.ScriptRuntime;
+        if (offset >= range.start_offset) {
+            return rangeSnapshotFromNodeOffsets(allocator, host, node_id, range.start_offset, offset);
+        }
+    }
+    return rangeSnapshotFromNodeOffsets(allocator, host, node_id, offset, offset);
+}
+
+fn rangeSnapshotCollapsed(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    range: RangeSnapshot,
+    to_start: bool,
+) errors.Result(RangeSnapshot) {
+    const node_id = range.start_container orelse return range;
+    const end_container = range.end_container orelse return error.ScriptRuntime;
+    if (!sameNodeId(node_id, end_container)) return error.ScriptRuntime;
+    return if (to_start)
+        rangeSnapshotFromNodeOffsets(allocator, host, node_id, range.start_offset, range.start_offset)
+    else
+        rangeSnapshotFromNodeOffsets(allocator, host, node_id, range.end_offset, range.end_offset);
+}
+
+fn rangeSnapshotFromNodeOffsets(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    node_id: dom.NodeId,
+    start_offset: usize,
+    end_offset: usize,
+) errors.Result(RangeSnapshot) {
+    const text = try rangeTextForNode(allocator, host, node_id);
+    defer allocator.free(text);
+    if (start_offset > end_offset or end_offset > text.len) return error.ScriptRuntime;
+    const selected_text = try allocator.dupe(u8, text[start_offset..end_offset]);
+    return .{
+        .selected_text = selected_text,
+        .start_container = node_id,
+        .end_container = node_id,
+        .common_ancestor_container = node_id,
+        .start_offset = start_offset,
+        .end_offset = end_offset,
+        .collapsed = start_offset == end_offset,
+    };
+}
+
+fn rangeTextForNode(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    node_id: dom.NodeId,
+) errors.Result([]const u8) {
+    const selection = host.domStore().selectionStateForNode(node_id) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+    if (selection != null) {
+        return host.domStore().valueForNode(allocator, node_id) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.ScriptRuntime,
+        };
+    }
+
+    const node = host.domStore().nodeAt(node_id) orelse return error.ScriptRuntime;
+    return switch (node.kind) {
+        .document, .element => try host.domStore().textContent(allocator, node_id),
+        .text, .comment => blk: {
+            const text = try host.domStore().characterDataText(node_id);
+            break :blk try allocator.dupe(u8, text);
+        },
+    };
+}
+
+fn rangeBoundaryNodeId(host: anytype, value: Value) errors.Result(dom.NodeId) {
+    return switch (value) {
+        .document => host.domStore().documentId(),
+        .element => |element| element,
+        .node => |node_id| node_id,
+        .template_content => |fragment_id| fragment_id,
+        else => error.ScriptRuntime,
+    };
+}
+
+const RangeInsertionPoint = struct {
+    parent: dom.NodeId,
+    reference: ?dom.NodeId,
+};
+
+fn rangeInsertionPointAtStartBoundary(
+    host: anytype,
+    range: RangeSnapshot,
+) errors.Result(RangeInsertionPoint) {
+    const start_container = range.start_container orelse return error.ScriptRuntime;
+    const end_container = range.end_container orelse return error.ScriptRuntime;
+    if (!sameNodeId(start_container, end_container)) return error.ScriptRuntime;
+    if (range.start_offset != 0) return error.ScriptRuntime;
+
+    const node = host.domStore().nodeAt(start_container) orelse return error.ScriptRuntime;
+    if (host.domStore().isSelectionControlNode(start_container)) return error.ScriptRuntime;
+
+    return switch (node.kind) {
+        .document, .element => .{
+            .parent = start_container,
+            .reference = if (node.children.items.len > 0) node.children.items[0] else null,
+        },
+        .text => .{
+            .parent = node.parent orelse return error.ScriptRuntime,
+            .reference = start_container,
+        },
+        .comment => return error.ScriptRuntime,
+    };
+}
+
+fn insertRangeNodeAtStartBoundary(
+    host: anytype,
+    range: RangeSnapshot,
+    value: Value,
+) errors.Result(void) {
+    const insertion_point = try rangeInsertionPointAtStartBoundary(host, range);
+    switch (value) {
+        .element, .node => |child_id| {
+            if (insertion_point.reference) |reference| {
+                _ = host.domStoreMut().insertBefore(insertion_point.parent, child_id, reference) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ScriptRuntime,
+                };
+            } else {
+                _ = host.domStoreMut().appendChild(insertion_point.parent, child_id) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ScriptRuntime,
+                };
+            }
+        },
+        .template_content => |fragment_id| {
+            const fragment_children = host.domStore().childIds(fragment_id);
+            if (fragment_children.len == 0) return;
+            if (insertion_point.reference) |reference| {
+                host.domStoreMut().insertChildrenBefore(insertion_point.parent, reference, fragment_children) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ScriptRuntime,
+                };
+            } else {
+                host.domStoreMut().appendChildren(insertion_point.parent, fragment_children) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ScriptRuntime,
+                };
+            }
+        },
+        else => return error.ScriptRuntime,
+    }
+
+    return;
+}
+
+fn surroundRangeContentsAtStartBoundary(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    range: RangeSnapshot,
+    wrapper_value: Value,
+) errors.Result(void) {
+    const insertion_point = try rangeInsertionPointAtStartBoundary(host, range);
+    const start_container = range.start_container orelse return error.ScriptRuntime;
+    const container = host.domStore().nodeAt(start_container) orelse return error.ScriptRuntime;
+    const wrapper_id = try nodeValueId(wrapper_value);
+    const wrapper_node = host.domStore().nodeAt(wrapper_id) orelse return error.ScriptRuntime;
+    if (wrapper_node.kind != .element) return error.ScriptRuntime;
+    if (host.domStore().childIds(wrapper_id).len != 0) return error.ScriptRuntime;
+
+    if (sameNodeId(start_container, wrapper_id)) return error.ScriptRuntime;
+    if (host.domStore().nodeContains(wrapper_id, start_container) or host.domStore().nodeContains(start_container, wrapper_id)) {
+        return error.ScriptRuntime;
+    }
+
+    const old_children = switch (container.kind) {
+        .document, .element => try allocator.dupe(dom.NodeId, host.domStore().childIds(start_container)),
+        .text, .comment => null,
+    };
+    defer if (old_children) |children| allocator.free(children);
+
+    if (insertion_point.reference) |reference| {
+        _ = host.domStoreMut().insertBefore(insertion_point.parent, wrapper_id, reference) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.ScriptRuntime,
+        };
+    } else {
+        _ = host.domStoreMut().appendChild(insertion_point.parent, wrapper_id) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.ScriptRuntime,
+        };
+    }
+
+    switch (container.kind) {
+        .document, .element => {
+            if (old_children.?.len > 0) {
+                host.domStoreMut().appendChildren(wrapper_id, old_children.?) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ScriptRuntime,
+                };
+            }
+        },
+        .text => {
+            _ = host.domStoreMut().appendChildren(wrapper_id, &.{start_container}) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+        },
+        .comment => return error.ScriptRuntime,
+    }
+
+    return;
+}
+
 fn compareRangeBoundaryPoints(
     store: *const dom.DomStore,
     left: RangeSnapshot,
@@ -16588,6 +18688,20 @@ fn optionalNodeListIndex(value: Value) ?usize {
             const max_index: f64 = @floatFromInt(std.math.maxInt(usize));
             if (number > max_index) break :blk null;
             break :blk @as(usize, @intFromFloat(number));
+        },
+        else => null,
+    };
+}
+
+fn optionalSignedNodeListIndex(value: Value) ?isize {
+    return switch (value) {
+        .number => |number| blk: {
+            if (!std.math.isFinite(number)) break :blk null;
+            if (std.math.floor(number) != number) break :blk null;
+            const min_index: f64 = @floatFromInt(std.math.minInt(isize));
+            const max_index: f64 = @floatFromInt(std.math.maxInt(isize));
+            if (number < min_index or number > max_index) break :blk null;
+            break :blk @as(isize, @intFromFloat(number));
         },
         else => null,
     };

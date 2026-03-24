@@ -1954,3 +1954,45 @@ fn create_attribute_rejects_invalid_qualified_names_end_to_end() -> browser_test
     );
     Ok(())
 }
+
+#[test]
+fn optional_chaining_member_calls_are_available_end_to_end() -> browser_tester_next::Result<()> {
+    let mut harness = Harness::from_html(
+        "<main id='root'><button id='btn'>run</button><p id='out'></p><script>const actionEls = { close: document.getElementById('btn') }; actionEls.close?.addEventListener('click', () => { document.getElementById('out').textContent = 'ok'; });</script></main>",
+    )?;
+
+    harness.click("#btn")?;
+    harness.assert_text("#out", "ok")?;
+    Ok(())
+}
+
+#[test]
+fn dom_constructors_and_instanceof_checks_are_available_end_to_end()
+-> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><button id='btn'>run</button><select id='sel'><option>One</option></select><p id='out'></p><script>const button = document.getElementById('btn'); const select = document.getElementById('sel'); document.getElementById('out').textContent = [typeof HTMLButtonElement, String(window.HTMLButtonElement === HTMLButtonElement), String(button instanceof HTMLButtonElement), String(button instanceof HTMLElement), String(button instanceof Element), String(document instanceof Node), String(select instanceof HTMLSelectElement), String(window.HTMLSelectElement === HTMLSelectElement)].join('|');</script></main>",
+    )?;
+
+    harness.assert_text("#out", "function|true|true|true|true|true|true|true")?;
+    Ok(())
+}
+
+#[test]
+fn number_to_fixed_is_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><div id='out'></div><script>const quotePair = \"\\\"\\\"\"; const label = `ABC-001 (${quotePair.length} 件)`; const formatted = Math.max(0, 4.2).toFixed(2); document.getElementById('out').textContent = `${label}|${formatted}`;</script></main>",
+    )?;
+
+    harness.assert_text("#out", "ABC-001 (2 件)|4.20")?;
+    Ok(())
+}
+
+#[test]
+fn regex_literals_are_available_end_to_end() -> browser_tester_next::Result<()> {
+    let harness = Harness::from_html(
+        "<main id='root'><div id='out'></div><script>const template = '{name}-{count}'; const values = { name: 'Ada', count: '3' }; const replaced = template.replace(/\\{(\\w+)\\}/g, (_, key) => { return values[key]; }); const lookahead = '1000000'.replace(/\\B(?=(\\d{3})+(?!\\d))/g, ','); document.getElementById('out').textContent = replaced + '|' + lookahead;</script></main>",
+    )?;
+
+    harness.assert_text("#out", "Ada-3|1,000,000")?;
+    Ok(())
+}

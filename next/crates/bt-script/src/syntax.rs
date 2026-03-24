@@ -33,6 +33,22 @@ pub(crate) enum Statement {
         update: Option<Expr>,
         body: Vec<Statement>,
     },
+    ForIn {
+        binding: String,
+        iterable: Expr,
+        body: Vec<Statement>,
+    },
+    ForOf {
+        binding: String,
+        iterable: Expr,
+        body: Vec<Statement>,
+    },
+    TryCatch {
+        try_body: Vec<Statement>,
+        catch_binding: String,
+        catch_body: Vec<Statement>,
+    },
+    Throw(Expr),
     Assignment {
         target: AssignTarget,
         value: Expr,
@@ -91,6 +107,10 @@ pub(crate) enum Expr {
     Identifier(String),
     String(String),
     Number(String),
+    RegexLiteral {
+        pattern: String,
+        flags: String,
+    },
     Boolean(bool),
     Null,
     Undefined,
@@ -98,9 +118,18 @@ pub(crate) enum Expr {
         object: Box<Expr>,
         property: String,
     },
+    OptionalMember {
+        object: Box<Expr>,
+        property: String,
+    },
     ComputedMember {
         object: Box<Expr>,
         property: Box<Expr>,
+    },
+    OptionalMemberCall {
+        object: Box<Expr>,
+        property: String,
+        args: Vec<Expr>,
     },
     Call {
         callee: Box<Expr>,
@@ -185,6 +214,7 @@ pub(crate) enum ComparisonOperator {
     LessThanOrEqual,
     GreaterThan,
     GreaterThanOrEqual,
+    InstanceOf,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

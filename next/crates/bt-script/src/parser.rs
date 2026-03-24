@@ -51,17 +51,23 @@ impl<'a> Parser<'a> {
         if self.consume_keyword("if") {
             return self.parse_if_statement();
         }
+        if self.consume_keyword("try") {
+            return self.parse_try_statement();
+        }
         if self.consume_keyword("while") {
             return self.parse_while_statement();
         }
         if self.consume_keyword("for") {
             return self.parse_for_statement();
         }
-        if self.consume_keyword("const")
-            || self.consume_keyword("let")
-            || self.consume_keyword("var")
-        {
-            return self.parse_variable_declaration();
+        if self.consume_keyword("const") {
+            return self.parse_variable_declaration(true);
+        }
+        if self.consume_keyword("let") || self.consume_keyword("var") {
+            return self.parse_variable_declaration(false);
+        }
+        if self.consume_keyword("throw") {
+            return self.parse_throw_statement();
         }
 
         let expr = self.parse_expression()?;
@@ -228,7 +234,9 @@ impl<'a> Parser<'a> {
         let mut expr = self.parse_additive()?;
         loop {
             self.skip_ws_and_comments();
-            let operator = if self.consume_str("<=") {
+            let operator = if self.consume_keyword("instanceof") {
+                Some(ComparisonOperator::InstanceOf)
+            } else if self.consume_str("<=") {
                 Some(ComparisonOperator::LessThanOrEqual)
             } else if self.consume_str(">=") {
                 Some(ComparisonOperator::GreaterThanOrEqual)
@@ -309,7 +317,8 @@ impl<'a> Parser<'a> {
     fn parse_unary(&mut self) -> Result<Expr> {
         self.skip_ws_and_comments();
         if self.consume_keyword("new") {
-            return self.parse_new_expression();
+            let expr = self.parse_new_expression()?;
+            return self.parse_postfix_from(expr);
         }
         if self.consume_str("++") {
             let expr = self.parse_unary()?;
@@ -350,11 +359,32 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_postfix(&mut self) -> Result<Expr> {
-        let mut expr = self.parse_primary()?;
+        let expr = self.parse_primary()?;
+        self.parse_postfix_from(expr)
+    }
 
+    fn parse_postfix_from(&mut self, mut expr: Expr) -> Result<Expr> {
         loop {
             self.skip_ws_and_comments();
             match self.peek_char() {
+                Some('?') if self.peek_next_char() == Some('.') => {
+                    self.pos += 2;
+                    let property = self.parse_identifier()?;
+                    self.skip_ws_and_comments();
+                    if self.peek_char() == Some('(') {
+                        let args = self.parse_call_arguments()?;
+                        expr = Expr::OptionalMemberCall {
+                            object: Box::new(expr),
+                            property,
+                            args,
+                        };
+                    } else {
+                        expr = Expr::OptionalMember {
+                            object: Box::new(expr),
+                            property,
+                        };
+                    }
+                }
                 Some('.') => {
                     self.pos += 1;
                     let property = self.parse_identifier()?;
@@ -412,7 +442,9 @@ impl<'a> Parser<'a> {
         match self.peek_char() {
             Some('[') => self.parse_array_literal(),
             Some('{') => self.parse_object_literal(),
+            Some('/') => self.parse_regex_literal(),
             Some('\'') | Some('"') => Ok(Expr::String(self.parse_string()?)),
+            Some('`') => self.parse_template_literal(),
             Some('(') => {
                 if let Some(function) = self.try_parse_arrow_function()? {
                     return Ok(Expr::ArrowFunction(function));
@@ -449,10 +481,11 @@ impl<'a> Parser<'a> {
         } else {
             Vec::new()
         };
-        Ok(Expr::New {
+        let expr = Expr::New {
             callee: Box::new(callee),
             args,
-        })
+        };
+        self.parse_postfix_from(expr)
     }
 
     fn parse_new_callee(&mut self) -> Result<Expr> {
@@ -473,12 +506,17 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn parse_variable_declaration(&mut self) -> Result<Statement> {
+    fn parse_variable_declaration(&mut self, is_const: bool) -> Result<Statement> {
         self.skip_ws_and_comments();
         let name = self.parse_identifier()?;
         self.skip_ws_and_comments();
-        self.expect_char('=')?;
-        let value = self.parse_expression()?;
+        let value = if self.consume_char('=') {
+            self.parse_expression()?
+        } else if is_const {
+            return Err(self.error("const declaration requires initializer"));
+        } else {
+            Expr::Undefined
+        };
         Ok(Statement::VariableDeclaration { name, value })
     }
 
@@ -513,6 +551,25 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_try_statement(&mut self) -> Result<Statement> {
+        let try_body = self.parse_statement_body()?;
+        self.skip_ws_and_comments();
+        if !self.consume_keyword("catch") {
+            return Err(self.error("expected `catch` after `try` block"));
+        }
+        self.skip_ws_and_comments();
+        self.expect_char('(')?;
+        let catch_binding = self.parse_identifier()?;
+        self.skip_ws_and_comments();
+        self.expect_char(')')?;
+        let catch_body = self.parse_statement_body()?;
+        Ok(Statement::TryCatch {
+            try_body,
+            catch_binding,
+            catch_body,
+        })
+    }
+
     fn parse_while_statement(&mut self) -> Result<Statement> {
         self.skip_ws_and_comments();
         self.expect_char('(')?;
@@ -523,6 +580,11 @@ impl<'a> Parser<'a> {
         Ok(Statement::While { condition, body })
     }
 
+    fn parse_throw_statement(&mut self) -> Result<Statement> {
+        let value = self.parse_expression()?;
+        Ok(Statement::Throw(value))
+    }
+
     fn parse_for_statement(&mut self) -> Result<Statement> {
         self.skip_ws_and_comments();
         self.expect_char('(')?;
@@ -530,14 +592,76 @@ impl<'a> Parser<'a> {
 
         let init = if self.consume_char(';') {
             None
-        } else if self.consume_keyword("const")
-            || self.consume_keyword("let")
-            || self.consume_keyword("var")
-        {
-            let statement = self.parse_variable_declaration()?;
+        } else if self.consume_keyword("const") {
+            let binding = self.parse_identifier()?;
+            self.skip_ws_and_comments();
+            if self.consume_keyword("in") {
+                let iterable = self.parse_expression()?;
+                self.skip_ws_and_comments();
+                self.expect_char(')')?;
+                let body = self.parse_statement_body()?;
+                return Ok(Statement::ForIn {
+                    binding,
+                    iterable,
+                    body,
+                });
+            }
+            if self.consume_keyword("of") {
+                let iterable = self.parse_expression()?;
+                self.skip_ws_and_comments();
+                self.expect_char(')')?;
+                let body = self.parse_statement_body()?;
+                return Ok(Statement::ForOf {
+                    binding,
+                    iterable,
+                    body,
+                });
+            }
+            self.skip_ws_and_comments();
+            self.expect_char('=')?;
+            let value = self.parse_expression()?;
             self.skip_ws_and_comments();
             self.expect_char(';')?;
-            Some(Box::new(statement))
+            Some(Box::new(Statement::VariableDeclaration {
+                name: binding,
+                value,
+            }))
+        } else if self.consume_keyword("let") || self.consume_keyword("var") {
+            let binding = self.parse_identifier()?;
+            self.skip_ws_and_comments();
+            if self.consume_keyword("in") {
+                let iterable = self.parse_expression()?;
+                self.skip_ws_and_comments();
+                self.expect_char(')')?;
+                let body = self.parse_statement_body()?;
+                return Ok(Statement::ForIn {
+                    binding,
+                    iterable,
+                    body,
+                });
+            }
+            if self.consume_keyword("of") {
+                let iterable = self.parse_expression()?;
+                self.skip_ws_and_comments();
+                self.expect_char(')')?;
+                let body = self.parse_statement_body()?;
+                return Ok(Statement::ForOf {
+                    binding,
+                    iterable,
+                    body,
+                });
+            }
+            let value = if self.consume_char('=') {
+                self.parse_expression()?
+            } else {
+                Expr::Undefined
+            };
+            self.skip_ws_and_comments();
+            self.expect_char(';')?;
+            Some(Box::new(Statement::VariableDeclaration {
+                name: binding,
+                value,
+            }))
         } else {
             let expr = self.parse_expression()?;
             self.skip_ws_and_comments();
@@ -794,7 +918,7 @@ impl<'a> Parser<'a> {
         }
 
         loop {
-            let name = self.parse_identifier()?;
+            let name = self.parse_function_parameter_name()?;
             self.skip_ws_and_comments();
             let default = if self.consume_char('=') {
                 self.skip_ws_and_comments();
@@ -811,9 +935,70 @@ impl<'a> Parser<'a> {
             }
             self.expect_char(',')?;
             self.skip_ws_and_comments();
+            if self.consume_char(')') {
+                break;
+            }
         }
 
         Ok((params, defaults))
+    }
+
+    fn parse_function_parameter_name(&mut self) -> Result<String> {
+        self.skip_ws_and_comments();
+        match self.peek_char() {
+            Some('[') => self.parse_array_destructuring_parameter(),
+            Some('{') => self.parse_object_destructuring_parameter(),
+            _ => self.parse_identifier(),
+        }
+    }
+
+    fn parse_array_destructuring_parameter(&mut self) -> Result<String> {
+        self.expect_char('[')?;
+        self.skip_ws_and_comments();
+
+        let mut names = Vec::new();
+        if self.consume_char(']') {
+            return Ok("__array_destructure__:".to_string());
+        }
+
+        loop {
+            let name = self.parse_identifier()?;
+            names.push(name);
+            self.skip_ws_and_comments();
+            if self.consume_char(']') {
+                break;
+            }
+            self.expect_char(',')?;
+            self.skip_ws_and_comments();
+            if self.consume_char(')') {
+                break;
+            }
+        }
+
+        Ok(format!("__array_destructure__:{}", names.join(",")))
+    }
+
+    fn parse_object_destructuring_parameter(&mut self) -> Result<String> {
+        self.expect_char('{')?;
+        self.skip_ws_and_comments();
+
+        let mut names = Vec::new();
+        if self.consume_char('}') {
+            return Ok("__object_destructure__:".to_string());
+        }
+
+        loop {
+            let name = self.parse_identifier()?;
+            names.push(name);
+            self.skip_ws_and_comments();
+            if self.consume_char('}') {
+                break;
+            }
+            self.expect_char(',')?;
+            self.skip_ws_and_comments();
+        }
+
+        Ok(format!("__object_destructure__:{}", names.join(",")))
     }
 
     fn capture_expression_source_until(&mut self, terminators: &[char]) -> Result<String> {
@@ -881,6 +1066,7 @@ impl<'a> Parser<'a> {
                         && terminators.contains(&')')
                     {
                         let end = self.pos - ch.len_utf8();
+                        self.pos = end;
                         return Ok(self.input[start..end].to_string());
                     }
                     paren_depth = paren_depth.saturating_sub(1);
@@ -895,6 +1081,7 @@ impl<'a> Parser<'a> {
                         && terminators.contains(&'}')
                     {
                         let end = self.pos - ch.len_utf8();
+                        self.pos = end;
                         return Ok(self.input[start..end].to_string());
                     }
                     brace_depth = brace_depth.saturating_sub(1);
@@ -909,6 +1096,7 @@ impl<'a> Parser<'a> {
                         && terminators.contains(&']')
                     {
                         let end = self.pos - ch.len_utf8();
+                        self.pos = end;
                         return Ok(self.input[start..end].to_string());
                     }
                     bracket_depth = bracket_depth.saturating_sub(1);
@@ -920,6 +1108,7 @@ impl<'a> Parser<'a> {
                         && terminators.contains(&',')
                     {
                         let end = self.pos - ch.len_utf8();
+                        self.pos = end;
                         return Ok(self.input[start..end].to_string());
                     }
                 }
@@ -942,7 +1131,7 @@ impl<'a> Parser<'a> {
         let mut params = Vec::new();
         if self.peek_char() != Some(')') {
             loop {
-                let param = match self.parse_identifier() {
+                let param = match self.parse_function_parameter_name() {
                     Ok(param) => param,
                     Err(_) => {
                         self.pos = start;
@@ -970,12 +1159,19 @@ impl<'a> Parser<'a> {
             return Ok(None);
         }
         self.skip_ws_and_comments();
-        if self.peek_char() != Some('{') {
-            self.pos = start;
-            return Ok(None);
-        }
+        let body_source = if self.peek_char() == Some('{') {
+            self.capture_braced_block()?
+        } else {
+            let expression_source =
+                self.capture_expression_source_until(&[',', ')', ']', '}', ';'])?;
+            let expression_source = expression_source.trim();
+            if expression_source.is_empty() {
+                self.pos = start;
+                return Ok(None);
+            }
+            format!("return {expression_source};")
+        };
 
-        let body_source = self.capture_braced_block()?;
         Ok(Some(ScriptFunction::new(params, body_source)))
     }
 
@@ -989,6 +1185,10 @@ impl<'a> Parser<'a> {
         }
 
         loop {
+            self.skip_ws_and_comments();
+            if self.peek_char() == Some(',') {
+                return Err(self.error("empty call argument"));
+            }
             if self.consume_str("...") {
                 let expr = self.parse_expression()?;
                 args.push(Expr::Spread(Box::new(expr)));
@@ -1041,19 +1241,218 @@ impl<'a> Parser<'a> {
         Ok(out)
     }
 
+    fn parse_regex_literal(&mut self) -> Result<Expr> {
+        self.expect_char('/')?;
+        let mut pattern = String::new();
+        let mut in_character_class = false;
+        let mut escaped = false;
+
+        loop {
+            let Some(ch) = self.bump_char() else {
+                return Err(self.error("unterminated regex literal"));
+            };
+            if escaped {
+                pattern.push(ch);
+                escaped = false;
+                continue;
+            }
+
+            match ch {
+                '\\' => {
+                    pattern.push(ch);
+                    escaped = true;
+                }
+                '[' => {
+                    pattern.push(ch);
+                    in_character_class = true;
+                }
+                ']' if in_character_class => {
+                    pattern.push(ch);
+                    in_character_class = false;
+                }
+                '/' if !in_character_class => break,
+                '\n' | '\r' => return Err(self.error("unterminated regex literal")),
+                other => pattern.push(other),
+            }
+        }
+
+        if pattern.is_empty() {
+            return Err(self.error("empty regex literal"));
+        }
+
+        let flags = self.parse_regex_flags()?;
+        Ok(Expr::RegexLiteral { pattern, flags })
+    }
+
+    fn parse_regex_flags(&mut self) -> Result<String> {
+        let mut flags = String::new();
+        while let Some(ch) = self.peek_char() {
+            if !ch.is_ascii_alphabetic() {
+                break;
+            }
+            if !matches!(ch, 'g' | 'i' | 'm' | 's' | 'u') {
+                return Err(self.error(format!("unsupported regex flag `{ch}`")));
+            }
+            if flags.contains(ch) {
+                return Err(self.error(format!("duplicate regex flag `{ch}`")));
+            }
+            self.pos += ch.len_utf8();
+            flags.push(ch);
+        }
+
+        Ok(flags)
+    }
+
+    fn parse_template_literal(&mut self) -> Result<Expr> {
+        self.expect_char('`')?;
+        let mut parts = Vec::new();
+        let mut chunk = String::new();
+
+        loop {
+            let Some(ch) = self.bump_char() else {
+                return Err(self.error("unterminated template literal"));
+            };
+            match ch {
+                '`' => {
+                    parts.push(Expr::String(std::mem::take(&mut chunk)));
+                    break;
+                }
+                '$' if self.peek_char() == Some('{') => {
+                    self.pos += 1;
+                    parts.push(Expr::String(std::mem::take(&mut chunk)));
+                    let expr = self.parse_expression()?;
+                    parts.push(expr);
+                    self.skip_ws_and_comments();
+                    self.expect_char('}')?;
+                }
+                '\\' => {
+                    let Some(escaped) = self.bump_char() else {
+                        return Err(self.error("unterminated escape sequence"));
+                    };
+                    if escaped == '$' && self.peek_char() == Some('{') {
+                        self.pos += 1;
+                        chunk.push('$');
+                        chunk.push('{');
+                        continue;
+                    }
+                    chunk.push(match escaped {
+                        'n' => '\n',
+                        'r' => '\r',
+                        't' => '\t',
+                        '\\' => '\\',
+                        '\'' => '\'',
+                        '"' => '"',
+                        '`' => '`',
+                        other => other,
+                    });
+                }
+                other => chunk.push(other),
+            }
+        }
+
+        if parts.is_empty() {
+            return Ok(Expr::String(String::new()));
+        }
+
+        let mut expr = parts.remove(0);
+        for part in parts {
+            expr = Expr::BinaryAdd {
+                left: Box::new(expr),
+                right: Box::new(part),
+            };
+        }
+        Ok(expr)
+    }
+
     fn parse_number(&mut self) -> Result<String> {
         let start = self.pos;
+        if self.peek_char() == Some('0') {
+            match self.peek_next_char() {
+                Some('x') | Some('X') => {
+                    self.pos += 2;
+                    let literal_start = self.pos;
+                    while let Some(ch) = self.peek_char() {
+                        if ch.is_ascii_hexdigit() || ch == '_' {
+                            self.pos += ch.len_utf8();
+                        } else {
+                            break;
+                        }
+                    }
+                    let digits = self.input[literal_start..self.pos].replace('_', "");
+                    if digits.is_empty() {
+                        return Err(self.error("invalid numeric literal"));
+                    }
+                    let value = u128::from_str_radix(&digits, 16)
+                        .map_err(|_| self.error("invalid numeric literal"))?;
+                    return Ok(value.to_string());
+                }
+                Some('b') | Some('B') => {
+                    self.pos += 2;
+                    let literal_start = self.pos;
+                    while let Some(ch) = self.peek_char() {
+                        if matches!(ch, '0' | '1' | '_') {
+                            self.pos += ch.len_utf8();
+                        } else {
+                            break;
+                        }
+                    }
+                    let digits = self.input[literal_start..self.pos].replace('_', "");
+                    if digits.is_empty() {
+                        return Err(self.error("invalid numeric literal"));
+                    }
+                    let value = u128::from_str_radix(&digits, 2)
+                        .map_err(|_| self.error("invalid numeric literal"))?;
+                    return Ok(value.to_string());
+                }
+                Some('o') | Some('O') => {
+                    self.pos += 2;
+                    let literal_start = self.pos;
+                    while let Some(ch) = self.peek_char() {
+                        if matches!(ch, '0'..='7' | '_') {
+                            self.pos += ch.len_utf8();
+                        } else {
+                            break;
+                        }
+                    }
+                    let digits = self.input[literal_start..self.pos].replace('_', "");
+                    if digits.is_empty() {
+                        return Err(self.error("invalid numeric literal"));
+                    }
+                    let value = u128::from_str_radix(&digits, 8)
+                        .map_err(|_| self.error("invalid numeric literal"))?;
+                    return Ok(value.to_string());
+                }
+                Some('_') => return Err(self.error("invalid numeric literal")),
+                _ => {}
+            }
+        }
+
+        let mut seen_digit = false;
         let mut seen_dot = false;
+        let mut seen_exponent = false;
 
         while let Some(ch) = self.peek_char() {
-            if ch.is_ascii_digit() {
+            if ch.is_ascii_digit() || ch == '_' {
+                seen_digit = true;
                 self.pos += ch.len_utf8();
                 continue;
             }
-            if ch == '.' && !seen_dot {
+            if ch == '.' && !seen_dot && !seen_exponent {
                 seen_dot = true;
                 self.pos += ch.len_utf8();
                 continue;
+            }
+            if matches!(ch, 'e' | 'E') && !seen_exponent && seen_digit {
+                seen_exponent = true;
+                self.pos += ch.len_utf8();
+                if matches!(self.peek_char(), Some('+') | Some('-')) {
+                    self.pos += 1;
+                }
+                continue;
+            }
+            if ch == 'n' && seen_digit {
+                self.pos += ch.len_utf8();
+                break;
             }
             break;
         }
@@ -1062,7 +1461,8 @@ impl<'a> Parser<'a> {
             return Err(self.error("expected number"));
         }
 
-        Ok(self.input[start..self.pos].to_string())
+        let literal = self.input[start..self.pos].replace('_', "");
+        Ok(literal.trim_end_matches('n').to_string())
     }
 
     fn parse_identifier(&mut self) -> Result<String> {

@@ -18,20 +18,28 @@ fn issue_174_datetimeformat_accepts_chicago_and_formats_cross_zone_results()
             hour12: false,
           });
           const parts = formatter.formatToParts(new Date(instantMs));
-          const get = (type) =>
-            parts.find((part) => part.type === type)?.value || "?";
+          function getPart(type) {
+            let index = 0;
+            while (index < parts.length) {
+              if (parts[index].type === type) {
+                return parts[index].value;
+              }
+              index += 1;
+            }
+            return "?";
+          }
           return (
-            get("year") +
+            getPart("year") +
             "-" +
-            get("month") +
+            getPart("month") +
             "-" +
-            get("day") +
+            getPart("day") +
             " " +
-            get("hour") +
+            getPart("hour") +
             ":" +
-            get("minute") +
+            getPart("minute") +
             ":" +
-            get("second")
+            getPart("second")
           );
         }
 
@@ -68,7 +76,15 @@ fn issue_175_datetimeformat_surfaces_new_york_dst_nonexistent_and_ambiguous_time
         }
 
         function extractPartNumber(parts, type) {
-          const value = parts.find((part) => part.type === type)?.value;
+          let value = "";
+          let index = 0;
+          while (index < parts.length) {
+            if (parts[index].type === type) {
+              value = parts[index].value;
+              break;
+            }
+            index += 1;
+          }
           const parsed = Number(value);
           return Number.isFinite(parsed) ? parsed : NaN;
         }
@@ -111,8 +127,8 @@ fn issue_175_datetimeformat_surfaces_new_york_dst_nonexistent_and_ambiguous_time
         }
 
         function collectOffsetCandidates(zone, localUtcMs) {
-          const offsets = new Set();
-          [
+          const offsets = [];
+          const samples = [
             localUtcMs,
             localUtcMs - 3600000,
             localUtcMs + 3600000,
@@ -120,11 +136,15 @@ fn issue_175_datetimeformat_surfaces_new_york_dst_nonexistent_and_ambiguous_time
             localUtcMs + 86400000,
             localUtcMs - 172800000,
             localUtcMs + 172800000,
-          ].forEach((sampleMs) => {
+          ];
+          let index = 0;
+          while (index < samples.length) {
+            const sampleMs = samples[index];
             const offset = getOffsetMinutes(zone, sampleMs);
-            if (Number.isFinite(offset)) offsets.add(offset);
-          });
-          return Array.from(offsets);
+            if (Number.isFinite(offset) && offsets.indexOf(offset) < 0) offsets.push(offset);
+            index += 1;
+          }
+          return offsets;
         }
 
         function matchesLocalDateTime(parts, target) {
@@ -149,13 +169,19 @@ fn issue_175_datetimeformat_surfaces_new_york_dst_nonexistent_and_ambiguous_time
             0
           );
           const matches = [];
-          collectOffsetCandidates(fromZone, localUtcMs).forEach((offsetMinutes) => {
+          const candidates = collectOffsetCandidates(fromZone, localUtcMs);
+          let index = 0;
+          while (index < candidates.length) {
+            const offsetMinutes = candidates[index];
             const candidateMs = localUtcMs - offsetMinutes * 60000;
             const candidateParts = getZonedParts(candidateMs, fromZone);
-            if (!matchesLocalDateTime(candidateParts, parsed)) return;
-            if (!matches.includes(candidateMs)) matches.push(candidateMs);
-          });
-          matches.sort((a, b) => a - b);
+            if (!matchesLocalDateTime(candidateParts, parsed)) {
+              index += 1;
+              continue;
+            }
+            if (matches.indexOf(candidateMs) < 0) matches.push(candidateMs);
+            index += 1;
+          }
           if (!matches.length) return "error:nonexistent";
           if (matches.length === 1) return "ok";
           return "ambiguous";

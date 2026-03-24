@@ -14379,3 +14379,210 @@ fn runtime_rejects_named_node_map_remove_missing() {
     assert!(message.contains("NamedNodeMap.removeNamedItem()"));
     assert!(message.contains("existing attribute"));
 }
+
+#[test]
+fn runtime_supports_optional_chaining_member_calls() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "const actionEls = { close: { addEventListener: function(type, callback) { callback(); } } }; let count = 0; actionEls.close?.addEventListener('click', () => { count += 1; }); const missing = null?.noop; document.getElementById('out').textContent = String(count) + ':' + String(missing) + ':' + String(actionEls.close?.addEventListener);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("optional chaining should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("1:undefined:[function]")
+    );
+}
+
+#[test]
+fn runtime_supports_template_literals_with_interpolation() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "const name = 'Ada'; document.getElementById('out').textContent = `Hello ${name}!`;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("template literals should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("Hello Ada!")
+    );
+}
+
+#[test]
+fn runtime_supports_object_getters_before_object_assign() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "let getCount = 0; const source = { get amount() { getCount += 1; return 7; } }; const value = source.amount; document.getElementById('out').textContent = String(getCount) + ':' + String(value);",
+            "inline-script",
+            &mut host,
+        )
+        .expect("object getters should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("1:7")
+    );
+}
+
+#[test]
+fn runtime_supports_dom_constructors_and_instanceof_checks() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("btn", ElementHandle::new(1), "Run");
+    host.seed_element_tag_name(ElementHandle::new(1), "button");
+    host.seed_node_namespace_uri(NodeHandle::new(1), "http://www.w3.org/1999/xhtml");
+    host.seed_element("sel", ElementHandle::new(2), "");
+    host.seed_element_tag_name(ElementHandle::new(2), "select");
+    host.seed_node_namespace_uri(NodeHandle::new(2), "http://www.w3.org/1999/xhtml");
+    host.seed_element("out", ElementHandle::new(3), "");
+
+    runtime
+        .eval_program(
+            "const button = document.getElementById('btn'); const select = document.getElementById('sel'); document.getElementById('out').textContent = [typeof HTMLButtonElement, String(window.HTMLButtonElement === HTMLButtonElement), String(button instanceof HTMLButtonElement), String(button instanceof HTMLElement), String(button instanceof Element), String(document instanceof Node), String(select instanceof HTMLSelectElement), String(window.HTMLSelectElement === HTMLSelectElement)].join('|');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("dom constructors should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(3))
+            .map(String::as_str),
+        Some("function|true|true|true|true|true|true|true")
+    );
+}
+
+#[test]
+fn runtime_supports_number_to_fixed() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "const value = Math.max(0, 4.2).toFixed(2); document.getElementById('out').textContent = value;",
+            "inline-script",
+            &mut host,
+        )
+        .expect("number toFixed should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("4.20")
+    );
+}
+
+#[test]
+fn runtime_supports_number_to_precision_and_exponential() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            "const parts = [Number(12.345).toPrecision(4), Math.max(0, 4.2).toExponential(2), Number(10000).toPrecision(10)]; document.getElementById('out').textContent = parts.join('|');",
+            "inline-script",
+            &mut host,
+        )
+        .expect("number precision helpers should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("12.35|4.20e+0|10000.00000")
+    );
+}
+
+#[test]
+fn runtime_supports_string_array_literals() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    runtime
+        .eval_program(
+            r#"const roles = ["name", "cost", "price"];"#,
+            "inline-script",
+            &mut host,
+        )
+        .expect("string array literals should parse and evaluate");
+}
+
+#[test]
+fn runtime_supports_issue_218_infer_mappings_snippet() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+
+    runtime
+        .eval_program(
+            r#"function inferMappings(headers) { const roles = ["name", "cost", "price", "extra", "target"]; const mappings = new Array(headers.length).fill("unused"); const normalizedHeaders = headers.map((value) => String(value || "").toLowerCase()); roles.forEach((role) => { const index = normalizedHeaders.indexOf(role); if (index >= 0) { mappings[index] = role; } }); return mappings; } inferMappings(["name", "cost", "price", "extra", "target"]);"#,
+            "inline-script",
+            &mut host,
+        )
+        .expect("issue 218 inferMappings snippet should parse and evaluate");
+}
+
+#[test]
+fn runtime_rejects_number_to_fixed_with_out_of_range_digits() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    let error = runtime
+        .eval_program(
+            "document.getElementById('out').textContent = (1.23).toFixed(101);",
+            "inline-script",
+            &mut host,
+        )
+        .expect_err("toFixed should reject out-of-range digits");
+
+    let message = error.to_string();
+    assert!(message.contains("toFixed"));
+    assert!(message.contains("0 and 100"));
+}
+
+#[test]
+fn runtime_supports_regex_literals_and_callback_replacement() {
+    let mut runtime = ScriptRuntime::new();
+    let mut host = RecordingHost::default();
+    host.seed_element("out", ElementHandle::new(1), "");
+
+    runtime
+        .eval_program(
+            r#"const template = '{name}-{count}'; const values = { name: 'Ada', count: '3' }; const replaced = template.replace(/\{(\w+)\}/g, (_, key) => { return values[key]; }); const matches = String(template.match(/\{(\w+)\}/g)); const exec = String(/(\w+)-(\w+)/.exec('foo-bar')); const search = String('abc123'.search(/\d+/)); const test = String(/foo/.test('xfoo')); document.getElementById('out').textContent = replaced + '|' + matches + '|' + exec + '|' + search + '|' + test;"#,
+            "inline-script",
+            &mut host,
+        )
+        .expect("regex literals should resolve through the script runtime");
+
+    assert_eq!(
+        host.text_content
+            .get(&ElementHandle::new(1))
+            .map(String::as_str),
+        Some("Ada-3|{name},{count}|foo-bar,foo,bar|3|true")
+    );
+}
