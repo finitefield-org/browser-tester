@@ -19,8 +19,8 @@ Exit criteria:
 ## Phase 1: DOM Core
 
 - Parse HTML into the internal DOM store.
-- Implement the initial selector subset.
-- Implement DOM dump and assertion helpers.
+- Implement the initial selector subset and a bounded combinator slice.
+- Implement DOM dump and assertion helpers. The current workspace already has the initial assertion slice; later work should expand it only when a bounded user-visible gap appears.
 
 Exit criteria:
 
@@ -40,8 +40,9 @@ Exit criteria:
 
 ## Phase 3: Events and Form Controls
 
-- Add event dispatch, bubbling, default actions, and user-like actions.
+- Add target-phase event dispatch, default actions, and user-like actions.
 - Add input, checkbox, select, focus, blur, and submit behavior.
+- Keep bubbling/capture out of scope until a bounded need appears.
 
 Exit criteria:
 
@@ -71,8 +72,8 @@ Exit criteria:
 ## Phase 6: Selector and Query Expansion
 
 - Expand selector support in bounded slices.
-- Add script-side query APIs that reuse the same selector engine.
-- Add live collections only as needed by user-visible gaps.
+- Add script-side query APIs that reuse the same selector engine, plus a minimal snapshot `NodeList` and bounded live `HTMLCollection` slices for `children`.
+- Expand live collections only as needed by user-visible gaps.
 
 Exit criteria:
 
@@ -80,7 +81,8 @@ Exit criteria:
 
 ## Phase 7: Reflection, Mutation, Serialization
 
-- Add attribute reflection, class and dataset views, tree mutation primitives, and HTML serialization/insertion surfaces.
+- Add bounded attribute reflection helpers, then bounded `classList` / `dataset` views, tree mutation primitives, and HTML serialization/insertion surfaces.
+- The current workspace already has public selector-based tree-mutation wrappers plus the bounded `internal/dom` helpers; keep expanding only the slices that are still missing.
 - Keep each slice bounded and documented.
 
 Exit criteria:

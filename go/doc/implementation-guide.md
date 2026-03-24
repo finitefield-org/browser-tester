@@ -74,7 +74,7 @@ Exit criteria:
 
 - Implement HTML parsing into a tree store.
 - Implement selector matching for the first bounded slice.
-- Implement DOM dump helpers and the initial assertion helpers.
+- Implement DOM dump helpers and the initial assertion helpers. The current Go workspace already has the initial assertion slice; later work should keep it bounded rather than widening the facade.
 
 Exit criteria:
 
@@ -94,12 +94,13 @@ Exit criteria:
 
 ### Phase 3: Events and User-Like Actions
 
-- Implement capture/bubble dispatch, default actions, and form-control state updates.
+- Implement target-phase listener dispatch, default actions, and form-control state updates.
 - Add `Click`, `TypeText`, `SetChecked`, `SetSelectValue`, `Focus`, `Blur`, `Dispatch`, `DispatchKeyboard`, and `Submit`.
 
 Exit criteria:
 
-- Event order is deterministic.
+- Target listeners and default actions are deterministic.
+- Bubbling/capture remain later unless explicitly added to the matrix.
 - Default actions and form updates are covered by tests.
 
 ### Phase 4: Runtime Services and Mock Registry
@@ -136,7 +137,7 @@ Exit criteria:
 
 ### Phase 7: Reflection, Mutation, and Serialization
 
-- Add attribute reflection, class/dataset views, tree mutation primitives, and HTML serialization/insertion helpers.
+- Add attribute reflection, class/dataset views, selector-based tree mutation helpers, and HTML serialization/insertion helpers.
 - Keep the supported slice bounded and documented.
 
 Exit criteria:

@@ -25,6 +25,9 @@ type Node struct {
 	TagName string
 	Attrs   []Attribute
 	Text    string
+
+	DefaultAttrs []Attribute
+	DefaultText  string
 }
 
 type Store struct {

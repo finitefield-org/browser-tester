@@ -12,11 +12,28 @@ type simpleSelector struct {
 	classes []string
 }
 
+type selectorCombinator uint8
+
+const (
+	selectorCombinatorNone selectorCombinator = iota
+	selectorCombinatorDescendant
+	selectorCombinatorChild
+)
+
+type selectorSequence struct {
+	parts []selectorSequencePart
+}
+
+type selectorSequencePart struct {
+	compound   simpleSelector
+	combinator selectorCombinator
+}
+
 func (s *Store) Select(selector string) ([]NodeID, error) {
 	if s == nil {
 		return nil, fmt.Errorf("dom store is nil")
 	}
-	parsed, err := parseSimpleSelector(selector)
+	parsed, err := parseSelectorSequence(selector)
 	if err != nil {
 		return nil, err
 	}
@@ -24,7 +41,7 @@ func (s *Store) Select(selector string) ([]NodeID, error) {
 	matches := make([]NodeID, 0, 4)
 	for _, rootID := range s.documentChildren() {
 		s.walkElementPreOrder(rootID, func(node *Node) {
-			if parsed.matches(node) {
+			if parsed.matches(s, node) {
 				matches = append(matches, node.ID)
 			}
 		})
@@ -43,6 +60,122 @@ func (s *Store) walkElementPreOrder(id NodeID, visit func(*Node)) {
 	for _, childID := range node.Children {
 		s.walkElementPreOrder(childID, visit)
 	}
+}
+
+func parseSelectorSequence(input string) (selectorSequence, error) {
+	text := strings.TrimSpace(input)
+	if text == "" {
+		return selectorSequence{}, fmt.Errorf("selector must not be empty")
+	}
+
+	parts := make([]selectorSequencePart, 0, 4)
+	i := 0
+	for {
+		i = skipSpaces(text, i)
+		if i >= len(text) {
+			break
+		}
+		if text[i] == '>' {
+			return selectorSequence{}, fmt.Errorf("unsupported selector `%s`: combinators must separate selector compounds", input)
+		}
+
+		start := i
+		for i < len(text) && !isSelectorCompoundTerminator(text[i]) {
+			i++
+		}
+		if start == i {
+			return selectorSequence{}, fmt.Errorf("unsupported selector `%s`", input)
+		}
+
+		compound, err := parseSimpleSelector(text[start:i])
+		if err != nil {
+			return selectorSequence{}, err
+		}
+		parts = append(parts, selectorSequencePart{compound: compound})
+
+		j := i
+		hadSpace := false
+		for j < len(text) && isSpace(text[j]) {
+			hadSpace = true
+			j++
+		}
+		if j >= len(text) {
+			break
+		}
+
+		switch text[j] {
+		case '>':
+			parts[len(parts)-1].combinator = selectorCombinatorChild
+			i = j + 1
+		default:
+			if hadSpace {
+				parts[len(parts)-1].combinator = selectorCombinatorDescendant
+				i = j
+			} else {
+				return selectorSequence{}, fmt.Errorf("unsupported selector `%s`", input)
+			}
+		}
+	}
+
+	if len(parts) == 0 {
+		return selectorSequence{}, fmt.Errorf("selector must not be empty")
+	}
+	if parts[len(parts)-1].combinator != selectorCombinatorNone {
+		return selectorSequence{}, fmt.Errorf("unsupported selector `%s`: trailing combinator", input)
+	}
+	return selectorSequence{parts: parts}, nil
+}
+
+func (s selectorSequence) matches(store *Store, node *Node) bool {
+	if store == nil || node == nil || node.Kind != NodeKindElement {
+		return false
+	}
+	if len(s.parts) == 0 {
+		return false
+	}
+
+	last := len(s.parts) - 1
+	if !s.parts[last].compound.matches(node) {
+		return false
+	}
+
+	current := node
+	for i := last - 1; i >= 0; i-- {
+		switch s.parts[i].combinator {
+		case selectorCombinatorChild:
+			parentID := current.Parent
+			if parentID == 0 {
+				return false
+			}
+			parent := store.Node(parentID)
+			if parent == nil || !s.parts[i].compound.matches(parent) {
+				return false
+			}
+			current = parent
+		case selectorCombinatorDescendant:
+			found := false
+			parentID := current.Parent
+			for parentID != 0 {
+				parent := store.Node(parentID)
+				if parent == nil {
+					return false
+				}
+				if s.parts[i].compound.matches(parent) {
+					current = parent
+					found = true
+					break
+				}
+				parentID = parent.Parent
+			}
+			if !found {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+
+	return true
 }
 
 func parseSimpleSelector(input string) (simpleSelector, error) {
@@ -130,6 +263,10 @@ func (s simpleSelector) matches(node *Node) bool {
 		}
 	}
 	return true
+}
+
+func isSelectorCompoundTerminator(ch byte) bool {
+	return isSpace(ch) || ch == '>'
 }
 
 func attributeValue(attrs []Attribute, name string) (string, bool) {

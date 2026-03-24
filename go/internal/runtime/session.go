@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"browsertester/internal/dom"
 	"browsertester/internal/mocks"
 )
 
@@ -31,11 +32,17 @@ func DefaultSessionConfig() SessionConfig {
 }
 
 type Session struct {
-	config    SessionConfig
-	scheduler Scheduler
-	scrollX   int64
-	scrollY   int64
-	registry  *mocks.Registry
+	config          SessionConfig
+	scheduler       Scheduler
+	scrollX         int64
+	scrollY         int64
+	registry        *mocks.Registry
+	domStore        *dom.Store
+	domReady        bool
+	domErr          error
+	focusedSelector string
+	interactions    []Interaction
+	eventListeners  []eventListenerRecord
 }
 
 func NewSession(config SessionConfig) *Session {
@@ -163,6 +170,22 @@ func (s *Session) Config() SessionConfig {
 		return DefaultSessionConfig()
 	}
 	return cloneSessionConfig(s.config)
+}
+
+func (s *Session) FocusedSelector() string {
+	if s == nil {
+		return ""
+	}
+	return s.focusedSelector
+}
+
+func (s *Session) InteractionLog() []Interaction {
+	if s == nil {
+		return nil
+	}
+	out := make([]Interaction, len(s.interactions))
+	copy(out, s.interactions)
+	return out
 }
 
 func (s *Session) ReadClipboard() (string, error) {
@@ -312,6 +335,161 @@ func (s *Session) MatchMedia(query string) (bool, error) {
 		return false, fmt.Errorf("session is unavailable")
 	}
 	return s.Registry().MatchMedia().Resolve(query)
+}
+
+func (s *Session) Click(selector string) error {
+	if s == nil {
+		return fmt.Errorf("session is unavailable")
+	}
+	store, nodeID, _, normalized, err := s.resolveActionTarget(selector)
+	if err != nil {
+		return err
+	}
+	s.interactions = append(s.interactions, Interaction{
+		Kind:     InteractionKindClick,
+		Selector: normalized,
+	})
+	if err := s.dispatchEventListeners(store, nodeID, "click"); err != nil {
+		return err
+	}
+	if err := s.applyClickDefaultAction(normalized); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Session) Focus(selector string) error {
+	if s == nil {
+		return fmt.Errorf("session is unavailable")
+	}
+	store, nodeID, _, normalized, err := s.resolveActionTarget(selector)
+	if err != nil {
+		return err
+	}
+	s.focusedSelector = normalized
+	s.interactions = append(s.interactions, Interaction{
+		Kind:     InteractionKindFocus,
+		Selector: normalized,
+	})
+	if err := s.dispatchEventListeners(store, nodeID, "focus"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Session) Blur() error {
+	if s == nil {
+		return fmt.Errorf("session is unavailable")
+	}
+	previous := s.focusedSelector
+	s.focusedSelector = ""
+	s.interactions = append(s.interactions, Interaction{
+		Kind:     InteractionKindBlur,
+		Selector: previous,
+	})
+	if previous == "" {
+		return nil
+	}
+	store, nodeID, _, _, err := s.resolveActionTarget(previous)
+	if err != nil {
+		return nil
+	}
+	if err := s.dispatchEventListeners(store, nodeID, "blur"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Session) validateSelector(selector string) (string, error) {
+	normalized := strings.TrimSpace(selector)
+	if normalized == "" {
+		return "", fmt.Errorf("selector must not be empty")
+	}
+	store, err := s.ensureDOM()
+	if err != nil {
+		return "", err
+	}
+	ids, err := store.Select(normalized)
+	if err != nil {
+		return "", err
+	}
+	if len(ids) == 0 {
+		return "", fmt.Errorf("selector `%s` did not match any element", normalized)
+	}
+	return normalized, nil
+}
+
+func (s *Session) GetAttribute(selector, name string) (string, bool, error) {
+	if s == nil {
+		return "", false, fmt.Errorf("session is unavailable")
+	}
+	store, nodeID, _, _, err := s.resolveActionTarget(selector)
+	if err != nil {
+		return "", false, err
+	}
+	return store.GetAttribute(nodeID, name)
+}
+
+func (s *Session) HasAttribute(selector, name string) (bool, error) {
+	if s == nil {
+		return false, fmt.Errorf("session is unavailable")
+	}
+	store, nodeID, _, _, err := s.resolveActionTarget(selector)
+	if err != nil {
+		return false, err
+	}
+	return store.HasAttribute(nodeID, name)
+}
+
+func (s *Session) SetAttribute(selector, name, value string) error {
+	if s == nil {
+		return fmt.Errorf("session is unavailable")
+	}
+	store, nodeID, _, _, err := s.resolveActionTarget(selector)
+	if err != nil {
+		return err
+	}
+	return store.SetAttribute(nodeID, name, value)
+}
+
+func (s *Session) RemoveAttribute(selector, name string) error {
+	if s == nil {
+		return fmt.Errorf("session is unavailable")
+	}
+	store, nodeID, _, _, err := s.resolveActionTarget(selector)
+	if err != nil {
+		return err
+	}
+	return store.RemoveAttribute(nodeID, name)
+}
+
+func (s *Session) ensureDOM() (*dom.Store, error) {
+	if s == nil {
+		return nil, fmt.Errorf("session is unavailable")
+	}
+	if s.domReady {
+		if s.domErr != nil {
+			return nil, s.domErr
+		}
+		return s.domStore, nil
+	}
+
+	store := dom.NewStore()
+	if strings.TrimSpace(s.config.HTML) != "" {
+		if err := store.BootstrapHTML(s.config.HTML); err != nil {
+			s.domErr = err
+			s.domReady = true
+			return nil, err
+		}
+	}
+
+	s.domStore = store
+	s.domReady = true
+	if err := s.executeInlineScripts(store); err != nil {
+		s.domErr = err
+		return nil, err
+	}
+	return s.domStore, nil
 }
 
 func cloneSessionConfig(config SessionConfig) SessionConfig {

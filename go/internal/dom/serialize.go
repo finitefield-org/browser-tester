@@ -54,7 +54,11 @@ func (s *Store) serializeNode(b *strings.Builder, id NodeID) {
 
 	switch node.Kind {
 	case NodeKindText:
-		b.WriteString(node.Text)
+		if s.shouldSerializeTextRaw(id) {
+			b.WriteString(node.Text)
+			return
+		}
+		b.WriteString(escapeTextContent(node.Text))
 	case NodeKindElement:
 		b.WriteByte('<')
 		b.WriteString(node.TagName)
@@ -82,10 +86,35 @@ func (s *Store) serializeNode(b *strings.Builder, id NodeID) {
 	}
 }
 
+func (s *Store) shouldSerializeTextRaw(id NodeID) bool {
+	node := s.nodes[id]
+	if node == nil || node.Kind != NodeKindText {
+		return false
+	}
+	parent := s.nodes[node.Parent]
+	if parent == nil || parent.Kind != NodeKindElement {
+		return false
+	}
+	return parent.TagName == "script"
+}
+
 func escapeAttributeValue(value string) string {
 	if value == "" {
 		return value
 	}
+	value = strings.ReplaceAll(value, "&", "&amp;")
+	value = strings.ReplaceAll(value, "<", "&lt;")
+	value = strings.ReplaceAll(value, ">", "&gt;")
 	value = strings.ReplaceAll(value, `"`, "&quot;")
+	return value
+}
+
+func escapeTextContent(value string) string {
+	if value == "" {
+		return value
+	}
+	value = strings.ReplaceAll(value, "&", "&amp;")
+	value = strings.ReplaceAll(value, "<", "&lt;")
+	value = strings.ReplaceAll(value, ">", "&gt;")
 	return value
 }

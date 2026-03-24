@@ -59,3 +59,156 @@ func TestTextContentForNode(t *testing.T) {
 		t.Fatalf("TextContentForNode() = %q, want %q", got, want)
 	}
 }
+
+func TestSerializationEscapesSpecialCharacters(t *testing.T) {
+	store := NewStore()
+
+	rootID := store.newNode(Node{
+		Kind:    NodeKindElement,
+		TagName: "div",
+		Attrs: []Attribute{
+			{Name: "data-x", Value: `a&b<"c">`, HasValue: true},
+		},
+	})
+	textID := store.newNode(Node{
+		Kind: NodeKindText,
+		Text: `1 < 2 & 3 > 0`,
+	})
+
+	store.appendChild(store.DocumentID(), rootID)
+	store.appendChild(rootID, textID)
+
+	if got, want := store.DumpDOM(), `<div data-x="a&amp;b&lt;&quot;c&quot;&gt;">1 &lt; 2 &amp; 3 &gt; 0</div>`; got != want {
+		t.Fatalf("DumpDOM() = %q, want %q", got, want)
+	}
+
+	outer, err := store.OuterHTMLForNode(rootID)
+	if err != nil {
+		t.Fatalf("OuterHTMLForNode() error = %v", err)
+	}
+	if got, want := outer, `<div data-x="a&amp;b&lt;&quot;c&quot;&gt;">1 &lt; 2 &amp; 3 &gt; 0</div>`; got != want {
+		t.Fatalf("OuterHTMLForNode() = %q, want %q", got, want)
+	}
+}
+
+func TestFormControlMutationHelpers(t *testing.T) {
+	store := NewStore()
+	input := `<form id="profile"><input id="name"><input id="flag" type="checkbox"><input id="radio-a" type="radio" name="size" checked><input id="radio-b" type="radio" name="size"><textarea id="bio">Base</textarea><select id="mode"><option value="a" selected>A</option><option>B</option><option value="c">C</option></select></form>`
+	if err := store.BootstrapHTML(input); err != nil {
+		t.Fatalf("BootstrapHTML() error = %v", err)
+	}
+
+	nameID := mustSelectSingle(t, store, "#name")
+	flagID := mustSelectSingle(t, store, "#flag")
+	radioBID := mustSelectSingle(t, store, "#radio-b")
+	bioID := mustSelectSingle(t, store, "#bio")
+	modeID := mustSelectSingle(t, store, "#mode")
+
+	if err := store.SetFormControlValue(nameID, "Ada"); err != nil {
+		t.Fatalf("SetFormControlValue(#name) error = %v", err)
+	}
+	if err := store.SetFormControlValue(bioID, "Line 1\nLine 2"); err != nil {
+		t.Fatalf("SetFormControlValue(#bio) error = %v", err)
+	}
+	if err := store.SetFormControlChecked(flagID, true); err != nil {
+		t.Fatalf("SetFormControlChecked(#flag) error = %v", err)
+	}
+	if err := store.SetFormControlChecked(radioBID, true); err != nil {
+		t.Fatalf("SetFormControlChecked(#radio-b) error = %v", err)
+	}
+	if err := store.SetSelectValue(modeID, "B"); err != nil {
+		t.Fatalf("SetSelectValue(#mode) error = %v", err)
+	}
+
+	if got, want := store.DumpDOM(), `<form id="profile"><input id="name" value="Ada"><input id="flag" type="checkbox" checked><input id="radio-a" type="radio" name="size"><input id="radio-b" type="radio" name="size" checked><textarea id="bio">Line 1
+Line 2</textarea><select id="mode"><option value="a">A</option><option selected>B</option><option value="c">C</option></select></form>`; got != want {
+		t.Fatalf("DumpDOM() = %q, want %q", got, want)
+	}
+}
+
+func TestSetSelectValueClearsUnmatchedSelection(t *testing.T) {
+	store := NewStore()
+	if err := store.BootstrapHTML(`<select id="mode"><option value="a" selected>A</option><option value="b">B</option></select>`); err != nil {
+		t.Fatalf("BootstrapHTML() error = %v", err)
+	}
+
+	modeID := mustSelectSingle(t, store, "#mode")
+	if err := store.SetSelectValue(modeID, "missing"); err != nil {
+		t.Fatalf("SetSelectValue(#mode, missing) error = %v", err)
+	}
+
+	if got, want := store.DumpDOM(), `<select id="mode"><option value="a">A</option><option value="b">B</option></select>`; got != want {
+		t.Fatalf("DumpDOM() after missing select value = %q, want %q", got, want)
+	}
+}
+
+func TestFormControlMutationHelpersRejectUnsupportedNodes(t *testing.T) {
+	store := NewStore()
+	if err := store.BootstrapHTML(`<main><input id="name"><input id="flag" type="checkbox"><select id="mode"><option>A</option></select></main>`); err != nil {
+		t.Fatalf("BootstrapHTML() error = %v", err)
+	}
+
+	nameID := mustSelectSingle(t, store, "#name")
+	flagID := mustSelectSingle(t, store, "#flag")
+
+	if err := store.SetFormControlValue(flagID, "Ada"); err == nil {
+		t.Fatalf("SetFormControlValue(#flag) error = nil, want unsupported control error")
+	}
+	if err := store.SetFormControlChecked(nameID, true); err == nil {
+		t.Fatalf("SetFormControlChecked(#name) error = nil, want unsupported control error")
+	}
+	if err := store.SetSelectValue(nameID, "A"); err == nil {
+		t.Fatalf("SetSelectValue(#name) error = nil, want unsupported control error")
+	}
+}
+
+func TestResetFormControlsRestoresInitialState(t *testing.T) {
+	store := NewStore()
+	input := `<form id="profile"><input id="name"><input id="flag" type="checkbox"><input id="radio-a" type="radio" name="size" checked><input id="radio-b" type="radio" name="size"><textarea id="bio">Base</textarea><select id="mode"><option value="a" selected>A</option><option>B</option><option value="c">C</option></select></form>`
+	if err := store.BootstrapHTML(input); err != nil {
+		t.Fatalf("BootstrapHTML() error = %v", err)
+	}
+
+	formID := mustSelectSingle(t, store, "#profile")
+	nameID := mustSelectSingle(t, store, "#name")
+	flagID := mustSelectSingle(t, store, "#flag")
+	radioBID := mustSelectSingle(t, store, "#radio-b")
+	bioID := mustSelectSingle(t, store, "#bio")
+	modeID := mustSelectSingle(t, store, "#mode")
+
+	if err := store.SetFormControlValue(nameID, "Ada"); err != nil {
+		t.Fatalf("SetFormControlValue(#name) error = %v", err)
+	}
+	if err := store.SetFormControlChecked(flagID, true); err != nil {
+		t.Fatalf("SetFormControlChecked(#flag) error = %v", err)
+	}
+	if err := store.SetFormControlChecked(radioBID, true); err != nil {
+		t.Fatalf("SetFormControlChecked(#radio-b) error = %v", err)
+	}
+	if err := store.SetFormControlValue(bioID, "Line 1\nLine 2"); err != nil {
+		t.Fatalf("SetFormControlValue(#bio) error = %v", err)
+	}
+	if err := store.SetSelectValue(modeID, "B"); err != nil {
+		t.Fatalf("SetSelectValue(#mode) error = %v", err)
+	}
+
+	if err := store.ResetFormControls(formID); err != nil {
+		t.Fatalf("ResetFormControls(#profile) error = %v", err)
+	}
+
+	if got, want := store.DumpDOM(), input; got != want {
+		t.Fatalf("DumpDOM() after ResetFormControls = %q, want %q", got, want)
+	}
+}
+
+func mustSelectSingle(t *testing.T, store *Store, selector string) NodeID {
+	t.Helper()
+	nodes, err := store.Select(selector)
+	if err != nil {
+		t.Fatalf("Select(%q) error = %v", selector, err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("Select(%q) len = %d, want 1", selector, len(nodes))
+	}
+	return nodes[0]
+}

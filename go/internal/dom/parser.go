@@ -37,52 +37,51 @@ func (s *Store) BootstrapHTML(html string) error {
 	if s == nil {
 		return fmt.Errorf("dom store is nil")
 	}
-	s.Reset()
-	s.sourceHTML = html
 
 	tokens, err := tokenizeHTML(html)
 	if err != nil {
 		return err
 	}
 
-	stack := []NodeID{s.documentID}
+	next := NewStore()
+	next.sourceHTML = html
+
+	stack := []NodeID{next.documentID}
 	for _, token := range tokens {
 		switch token.kind {
 		case htmlTokenText:
 			if token.text == "" {
 				continue
 			}
-			nodeID := s.newNode(Node{
+			nodeID := next.newNode(Node{
 				Kind: NodeKindText,
 				Text: token.text,
 			})
-			s.appendChild(stack[len(stack)-1], nodeID)
+			next.appendChild(stack[len(stack)-1], nodeID)
 		case htmlTokenStartTag:
-			nodeID := s.newNode(Node{
+			nodeID := next.newNode(Node{
 				Kind:    NodeKindElement,
 				TagName: token.name,
 				Attrs:   token.attrs,
 			})
-			s.appendChild(stack[len(stack)-1], nodeID)
+			next.appendChild(stack[len(stack)-1], nodeID)
 			if !token.selfClosing && !isVoidElement(token.name) {
 				stack = append(stack, nodeID)
 			}
 		case htmlTokenEndTag:
-			match := -1
-			for i := len(stack) - 1; i >= 1; i-- {
-				node := s.nodes[stack[i]]
-				if node != nil && node.Kind == NodeKindElement && node.TagName == token.name {
-					match = i
-					break
-				}
-			}
-			if match == -1 {
+			if len(stack) <= 1 {
 				return fmt.Errorf("unexpected closing tag </%s>", token.name)
 			}
-			stack = stack[:match]
+			node := next.nodes[stack[len(stack)-1]]
+			if node == nil || node.Kind != NodeKindElement || node.TagName != token.name {
+				return fmt.Errorf("unexpected closing tag </%s>", token.name)
+			}
+			stack = stack[:len(stack)-1]
 		}
 	}
 
+	next.captureDefaultState()
+	*s = *next
 	return nil
 }
 
@@ -130,9 +129,48 @@ func tokenizeHTML(input string) ([]htmlToken, error) {
 			}
 			tokens = append(tokens, token)
 			i = next
+			if token.kind == htmlTokenStartTag && token.name == "script" && !token.selfClosing {
+				lowerRest := strings.ToLower(input[i:])
+				closeOffset := strings.Index(lowerRest, "</script")
+				if closeOffset == -1 {
+					return nil, fmt.Errorf("unterminated script element")
+				}
+				if closeOffset > 0 {
+					tokens = append(tokens, htmlToken{
+						kind: htmlTokenText,
+						text: input[i : i+closeOffset],
+					})
+				}
+				endToken, endNext, err := parseEndTag(input, i+closeOffset)
+				if err != nil {
+					return nil, err
+				}
+				tokens = append(tokens, endToken)
+				i = endNext
+			}
 		}
 	}
 	return tokens, nil
+}
+
+func (s *Store) captureDefaultState() {
+	if s == nil {
+		return
+	}
+	for _, node := range s.nodes {
+		if node == nil {
+			continue
+		}
+		node.DefaultAttrs = cloneAttributes(node.Attrs)
+		switch node.Kind {
+		case NodeKindText:
+			node.DefaultText = node.Text
+		case NodeKindElement:
+			if node.TagName == "textarea" || node.TagName == "option" {
+				node.DefaultText = s.TextContentForNode(node.ID)
+			}
+		}
+	}
 }
 
 func parseEndTag(input string, start int) (htmlToken, int, error) {
@@ -221,7 +259,7 @@ func parseStartTag(input string, start int) (htmlToken, int, error) {
 				i++
 			default:
 				valueStart := i
-				for i < len(input) && !isSpace(input[i]) && input[i] != '>' && input[i] != '/' {
+				for i < len(input) && !isUnquotedAttrValueTerminator(input, i) {
 					i++
 				}
 				if valueStart == i {
@@ -233,6 +271,13 @@ func parseStartTag(input string, start int) (htmlToken, int, error) {
 
 		token.attrs = append(token.attrs, attr)
 	}
+}
+
+func isUnquotedAttrValueTerminator(input string, i int) bool {
+	if isSpace(input[i]) || input[i] == '>' {
+		return true
+	}
+	return input[i] == '/' && i+1 < len(input) && input[i+1] == '>'
 }
 
 func isVoidElement(tagName string) bool {

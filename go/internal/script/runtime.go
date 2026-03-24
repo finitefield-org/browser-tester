@@ -1,6 +1,9 @@
 package script
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 type RuntimeConfig struct {
 	StepLimit int
@@ -61,15 +64,40 @@ func (r *Runtime) Dispatch(request DispatchRequest) (DispatchResult, error) {
 		return DispatchResult{Value: UndefinedValue()}, nil
 	}
 
+	statements, err := splitScriptStatements(source)
+	if err != nil {
+		return DispatchResult{}, NewError(ErrorKindParse, err.Error())
+	}
+
+	if len(statements) == 0 {
+		return DispatchResult{Value: UndefinedValue()}, nil
+	}
+
+	var last Value = UndefinedValue()
+	for _, statement := range statements {
+		result, err := r.dispatchStatement(statement)
+		if err != nil {
+			return DispatchResult{}, err
+		}
+		last = result.Value
+	}
+	return DispatchResult{Value: last}, nil
+}
+
+func (r *Runtime) dispatchStatement(source string) (DispatchResult, error) {
+	if source == "" || source == "noop" {
+		return DispatchResult{Value: UndefinedValue()}, nil
+	}
+
 	if strings.HasPrefix(source, "host:") {
-		method := strings.TrimSpace(strings.TrimPrefix(source, "host:"))
-		if method == "" {
-			return DispatchResult{}, NewError(ErrorKindParse, "host dispatch requires a non-empty method name")
+		method, args, err := parseHostInvocation(strings.TrimPrefix(source, "host:"))
+		if err != nil {
+			return DispatchResult{}, NewError(ErrorKindParse, err.Error())
 		}
 		if r.host == nil {
 			return DispatchResult{}, NewError(ErrorKindHost, "host bindings are unavailable")
 		}
-		value, err := r.host.Call(method, nil)
+		value, err := r.host.Call(method, args)
 		if err != nil {
 			return DispatchResult{}, NewError(ErrorKindHost, err.Error())
 		}
@@ -78,6 +106,48 @@ func (r *Runtime) Dispatch(request DispatchRequest) (DispatchResult, error) {
 
 	return DispatchResult{}, NewError(
 		ErrorKindUnsupported,
-		"unsupported script source; this scaffold supports only `noop` and `host:<method>`",
+		"unsupported script source; this scaffold supports only `noop`, `host:<method>`, and `;`-separated host statements",
 	)
+}
+
+func splitScriptStatements(source string) ([]string, error) {
+	text := strings.TrimSpace(source)
+	if text == "" {
+		return nil, nil
+	}
+
+	statements := make([]string, 0, 4)
+	start := 0
+	var quote byte
+	for i := 0; i < len(text); i++ {
+		ch := text[i]
+		if quote != 0 {
+			if ch == '\\' && i+1 < len(text) {
+				i++
+				continue
+			}
+			if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch ch {
+		case '\'', '"':
+			quote = ch
+		case ';':
+			statement := strings.TrimSpace(text[start:i])
+			if statement != "" {
+				statements = append(statements, statement)
+			}
+			start = i + 1
+		}
+	}
+	if quote != 0 {
+		return nil, fmt.Errorf("unterminated quoted string in script source")
+	}
+
+	if tail := strings.TrimSpace(text[start:]); tail != "" {
+		statements = append(statements, tail)
+	}
+	return statements, nil
 }

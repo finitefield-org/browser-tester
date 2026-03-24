@@ -30,6 +30,28 @@ func TestFetchFamilyResolvesAndCapturesCalls(t *testing.T) {
 	}
 }
 
+func TestFetchFamilyUsesLastWriteWinsForDuplicateRules(t *testing.T) {
+	var f FetchFamily
+
+	f.RespondText("https://example.test/a", 200, "first")
+	f.RespondText("https://example.test/a", 201, "second")
+
+	status, body, err := f.Resolve("https://example.test/a")
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status != 201 || body != "second" {
+		t.Fatalf("Resolve() = (%d, %q), want (201, %q)", status, body, "second")
+	}
+
+	f.Reset()
+	f.Fail("https://example.test/a", "first failure")
+	f.Fail("https://example.test/a", "second failure")
+	if _, _, err := f.Resolve("https://example.test/a"); err == nil || err.Error() != "second failure" {
+		t.Fatalf("Resolve() error = %v, want second failure", err)
+	}
+}
+
 func TestDialogFamilyQueuesAndCapturesMessages(t *testing.T) {
 	var f DialogFamily
 
@@ -63,6 +85,41 @@ func TestDialogFamilyQueuesAndCapturesMessages(t *testing.T) {
 	}
 	if got := f.TakePromptMessages(); len(got) != 1 || got[0] != "prompt?" {
 		t.Fatalf("TakePromptMessages() = %#v, want [\"prompt?\"]", got)
+	}
+}
+
+func TestDialogFamilyTakeSnapshotsClearState(t *testing.T) {
+	var f DialogFamily
+
+	f.RecordAlert("alert")
+	f.RecordConfirm("confirm?")
+	f.RecordPrompt("prompt?")
+
+	alerts := f.TakeAlerts()
+	if len(alerts) != 1 || alerts[0] != "alert" {
+		t.Fatalf("TakeAlerts() = %#v, want [\"alert\"]", alerts)
+	}
+	alerts[0] = "mutated"
+	if got := f.TakeAlerts(); len(got) != 0 {
+		t.Fatalf("TakeAlerts() second read = %#v, want empty", got)
+	}
+
+	confirms := f.TakeConfirmMessages()
+	if len(confirms) != 1 || confirms[0] != "confirm?" {
+		t.Fatalf("TakeConfirmMessages() = %#v, want [\"confirm?\"]", confirms)
+	}
+	confirms[0] = "mutated"
+	if got := f.TakeConfirmMessages(); len(got) != 0 {
+		t.Fatalf("TakeConfirmMessages() second read = %#v, want empty", got)
+	}
+
+	prompts := f.TakePromptMessages()
+	if len(prompts) != 1 || prompts[0] != "prompt?" {
+		t.Fatalf("TakePromptMessages() = %#v, want [\"prompt?\"]", prompts)
+	}
+	prompts[0] = "mutated"
+	if got := f.TakePromptMessages(); len(got) != 0 {
+		t.Fatalf("TakePromptMessages() second read = %#v, want empty", got)
 	}
 }
 
@@ -104,6 +161,58 @@ func TestOpenClosePrintScrollFailureAndCapture(t *testing.T) {
 	}
 }
 
+func TestOpenClosePrintScrollTakeCallsClearState(t *testing.T) {
+	var open OpenFamily
+	if err := open.Invoke("https://example.test/new"); err != nil {
+		t.Fatalf("Open Invoke() error = %v", err)
+	}
+	openCalls := open.TakeCalls()
+	if len(openCalls) != 1 || openCalls[0].URL != "https://example.test/new" {
+		t.Fatalf("Open TakeCalls() = %#v, want one call", openCalls)
+	}
+	openCalls[0].URL = "mutated"
+	if got := open.TakeCalls(); len(got) != 0 {
+		t.Fatalf("Open TakeCalls() second read = %#v, want empty", got)
+	}
+
+	var close CloseFamily
+	if err := close.Invoke(); err != nil {
+		t.Fatalf("Close Invoke() error = %v", err)
+	}
+	closeCalls := close.TakeCalls()
+	if len(closeCalls) != 1 {
+		t.Fatalf("Close TakeCalls() = %#v, want one call", closeCalls)
+	}
+	if got := close.TakeCalls(); len(got) != 0 {
+		t.Fatalf("Close TakeCalls() second read = %#v, want empty", got)
+	}
+
+	var print PrintFamily
+	if err := print.Invoke(); err != nil {
+		t.Fatalf("Print Invoke() error = %v", err)
+	}
+	printCalls := print.Take()
+	if len(printCalls) != 1 {
+		t.Fatalf("Print Take() = %#v, want one call", printCalls)
+	}
+	if got := print.Take(); len(got) != 0 {
+		t.Fatalf("Print Take() second read = %#v, want empty", got)
+	}
+
+	var scroll ScrollFamily
+	if err := scroll.Invoke("by", 3, 4); err != nil {
+		t.Fatalf("Scroll Invoke() error = %v", err)
+	}
+	scrollCalls := scroll.TakeCalls()
+	if len(scrollCalls) != 1 || scrollCalls[0].Method != "by" || scrollCalls[0].X != 3 || scrollCalls[0].Y != 4 {
+		t.Fatalf("Scroll TakeCalls() = %#v, want one by-call", scrollCalls)
+	}
+	scrollCalls[0].Method = "mutated"
+	if got := scroll.TakeCalls(); len(got) != 0 {
+		t.Fatalf("Scroll TakeCalls() second read = %#v, want empty", got)
+	}
+}
+
 func TestMatchMediaResolveAndTakeCalls(t *testing.T) {
 	var f MatchMediaFamily
 
@@ -127,6 +236,138 @@ func TestMatchMediaResolveAndTakeCalls(t *testing.T) {
 
 	if _, err := f.Resolve("(prefers-color-scheme: dark)"); err == nil {
 		t.Fatalf("Resolve() for unknown query error = nil, want missing-rule error")
+	}
+}
+
+func TestMatchMediaUsesLastWriteWinsForDuplicateRules(t *testing.T) {
+	var f MatchMediaFamily
+
+	f.RespondMatches("(prefers-color-scheme: dark)", false)
+	f.RespondMatches("(prefers-color-scheme: dark)", true)
+
+	matches, err := f.Resolve("(prefers-color-scheme: dark)")
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if !matches {
+		t.Fatalf("Resolve() = false, want true")
+	}
+}
+
+func TestMatchMediaTakeSnapshotsClearState(t *testing.T) {
+	var f MatchMediaFamily
+
+	f.RecordCall("(prefers-reduced-motion: reduce)")
+	f.RecordListenerCall("(prefers-reduced-motion: reduce)", "addListener")
+
+	calls := f.TakeCalls()
+	if len(calls) != 1 || calls[0].Query != "(prefers-reduced-motion: reduce)" {
+		t.Fatalf("TakeCalls() = %#v, want one query call", calls)
+	}
+	calls[0].Query = "mutated"
+	if got := f.TakeCalls(); len(got) != 0 {
+		t.Fatalf("TakeCalls() second read = %#v, want empty", got)
+	}
+
+	listeners := f.TakeListenerCalls()
+	if len(listeners) != 1 || listeners[0].Method != "addListener" {
+		t.Fatalf("TakeListenerCalls() = %#v, want one listener call", listeners)
+	}
+	listeners[0].Method = "mutated"
+	if got := f.TakeListenerCalls(); len(got) != 0 {
+		t.Fatalf("TakeListenerCalls() second read = %#v, want empty", got)
+	}
+}
+
+func TestLocationTakeNavigationsClearsState(t *testing.T) {
+	var f LocationFamily
+
+	f.RecordNavigation("https://example.test/a")
+	f.RecordNavigation("https://example.test/b")
+
+	navigations := f.TakeNavigations()
+	if len(navigations) != 2 || navigations[0] != "https://example.test/a" || navigations[1] != "https://example.test/b" {
+		t.Fatalf("TakeNavigations() = %#v, want both navigations", navigations)
+	}
+	navigations[0] = "mutated"
+	if got := f.TakeNavigations(); len(got) != 0 {
+		t.Fatalf("TakeNavigations() second read = %#v, want empty", got)
+	}
+}
+
+func TestDownloadFamilyTakeReturnsDeepCopyAndClearsState(t *testing.T) {
+	var f DownloadFamily
+
+	bytes := []byte("abc")
+	f.Capture("a.txt", bytes)
+	bytes[0] = 'z'
+
+	artifacts := f.Take()
+	if len(artifacts) != 1 || artifacts[0].FileName != "a.txt" || string(artifacts[0].Bytes) != "abc" {
+		t.Fatalf("Take() = %#v, want preserved artifact bytes", artifacts)
+	}
+	artifacts[0].Bytes[0] = 'y'
+	if got := f.Take(); len(got) != 0 {
+		t.Fatalf("Take() second read = %#v, want empty", got)
+	}
+}
+
+func TestFileInputFamilyTakeSelectionsReturnsDeepCopyAndClearsState(t *testing.T) {
+	var f FileInputFamily
+
+	files := []string{"a.txt", "b.txt"}
+	f.SetFiles("#upload", files)
+	files[0] = "mutated.txt"
+
+	selections := f.TakeSelections()
+	if len(selections) != 1 || selections[0].Selector != "#upload" {
+		t.Fatalf("TakeSelections() = %#v, want one selection", selections)
+	}
+	if len(selections[0].Files) != 2 || selections[0].Files[0] != "a.txt" || selections[0].Files[1] != "b.txt" {
+		t.Fatalf("TakeSelections() files = %#v, want preserved file list", selections[0].Files)
+	}
+	selections[0].Files[0] = "returned-mutation.txt"
+	if got := f.TakeSelections(); len(got) != 0 {
+		t.Fatalf("TakeSelections() second read = %#v, want empty", got)
+	}
+}
+
+func TestStorageFamilyLocalAndSessionReturnCopies(t *testing.T) {
+	var f StorageFamily
+
+	f.SeedLocal("token", "abc")
+	f.SeedSession("tab", "main")
+
+	local := f.Local()
+	session := f.Session()
+	local["token"] = "mutated"
+	local["extra"] = "new"
+	session["tab"] = "mutated"
+	session["extra"] = "new"
+
+	freshLocal := f.Local()
+	if got, want := freshLocal["token"], "abc"; got != want {
+		t.Fatalf("Local()[token] = %q, want %q", got, want)
+	}
+	if _, ok := freshLocal["extra"]; ok {
+		t.Fatalf("Local()[extra] should not exist")
+	}
+
+	freshSession := f.Session()
+	if got, want := freshSession["tab"], "main"; got != want {
+		t.Fatalf("Session()[tab] = %q, want %q", got, want)
+	}
+	if _, ok := freshSession["extra"]; ok {
+		t.Fatalf("Session()[extra] should not exist")
+	}
+
+	f.Reset()
+
+	if got := f.Local(); len(got) != 0 {
+		t.Fatalf("Local() after Reset = %#v, want empty", got)
+	}
+	if got := f.Session(); len(got) != 0 {
+		t.Fatalf("Session() after Reset = %#v, want empty", got)
 	}
 }
 

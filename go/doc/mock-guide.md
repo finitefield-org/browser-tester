@@ -57,7 +57,7 @@ Examples:
 - `Dialogs`: queued confirm/prompt answers, alert capture, and message capture
 - `Clipboard`: seeded read state and write capture
 - `Location`: current URL seed and navigation capture, including `window.location.assign()`, `window.location.replace()`, `window.location.reload()`, and URL-property assignments
-- `Downloads`: artifact capture through the registry and `Harness.CaptureDownload(...)`
+- `Downloads`: artifact capture through the registry and `Harness.CaptureDownload(...)`, plus hyperlink clicks on `a` / `area` elements with `download` attributes
 - `FileInput`: file selection capture and the `input.files` snapshot
 - `Open`: call capture and optional bootstrap failure
 - `Close`: call capture and optional bootstrap failure

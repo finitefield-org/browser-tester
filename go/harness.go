@@ -257,6 +257,78 @@ func (h *Harness) Navigate(url string) error {
 	return nil
 }
 
+func (h *Harness) Click(selector string) error {
+	if h == nil || h.session == nil {
+		return NewError(ErrorKindEvent, "click is unavailable")
+	}
+	if err := h.session.Click(selector); err != nil {
+		return NewError(ErrorKindEvent, err.Error())
+	}
+	return nil
+}
+
+func (h *Harness) Focus(selector string) error {
+	if h == nil || h.session == nil {
+		return NewError(ErrorKindEvent, "focus is unavailable")
+	}
+	if err := h.session.Focus(selector); err != nil {
+		return NewError(ErrorKindEvent, err.Error())
+	}
+	return nil
+}
+
+func (h *Harness) Blur() error {
+	if h == nil || h.session == nil {
+		return NewError(ErrorKindEvent, "blur is unavailable")
+	}
+	if err := h.session.Blur(); err != nil {
+		return NewError(ErrorKindEvent, err.Error())
+	}
+	return nil
+}
+
+func (h *Harness) GetAttribute(selector, name string) (string, bool, error) {
+	if h == nil || h.session == nil {
+		return "", false, NewError(ErrorKindDOM, "get attribute is unavailable")
+	}
+	value, ok, err := h.session.GetAttribute(selector, name)
+	if err != nil {
+		return "", false, NewError(ErrorKindDOM, err.Error())
+	}
+	return value, ok, nil
+}
+
+func (h *Harness) HasAttribute(selector, name string) (bool, error) {
+	if h == nil || h.session == nil {
+		return false, NewError(ErrorKindDOM, "has attribute is unavailable")
+	}
+	ok, err := h.session.HasAttribute(selector, name)
+	if err != nil {
+		return false, NewError(ErrorKindDOM, err.Error())
+	}
+	return ok, nil
+}
+
+func (h *Harness) SetAttribute(selector, name, value string) error {
+	if h == nil || h.session == nil {
+		return NewError(ErrorKindDOM, "set attribute is unavailable")
+	}
+	if err := h.session.SetAttribute(selector, name, value); err != nil {
+		return NewError(ErrorKindDOM, err.Error())
+	}
+	return nil
+}
+
+func (h *Harness) RemoveAttribute(selector, name string) error {
+	if h == nil || h.session == nil {
+		return NewError(ErrorKindDOM, "remove attribute is unavailable")
+	}
+	if err := h.session.RemoveAttribute(selector, name); err != nil {
+		return NewError(ErrorKindDOM, err.Error())
+	}
+	return nil
+}
+
 func (h *Harness) CaptureDownload(fileName string, bytes []byte) error {
 	if h == nil || h.session == nil {
 		return NewError(ErrorKindMock, "capture download is unavailable")

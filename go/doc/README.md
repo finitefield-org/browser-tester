@@ -30,6 +30,13 @@ The design follows the lessons captured in [`../next.md`](../../next.md) and [`.
 ## Current Status
 
 - Phase 0 scaffold is present, and internal DOM/runtime/script scaffolds have landed.
+- The initial interaction slice (`Click`/`Focus`/`Blur`), the initial form-control slice (`TypeText`/`SetChecked`/`SetSelectValue`/`Submit`), and the initial assertion slice (`AssertText`/`AssertValue`/`AssertChecked`/`AssertExists`) are wired through the public facade and debug view, and `Click` also follows bounded hyperlink default actions for `a` / `area` elements and reset-button form reset through the location, open, download, and DOM form-control helpers. Inline `<script>` listeners can register target-phase handlers through the host bridge, and those handlers can chain bounded `host:` statements separated by `;`.
+- The selector engine now covers a bounded descendant/child combinator slice in addition to the simple tag/id/class forms.
+- Script DOM query helpers are available through host bindings for `querySelector` / `querySelectorAll` / `matches` / `closest`, `querySelectorAll` returns a minimal snapshot `NodeList`, and a minimal live `HTMLCollection` covers `children`.
+- Inline `<script>` blocks are preserved as raw text and execute during bootstrap through the bounded script host bridge, so source HTML can mutate the live DOM.
+- Bounded attribute reflection helpers are available for `GetAttribute` / `HasAttribute` / `SetAttribute` / `RemoveAttribute`; explicit `classList` and `dataset` views remain later.
+- Internal bounded `classList` / `dataset` helpers now live in `internal/dom`; the public facade will stay narrow until they are clearly needed.
+- The public tree-mutation slice (`InnerHTML`, `OuterHTML`, `SetInnerHTML`, `SetOuterHTML`, `InsertAdjacentHTML`, `RemoveNode`) is wired through the facade; `cloneNode` remains internal for now.
 - `go test ./...` passes for the current skeleton.
 - The clipboard mock family scaffold is present, including `ReadClipboard` and `WriteClipboard`.
 - Later phases remain intentionally bounded and future-facing.

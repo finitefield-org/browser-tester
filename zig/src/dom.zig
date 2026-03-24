@@ -21,6 +21,8 @@ pub const ElementData = struct {
     namespace_uri: []const u8 = "http://www.w3.org/1999/xhtml",
     attributes: std.ArrayListUnmanaged(Attribute) = .{},
     dialog_return_value: []const u8 = "",
+    output_default_value: ?[]const u8 = null,
+    popover_visible: bool = false,
 };
 
 pub const NodeKind = union(enum) {
@@ -47,6 +49,13 @@ pub const RangeTextSelectionMode = enum {
     select,
     start,
     end,
+};
+
+pub const PopoverState = enum {
+    no_popover,
+    auto,
+    hint,
+    manual,
 };
 
 const SerializationNamespace = enum {
@@ -134,6 +143,7 @@ const SelectorPseudoClass = union(enum) {
     focus,
     focus_visible,
     focus_within,
+    popover_open,
     lang: std.ArrayListUnmanaged([]const u8),
     dir: SelectorDirValue,
     not: std.ArrayListUnmanaged(SelectorChain),
@@ -252,6 +262,7 @@ pub const DomStore = struct {
     target_fragment: ?[]const u8 = null,
     selection: std.AutoHashMapUnmanaged(NodeId, SelectionState) = .{},
     document_selection_cleared: bool = false,
+    indeterminate: std.AutoHashMapUnmanaged(NodeId, void) = .{},
     custom_validity: std.AutoHashMapUnmanaged(NodeId, []const u8) = .{},
 
     pub fn init(allocator: std.mem.Allocator) errors.Result(DomStore) {
@@ -268,6 +279,7 @@ pub const DomStore = struct {
             .target_fragment = null,
             .selection = .{},
             .document_selection_cleared = false,
+            .indeterminate = .{},
             .custom_validity = .{},
         };
         const arena_alloc = store.arena.allocator();
@@ -285,6 +297,7 @@ pub const DomStore = struct {
         while (custom_values.next()) |message| {
             self.allocator.free(message.*);
         }
+        self.indeterminate.deinit(self.allocator);
         self.custom_validity.deinit(self.allocator);
         self.selection.deinit(self.allocator);
         self.arena.deinit();
@@ -356,7 +369,8 @@ pub const DomStore = struct {
 
         if (!std.mem.eql(u8, element.tag_name, "input") and
             !std.mem.eql(u8, element.tag_name, "select") and
-            !std.mem.eql(u8, element.tag_name, "textarea"))
+            !std.mem.eql(u8, element.tag_name, "textarea") and
+            !std.mem.eql(u8, element.tag_name, "output"))
         {
             return error.DomError;
         }
@@ -402,6 +416,40 @@ pub const DomStore = struct {
         return;
     }
 
+    pub fn outputDefaultValue(self: *const DomStore, allocator: std.mem.Allocator, node_id: NodeId) errors.Result([]const u8) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return error.DomError,
+        };
+        if (!std.mem.eql(u8, element.tag_name, "output")) return error.DomError;
+        if (element.output_default_value) |default_value| {
+            return allocator.dupe(u8, default_value);
+        }
+        return self.textContent(allocator, node_id);
+    }
+
+    pub fn outputHasDefaultValueOverride(self: *const DomStore, node_id: NodeId) errors.Result(bool) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return error.DomError,
+        };
+        if (!std.mem.eql(u8, element.tag_name, "output")) return error.DomError;
+        return element.output_default_value != null;
+    }
+
+    pub fn setOutputDefaultValue(self: *DomStore, node_id: NodeId, value: []const u8) errors.Result(void) {
+        const node = self.nodeAtMut(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |*element| element,
+            else => return error.DomError,
+        };
+        if (!std.mem.eql(u8, element.tag_name, "output")) return error.DomError;
+        element.output_default_value = try duplicateString(self, value);
+        return;
+    }
+
     pub fn validationMessageForNode(
         self: *const DomStore,
         allocator: std.mem.Allocator,
@@ -415,7 +463,8 @@ pub const DomStore = struct {
 
         if (!std.mem.eql(u8, element.tag_name, "input") and
             !std.mem.eql(u8, element.tag_name, "select") and
-            !std.mem.eql(u8, element.tag_name, "textarea"))
+            !std.mem.eql(u8, element.tag_name, "textarea") and
+            !std.mem.eql(u8, element.tag_name, "output"))
         {
             return error.DomError;
         }
@@ -1205,6 +1254,39 @@ pub const DomStore = struct {
         return (try self.getAttribute(node_id, trimmed)) != null;
     }
 
+    pub fn popoverStateForNode(self: *const DomStore, node_id: NodeId) ?PopoverState {
+        const node = self.nodeAt(node_id) orelse return null;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return null,
+        };
+        if (!std.mem.eql(u8, element.namespace_uri, "http://www.w3.org/1999/xhtml")) return null;
+        return popoverStateFromAttribute(elementAttributeValue(element, "popover"));
+    }
+
+    pub fn popoverVisibleForNode(self: *const DomStore, node_id: NodeId) ?bool {
+        const node = self.nodeAt(node_id) orelse return null;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return null,
+        };
+        if (!std.mem.eql(u8, element.namespace_uri, "http://www.w3.org/1999/xhtml")) return null;
+        return element.popover_visible;
+    }
+
+    pub fn setPopoverVisible(self: *DomStore, node_id: NodeId, visible: bool) errors.Result(void) {
+        const node = self.nodeAtMut(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |*element| element,
+            else => return error.DomError,
+        };
+        if (!std.mem.eql(u8, element.namespace_uri, "http://www.w3.org/1999/xhtml")) {
+            return error.DomError;
+        }
+        element.popover_visible = visible;
+        return;
+    }
+
     pub fn setAttribute(
         self: *DomStore,
         node_id: NodeId,
@@ -1221,8 +1303,22 @@ pub const DomStore = struct {
         const arena_alloc = self.arena.allocator();
         const value_copy = try duplicateString(self, value);
         if (findAttributeIndexByName(element.attributes.items, trimmed)) |index| {
+            if (std.ascii.eqlIgnoreCase(trimmed, "popover")) {
+                const old_state = popoverStateFromAttribute(element.attributes.items[index].value);
+                const new_state = popoverStateFromAttribute(value);
+                if (element.popover_visible and old_state != new_state) {
+                    element.popover_visible = false;
+                }
+            }
             element.attributes.items[index].value = value_copy;
             return;
+        }
+
+        if (std.ascii.eqlIgnoreCase(trimmed, "popover")) {
+            const new_state = popoverStateFromAttribute(value);
+            if (element.popover_visible and new_state != .no_popover) {
+                element.popover_visible = false;
+            }
         }
 
         try element.attributes.append(arena_alloc, .{
@@ -1245,6 +1341,12 @@ pub const DomStore = struct {
         };
 
         if (findAttributeIndexByName(element.attributes.items, trimmed)) |index| {
+            if (std.ascii.eqlIgnoreCase(trimmed, "popover")) {
+                const old_state = popoverStateFromAttribute(element.attributes.items[index].value);
+                if (element.popover_visible and old_state != .no_popover) {
+                    element.popover_visible = false;
+                }
+            }
             _ = element.attributes.orderedRemove(index);
         }
         return;
@@ -1268,12 +1370,23 @@ pub const DomStore = struct {
         if (force) |forced| {
             if (!forced) {
                 if (index) |found| {
+                    if (std.ascii.eqlIgnoreCase(trimmed, "popover")) {
+                        const old_state = popoverStateFromAttribute(element.attributes.items[found].value);
+                        if (element.popover_visible and old_state != .no_popover) {
+                            element.popover_visible = false;
+                        }
+                    }
                     _ = element.attributes.orderedRemove(found);
                 }
                 return false;
             }
 
             if (index == null) {
+                if (std.ascii.eqlIgnoreCase(trimmed, "popover")) {
+                    if (element.popover_visible) {
+                        element.popover_visible = false;
+                    }
+                }
                 try element.attributes.append(arena_alloc, .{
                     .name = try duplicateLowercase(self, trimmed),
                     .value = try duplicateString(self, ""),
@@ -1283,8 +1396,20 @@ pub const DomStore = struct {
         }
 
         if (index) |found| {
+            if (std.ascii.eqlIgnoreCase(trimmed, "popover")) {
+                const old_state = popoverStateFromAttribute(element.attributes.items[found].value);
+                if (element.popover_visible and old_state != .no_popover) {
+                    element.popover_visible = false;
+                }
+            }
             _ = element.attributes.orderedRemove(found);
             return false;
+        }
+
+        if (std.ascii.eqlIgnoreCase(trimmed, "popover")) {
+            if (element.popover_visible) {
+                element.popover_visible = false;
+            }
         }
 
         try element.attributes.append(arena_alloc, .{
@@ -1402,6 +1527,37 @@ pub const DomStore = struct {
             try upsertAttribute(arena_alloc, &element.attributes, "checked", try duplicateString(self, ""));
         } else {
             removeAttributeByName(&element.attributes, "checked");
+        }
+
+        return;
+    }
+
+    pub fn indeterminateForNode(self: *const DomStore, node_id: NodeId) ?bool {
+        const node = self.nodeAt(node_id) orelse return null;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return null,
+        };
+
+        if (!std.mem.eql(u8, element.tag_name, "input")) return null;
+        return self.indeterminate.contains(node_id);
+    }
+
+    pub fn setFormControlIndeterminate(self: *DomStore, node_id: NodeId, indeterminate: bool) errors.Result(void) {
+        const node = self.nodeAtMut(node_id) orelse return error.HtmlParse;
+        const element = switch (node.kind) {
+            .element => |*element| element,
+            else => return error.HtmlParse,
+        };
+
+        if (!std.mem.eql(u8, element.tag_name, "input")) {
+            return error.DomError;
+        }
+
+        if (indeterminate) {
+            try self.indeterminate.put(self.allocator, node_id, {});
+        } else {
+            _ = self.indeterminate.remove(node_id);
         }
 
         return;
@@ -1822,6 +1978,7 @@ pub const DomStore = struct {
         }
 
         self.clearSelectionStateForSubtree(node_id);
+        self.clearIndeterminateStateForSubtree(node_id);
         self.clearCustomValidityStateForSubtree(node_id);
 
         const record = self.nodeAtMut(node_id) orelse return error.DomError;
@@ -1987,6 +2144,11 @@ pub const DomStore = struct {
                 if (cloned_element.kind == .element) {
                     cloned_element.kind.element.dialog_return_value =
                         try duplicateString(self, element.dialog_return_value);
+                    cloned_element.kind.element.output_default_value = if (element.output_default_value) |default_value|
+                        try duplicateString(self, default_value)
+                    else
+                        null;
+                    cloned_element.kind.element.popover_visible = element.popover_visible;
                 }
                 break :blk node_id;
             },
@@ -2496,6 +2658,14 @@ pub const DomStore = struct {
         const node = self.nodeAt(node_id) orelse return;
         for (node.children.items) |child_id| {
             self.clearSelectionStateForSubtree(child_id);
+        }
+    }
+
+    fn clearIndeterminateStateForSubtree(self: *DomStore, node_id: NodeId) void {
+        _ = self.indeterminate.remove(node_id);
+        const node = self.nodeAt(node_id) orelse return;
+        for (node.children.items) |child_id| {
+            self.clearIndeterminateStateForSubtree(child_id);
         }
     }
 
@@ -3311,6 +3481,16 @@ fn trimAttributeName(name: []const u8) ?[]const u8 {
     return if (trimmed.len == 0) null else trimmed;
 }
 
+fn popoverStateFromAttribute(value: ?[]const u8) PopoverState {
+    const raw = value orelse return .no_popover;
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n\x0c");
+    if (trimmed.len == 0) return .auto;
+    if (std.ascii.eqlIgnoreCase(trimmed, "auto")) return .auto;
+    if (std.ascii.eqlIgnoreCase(trimmed, "hint")) return .hint;
+    if (std.ascii.eqlIgnoreCase(trimmed, "manual")) return .manual;
+    return .manual;
+}
+
 fn findAttributeIndexByName(attributes: []const Attribute, name: []const u8) ?usize {
     for (attributes, 0..) |attribute, index| {
         if (asciiEqualIgnoreCase(attribute.name, name)) {
@@ -3869,6 +4049,8 @@ fn parseSelectorPseudoClass(
         const pattern = try parseSelectorNthChildArgument(allocator, selector, pos);
         return .{ .nth_last_of_type = pattern };
     }
+
+    if (asciiEqualIgnoreCase(name, "popover-open")) return .popover_open;
 
     if (pos.* < selector.len and selector[pos.*] == '(') return error.HtmlParse;
 
@@ -4837,6 +5019,10 @@ fn isIndeterminatePseudoClass(self: *const DomStore, node_id: NodeId) bool {
         return false;
     }
 
+    if (self.indeterminate.contains(node_id)) {
+        return true;
+    }
+
     if (!isCheckableInputType(elementAttributeValue(element, "type"))) {
         return false;
     }
@@ -5215,7 +5401,7 @@ fn isValidityFormControlCandidate(self: *const DomStore, node_id: NodeId) bool {
         else => return false,
     };
 
-    if (std.mem.eql(u8, element.tag_name, "textarea") or std.mem.eql(u8, element.tag_name, "select")) {
+    if (std.mem.eql(u8, element.tag_name, "textarea") or std.mem.eql(u8, element.tag_name, "select") or std.mem.eql(u8, element.tag_name, "output")) {
         return true;
     }
 
@@ -6900,6 +7086,10 @@ fn isFocusWithinPseudoClass(self: *const DomStore, node_id: NodeId) bool {
     return false;
 }
 
+fn isPopoverOpenPseudoClass(self: *const DomStore, node_id: NodeId) bool {
+    return self.popoverVisibleForNode(node_id) orelse false;
+}
+
 fn isNthChild(self: *const DomStore, node_id: NodeId, pattern: SelectorNthChildPattern) bool {
     const filters = if (pattern.of_selectors) |selectors| selectors.items else null;
     const position = elementChildPositionFiltered(self, node_id, filters) orelse return false;
@@ -7122,6 +7312,7 @@ fn nodeMatchesPseudoClass(self: *const DomStore, node_id: NodeId, pseudo: Select
         .focus => isFocusPseudoClass(self, node_id),
         .focus_visible => isFocusPseudoClass(self, node_id),
         .focus_within => isFocusWithinPseudoClass(self, node_id),
+        .popover_open => isPopoverOpenPseudoClass(self, node_id),
         .lang => |langs| isLangPseudoClass(self, node_id, langs.items),
         .dir => |dir| isDirPseudoClass(self, node_id, dir),
         .not => |selectors| blk: {
