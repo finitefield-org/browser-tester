@@ -18,7 +18,7 @@ func (s *Session) DumpDOM() string {
 	return store.DumpDOM()
 }
 
-func (s *Session) TypeText(selector, text string) error {
+func (s *Session) TypeText(selector, text string) (err error) {
 	if s == nil {
 		return fmt.Errorf("session is unavailable")
 	}
@@ -26,17 +26,25 @@ func (s *Session) TypeText(selector, text string) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			s.discardMicrotasks()
+		}
+	}()
 	if err := store.SetFormControlValue(nodeID, text); err != nil {
 		return err
 	}
-	s.recordInteraction(InteractionKindTypeText, normalized)
-	if err := s.dispatchEventListeners(store, nodeID, "input"); err != nil {
+	if err := store.SetUserValidity(nodeID, true); err != nil {
 		return err
 	}
-	return nil
+	s.recordInteraction(InteractionKindTypeText, normalized)
+	if _, err := s.dispatchEventListeners(store, nodeID, "input"); err != nil {
+		return err
+	}
+	return s.drainMicrotasks(store)
 }
 
-func (s *Session) SetChecked(selector string, checked bool) error {
+func (s *Session) SetChecked(selector string, checked bool) (err error) {
 	if s == nil {
 		return fmt.Errorf("session is unavailable")
 	}
@@ -44,20 +52,28 @@ func (s *Session) SetChecked(selector string, checked bool) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			s.discardMicrotasks()
+		}
+	}()
 	if err := store.SetFormControlChecked(nodeID, checked); err != nil {
 		return err
 	}
+	if err := store.SetUserValidity(nodeID, true); err != nil {
+		return err
+	}
 	s.recordInteraction(InteractionKindSetChecked, normalized)
-	if err := s.dispatchEventListeners(store, nodeID, "input"); err != nil {
+	if _, err := s.dispatchEventListeners(store, nodeID, "input"); err != nil {
 		return err
 	}
-	if err := s.dispatchEventListeners(store, nodeID, "change"); err != nil {
+	if _, err := s.dispatchEventListeners(store, nodeID, "change"); err != nil {
 		return err
 	}
-	return nil
+	return s.drainMicrotasks(store)
 }
 
-func (s *Session) SetSelectValue(selector, value string) error {
+func (s *Session) SetSelectValue(selector, value string) (err error) {
 	if s == nil {
 		return fmt.Errorf("session is unavailable")
 	}
@@ -65,20 +81,28 @@ func (s *Session) SetSelectValue(selector, value string) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			s.discardMicrotasks()
+		}
+	}()
 	if err := store.SetSelectValue(nodeID, value); err != nil {
 		return err
 	}
+	if err := store.SetUserValidity(nodeID, true); err != nil {
+		return err
+	}
 	s.recordInteraction(InteractionKindSetSelectValue, normalized)
-	if err := s.dispatchEventListeners(store, nodeID, "input"); err != nil {
+	if _, err := s.dispatchEventListeners(store, nodeID, "input"); err != nil {
 		return err
 	}
-	if err := s.dispatchEventListeners(store, nodeID, "change"); err != nil {
+	if _, err := s.dispatchEventListeners(store, nodeID, "change"); err != nil {
 		return err
 	}
-	return nil
+	return s.drainMicrotasks(store)
 }
 
-func (s *Session) Submit(selector string) error {
+func (s *Session) Submit(selector string) (err error) {
 	if s == nil {
 		return fmt.Errorf("session is unavailable")
 	}
@@ -86,16 +110,20 @@ func (s *Session) Submit(selector string) error {
 	if err != nil {
 		return err
 	}
-	if _, ok := submitTarget(store, nodeID, node); !ok {
+	defer func() {
+		if err != nil {
+			s.discardMicrotasks()
+		}
+	}()
+	formID, ok := submitTarget(store, nodeID, node)
+	if !ok {
 		return fmt.Errorf("selector `%s` does not reference a form or submit control with an owning form", normalized)
 	}
 	s.recordInteraction(InteractionKindSubmit, normalized)
-	if formID, ok := submitTarget(store, nodeID, node); ok {
-		if err := s.dispatchEventListeners(store, formID, "submit"); err != nil {
-			return err
-		}
+	if _, err := s.dispatchEventListeners(store, formID, "submit"); err != nil {
+		return err
 	}
-	return nil
+	return s.drainMicrotasks(store)
 }
 
 func (s *Session) applyClickDefaultAction(selector string) error {
@@ -116,26 +144,38 @@ func (s *Session) applyClickDefaultAction(selector string) error {
 			if err := store.SetFormControlChecked(nodeID, !checked); err != nil {
 				return err
 			}
-			if err := s.dispatchEventListeners(store, nodeID, "input"); err != nil {
+			if err := store.SetUserValidity(nodeID, true); err != nil {
 				return err
 			}
-			return s.dispatchEventListeners(store, nodeID, "change")
+			if _, err := s.dispatchEventListeners(store, nodeID, "input"); err != nil {
+				return err
+			}
+			_, err := s.dispatchEventListeners(store, nodeID, "change")
+			return err
 		case "radio":
 			if err := store.SetFormControlChecked(nodeID, true); err != nil {
 				return err
 			}
-			if err := s.dispatchEventListeners(store, nodeID, "input"); err != nil {
+			if err := store.SetUserValidity(nodeID, true); err != nil {
 				return err
 			}
-			return s.dispatchEventListeners(store, nodeID, "change")
+			if _, err := s.dispatchEventListeners(store, nodeID, "input"); err != nil {
+				return err
+			}
+			_, err := s.dispatchEventListeners(store, nodeID, "change")
+			return err
 		case "submit", "image":
 			if _, ok := submitTarget(store, nodeID, node); ok {
 				return s.Submit(normalized)
 			}
 		case "reset":
 			if formID, ok := resetTarget(store, nodeID, node); ok {
-				if err := s.dispatchEventListeners(store, formID, "reset"); err != nil {
+				prevented, err := s.dispatchTargetEventListeners(store, formID, "reset")
+				if err != nil {
 					return err
+				}
+				if prevented {
+					return nil
 				}
 				return store.ResetFormControls(formID)
 			}
@@ -147,8 +187,12 @@ func (s *Session) applyClickDefaultAction(selector string) error {
 			}
 		} else if isResetControl(node) {
 			if formID, ok := resetTarget(store, nodeID, node); ok {
-				if err := s.dispatchEventListeners(store, formID, "reset"); err != nil {
+				prevented, err := s.dispatchTargetEventListeners(store, formID, "reset")
+				if err != nil {
 					return err
+				}
+				if prevented {
+					return nil
 				}
 				return store.ResetFormControls(formID)
 			}

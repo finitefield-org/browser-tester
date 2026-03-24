@@ -3,6 +3,9 @@ const std = @import("std");
 const dom = @import("dom.zig");
 const errors = @import("errors.zig");
 
+const TextTrackMode = dom.TextTrackMode;
+const TextTrackState = dom.TextTrackState;
+
 pub const ListenerTarget = union(enum) {
     document,
     window,
@@ -21,6 +24,91 @@ pub const EventPhase = enum(u8) {
     bubbling = 3,
 };
 
+const FormDataEntry = struct {
+    name: []const u8,
+    value: []const u8,
+};
+
+const FormDataEntrySnapshot = struct {
+    name: []const u8,
+    value: []const u8,
+};
+
+const FormDataState = struct {
+    allocator: std.mem.Allocator,
+    items: std.ArrayListUnmanaged(FormDataEntry) = .{},
+
+    fn deinit(self: *FormDataState) void {
+        for (self.items.items) |entry| {
+            self.allocator.free(entry.name);
+            self.allocator.free(entry.value);
+        }
+        self.items.deinit(self.allocator);
+    }
+
+    fn append(self: *FormDataState, name: []const u8, value: []const u8) errors.Result(void) {
+        const name_copy = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(name_copy);
+        const value_copy = try self.allocator.dupe(u8, value);
+        errdefer self.allocator.free(value_copy);
+        try self.items.append(self.allocator, .{
+            .name = name_copy,
+            .value = value_copy,
+        });
+    }
+
+    fn delete(self: *FormDataState, name: []const u8) void {
+        var index: usize = 0;
+        while (index < self.items.items.len) {
+            const entry = self.items.items[index];
+            if (!std.mem.eql(u8, entry.name, name)) {
+                index += 1;
+                continue;
+            }
+            self.allocator.free(entry.name);
+            self.allocator.free(entry.value);
+            _ = self.items.orderedRemove(index);
+        }
+    }
+
+    fn set(self: *FormDataState, name: []const u8, value: []const u8) errors.Result(void) {
+        self.delete(name);
+        try self.append(name, value);
+    }
+
+    fn has(self: *const FormDataState, name: []const u8) bool {
+        for (self.items.items) |entry| {
+            if (std.mem.eql(u8, entry.name, name)) return true;
+        }
+        return false;
+    }
+
+    fn get(self: *const FormDataState, name: []const u8) ?[]const u8 {
+        for (self.items.items) |entry| {
+            if (std.mem.eql(u8, entry.name, name)) return entry.value;
+        }
+        return null;
+    }
+
+    fn getAll(self: *const FormDataState, allocator: std.mem.Allocator, name: []const u8) errors.Result(StringListState) {
+        var items: std.ArrayList([]const u8) = .empty;
+        errdefer items.deinit(allocator);
+        for (self.items.items) |entry| {
+            if (!std.mem.eql(u8, entry.name, name)) continue;
+            try items.append(allocator, try allocator.dupe(u8, entry.value));
+        }
+        return .{ .items = try items.toOwnedSlice(allocator) };
+    }
+};
+
+fn formDataStateCreate(allocator: std.mem.Allocator) errors.Result(*FormDataState) {
+    const state = try allocator.create(FormDataState);
+    state.* = .{
+        .allocator = allocator,
+    };
+    return state;
+}
+
 pub const ScriptEvent = struct {
     event_type: []const u8,
     target: ListenerTarget,
@@ -31,9 +119,31 @@ pub const ScriptEvent = struct {
     propagation_stopped: bool = false,
     immediate_propagation_stopped: bool = false,
     phase: EventPhase = .none,
+    is_submit_event: bool = false,
+    submitter_element: ?dom.NodeId = null,
+    source_element: ?dom.NodeId = null,
+    command_text: ?[]const u8 = null,
+    form_data: ?*FormDataState = null,
 
     pub fn eventType(self: *const ScriptEvent) []const u8 {
         return self.event_type;
+    }
+
+    pub fn command(self: *const ScriptEvent) ?[]const u8 {
+        return self.command_text;
+    }
+
+    pub fn source(self: *const ScriptEvent) ?dom.NodeId {
+        return self.source_element;
+    }
+
+    pub fn submitter(self: *const ScriptEvent) ?dom.NodeId {
+        if (!self.is_submit_event) return null;
+        return self.submitter_element;
+    }
+
+    pub fn formData(self: *const ScriptEvent) ?*FormDataState {
+        return self.form_data;
     }
 
     pub fn preventDefault(self: *ScriptEvent) void {
@@ -369,6 +479,35 @@ pub const ScriptRuntime = struct {
         bubbles: bool,
         cancelable: bool,
     ) errors.Result(DispatchOutcome) {
+        return try self.dispatchDomEventWithMetadata(
+            allocator,
+            host,
+            node_id,
+            event_type,
+            bubbles,
+            cancelable,
+            false,
+            null,
+            null,
+            null,
+            null,
+        );
+    }
+
+    fn dispatchDomEventWithMetadata(
+        self: *ScriptRuntime,
+        allocator: std.mem.Allocator,
+        host: anytype,
+        node_id: dom.NodeId,
+        event_type: []const u8,
+        bubbles: bool,
+        cancelable: bool,
+        is_submit_event: bool,
+        submitter_node: ?dom.NodeId,
+        source_node: ?dom.NodeId,
+        command_text: ?[]const u8,
+        form_data: ?*FormDataState,
+    ) errors.Result(DispatchOutcome) {
         const node = host.domStore().nodeAt(node_id) orelse return error.ScriptRuntime;
         switch (node.kind) {
             .element => {},
@@ -381,6 +520,11 @@ pub const ScriptRuntime = struct {
             .current_target = null,
             .bubbles = bubbles,
             .cancelable = cancelable,
+            .is_submit_event = is_submit_event,
+            .submitter_element = submitter_node,
+            .source_element = source_node,
+            .command_text = command_text,
+            .form_data = form_data,
         };
 
         var ancestors: std.ArrayList(ListenerTarget) = .empty;
@@ -424,6 +568,68 @@ pub const ScriptRuntime = struct {
         event.current_target = null;
         event.phase = .none;
         return .{ .default_prevented = event.default_prevented };
+    }
+
+    pub fn dispatchCommandEvent(
+        self: *ScriptRuntime,
+        allocator: std.mem.Allocator,
+        host: anytype,
+        node_id: dom.NodeId,
+        source_id: dom.NodeId,
+        command_text: []const u8,
+    ) errors.Result(DispatchOutcome) {
+        return try self.dispatchDomEventWithMetadata(
+            allocator,
+            host,
+            node_id,
+            "command",
+            false,
+            true,
+            false,
+            null,
+            source_id,
+            command_text,
+            null,
+        );
+    }
+
+    pub fn dispatchSubmitEvent(
+        self: *ScriptRuntime,
+        allocator: std.mem.Allocator,
+        host: anytype,
+        node_id: dom.NodeId,
+        submitter_node: ?dom.NodeId,
+    ) errors.Result(DispatchOutcome) {
+        const submit_outcome = try self.dispatchDomEventWithMetadata(
+            allocator,
+            host,
+            node_id,
+            "submit",
+            true,
+            true,
+            true,
+            submitter_node,
+            null,
+            null,
+            null,
+        );
+        if (submit_outcome.default_prevented) return submit_outcome;
+
+        const form_data_state = try formDataBuildState(allocator, host, node_id, submitter_node);
+        _ = try self.dispatchDomEventWithMetadata(
+            allocator,
+            host,
+            node_id,
+            "formdata",
+            true,
+            false,
+            false,
+            null,
+            null,
+            null,
+            form_data_state,
+        );
+        return submit_outcome;
     }
 
     pub fn evalScriptSourceWithBindings(
@@ -1691,11 +1897,15 @@ const Value = union(enum) {
     node: dom.NodeId,
     template_content: dom.NodeId,
     file_list: StringListState,
+    form_data: *FormDataState,
+    form_data_entry: FormDataEntrySnapshot,
     attribute: *AttributeState,
     named_node_map: NamedNodeMapState,
     class_list: dom.NodeId,
     part_list: dom.NodeId,
     rel_list: dom.NodeId,
+    blocking_list: dom.NodeId,
+    controls_list: dom.NodeId,
     output_html_for: dom.NodeId,
     dataset: dom.NodeId,
     node_list: NodeList,
@@ -1704,6 +1914,7 @@ const Value = union(enum) {
     media_query_list: MediaQueryList,
     string_list: StringListState,
     media_list: MediaListState,
+    text_track: *TextTrackState,
     date: *DateState,
     dom_rect: *DomRectState,
     dom_rect_list: *DomRectListState,
@@ -2536,6 +2747,15 @@ fn evalAssignment(
                     try set_onchange_fn(host_ptr, mql.media, next_handler);
                     return;
                 }
+            }
+
+            return error.ScriptRuntime;
+        },
+        .text_track => |track| {
+            if (std.mem.eql(u8, target.property, "mode")) {
+                const text = try asString(allocator, value);
+                track.mode = textTrackModeFromString(text) orelse return error.ScriptRuntime;
+                return;
             }
 
             return error.ScriptRuntime;
@@ -3935,6 +4155,89 @@ fn evalAssignment(
                 try host.domStoreMut().setAttribute(element, "autocomplete", text);
                 return;
             }
+            if (std.mem.eql(u8, target.property, "capture")) {
+                if (!try elementSupportsCaptureProperty(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "capture", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "shadowRootMode")) {
+                if (!try elementIsTemplateElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try lowercaseDupe(allocator, try asString(allocator, value));
+                defer allocator.free(text);
+                if (std.mem.eql(u8, text, "open") or std.mem.eql(u8, text, "closed")) {
+                    try host.domStoreMut().setAttribute(element, "shadowrootmode", text);
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "shadowrootmode");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "shadowRootDelegatesFocus")) {
+                if (!try elementIsTemplateElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "shadowrootdelegatesfocus", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "shadowrootdelegatesfocus");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "shadowRootClonable")) {
+                if (!try elementIsTemplateElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "shadowrootclonable", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "shadowrootclonable");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "shadowRootSerializable")) {
+                if (!try elementIsTemplateElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "shadowrootserializable", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "shadowrootserializable");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "shadowRootCustomElementRegistry")) {
+                if (!try elementIsTemplateElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "shadowrootcustomelementregistry", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "alpha")) {
+                if (!try elementSupportsColorInputProperty(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "alpha", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "alpha");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "colorSpace")) {
+                if (!try elementSupportsColorInputProperty(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try lowercaseDupe(allocator, try asString(allocator, value));
+                defer allocator.free(text);
+                const normalized = if (std.mem.eql(u8, text, "display-p3")) "display-p3" else "limited-srgb";
+                try host.domStoreMut().setAttribute(element, "colorspace", normalized);
+                return;
+            }
             if (std.mem.eql(u8, target.property, "min")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
                 if (std.mem.eql(u8, tag_name, "meter")) {
@@ -4047,21 +4350,90 @@ fn evalAssignment(
                 }
                 return;
             }
+            if (std.mem.eql(u8, target.property, "rows")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "textarea")) {
+                    return error.ScriptRuntime;
+                }
+                const rows = try unsignedLongFromValue(allocator, value);
+                const text = try std.fmt.allocPrint(allocator, "{d}", .{rows});
+                defer allocator.free(text);
+                try host.domStoreMut().setAttribute(element, "rows", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "cols")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "textarea")) {
+                    return error.ScriptRuntime;
+                }
+                const cols = try unsignedLongFromValue(allocator, value);
+                const text = try std.fmt.allocPrint(allocator, "{d}", .{cols});
+                defer allocator.free(text);
+                try host.domStoreMut().setAttribute(element, "cols", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "wrap")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "textarea")) {
+                    return error.ScriptRuntime;
+                }
+                const text = try lowercaseDupe(allocator, try asString(allocator, value));
+                defer allocator.free(text);
+                try host.domStoreMut().setAttribute(element, "wrap", text);
+                return;
+            }
             if (std.mem.eql(u8, target.property, "accept")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
-                if (!std.mem.eql(u8, tag_name, "input")) return error.ScriptRuntime;
+                if (!std.ascii.eqlIgnoreCase(tag_name, "input")) return error.ScriptRuntime;
                 const text = try asString(allocator, value);
                 try host.domStoreMut().setAttribute(element, "accept", text);
                 return;
             }
             if (std.mem.eql(u8, target.property, "size")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
-                if (!std.mem.eql(u8, tag_name, "input")) return error.ScriptRuntime;
-                const size = try inputSizeFromValue(allocator, value);
-                const text = try std.fmt.allocPrint(allocator, "{d}", .{size});
-                defer allocator.free(text);
-                try host.domStoreMut().setAttribute(element, "size", text);
+                if (std.ascii.eqlIgnoreCase(tag_name, "input")) {
+                    const size = try inputSizeFromValue(allocator, value);
+                    const text = try std.fmt.allocPrint(allocator, "{d}", .{size});
+                    defer allocator.free(text);
+                    try host.domStoreMut().setAttribute(element, "size", text);
+                    return;
+                }
+                if (std.mem.eql(u8, tag_name, "select")) {
+                    const size = try unsignedLongFromValue(allocator, value);
+                    const text = try std.fmt.allocPrint(allocator, "{d}", .{size});
+                    defer allocator.free(text);
+                    try host.domStoreMut().setAttribute(element, "size", text);
+                    return;
+                }
+                return error.ScriptRuntime;
+            }
+            if (std.mem.eql(u8, target.property, "command")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "button")) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "command", text);
                 return;
+            }
+            if (std.mem.eql(u8, target.property, "commandForElement")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "button")) {
+                    return error.ScriptRuntime;
+                }
+                switch (value) {
+                    .null_value, .undefined_value => {
+                        try host.domStoreMut().removeAttribute(element, "commandfor");
+                        return;
+                    },
+                    .element => |target_id| {
+                        const target_name = (try host.domStore().getAttribute(target_id, "id")) orelse return error.ScriptRuntime;
+                        if (target_name.len == 0) return error.ScriptRuntime;
+                        try host.domStoreMut().setAttribute(element, "commandfor", target_name);
+                        return;
+                    },
+                    else => return error.ScriptRuntime,
+                }
             }
             if (std.mem.eql(u8, target.property, "popoverTargetElement")) {
                 if (!try elementSupportsPopoverTargetProperty(host, element)) {
@@ -4210,6 +4582,47 @@ fn evalAssignment(
             }
             if (std.mem.eql(u8, target.property, "width")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (try elementIsCanvasElement(host, element)) {
+                    const width = try unsignedLongFromValue(allocator, value);
+                    const text = try std.fmt.allocPrint(allocator, "{d}", .{width});
+                    defer allocator.free(text);
+                    try host.domStoreMut().setAttribute(element, "width", text);
+                    return;
+                }
+                if (std.mem.eql(u8, tag_name, "img")) {
+                    const width = try unsignedLongFromValue(allocator, value);
+                    const text = try std.fmt.allocPrint(allocator, "{d}", .{width});
+                    defer allocator.free(text);
+                    try host.domStoreMut().setAttribute(element, "width", text);
+                    return;
+                }
+                if (std.ascii.eqlIgnoreCase(tag_name, "input")) {
+                    if (!try elementIsImageInputElement(host, element)) {
+                        return error.ScriptRuntime;
+                    }
+                    const width = try unsignedLongFromValue(allocator, value);
+                    const text = try std.fmt.allocPrint(allocator, "{d}", .{width});
+                    defer allocator.free(text);
+                    try host.domStoreMut().setAttribute(element, "width", text);
+                    return;
+                }
+                if (std.mem.eql(u8, tag_name, "video")) {
+                    const width = try unsignedLongFromValue(allocator, value);
+                    const text = try std.fmt.allocPrint(allocator, "{d}", .{width});
+                    defer allocator.free(text);
+                    try host.domStoreMut().setAttribute(element, "width", text);
+                    return;
+                }
+                if (std.mem.eql(u8, tag_name, "object")) {
+                    const text = try asString(allocator, value);
+                    try host.domStoreMut().setAttribute(element, "width", text);
+                    return;
+                }
+                if (std.ascii.eqlIgnoreCase(tag_name, "iframe")) {
+                    const text = try asString(allocator, value);
+                    try host.domStoreMut().setAttribute(element, "width", text);
+                    return;
+                }
                 if (!(tableElementTagAllowed(tag_name) or tableCellTagAllowed(tag_name) or tableColumnTagAllowed(tag_name))) {
                     return error.ScriptRuntime;
                 }
@@ -4283,6 +4696,47 @@ fn evalAssignment(
             }
             if (std.mem.eql(u8, target.property, "height")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (try elementIsCanvasElement(host, element)) {
+                    const height = try unsignedLongFromValue(allocator, value);
+                    const text = try std.fmt.allocPrint(allocator, "{d}", .{height});
+                    defer allocator.free(text);
+                    try host.domStoreMut().setAttribute(element, "height", text);
+                    return;
+                }
+                if (std.mem.eql(u8, tag_name, "img")) {
+                    const height = try unsignedLongFromValue(allocator, value);
+                    const text = try std.fmt.allocPrint(allocator, "{d}", .{height});
+                    defer allocator.free(text);
+                    try host.domStoreMut().setAttribute(element, "height", text);
+                    return;
+                }
+                if (std.ascii.eqlIgnoreCase(tag_name, "input")) {
+                    if (!try elementIsImageInputElement(host, element)) {
+                        return error.ScriptRuntime;
+                    }
+                    const height = try unsignedLongFromValue(allocator, value);
+                    const text = try std.fmt.allocPrint(allocator, "{d}", .{height});
+                    defer allocator.free(text);
+                    try host.domStoreMut().setAttribute(element, "height", text);
+                    return;
+                }
+                if (std.mem.eql(u8, tag_name, "video")) {
+                    const height = try unsignedLongFromValue(allocator, value);
+                    const text = try std.fmt.allocPrint(allocator, "{d}", .{height});
+                    defer allocator.free(text);
+                    try host.domStoreMut().setAttribute(element, "height", text);
+                    return;
+                }
+                if (std.mem.eql(u8, tag_name, "object")) {
+                    const text = try asString(allocator, value);
+                    try host.domStoreMut().setAttribute(element, "height", text);
+                    return;
+                }
+                if (std.ascii.eqlIgnoreCase(tag_name, "iframe")) {
+                    const text = try asString(allocator, value);
+                    try host.domStoreMut().setAttribute(element, "height", text);
+                    return;
+                }
                 if (!tableCellTagAllowed(tag_name)) {
                     return error.ScriptRuntime;
                 }
@@ -4421,7 +4875,10 @@ fn evalAssignment(
 
             if (std.mem.eql(u8, target.property, "media")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
-                if (std.mem.eql(u8, tag_name, "style") or std.mem.eql(u8, tag_name, "link")) {
+                if (std.mem.eql(u8, tag_name, "style") or std.mem.eql(u8, tag_name, "link") or
+                    std.ascii.eqlIgnoreCase(tag_name, "source") or
+                    std.ascii.eqlIgnoreCase(tag_name, "meta"))
+                {
                     const text = try asString(allocator, value);
                     try host.domStoreMut().setAttribute(element, "media", text);
                     return;
@@ -4446,11 +4903,335 @@ fn evalAssignment(
                 return;
             }
             if (std.mem.eql(u8, target.property, "alt")) {
-                if (!try elementIsAreaElement(host, element)) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse {
                     return error.ScriptRuntime;
+                };
+                if (!std.mem.eql(u8, tag_name, "img") and
+                    !std.mem.eql(u8, tag_name, "area"))
+                {
+                    if (!std.ascii.eqlIgnoreCase(tag_name, "input") or !try elementIsImageInputElement(host, element)) {
+                        return error.ScriptRuntime;
+                    }
                 }
                 const text = try asString(allocator, value);
                 try host.domStoreMut().setAttribute(element, "alt", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "useMap")) {
+                if (!try elementIsImageOrObjectElement(host, element) and !try elementIsImageInputElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "usemap", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "isMap")) {
+                if (!try elementIsImageElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "ismap", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "ismap");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "loading")) {
+                if (!try elementIsImageOrIFrameElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try lowercaseDupe(allocator, try asString(allocator, value));
+                defer allocator.free(text);
+                try host.domStoreMut().setAttribute(element, "loading", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "decoding")) {
+                if (!try elementIsImageElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try lowercaseDupe(allocator, try asString(allocator, value));
+                defer allocator.free(text);
+                try host.domStoreMut().setAttribute(element, "decoding", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "src")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse {
+                    return error.ScriptRuntime;
+                };
+                if (!std.mem.eql(u8, tag_name, "script") and
+                    !std.mem.eql(u8, tag_name, "img") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "source") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "iframe") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "audio") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "video") and
+                    !std.mem.eql(u8, tag_name, "track"))
+                {
+                    if (!std.ascii.eqlIgnoreCase(tag_name, "input") or !try elementIsImageInputElement(host, element)) {
+                        return error.ScriptRuntime;
+                    }
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "src", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "preload")) {
+                if (!try elementIsMediaElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try lowercaseDupe(allocator, try asString(allocator, value));
+                defer allocator.free(text);
+                try host.domStoreMut().setAttribute(element, "preload", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "autoplay")) {
+                if (!try elementIsMediaElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "autoplay", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "autoplay");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "loop")) {
+                if (!try elementIsMediaElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "loop", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "loop");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "controls")) {
+                if (!try elementIsMediaElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "controls", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "controls");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "muted")) {
+                if (!try elementIsMediaElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                host.domStoreMut().setMediaMuted(element, isTruthy(value)) catch return error.ScriptRuntime;
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "defaultMuted")) {
+                if (!try elementIsMediaElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "muted", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "muted");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "volume")) {
+                if (!try elementIsMediaElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const volume = try numberFromValue(allocator, value);
+                host.domStoreMut().setMediaVolume(element, volume) catch return error.ScriptRuntime;
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "defaultPlaybackRate")) {
+                if (!try elementIsMediaElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const playback_rate = try numberFromValue(allocator, value);
+                host.domStoreMut().setMediaDefaultPlaybackRate(element, playback_rate) catch return error.ScriptRuntime;
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "playbackRate")) {
+                if (!try elementIsMediaElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const playback_rate = try numberFromValue(allocator, value);
+                host.domStoreMut().setMediaPlaybackRate(element, playback_rate) catch return error.ScriptRuntime;
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "preservesPitch")) {
+                if (!try elementIsMediaElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                host.domStoreMut().setMediaPreservesPitch(element, isTruthy(value)) catch return error.ScriptRuntime;
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "content")) {
+                if (!try elementIsMetaElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "content", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "httpEquiv")) {
+                if (!try elementIsMetaElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "http-equiv", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "srcdoc")) {
+                if (!try elementIsIFrameElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "srcdoc", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "data")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "object")) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "data", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "srcset")) {
+                if (!try elementIsImageOrSourceElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "srcset", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "sizes")) {
+                if (!try elementIsImageOrSourceElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "sizes", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "fetchPriority")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse {
+                    return error.ScriptRuntime;
+                };
+                if (!std.mem.eql(u8, tag_name, "img") and
+                    !std.mem.eql(u8, tag_name, "link") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "script") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "iframe"))
+                {
+                    return error.ScriptRuntime;
+                }
+                const text = try lowercaseDupe(allocator, try asString(allocator, value));
+                defer allocator.free(text);
+                try host.domStoreMut().setAttribute(element, "fetchpriority", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "crossOrigin")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse {
+                    return error.ScriptRuntime;
+                };
+                if (!std.mem.eql(u8, tag_name, "img") and
+                    !std.mem.eql(u8, tag_name, "link") and
+                    !std.mem.eql(u8, tag_name, "audio") and
+                    !std.mem.eql(u8, tag_name, "video") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "script"))
+                {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "crossorigin", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "poster")) {
+                if (!try elementIsVideoElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "poster", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "playsInline")) {
+                if (!try elementIsVideoElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "playsinline", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "playsinline");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "disableRemotePlayback")) {
+                if (!try elementIsMediaElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "disableremoteplayback", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "disableremoteplayback");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "disablePictureInPicture")) {
+                if (!try elementIsVideoElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "disablepictureinpicture", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "disablepictureinpicture");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "referrerPolicy")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse {
+                    return error.ScriptRuntime;
+                };
+                if (!std.mem.eql(u8, tag_name, "img") and
+                    !std.mem.eql(u8, tag_name, "link") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "script") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "a") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "area") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "iframe"))
+                {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "referrerpolicy", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "allow")) {
+                if (!try elementIsIFrameElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "allow", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "allowFullscreen")) {
+                if (!try elementIsIFrameElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "allowfullscreen", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "allowfullscreen");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "credentialless")) {
+                if (!try elementIsIFrameElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "credentialless", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "credentialless");
+                }
                 return;
             }
             if (std.mem.eql(u8, target.property, "coords")) {
@@ -4493,7 +5274,9 @@ fn evalAssignment(
 
             if (std.mem.eql(u8, target.property, "charset")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
-                if (std.mem.eql(u8, tag_name, "link") or std.ascii.eqlIgnoreCase(tag_name, "script")) {
+                if (std.mem.eql(u8, tag_name, "link") or std.ascii.eqlIgnoreCase(tag_name, "script") or
+                    std.ascii.eqlIgnoreCase(tag_name, "meta"))
+                {
                     const text = try asString(allocator, value);
                     try host.domStoreMut().setAttribute(element, "charset", text);
                     return;
@@ -4522,12 +5305,65 @@ fn evalAssignment(
             }
 
             if (std.mem.eql(u8, target.property, "src")) {
-                if (!try elementIsScriptElement(host, element)) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "script") and !std.mem.eql(u8, tag_name, "img") and
+                    !std.mem.eql(u8, tag_name, "track"))
+                {
                     return error.ScriptRuntime;
                 }
                 const text = try asString(allocator, value);
                 try host.domStoreMut().setAttribute(element, "src", text);
                 return;
+            }
+            if (std.mem.eql(u8, target.property, "kind")) {
+                if (!try elementSupportsTrackProperty(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try lowercaseDupe(allocator, try asString(allocator, value));
+                defer allocator.free(text);
+                try host.domStoreMut().setAttribute(element, "kind", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "srclang")) {
+                if (!try elementSupportsTrackProperty(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "srclang", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "label")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "track")) {
+                    const text = try asString(allocator, value);
+                    try host.domStoreMut().setAttribute(element, "label", text);
+                    return;
+                }
+                if (!std.mem.eql(u8, tag_name, "option") and !std.mem.eql(u8, tag_name, "optgroup")) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "label", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "default")) {
+                if (!try elementSupportsTrackProperty(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "default", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "default");
+                }
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "readyState") or
+                std.mem.eql(u8, target.property, "track"))
+            {
+                if (!try elementSupportsTrackProperty(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                return error.ScriptRuntime;
             }
             if (std.mem.eql(u8, target.property, "text")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
@@ -4580,7 +5416,9 @@ fn evalAssignment(
 
             if (std.mem.eql(u8, target.property, "fetchPriority")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
-                if (std.mem.eql(u8, tag_name, "link") or std.ascii.eqlIgnoreCase(tag_name, "script")) {
+                if (std.mem.eql(u8, tag_name, "link") or std.ascii.eqlIgnoreCase(tag_name, "script") or
+                    std.ascii.eqlIgnoreCase(tag_name, "iframe"))
+                {
                     const text = try asString(allocator, value);
                     try host.domStoreMut().setAttribute(element, "fetchpriority", text);
                     return;
@@ -4603,7 +5441,8 @@ fn evalAssignment(
                 if (std.ascii.eqlIgnoreCase(tag_name, "a") or
                     std.ascii.eqlIgnoreCase(tag_name, "area") or
                     std.ascii.eqlIgnoreCase(tag_name, "link") or
-                    std.ascii.eqlIgnoreCase(tag_name, "script"))
+                    std.ascii.eqlIgnoreCase(tag_name, "script") or
+                    std.ascii.eqlIgnoreCase(tag_name, "iframe"))
                 {
                     const text = try asString(allocator, value);
                     try host.domStoreMut().setAttribute(element, "referrerpolicy", text);
@@ -4663,7 +5502,9 @@ fn evalAssignment(
                     std.mem.eql(u8, tag_name, "link") or
                     std.ascii.eqlIgnoreCase(tag_name, "a") or
                     std.ascii.eqlIgnoreCase(tag_name, "area") or
-                    std.ascii.eqlIgnoreCase(tag_name, "script"))
+                    std.ascii.eqlIgnoreCase(tag_name, "script") or
+                    std.mem.eql(u8, tag_name, "object") or
+                    std.ascii.eqlIgnoreCase(tag_name, "source"))
                 {
                     const text = try asString(allocator, value);
                     try host.domStoreMut().setAttribute(element, "type", text);
@@ -4693,6 +5534,11 @@ fn evalAssignment(
 
             if (std.mem.eql(u8, target.property, "value")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (std.ascii.eqlIgnoreCase(tag_name, "data")) {
+                    const text = try asString(allocator, value);
+                    try host.domStoreMut().setAttribute(element, "value", text);
+                    return;
+                }
                 if (std.mem.eql(u8, tag_name, "output")) {
                     const current_default = try host.domStore().outputDefaultValue(allocator, element);
                     defer allocator.free(current_default);
@@ -4729,10 +5575,18 @@ fn evalAssignment(
                 host.domStoreMut().setInputValueAsDate(element, timestamp_ms) catch return error.ScriptRuntime;
                 return;
             }
+            if (std.mem.eql(u8, target.property, "dateTime")) {
+                if (!try elementIsTimeElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "datetime", text);
+                return;
+            }
             if (std.mem.eql(u8, target.property, "defaultValue")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
                 const text = try asString(allocator, value);
-                if (std.mem.eql(u8, tag_name, "input")) {
+                if (std.ascii.eqlIgnoreCase(tag_name, "input")) {
                     try host.domStoreMut().setAttribute(element, "value", text);
                     return;
                 }
@@ -4752,7 +5606,7 @@ fn evalAssignment(
             }
             if (std.mem.eql(u8, target.property, "defaultChecked")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
-                if (!std.mem.eql(u8, tag_name, "input")) {
+                if (!std.ascii.eqlIgnoreCase(tag_name, "input")) {
                     return error.ScriptRuntime;
                 }
                 if (isTruthy(value)) {
@@ -4816,7 +5670,6 @@ fn evalAssignment(
                 host.domStoreMut().setSelectSelectedIndex(element, selected_index) catch return error.ScriptRuntime;
                 return;
             }
-
             if (std.mem.eql(u8, target.property, "selected")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
                 if (!std.mem.eql(u8, tag_name, "option")) {
@@ -5043,13 +5896,21 @@ fn evalNewExpr(
         .identifier => |name| name,
         else => return error.ScriptRuntime,
     };
-    if (!std.mem.eql(u8, callee_name, "Date")) return error.ScriptRuntime;
-    if (new_expr.args.len != 1) return error.ScriptRuntime;
+    if (std.mem.eql(u8, callee_name, "Date")) {
+        if (new_expr.args.len != 1) return error.ScriptRuntime;
 
-    const timestamp_value = try evalExpr(allocator, host, bindings, new_expr.args[0]);
-    const timestamp_ms = try numberFromValue(allocator, timestamp_value);
-    if (!std.math.isFinite(timestamp_ms)) return error.ScriptRuntime;
-    return try makeDateValue(allocator, timestamp_ms);
+        const timestamp_value = try evalExpr(allocator, host, bindings, new_expr.args[0]);
+        const timestamp_ms = try numberFromValue(allocator, timestamp_value);
+        if (!std.math.isFinite(timestamp_ms)) return error.ScriptRuntime;
+        return try makeDateValue(allocator, timestamp_ms);
+    }
+
+    if (std.mem.eql(u8, callee_name, "FormData")) {
+        if (new_expr.args.len > 2) return error.ScriptRuntime;
+        return try makeFormDataValue(allocator, host, bindings, new_expr.args);
+    }
+
+    return error.ScriptRuntime;
 }
 
 fn evalIdentifier(
@@ -5088,6 +5949,16 @@ fn evalMember(
 ) errors.Result(Value) {
     const object = try evalExpr(allocator, host, bindings, member.object);
     return switch (object) {
+        .form_data => error.ScriptRuntime,
+        .form_data_entry => blk: {
+            if (std.mem.eql(u8, member.property, "name")) {
+                break :blk Value{ .string = object.form_data_entry.name };
+            }
+            if (std.mem.eql(u8, member.property, "value")) {
+                break :blk Value{ .string = object.form_data_entry.value };
+            }
+            break :blk error.ScriptRuntime;
+        },
         .document => blk: {
             if (std.mem.eql(u8, member.property, "defaultView")) {
                 break :blk Value{ .window = {} };
@@ -5667,7 +6538,42 @@ fn evalMember(
                 if (std.mem.eql(u8, tag_name, "template")) {
                     break :blk Value{ .template_content = element };
                 }
+                if (std.mem.eql(u8, tag_name, "meta")) {
+                    const content = (try host.domStore().getAttribute(element, "content")) orelse "";
+                    break :blk Value{ .string = content };
+                }
                 break :blk error.ScriptRuntime;
+            }
+            if (std.mem.eql(u8, member.property, "shadowRootMode")) {
+                if (!try elementIsTemplateElement(host, element)) break :blk error.ScriptRuntime;
+                const mode = (try host.domStore().getAttribute(element, "shadowrootmode")) orelse "";
+                if (std.ascii.eqlIgnoreCase(mode, "open")) {
+                    break :blk Value{ .string = "open" };
+                }
+                if (std.ascii.eqlIgnoreCase(mode, "closed")) {
+                    break :blk Value{ .string = "closed" };
+                }
+                break :blk Value{ .string = "" };
+            }
+            if (std.mem.eql(u8, member.property, "shadowRootDelegatesFocus")) {
+                if (!try elementIsTemplateElement(host, element)) break :blk error.ScriptRuntime;
+                const delegates_focus = try host.domStore().hasAttribute(element, "shadowrootdelegatesfocus");
+                break :blk Value{ .boolean = delegates_focus };
+            }
+            if (std.mem.eql(u8, member.property, "shadowRootClonable")) {
+                if (!try elementIsTemplateElement(host, element)) break :blk error.ScriptRuntime;
+                const clonable = try host.domStore().hasAttribute(element, "shadowrootclonable");
+                break :blk Value{ .boolean = clonable };
+            }
+            if (std.mem.eql(u8, member.property, "shadowRootSerializable")) {
+                if (!try elementIsTemplateElement(host, element)) break :blk error.ScriptRuntime;
+                const serializable = try host.domStore().hasAttribute(element, "shadowrootserializable");
+                break :blk Value{ .boolean = serializable };
+            }
+            if (std.mem.eql(u8, member.property, "shadowRootCustomElementRegistry")) {
+                if (!try elementIsTemplateElement(host, element)) break :blk error.ScriptRuntime;
+                const registry = (try host.domStore().getAttribute(element, "shadowrootcustomelementregistry")) orelse "";
+                break :blk Value{ .string = registry };
             }
             if (std.mem.eql(u8, member.property, "innerHTML")) {
                 const html = try host.domStore().innerHtml(allocator, element);
@@ -5720,11 +6626,9 @@ fn evalMember(
                 break :blk Value{ .boolean = open };
             }
             if (std.mem.eql(u8, member.property, "name")) {
-                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (std.mem.eql(u8, tag_name, "details")) {
-                    const name = (try host.domStore().getAttribute(element, "name")) orelse "";
-                    break :blk Value{ .string = name };
-                }
+                if (!try elementSupportsNameProperty(host, element)) break :blk error.ScriptRuntime;
+                const name = (try host.domStore().getAttribute(element, "name")) orelse "";
+                break :blk Value{ .string = name };
             }
             if (std.mem.eql(u8, member.property, "returnValue")) {
                 if (!try elementSupportsDialogProperty(host, element)) break :blk error.ScriptRuntime;
@@ -5834,10 +6738,31 @@ fn evalMember(
                 const nonce = (try host.domStore().getAttribute(element, "nonce")) orelse "";
                 break :blk Value{ .string = nonce };
             }
+            if (std.mem.eql(u8, member.property, "data")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "object")) break :blk error.ScriptRuntime;
+                const data = (try host.domStore().getAttribute(element, "data")) orelse "";
+                break :blk Value{ .string = data };
+            }
             if (std.mem.eql(u8, member.property, "src")) {
-                if (!try elementIsScriptElement(host, element)) break :blk error.ScriptRuntime;
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "script") and
+                    !std.mem.eql(u8, tag_name, "img") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "source") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "iframe") and
+                    !std.mem.eql(u8, tag_name, "track"))
+                {
+                    if (!std.ascii.eqlIgnoreCase(tag_name, "input") or !try elementIsImageInputElement(host, element)) {
+                        break :blk error.ScriptRuntime;
+                    }
+                }
                 const src = (try host.domStore().getAttribute(element, "src")) orelse "";
                 break :blk Value{ .string = src };
+            }
+            if (std.mem.eql(u8, member.property, "httpEquiv")) {
+                if (!try elementIsMetaElement(host, element)) break :blk error.ScriptRuntime;
+                const http_equiv = (try host.domStore().getAttribute(element, "http-equiv")) orelse "";
+                break :blk Value{ .string = http_equiv };
             }
             if (std.mem.eql(u8, member.property, "text")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
@@ -5885,6 +6810,38 @@ fn evalMember(
             if (std.mem.eql(u8, member.property, "autocomplete")) {
                 const autocomplete = (try host.domStore().getAttribute(element, "autocomplete")) orelse "";
                 break :blk Value{ .string = autocomplete };
+            }
+            if (std.mem.eql(u8, member.property, "capture")) {
+                if (!try elementSupportsCaptureProperty(host, element)) break :blk error.ScriptRuntime;
+                const capture = (try host.domStore().getAttribute(element, "capture")) orelse "";
+                const trimmed = std.mem.trim(u8, capture, " \t\r\n\x0c");
+                if (trimmed.len == 0) {
+                    break :blk Value{ .string = "" };
+                }
+                if (std.ascii.eqlIgnoreCase(trimmed, "user")) {
+                    break :blk Value{ .string = "user" };
+                }
+                if (std.ascii.eqlIgnoreCase(trimmed, "environment")) {
+                    break :blk Value{ .string = "environment" };
+                }
+                break :blk Value{ .string = "" };
+            }
+            if (std.mem.eql(u8, member.property, "alpha")) {
+                if (!try elementSupportsColorInputProperty(host, element)) break :blk error.ScriptRuntime;
+                const alpha = try host.domStore().hasAttribute(element, "alpha");
+                break :blk Value{ .boolean = alpha };
+            }
+            if (std.mem.eql(u8, member.property, "colorSpace")) {
+                if (!try elementSupportsColorInputProperty(host, element)) break :blk error.ScriptRuntime;
+                const color_space = (try host.domStore().getAttribute(element, "colorspace")) orelse "limited-srgb";
+                const trimmed = std.mem.trim(u8, color_space, " \t\r\n\x0c");
+                if (trimmed.len == 0 or std.ascii.eqlIgnoreCase(trimmed, "limited-srgb")) {
+                    break :blk Value{ .string = "limited-srgb" };
+                }
+                if (std.ascii.eqlIgnoreCase(trimmed, "display-p3")) {
+                    break :blk Value{ .string = "display-p3" };
+                }
+                break :blk Value{ .string = "limited-srgb" };
             }
             if (std.mem.eql(u8, member.property, "min")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
@@ -5966,6 +6923,27 @@ fn evalMember(
                 const dir_name = (try host.domStore().getAttribute(element, "dirname")) orelse "";
                 break :blk Value{ .string = dir_name };
             }
+            if (std.mem.eql(u8, member.property, "rows")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "textarea")) {
+                    const rows = try textareaDimensionValue(host, element, "rows", 2);
+                    break :blk Value{ .number = @floatFromInt(rows) };
+                }
+                if (std.mem.eql(u8, tag_name, "table") or
+                    std.mem.eql(u8, tag_name, "thead") or
+                    std.mem.eql(u8, tag_name, "tbody") or
+                    std.mem.eql(u8, tag_name, "tfoot"))
+                {
+                    break :blk Value{ .html_collection = .{ .root = element, .kind = .table_rows } };
+                }
+                break :blk error.ScriptRuntime;
+            }
+            if (std.mem.eql(u8, member.property, "wrap")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "textarea")) break :blk error.ScriptRuntime;
+                const wrap = try textareaWrapValue(host, element);
+                break :blk Value{ .string = wrap };
+            }
             if (std.mem.eql(u8, member.property, "readOnly")) {
                 const readonly = try host.domStore().hasAttribute(element, "readonly");
                 break :blk Value{ .boolean = readonly };
@@ -6004,7 +6982,10 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "media")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (std.mem.eql(u8, tag_name, "style") or std.mem.eql(u8, tag_name, "link")) {
+                if (std.mem.eql(u8, tag_name, "style") or std.mem.eql(u8, tag_name, "link") or
+                    std.ascii.eqlIgnoreCase(tag_name, "source") or
+                    std.ascii.eqlIgnoreCase(tag_name, "meta"))
+                {
                     const media_text = (try host.domStore().getAttribute(element, "media")) orelse "";
                     break :blk Value{ .string = media_text };
                 }
@@ -6025,7 +7006,9 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "charset")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (std.mem.eql(u8, tag_name, "link") or std.ascii.eqlIgnoreCase(tag_name, "script")) {
+                if (std.mem.eql(u8, tag_name, "link") or std.ascii.eqlIgnoreCase(tag_name, "script") or
+                    std.ascii.eqlIgnoreCase(tag_name, "meta"))
+                {
                     const charset_text = (try host.domStore().getAttribute(element, "charset")) orelse "";
                     break :blk Value{ .string = charset_text };
                 }
@@ -6047,9 +7030,221 @@ fn evalMember(
                 }
                 break :blk error.ScriptRuntime;
             }
+            if (std.mem.eql(u8, member.property, "loading")) {
+                if (!try elementIsImageOrIFrameElement(host, element)) break :blk error.ScriptRuntime;
+                const loading_text = (try host.domStore().getAttribute(element, "loading")) orelse "";
+                break :blk Value{ .string = loading_text };
+            }
+            if (std.mem.eql(u8, member.property, "decoding")) {
+                if (!try elementIsImageElement(host, element)) break :blk error.ScriptRuntime;
+                const decoding_text = (try host.domStore().getAttribute(element, "decoding")) orelse "";
+                break :blk Value{ .string = decoding_text };
+            }
+            if (std.mem.eql(u8, member.property, "src")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "script") and
+                    !std.mem.eql(u8, tag_name, "img") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "source") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "iframe") and
+                    !std.mem.eql(u8, tag_name, "track") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "audio") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "video"))
+                {
+                    if (!std.ascii.eqlIgnoreCase(tag_name, "input") or !try elementIsImageInputElement(host, element)) {
+                        break :blk error.ScriptRuntime;
+                    }
+                }
+                const src_text = (try host.domStore().getAttribute(element, "src")) orelse "";
+                break :blk Value{ .string = src_text };
+            }
+            if (std.mem.eql(u8, member.property, "currentSrc")) {
+                if (!try elementIsImageOrMediaElement(host, element)) break :blk error.ScriptRuntime;
+                const current_src_text = (try host.domStore().getAttribute(element, "src")) orelse "";
+                break :blk Value{ .string = current_src_text };
+            }
+            if (std.mem.eql(u8, member.property, "srcdoc")) {
+                if (!try elementIsIFrameElement(host, element)) break :blk error.ScriptRuntime;
+                const srcdoc_text = (try host.domStore().getAttribute(element, "srcdoc")) orelse "";
+                break :blk Value{ .string = srcdoc_text };
+            }
+            if (std.mem.eql(u8, member.property, "srcset")) {
+                if (!try elementIsImageOrSourceElement(host, element)) break :blk error.ScriptRuntime;
+                const srcset_text = (try host.domStore().getAttribute(element, "srcset")) orelse "";
+                break :blk Value{ .string = srcset_text };
+            }
+            if (std.mem.eql(u8, member.property, "sizes")) {
+                if (!try elementIsImageOrSourceElement(host, element)) break :blk error.ScriptRuntime;
+                const sizes_text = (try host.domStore().getAttribute(element, "sizes")) orelse "";
+                break :blk Value{ .string = sizes_text };
+            }
+            if (std.mem.eql(u8, member.property, "kind")) {
+                if (!try elementSupportsTrackProperty(host, element)) break :blk error.ScriptRuntime;
+                const kind_text = (try host.domStore().getAttribute(element, "kind")) orelse "";
+                break :blk Value{ .string = textTrackKindValue(kind_text) };
+            }
+            if (std.mem.eql(u8, member.property, "srclang")) {
+                if (!try elementSupportsTrackProperty(host, element)) break :blk error.ScriptRuntime;
+                const srclang_text = (try host.domStore().getAttribute(element, "srclang")) orelse "";
+                break :blk Value{ .string = srclang_text };
+            }
+            if (std.mem.eql(u8, member.property, "track")) {
+                if (!try elementSupportsTrackProperty(host, element)) break :blk error.ScriptRuntime;
+                break :blk try makeTextTrackValue(host, element);
+            }
+            if (std.mem.eql(u8, member.property, "default")) {
+                if (!try elementSupportsTrackProperty(host, element)) break :blk error.ScriptRuntime;
+                const default_attr = try host.domStore().hasAttribute(element, "default");
+                break :blk Value{ .boolean = default_attr };
+            }
+            if (std.mem.eql(u8, member.property, "readyState")) {
+                if (!try elementSupportsTrackProperty(host, element)) break :blk error.ScriptRuntime;
+                break :blk Value{ .number = 0 };
+            }
+            if (std.mem.eql(u8, member.property, "complete")) {
+                if (!try elementIsImageElement(host, element)) break :blk error.ScriptRuntime;
+                break :blk Value{ .boolean = true };
+            }
+            if (std.mem.eql(u8, member.property, "naturalWidth")) {
+                if (!try elementIsImageElement(host, element)) break :blk error.ScriptRuntime;
+                break :blk Value{ .number = 0.0 };
+            }
+            if (std.mem.eql(u8, member.property, "naturalHeight")) {
+                if (!try elementIsImageElement(host, element)) break :blk error.ScriptRuntime;
+                break :blk Value{ .number = 0.0 };
+            }
             if (std.mem.eql(u8, member.property, "fetchPriority")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (std.mem.eql(u8, tag_name, "link") or std.ascii.eqlIgnoreCase(tag_name, "script")) {
+                if (!std.mem.eql(u8, tag_name, "img") and
+                    !std.mem.eql(u8, tag_name, "link") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "script") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "iframe"))
+                {
+                    break :blk error.ScriptRuntime;
+                }
+                const fetch_priority_text = (try host.domStore().getAttribute(element, "fetchpriority")) orelse "";
+                break :blk Value{ .string = fetch_priority_text };
+            }
+            if (std.mem.eql(u8, member.property, "crossOrigin")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "img") and
+                    !std.mem.eql(u8, tag_name, "link") and
+                    !std.mem.eql(u8, tag_name, "audio") and
+                    !std.mem.eql(u8, tag_name, "video") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "script"))
+                {
+                    break :blk error.ScriptRuntime;
+                }
+                const cross_origin_text = (try host.domStore().getAttribute(element, "crossorigin")) orelse "";
+                break :blk Value{ .string = cross_origin_text };
+            }
+            if (std.mem.eql(u8, member.property, "preload")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                const preload_text = (try host.domStore().getAttribute(element, "preload")) orelse "";
+                break :blk Value{ .string = preload_text };
+            }
+            if (std.mem.eql(u8, member.property, "autoplay")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                const autoplay_attr = try host.domStore().hasAttribute(element, "autoplay");
+                break :blk Value{ .boolean = autoplay_attr };
+            }
+            if (std.mem.eql(u8, member.property, "loop")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                const loop_attr = try host.domStore().hasAttribute(element, "loop");
+                break :blk Value{ .boolean = loop_attr };
+            }
+            if (std.mem.eql(u8, member.property, "controls")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                const controls_attr = try host.domStore().hasAttribute(element, "controls");
+                break :blk Value{ .boolean = controls_attr };
+            }
+            if (std.mem.eql(u8, member.property, "muted")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                const muted = try host.domStore().mediaMutedForNode(element);
+                break :blk Value{ .boolean = muted };
+            }
+            if (std.mem.eql(u8, member.property, "defaultMuted")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                const default_muted = try host.domStore().hasAttribute(element, "muted");
+                break :blk Value{ .boolean = default_muted };
+            }
+            if (std.mem.eql(u8, member.property, "volume")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                const volume = try host.domStore().mediaVolumeForNode(element);
+                break :blk Value{ .number = volume };
+            }
+            if (std.mem.eql(u8, member.property, "defaultPlaybackRate")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                const playback_rate = try host.domStore().mediaDefaultPlaybackRateForNode(element);
+                break :blk Value{ .number = playback_rate };
+            }
+            if (std.mem.eql(u8, member.property, "playbackRate")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                const playback_rate = try host.domStore().mediaPlaybackRateForNode(element);
+                break :blk Value{ .number = playback_rate };
+            }
+            if (std.mem.eql(u8, member.property, "preservesPitch")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                const preserves_pitch = try host.domStore().mediaPreservesPitchForNode(element);
+                break :blk Value{ .boolean = preserves_pitch };
+            }
+            if (std.mem.eql(u8, member.property, "referrerPolicy")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "img") and
+                    !std.mem.eql(u8, tag_name, "a") and
+                    !std.mem.eql(u8, tag_name, "area") and
+                    !std.mem.eql(u8, tag_name, "link") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "script") and
+                    !std.ascii.eqlIgnoreCase(tag_name, "iframe"))
+                {
+                    break :blk error.ScriptRuntime;
+                }
+                const referrer_policy_text = (try host.domStore().getAttribute(element, "referrerpolicy")) orelse "";
+                break :blk Value{ .string = referrer_policy_text };
+            }
+            if (std.mem.eql(u8, member.property, "allow")) {
+                if (!try elementIsIFrameElement(host, element)) break :blk error.ScriptRuntime;
+                const allow_text = (try host.domStore().getAttribute(element, "allow")) orelse "";
+                break :blk Value{ .string = allow_text };
+            }
+            if (std.mem.eql(u8, member.property, "poster")) {
+                if (!try elementIsVideoElement(host, element)) break :blk error.ScriptRuntime;
+                const poster_text = (try host.domStore().getAttribute(element, "poster")) orelse "";
+                break :blk Value{ .string = poster_text };
+            }
+            if (std.mem.eql(u8, member.property, "playsInline")) {
+                if (!try elementIsVideoElement(host, element)) break :blk error.ScriptRuntime;
+                const plays_inline = try host.domStore().hasAttribute(element, "playsinline");
+                break :blk Value{ .boolean = plays_inline };
+            }
+            if (std.mem.eql(u8, member.property, "controlsList")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                break :blk Value{ .controls_list = element };
+            }
+            if (std.mem.eql(u8, member.property, "disableRemotePlayback")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                const disable_remote_playback = try host.domStore().hasAttribute(element, "disableremoteplayback");
+                break :blk Value{ .boolean = disable_remote_playback };
+            }
+            if (std.mem.eql(u8, member.property, "disablePictureInPicture")) {
+                if (!try elementIsVideoElement(host, element)) break :blk error.ScriptRuntime;
+                const disable_picture_in_picture = try host.domStore().hasAttribute(element, "disablepictureinpicture");
+                break :blk Value{ .boolean = disable_picture_in_picture };
+            }
+            if (std.mem.eql(u8, member.property, "allowFullscreen")) {
+                if (!try elementIsIFrameElement(host, element)) break :blk error.ScriptRuntime;
+                const allow_fullscreen = try host.domStore().hasAttribute(element, "allowfullscreen");
+                break :blk Value{ .boolean = allow_fullscreen };
+            }
+            if (std.mem.eql(u8, member.property, "credentialless")) {
+                if (!try elementIsIFrameElement(host, element)) break :blk error.ScriptRuntime;
+                const credentialless = try host.domStore().hasAttribute(element, "credentialless");
+                break :blk Value{ .boolean = credentialless };
+            }
+            if (std.mem.eql(u8, member.property, "fetchPriority")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "link") or std.ascii.eqlIgnoreCase(tag_name, "script") or
+                    std.ascii.eqlIgnoreCase(tag_name, "iframe"))
+                {
                     const fetch_priority_text = (try host.domStore().getAttribute(element, "fetchpriority")) orelse "";
                     break :blk Value{ .string = fetch_priority_text };
                 }
@@ -6057,7 +7252,11 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "crossOrigin")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (std.mem.eql(u8, tag_name, "link") or std.ascii.eqlIgnoreCase(tag_name, "script")) {
+                if (std.mem.eql(u8, tag_name, "link") or
+                    std.mem.eql(u8, tag_name, "audio") or
+                    std.mem.eql(u8, tag_name, "video") or
+                    std.ascii.eqlIgnoreCase(tag_name, "script"))
+                {
                     const cross_origin_text = (try host.domStore().getAttribute(element, "crossorigin")) orelse "";
                     break :blk Value{ .string = cross_origin_text };
                 }
@@ -6178,9 +7377,34 @@ fn evalMember(
                 break :blk Value{ .string = ping_text };
             }
             if (std.mem.eql(u8, member.property, "alt")) {
-                if (!try elementIsAreaElement(host, element)) break :blk error.ScriptRuntime;
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "img") and
+                    !std.mem.eql(u8, tag_name, "area"))
+                {
+                    if (!std.ascii.eqlIgnoreCase(tag_name, "input") or !try elementIsImageInputElement(host, element)) {
+                        break :blk error.ScriptRuntime;
+                    }
+                }
                 const alt_text = (try host.domStore().getAttribute(element, "alt")) orelse "";
                 break :blk Value{ .string = alt_text };
+            }
+            if (std.mem.eql(u8, member.property, "useMap")) {
+                if (!try elementIsImageOrObjectElement(host, element) and !try elementIsImageInputElement(host, element)) break :blk error.ScriptRuntime;
+                const usemap_text = (try host.domStore().getAttribute(element, "usemap")) orelse "";
+                break :blk Value{ .string = usemap_text };
+            }
+            if (std.mem.eql(u8, member.property, "contentDocument")) {
+                if (!try elementIsObjectOrIFrameElement(host, element)) break :blk error.ScriptRuntime;
+                break :blk Value{ .null_value = {} };
+            }
+            if (std.mem.eql(u8, member.property, "contentWindow")) {
+                if (!try elementIsObjectOrIFrameElement(host, element)) break :blk error.ScriptRuntime;
+                break :blk Value{ .null_value = {} };
+            }
+            if (std.mem.eql(u8, member.property, "isMap")) {
+                if (!try elementIsImageElement(host, element)) break :blk error.ScriptRuntime;
+                const ismap = try host.domStore().hasAttribute(element, "ismap");
+                break :blk Value{ .boolean = ismap };
             }
             if (std.mem.eql(u8, member.property, "coords")) {
                 if (!try elementIsAreaElement(host, element)) break :blk error.ScriptRuntime;
@@ -6200,6 +7424,10 @@ fn evalMember(
             if (std.mem.eql(u8, member.property, "relList")) {
                 if (!try elementSupportsRelProperty(host, element)) break :blk error.ScriptRuntime;
                 break :blk Value{ .rel_list = element };
+            }
+            if (std.mem.eql(u8, member.property, "blocking")) {
+                if (!try elementSupportsBlockingProperty(host, element)) break :blk error.ScriptRuntime;
+                break :blk Value{ .blocking_list = element };
             }
             if (std.mem.eql(u8, member.property, "classList")) {
                 break :blk Value{ .class_list = element };
@@ -6224,6 +7452,10 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "value")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (std.ascii.eqlIgnoreCase(tag_name, "data")) {
+                    const value_text = (try host.domStore().getAttribute(element, "value")) orelse "";
+                    break :blk Value{ .string = value_text };
+                }
                 if (std.mem.eql(u8, tag_name, "progress")) {
                     const value = try progressValueForNode(host, element);
                     break :blk Value{ .number = value orelse 0.0 };
@@ -6234,6 +7466,11 @@ fn evalMember(
                 }
                 const value = try host.domStore().valueForNode(allocator, element);
                 break :blk Value{ .string = value };
+            }
+            if (std.mem.eql(u8, member.property, "dateTime")) {
+                if (!try elementIsTimeElement(host, element)) break :blk error.ScriptRuntime;
+                const date_time = (try host.domStore().getAttribute(element, "datetime")) orelse try host.domStore().textContent(allocator, element);
+                break :blk Value{ .string = date_time };
             }
             if (std.mem.eql(u8, member.property, "position")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
@@ -6247,6 +7484,10 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "label")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "track")) {
+                    const label_text = (try host.domStore().getAttribute(element, "label")) orelse "";
+                    break :blk Value{ .string = label_text };
+                }
                 if (std.mem.eql(u8, tag_name, "option")) {
                     if (try host.domStore().getAttribute(element, "label")) |label_text| {
                         break :blk Value{ .string = label_text };
@@ -6280,25 +7521,25 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "valueAsNumber")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (!std.mem.eql(u8, tag_name, "input")) break :blk error.ScriptRuntime;
+                if (!std.ascii.eqlIgnoreCase(tag_name, "input")) break :blk error.ScriptRuntime;
                 const value = host.domStore().inputValueAsNumber(element) orelse std.math.nan(f64);
                 break :blk Value{ .number = value };
             }
             if (std.mem.eql(u8, member.property, "valueAsDate")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (!std.mem.eql(u8, tag_name, "input")) break :blk error.ScriptRuntime;
+                if (!std.ascii.eqlIgnoreCase(tag_name, "input")) break :blk error.ScriptRuntime;
                 const value = host.domStore().inputValueAsDate(element) orelse break :blk Value{ .null_value = {} };
                 break :blk try makeDateValue(allocator, value);
             }
             if (std.mem.eql(u8, member.property, "accept")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (!std.mem.eql(u8, tag_name, "input")) break :blk error.ScriptRuntime;
+                if (!std.ascii.eqlIgnoreCase(tag_name, "input")) break :blk error.ScriptRuntime;
                 const accept = (try host.domStore().getAttribute(element, "accept")) orelse "";
                 break :blk Value{ .string = accept };
             }
             if (std.mem.eql(u8, member.property, "list")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (!std.mem.eql(u8, tag_name, "input")) break :blk error.ScriptRuntime;
+                if (!std.ascii.eqlIgnoreCase(tag_name, "input")) break :blk error.ScriptRuntime;
                 const list_id = try inputListElement(host, element);
                 if (list_id) |datalist_id| {
                     break :blk Value{ .element = datalist_id };
@@ -6316,18 +7557,42 @@ fn evalMember(
                 const action = try popoverTargetActionValue(host, element);
                 break :blk Value{ .string = action };
             }
+            if (std.mem.eql(u8, member.property, "command")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "button")) break :blk error.ScriptRuntime;
+                const command = try buttonCommandValue(host, element);
+                break :blk Value{ .string = command };
+            }
+            if (std.mem.eql(u8, member.property, "commandForElement")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "button")) break :blk error.ScriptRuntime;
+                const commandfor_target = try buttonCommandForElement(host, element);
+                if (commandfor_target) |target_id| {
+                    break :blk Value{ .element = target_id };
+                }
+                break :blk Value{ .null_value = {} };
+            }
             if (std.mem.eql(u8, member.property, "size")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (!std.mem.eql(u8, tag_name, "input")) break :blk error.ScriptRuntime;
-                const size = try inputSizeValue(host, element);
+                const size = if (std.ascii.eqlIgnoreCase(tag_name, "input")) try inputSizeValue(host, element) else if (std.mem.eql(u8, tag_name, "select")) try selectSizeValue(host, element) else return error.ScriptRuntime;
                 break :blk Value{ .number = @floatFromInt(size) };
-            }
-            if (std.mem.eql(u8, member.property, "files")) {
-                if (!try elementSupportsFilesProperty(host, element)) break :blk error.ScriptRuntime;
-                break :blk Value{ .file_list = try fileInputFilesValue(allocator, host, element) };
             }
             if (std.mem.eql(u8, member.property, "type")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "button")) {
+                    const state = try buttonTypeState(host, element);
+                    const type_value = switch (state) {
+                        .submit => "submit",
+                        .reset => "reset",
+                        .button => "button",
+                        .auto => if (try buttonIsSubmitButton(host, element)) "submit" else "button",
+                    };
+                    break :blk Value{ .string = type_value };
+                }
+                if (std.mem.eql(u8, tag_name, "select")) {
+                    const type_value = if (try host.domStore().hasAttribute(element, "multiple")) "select-multiple" else "select-one";
+                    break :blk Value{ .string = type_value };
+                }
                 if (std.mem.eql(u8, tag_name, "style")) {
                     const type_text = (try host.domStore().getAttribute(element, "type")) orelse "text/css";
                     break :blk Value{ .string = type_text };
@@ -6335,10 +7600,15 @@ fn evalMember(
                 if (std.mem.eql(u8, tag_name, "output")) {
                     break :blk Value{ .string = "output" };
                 }
+                if (std.mem.eql(u8, tag_name, "fieldset")) {
+                    break :blk Value{ .string = "fieldset" };
+                }
                 if (std.mem.eql(u8, tag_name, "link") or
                     std.ascii.eqlIgnoreCase(tag_name, "a") or
                     std.ascii.eqlIgnoreCase(tag_name, "area") or
-                    std.ascii.eqlIgnoreCase(tag_name, "script"))
+                    std.ascii.eqlIgnoreCase(tag_name, "script") or
+                    std.mem.eql(u8, tag_name, "object") or
+                    std.ascii.eqlIgnoreCase(tag_name, "source"))
                 {
                     const type_text = (try host.domStore().getAttribute(element, "type")) orelse "";
                     break :blk Value{ .string = type_text };
@@ -6347,6 +7617,10 @@ fn evalMember(
                 const default_type = if (std.mem.eql(u8, tag_name, "button")) "submit" else "text";
                 const type_text = (try host.domStore().getAttribute(element, "type")) orelse default_type;
                 break :blk Value{ .string = try lowercaseDupe(allocator, type_text) };
+            }
+            if (std.mem.eql(u8, member.property, "files")) {
+                if (!try elementSupportsFilesProperty(host, element)) break :blk error.ScriptRuntime;
+                break :blk Value{ .file_list = try fileInputFilesValue(allocator, host, element) };
             }
             if (std.mem.eql(u8, member.property, "minLength")) {
                 if (!try elementSupportsTextLengthProperty(host, element)) break :blk error.ScriptRuntime;
@@ -6358,9 +7632,15 @@ fn evalMember(
                 const limit = try textLengthLimitValue(host, element, "maxlength");
                 break :blk Value{ .number = @floatFromInt(limit) };
             }
+            if (std.mem.eql(u8, member.property, "cols")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "textarea")) break :blk error.ScriptRuntime;
+                const cols = try textareaDimensionValue(host, element, "cols", 20);
+                break :blk Value{ .number = @floatFromInt(cols) };
+            }
             if (std.mem.eql(u8, member.property, "defaultValue")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (std.mem.eql(u8, tag_name, "input") or std.mem.eql(u8, tag_name, "textarea")) {
+                if (std.ascii.eqlIgnoreCase(tag_name, "input") or std.mem.eql(u8, tag_name, "textarea")) {
                     const value = try host.domStore().valueForNode(allocator, element);
                     break :blk Value{ .string = value };
                 }
@@ -6372,7 +7652,7 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "defaultChecked")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (!std.mem.eql(u8, tag_name, "input")) break :blk error.ScriptRuntime;
+                if (!std.ascii.eqlIgnoreCase(tag_name, "input")) break :blk error.ScriptRuntime;
                 const checked = try host.domStore().getAttribute(element, "checked");
                 break :blk Value{ .boolean = checked != null };
             }
@@ -6402,6 +7682,24 @@ fn evalMember(
                 break :blk Value{ .string = target_value };
             }
             if (std.mem.eql(u8, member.property, "form")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (std.ascii.eqlIgnoreCase(tag_name, "legend")) {
+                    const form_owner = try legendFormOwner(host, element);
+                    if (form_owner) |form_id| {
+                        break :blk Value{ .element = form_id };
+                    }
+                    break :blk Value{ .null_value = {} };
+                }
+                if (std.ascii.eqlIgnoreCase(tag_name, "label")) {
+                    const control_id = try labelControlId(allocator, host, element);
+                    if (control_id) |id| {
+                        const form_owner = try elementFormOwner(host, id);
+                        if (form_owner) |form_id| {
+                            break :blk Value{ .element = form_id };
+                        }
+                    }
+                    break :blk Value{ .null_value = {} };
+                }
                 if (!try elementSupportsFormOwnerProperty(host, element)) break :blk error.ScriptRuntime;
                 const form_owner = try elementFormOwner(host, element);
                 if (form_owner) |form_id| {
@@ -6429,7 +7727,7 @@ fn evalMember(
                     break :blk Value{ .number = @floatFromInt(state.start) };
                 }
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (std.mem.eql(u8, tag_name, "input")) {
+                if (std.ascii.eqlIgnoreCase(tag_name, "input")) {
                     break :blk Value{ .null_value = {} };
                 }
                 break :blk error.ScriptRuntime;
@@ -6443,7 +7741,7 @@ fn evalMember(
                     break :blk Value{ .number = @floatFromInt(state.end) };
                 }
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (std.mem.eql(u8, tag_name, "input")) {
+                if (std.ascii.eqlIgnoreCase(tag_name, "input")) {
                     break :blk Value{ .null_value = {} };
                 }
                 break :blk error.ScriptRuntime;
@@ -6457,7 +7755,7 @@ fn evalMember(
                     break :blk Value{ .string = selectionDirectionName(state.direction) };
                 }
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (std.mem.eql(u8, tag_name, "input")) {
+                if (std.ascii.eqlIgnoreCase(tag_name, "input")) {
                     break :blk Value{ .null_value = {} };
                 }
                 break :blk error.ScriptRuntime;
@@ -6576,7 +7874,7 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "indeterminate")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (!std.mem.eql(u8, tag_name, "input")) break :blk error.ScriptRuntime;
+                if (!std.ascii.eqlIgnoreCase(tag_name, "input")) break :blk error.ScriptRuntime;
                 break :blk Value{ .boolean = host.domStore().indeterminateForNode(element) orelse false };
             }
             if (std.mem.eql(u8, member.property, "baseURI")) {
@@ -6626,6 +7924,31 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "width")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (try elementIsCanvasElement(host, element)) {
+                    const width = try canvasDimensionValue(host, element, "width", 300);
+                    break :blk Value{ .number = @floatFromInt(width) };
+                }
+                if (std.mem.eql(u8, tag_name, "img")) {
+                    const width = try textareaDimensionValue(host, element, "width", 0);
+                    break :blk Value{ .number = @floatFromInt(width) };
+                }
+                if (std.ascii.eqlIgnoreCase(tag_name, "input")) {
+                    if (!try elementIsImageInputElement(host, element)) break :blk error.ScriptRuntime;
+                    const width = try textareaDimensionValue(host, element, "width", 0);
+                    break :blk Value{ .number = @floatFromInt(width) };
+                }
+                if (std.mem.eql(u8, tag_name, "video")) {
+                    const width = try textareaDimensionValue(host, element, "width", 300);
+                    break :blk Value{ .number = @floatFromInt(width) };
+                }
+                if (std.mem.eql(u8, tag_name, "object")) {
+                    const width_text = (try host.domStore().getAttribute(element, "width")) orelse "";
+                    break :blk Value{ .string = width_text };
+                }
+                if (std.ascii.eqlIgnoreCase(tag_name, "iframe")) {
+                    const width_text = (try host.domStore().getAttribute(element, "width")) orelse "";
+                    break :blk Value{ .string = width_text };
+                }
                 if (!(tableElementTagAllowed(tag_name) or tableCellTagAllowed(tag_name) or tableColumnTagAllowed(tag_name))) {
                     break :blk error.ScriptRuntime;
                 }
@@ -6684,6 +8007,31 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "height")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (try elementIsCanvasElement(host, element)) {
+                    const height = try canvasDimensionValue(host, element, "height", 150);
+                    break :blk Value{ .number = @floatFromInt(height) };
+                }
+                if (std.mem.eql(u8, tag_name, "img")) {
+                    const height = try textareaDimensionValue(host, element, "height", 0);
+                    break :blk Value{ .number = @floatFromInt(height) };
+                }
+                if (std.ascii.eqlIgnoreCase(tag_name, "input")) {
+                    if (!try elementIsImageInputElement(host, element)) break :blk error.ScriptRuntime;
+                    const height = try textareaDimensionValue(host, element, "height", 0);
+                    break :blk Value{ .number = @floatFromInt(height) };
+                }
+                if (std.mem.eql(u8, tag_name, "video")) {
+                    const height = try textareaDimensionValue(host, element, "height", 150);
+                    break :blk Value{ .number = @floatFromInt(height) };
+                }
+                if (std.mem.eql(u8, tag_name, "object")) {
+                    const height_text = (try host.domStore().getAttribute(element, "height")) orelse "";
+                    break :blk Value{ .string = height_text };
+                }
+                if (std.ascii.eqlIgnoreCase(tag_name, "iframe")) {
+                    const height_text = (try host.domStore().getAttribute(element, "height")) orelse "";
+                    break :blk Value{ .string = height_text };
+                }
                 if (!tableCellTagAllowed(tag_name)) break :blk error.ScriptRuntime;
                 const height_text = (try host.domStore().getAttribute(element, "height")) orelse "";
                 break :blk Value{ .string = height_text };
@@ -6894,6 +8242,19 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "value")) {
                 var tokens = try relListTokens(allocator, host, object.rel_list);
+                defer tokens.deinit(allocator);
+                break :blk Value{ .string = try tokenListValue(allocator, tokens.items) };
+            }
+            break :blk error.ScriptRuntime;
+        },
+        .controls_list => blk: {
+            if (std.mem.eql(u8, member.property, "length")) {
+                var tokens = try controlsListTokens(allocator, host, object.controls_list);
+                defer tokens.deinit(allocator);
+                break :blk Value{ .number = @floatFromInt(tokens.items.len) };
+            }
+            if (std.mem.eql(u8, member.property, "value")) {
+                var tokens = try controlsListTokens(allocator, host, object.controls_list);
                 defer tokens.deinit(allocator);
                 break :blk Value{ .string = try tokenListValue(allocator, tokens.items) };
             }
@@ -7672,6 +9033,27 @@ fn evalMember(
             }
             break :blk error.ScriptRuntime;
         },
+        .text_track => |track| blk: {
+            if (std.mem.eql(u8, member.property, "kind")) {
+                const kind = (try host.domStore().getAttribute(track.element, "kind")) orelse "";
+                break :blk Value{ .string = textTrackKindValue(kind) };
+            }
+            if (std.mem.eql(u8, member.property, "label")) {
+                const label = (try host.domStore().getAttribute(track.element, "label")) orelse "";
+                break :blk Value{ .string = label };
+            }
+            if (std.mem.eql(u8, member.property, "language")) {
+                const language = (try host.domStore().getAttribute(track.element, "srclang")) orelse "";
+                break :blk Value{ .string = language };
+            }
+            if (std.mem.eql(u8, member.property, "mode")) {
+                break :blk Value{ .string = textTrackModeName(track.mode) };
+            }
+            if (std.mem.eql(u8, member.property, "readyState")) {
+                break :blk Value{ .number = 0 };
+            }
+            break :blk error.ScriptRuntime;
+        },
         .dataset => blk: {
             const attribute_name = try datasetAttributeName(allocator, member.property);
             const value = host.domStore().getAttribute(object.dataset, attribute_name) catch |err| switch (err) {
@@ -7719,6 +9101,33 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "currentTarget")) {
                 break :blk if (event.current_target) |target| valueForListenerTarget(target) else Value{ .undefined_value = {} };
+            }
+            if (std.mem.eql(u8, member.property, "formData")) {
+                if (event.formData()) |form_data| {
+                    break :blk Value{ .form_data = form_data };
+                }
+                break :blk Value{ .undefined_value = {} };
+            }
+            if (std.mem.eql(u8, member.property, "command")) {
+                if (event.command()) |command| {
+                    break :blk Value{ .string = command };
+                }
+                break :blk Value{ .undefined_value = {} };
+            }
+            if (std.mem.eql(u8, member.property, "source")) {
+                if (event.source()) |source_id| {
+                    break :blk Value{ .element = source_id };
+                }
+                break :blk Value{ .undefined_value = {} };
+            }
+            if (std.mem.eql(u8, member.property, "submitter")) {
+                if (event.is_submit_event) {
+                    if (event.submitter()) |submitter_id| {
+                        break :blk Value{ .element = submitter_id };
+                    }
+                    break :blk Value{ .null_value = {} };
+                }
+                break :blk Value{ .undefined_value = {} };
             }
             if (std.mem.eql(u8, member.property, "defaultPrevented")) {
                 break :blk Value{ .boolean = event.default_prevented };
@@ -8338,10 +9747,85 @@ fn evalMethodCall(
                 break :blk Value{ .null_value = {} };
             }
             break :blk Value{ .string = object.file_list.items[index] };
+        } else if (std.mem.eql(u8, method, "keys")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try stringListKeys(allocator, object.file_list.items);
+        } else if (std.mem.eql(u8, method, "values")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try stringListValues(allocator, object.file_list.items);
+        } else if (std.mem.eql(u8, method, "entries")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try stringListEntries(allocator, object.file_list.items);
+        } else if (std.mem.eql(u8, method, "forEach")) blk: {
+            break :blk try tokenListForEach(
+                allocator,
+                host,
+                bindings,
+                object.file_list.items,
+                Value{ .file_list = object.file_list },
+                args,
+                "filelist:forEach",
+            );
         } else if (std.mem.eql(u8, method, "toString")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk Value{ .string = "[object FileList]" };
         } else error.ScriptRuntime,
+        .form_data => if (std.mem.eql(u8, method, "append")) blk: {
+            if (args.len < 2 or args.len > 3) return error.ScriptRuntime;
+            const name_value = try evalExpr(allocator, host, bindings, args[0]);
+            const name = try asString(allocator, name_value);
+            const value_value = try evalExpr(allocator, host, bindings, args[1]);
+            const value = try asString(allocator, value_value);
+            try object.form_data.append(name, value);
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "keys")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try formDataKeys(allocator, object.form_data);
+        } else if (std.mem.eql(u8, method, "values")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try formDataValues(allocator, object.form_data);
+        } else if (std.mem.eql(u8, method, "entries")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try formDataEntries(allocator, object.form_data);
+        } else if (std.mem.eql(u8, method, "forEach")) blk: {
+            break :blk try formDataForEach(allocator, host, bindings, object.form_data, args);
+        } else if (std.mem.eql(u8, method, "delete")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const name_value = try evalExpr(allocator, host, bindings, args[0]);
+            const name = try asString(allocator, name_value);
+            object.form_data.delete(name);
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "get")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const name_value = try evalExpr(allocator, host, bindings, args[0]);
+            const name = try asString(allocator, name_value);
+            if (object.form_data.get(name)) |value| {
+                break :blk Value{ .string = value };
+            }
+            break :blk Value{ .null_value = {} };
+        } else if (std.mem.eql(u8, method, "getAll")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const name_value = try evalExpr(allocator, host, bindings, args[0]);
+            const name = try asString(allocator, name_value);
+            break :blk Value{ .string_list = try object.form_data.getAll(allocator, name) };
+        } else if (std.mem.eql(u8, method, "has")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const name_value = try evalExpr(allocator, host, bindings, args[0]);
+            const name = try asString(allocator, name_value);
+            break :blk Value{ .boolean = object.form_data.has(name) };
+        } else if (std.mem.eql(u8, method, "set")) blk: {
+            if (args.len < 2 or args.len > 3) return error.ScriptRuntime;
+            const name_value = try evalExpr(allocator, host, bindings, args[0]);
+            const name = try asString(allocator, name_value);
+            const value_value = try evalExpr(allocator, host, bindings, args[1]);
+            const value = try asString(allocator, value_value);
+            try object.form_data.set(name, value);
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "toString")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk Value{ .string = "[object FormData]" };
+        } else error.ScriptRuntime,
+        .form_data_entry => error.ScriptRuntime,
         .named_node_map => if (std.mem.eql(u8, method, "item")) blk: {
             if (args.len != 1) return error.ScriptRuntime;
             const index_value = try evalExpr(allocator, host, bindings, args[0]);
@@ -8652,9 +10136,46 @@ fn evalMethodCall(
         } else if (std.mem.eql(u8, method, "getBoundingClientRect")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk try makeDomRectValue(allocator, host, element);
+        } else if (std.mem.eql(u8, method, "assignedNodes")) blk: {
+            if (args.len > 1) return error.ScriptRuntime;
+            if (!try elementIsSlotElement(host, element)) break :blk error.ScriptRuntime;
+            if (args.len == 1) {
+                _ = try evalExpr(allocator, host, bindings, args[0]);
+            }
+            break :blk Value{ .node_list = .{
+                .items = &.{},
+                .live_root = element,
+                .live_kind = .children,
+                .item_kind = .node,
+            } };
+        } else if (std.mem.eql(u8, method, "assignedElements")) blk: {
+            if (args.len > 1) return error.ScriptRuntime;
+            if (!try elementIsSlotElement(host, element)) break :blk error.ScriptRuntime;
+            if (args.len == 1) {
+                _ = try evalExpr(allocator, host, bindings, args[0]);
+            }
+            break :blk Value{ .node_list = .{
+                .items = &.{},
+                .live_root = element,
+                .live_kind = .children,
+                .item_kind = .element,
+            } };
+        } else if (std.mem.eql(u8, method, "getContext")) blk: {
+            if (args.len < 1 or args.len > 2) return error.ScriptRuntime;
+            if (!try elementIsCanvasElement(host, element)) break :blk error.ScriptRuntime;
+            _ = try asString(allocator, try evalExpr(allocator, host, bindings, args[0]));
+            if (args.len == 2) {
+                _ = try evalExpr(allocator, host, bindings, args[1]);
+            }
+            break :blk Value{ .null_value = {} };
         } else if (std.mem.eql(u8, method, "getClientRects")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk try makeDomRectListValue(allocator, host, element);
+        } else if (std.mem.eql(u8, method, "getSVGDocument")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+            if (!std.mem.eql(u8, tag_name, "object")) break :blk error.ScriptRuntime;
+            break :blk Value{ .null_value = {} };
         } else if (std.mem.eql(u8, method, "click")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             if (!try elementSupportsClickProperty(host, element)) return error.ScriptRuntime;
@@ -8935,7 +10456,7 @@ fn evalMethodCall(
             if (std.mem.eql(u8, tag_name, "form")) {
                 break :blk Value{ .boolean = dom.formCheckValidity(host.domStore(), element) };
             }
-            if (std.mem.eql(u8, tag_name, "input") or std.mem.eql(u8, tag_name, "textarea") or std.mem.eql(u8, tag_name, "select") or std.mem.eql(u8, tag_name, "output")) {
+            if (std.ascii.eqlIgnoreCase(tag_name, "input") or std.mem.eql(u8, tag_name, "textarea") or std.mem.eql(u8, tag_name, "select") or std.mem.eql(u8, tag_name, "output") or std.mem.eql(u8, tag_name, "object")) {
                 break :blk Value{ .boolean = dom.formControlCheckValidity(host.domStore(), element) };
             }
             break :blk error.ScriptRuntime;
@@ -8943,10 +10464,11 @@ fn evalMethodCall(
             if (args.len != 0) return error.ScriptRuntime;
             const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
             if (std.mem.eql(u8, tag_name, "form") or
-                std.mem.eql(u8, tag_name, "input") or
+                std.ascii.eqlIgnoreCase(tag_name, "input") or
                 std.mem.eql(u8, tag_name, "textarea") or
                 std.mem.eql(u8, tag_name, "select") or
-                std.mem.eql(u8, tag_name, "output"))
+                std.mem.eql(u8, tag_name, "output") or
+                std.mem.eql(u8, tag_name, "object"))
             {
                 break :blk Value{ .boolean = try host.reportValidityNode(element) };
             }
@@ -8954,18 +10476,20 @@ fn evalMethodCall(
         } else if (std.mem.eql(u8, method, "submit")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             if (!try elementSupportsFormProperty(host, element)) return error.ScriptRuntime;
-            try host.submitNode(element);
+            try host.submitNode(element, null);
             break :blk Value{ .undefined_value = {} };
         } else if (std.mem.eql(u8, method, "requestSubmit")) blk: {
             if (args.len > 1) return error.ScriptRuntime;
             if (!try elementSupportsFormProperty(host, element)) return error.ScriptRuntime;
+            var submitter_node: ?dom.NodeId = null;
             if (args.len == 1) {
                 const submitter = try evalElementHandle(allocator, host, bindings, args[0]);
                 const owner = try elementFormOwner(host, submitter) orelse return error.ScriptRuntime;
                 if (!sameNodeId(owner, element)) return error.ScriptRuntime;
                 if (!try elementIsSubmitControl(host, submitter)) return error.ScriptRuntime;
+                submitter_node = submitter;
             }
-            try host.submitNode(element);
+            try host.submitNode(element, submitter_node);
             break :blk Value{ .undefined_value = {} };
         } else if (std.mem.eql(u8, method, "reset")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
@@ -9854,7 +11378,7 @@ fn evalMethodCall(
             if (args.len != 1) return error.ScriptRuntime;
             const token_value = try evalExpr(allocator, host, bindings, args[0]);
             const token = try validateClassListToken(allocator, token_value);
-            break :blk Value{ .boolean = relListSupportsToken(token) };
+            break :blk Value{ .boolean = try relListSupportsTokenForElement(allocator, host, element, token) };
         } else if (std.mem.eql(u8, method, "item")) blk: {
             if (args.len != 1) return error.ScriptRuntime;
             const index_value = try evalExpr(allocator, host, bindings, args[0]);
@@ -10020,6 +11544,368 @@ fn evalMethodCall(
             }
 
             try writeRelListTokens(allocator, host, element, tokens.items);
+            break :blk Value{ .boolean = true };
+        } else if (std.mem.eql(u8, method, "length")) blk: {
+            break :blk error.ScriptRuntime;
+        } else error.ScriptRuntime,
+        .blocking_list => |element| if (std.mem.eql(u8, method, "contains")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const token_value = try evalExpr(allocator, host, bindings, args[0]);
+            const token = try validateClassListToken(allocator, token_value);
+            var tokens = try blockingListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            break :blk Value{ .boolean = classListContains(tokens.items, token) };
+        } else if (std.mem.eql(u8, method, "supports")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const token_value = try evalExpr(allocator, host, bindings, args[0]);
+            const token = try validateClassListToken(allocator, token_value);
+            break :blk Value{ .boolean = blockingListSupportsToken(token) };
+        } else if (std.mem.eql(u8, method, "item")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const index_value = try evalExpr(allocator, host, bindings, args[0]);
+            const index = try asNodeListIndex(index_value);
+            var tokens = try blockingListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            if (index >= tokens.items.len) break :blk Value{ .null_value = {} };
+            break :blk Value{ .string = tokens.items[index] };
+        } else if (std.mem.eql(u8, method, "keys")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            var tokens = try blockingListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            break :blk try tokenListKeys(allocator, tokens.items);
+        } else if (std.mem.eql(u8, method, "values")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            var tokens = try blockingListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            break :blk try tokenListValues(allocator, tokens.items);
+        } else if (std.mem.eql(u8, method, "entries")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            var tokens = try blockingListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            break :blk try tokenListEntries(allocator, tokens.items);
+        } else if (std.mem.eql(u8, method, "forEach")) blk: {
+            var tokens = try blockingListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            break :blk try tokenListForEach(
+                allocator,
+                host,
+                bindings,
+                tokens.items,
+                Value{ .blocking_list = element },
+                args,
+                "domtokenlist:forEach",
+            );
+        } else if (std.mem.eql(u8, method, "add")) blk: {
+            if (args.len == 0) return error.ScriptRuntime;
+            var tokens = try blockingListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+
+            var changed = false;
+            for (args) |arg| {
+                const token_value = try evalExpr(allocator, host, bindings, arg);
+                const token = try validateClassListToken(allocator, token_value);
+                if (!classListContains(tokens.items, token)) {
+                    try tokens.append(allocator, token);
+                    changed = true;
+                }
+            }
+
+            if (changed) {
+                try writeBlockingListTokens(allocator, host, element, tokens.items);
+            }
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "remove")) blk: {
+            if (args.len == 0) return error.ScriptRuntime;
+            var tokens = try blockingListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+
+            const original_len = tokens.items.len;
+            for (args) |arg| {
+                const token_value = try evalExpr(allocator, host, bindings, arg);
+                const token = try validateClassListToken(allocator, token_value);
+                var index: usize = 0;
+                while (index < tokens.items.len) : (index += 1) {
+                    if (std.mem.eql(u8, tokens.items[index], token)) {
+                        _ = tokens.orderedRemove(index);
+                        break;
+                    }
+                }
+            }
+
+            if (tokens.items.len != original_len) {
+                try writeBlockingListTokens(allocator, host, element, tokens.items);
+            }
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "toggle")) blk: {
+            if (args.len != 1 and args.len != 2) return error.ScriptRuntime;
+            const token_value = try evalExpr(allocator, host, bindings, args[0]);
+            const token = try validateClassListToken(allocator, token_value);
+            const force: ?bool = if (args.len == 2) force_value_blk: {
+                const force_value = try evalExpr(allocator, host, bindings, args[1]);
+                break :force_value_blk isTruthy(force_value);
+            } else null;
+
+            var tokens = try blockingListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            const present = classListContains(tokens.items, token);
+            const now_present = if (force) |forced| present_blk: {
+                if (forced) {
+                    if (!present) {
+                        try tokens.append(allocator, token);
+                        try writeBlockingListTokens(allocator, host, element, tokens.items);
+                    }
+                    break :present_blk true;
+                }
+
+                if (present) {
+                    var index: usize = 0;
+                    while (index < tokens.items.len) : (index += 1) {
+                        if (std.mem.eql(u8, tokens.items[index], token)) {
+                            _ = tokens.orderedRemove(index);
+                            break;
+                        }
+                    }
+                    try writeBlockingListTokens(allocator, host, element, tokens.items);
+                }
+                break :present_blk false;
+            } else present_blk: {
+                if (present) {
+                    var index: usize = 0;
+                    while (index < tokens.items.len) : (index += 1) {
+                        if (std.mem.eql(u8, tokens.items[index], token)) {
+                            _ = tokens.orderedRemove(index);
+                            break;
+                        }
+                    }
+                    try writeBlockingListTokens(allocator, host, element, tokens.items);
+                    break :present_blk false;
+                }
+
+                try tokens.append(allocator, token);
+                try writeBlockingListTokens(allocator, host, element, tokens.items);
+                break :present_blk true;
+            };
+
+            break :blk Value{ .boolean = now_present };
+        } else if (std.mem.eql(u8, method, "replace")) blk: {
+            if (args.len != 2) return error.ScriptRuntime;
+            const old_value = try evalExpr(allocator, host, bindings, args[0]);
+            const old_token = try validateClassListToken(allocator, old_value);
+            const new_value = try evalExpr(allocator, host, bindings, args[1]);
+            const new_token = try validateClassListToken(allocator, new_value);
+
+            var tokens = try blockingListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+
+            var old_index: ?usize = null;
+            var index: usize = 0;
+            while (index < tokens.items.len) : (index += 1) {
+                if (std.mem.eql(u8, tokens.items[index], old_token)) {
+                    old_index = index;
+                    break;
+                }
+            }
+
+            if (old_index == null) break :blk Value{ .boolean = false };
+            if (std.mem.eql(u8, old_token, new_token)) break :blk Value{ .boolean = true };
+
+            var new_index: ?usize = null;
+            index = 0;
+            while (index < tokens.items.len) : (index += 1) {
+                if (std.mem.eql(u8, tokens.items[index], new_token)) {
+                    new_index = index;
+                    break;
+                }
+            }
+
+            if (new_index == null) {
+                tokens.items[old_index.?] = new_token;
+            } else {
+                _ = tokens.orderedRemove(old_index.?);
+            }
+
+            try writeBlockingListTokens(allocator, host, element, tokens.items);
+            break :blk Value{ .boolean = true };
+        } else if (std.mem.eql(u8, method, "length")) blk: {
+            break :blk error.ScriptRuntime;
+        } else error.ScriptRuntime,
+        .controls_list => |element| if (std.mem.eql(u8, method, "contains")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const token_value = try evalExpr(allocator, host, bindings, args[0]);
+            const token = try validateClassListToken(allocator, token_value);
+            var tokens = try controlsListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            break :blk Value{ .boolean = classListContains(tokens.items, token) };
+        } else if (std.mem.eql(u8, method, "supports")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const token_value = try evalExpr(allocator, host, bindings, args[0]);
+            const token = try validateClassListToken(allocator, token_value);
+            break :blk Value{ .boolean = controlsListSupportsToken(token) };
+        } else if (std.mem.eql(u8, method, "item")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const index_value = try evalExpr(allocator, host, bindings, args[0]);
+            const index = try asNodeListIndex(index_value);
+            var tokens = try controlsListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            if (index >= tokens.items.len) break :blk Value{ .null_value = {} };
+            break :blk Value{ .string = tokens.items[index] };
+        } else if (std.mem.eql(u8, method, "keys")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            var tokens = try controlsListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            break :blk try tokenListKeys(allocator, tokens.items);
+        } else if (std.mem.eql(u8, method, "values")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            var tokens = try controlsListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            break :blk try tokenListValues(allocator, tokens.items);
+        } else if (std.mem.eql(u8, method, "entries")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            var tokens = try controlsListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            break :blk try tokenListEntries(allocator, tokens.items);
+        } else if (std.mem.eql(u8, method, "forEach")) blk: {
+            var tokens = try controlsListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            break :blk try tokenListForEach(
+                allocator,
+                host,
+                bindings,
+                tokens.items,
+                Value{ .controls_list = element },
+                args,
+                "domtokenlist:forEach",
+            );
+        } else if (std.mem.eql(u8, method, "add")) blk: {
+            if (args.len == 0) return error.ScriptRuntime;
+            var tokens = try controlsListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+
+            var changed = false;
+            for (args) |arg| {
+                const token_value = try evalExpr(allocator, host, bindings, arg);
+                const token = try validateClassListToken(allocator, token_value);
+                if (!classListContains(tokens.items, token)) {
+                    try tokens.append(allocator, token);
+                    changed = true;
+                }
+            }
+
+            if (changed) {
+                try writeControlsListTokens(allocator, host, element, tokens.items);
+            }
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "remove")) blk: {
+            if (args.len == 0) return error.ScriptRuntime;
+            var tokens = try controlsListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+
+            const original_len = tokens.items.len;
+            for (args) |arg| {
+                const token_value = try evalExpr(allocator, host, bindings, arg);
+                const token = try validateClassListToken(allocator, token_value);
+                var index: usize = 0;
+                while (index < tokens.items.len) : (index += 1) {
+                    if (std.mem.eql(u8, tokens.items[index], token)) {
+                        _ = tokens.orderedRemove(index);
+                        break;
+                    }
+                }
+            }
+
+            if (tokens.items.len != original_len) {
+                try writeControlsListTokens(allocator, host, element, tokens.items);
+            }
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "toggle")) blk: {
+            if (args.len != 1 and args.len != 2) return error.ScriptRuntime;
+            const token_value = try evalExpr(allocator, host, bindings, args[0]);
+            const token = try validateClassListToken(allocator, token_value);
+            const force: ?bool = if (args.len == 2) force_value_blk: {
+                const force_value = try evalExpr(allocator, host, bindings, args[1]);
+                break :force_value_blk isTruthy(force_value);
+            } else null;
+
+            var tokens = try controlsListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            const present = classListContains(tokens.items, token);
+            const now_present = if (force) |forced| present_blk: {
+                if (forced) {
+                    if (!present) {
+                        try tokens.append(allocator, token);
+                        try writeControlsListTokens(allocator, host, element, tokens.items);
+                    }
+                    break :present_blk true;
+                }
+
+                if (present) {
+                    var index: usize = 0;
+                    while (index < tokens.items.len) : (index += 1) {
+                        if (std.mem.eql(u8, tokens.items[index], token)) {
+                            _ = tokens.orderedRemove(index);
+                            break;
+                        }
+                    }
+                    try writeControlsListTokens(allocator, host, element, tokens.items);
+                }
+                break :present_blk false;
+            } else present_blk: {
+                if (present) {
+                    var index: usize = 0;
+                    while (index < tokens.items.len) : (index += 1) {
+                        if (std.mem.eql(u8, tokens.items[index], token)) {
+                            _ = tokens.orderedRemove(index);
+                            break;
+                        }
+                    }
+                    try writeControlsListTokens(allocator, host, element, tokens.items);
+                    break :present_blk false;
+                }
+
+                try tokens.append(allocator, token);
+                try writeControlsListTokens(allocator, host, element, tokens.items);
+                break :present_blk true;
+            };
+
+            break :blk Value{ .boolean = now_present };
+        } else if (std.mem.eql(u8, method, "replace")) blk: {
+            if (args.len != 2) return error.ScriptRuntime;
+            const old_value = try evalExpr(allocator, host, bindings, args[0]);
+            const old_token = try validateClassListToken(allocator, old_value);
+            const new_value = try evalExpr(allocator, host, bindings, args[1]);
+            const new_token = try validateClassListToken(allocator, new_value);
+
+            var tokens = try controlsListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+
+            var old_index: ?usize = null;
+            var index: usize = 0;
+            while (index < tokens.items.len) : (index += 1) {
+                if (std.mem.eql(u8, tokens.items[index], old_token)) {
+                    old_index = index;
+                    break;
+                }
+            }
+
+            if (old_index == null) break :blk Value{ .boolean = false };
+            if (std.mem.eql(u8, old_token, new_token)) break :blk Value{ .boolean = true };
+
+            var new_index: ?usize = null;
+            index = 0;
+            while (index < tokens.items.len) : (index += 1) {
+                if (std.mem.eql(u8, tokens.items[index], new_token)) {
+                    new_index = index;
+                    break;
+                }
+            }
+
+            if (new_index == null) {
+                tokens.items[old_index.?] = new_token;
+            } else {
+                _ = tokens.orderedRemove(old_index.?);
+            }
+
+            try writeControlsListTokens(allocator, host, element, tokens.items);
             break :blk Value{ .boolean = true };
         } else if (std.mem.eql(u8, method, "length")) blk: {
             break :blk error.ScriptRuntime;
@@ -10700,6 +12586,11 @@ fn evalMethodCall(
         } else if (std.mem.eql(u8, method, "toString")) media_to_string: {
             if (args.len != 0) return error.ScriptRuntime;
             break :media_to_string Value{ .string = try media.currentText(allocator) };
+        } else error.ScriptRuntime,
+        .text_track => |track| if (std.mem.eql(u8, method, "toString")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            _ = track;
+            break :blk Value{ .string = "[object TextTrack]" };
         } else error.ScriptRuntime,
         .date => |date| if (std.mem.eql(u8, method, "toISOString")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
@@ -11876,6 +13767,173 @@ fn collectionEntriesFromStyleSheetIds(
     return try collectionEntriesFromValues(allocator, items);
 }
 
+fn freeFormDataIteratorValues(
+    allocator: std.mem.Allocator,
+    values: []Value,
+    count: usize,
+) void {
+    var index: usize = 0;
+    while (index < count) : (index += 1) {
+        switch (values[index]) {
+            .string => |text| allocator.free(text),
+            .form_data_entry => |entry| {
+                allocator.free(entry.name);
+                allocator.free(entry.value);
+            },
+            else => {},
+        }
+    }
+    allocator.free(values);
+}
+
+fn formDataSnapshotItems(
+    allocator: std.mem.Allocator,
+    form_data: *const FormDataState,
+) errors.Result([]FormDataEntry) {
+    return try allocator.dupe(FormDataEntry, form_data.items.items);
+}
+
+fn formDataKeys(
+    allocator: std.mem.Allocator,
+    form_data: *const FormDataState,
+) errors.Result(Value) {
+    const items = try formDataSnapshotItems(allocator, form_data);
+    defer allocator.free(items);
+
+    var values = try allocator.alloc(Value, items.len);
+    var index: usize = 0;
+    errdefer freeFormDataIteratorValues(allocator, values, index);
+
+    for (items, 0..) |entry, i| {
+        values[i] = .{ .string = try allocator.dupe(u8, entry.name) };
+        index += 1;
+    }
+
+    const state = allocator.create(CollectionIteratorState) catch {
+        freeFormDataIteratorValues(allocator, values, index);
+        return error.OutOfMemory;
+    };
+    state.* = .{
+        .items = values,
+        .index = 0,
+    };
+    return Value{ .collection_iterator = state };
+}
+
+fn formDataValues(
+    allocator: std.mem.Allocator,
+    form_data: *const FormDataState,
+) errors.Result(Value) {
+    const items = try formDataSnapshotItems(allocator, form_data);
+    defer allocator.free(items);
+
+    var values = try allocator.alloc(Value, items.len);
+    var index: usize = 0;
+    errdefer freeFormDataIteratorValues(allocator, values, index);
+
+    for (items, 0..) |entry, i| {
+        values[i] = .{ .string = try allocator.dupe(u8, entry.value) };
+        index += 1;
+    }
+
+    const state = allocator.create(CollectionIteratorState) catch {
+        freeFormDataIteratorValues(allocator, values, index);
+        return error.OutOfMemory;
+    };
+    state.* = .{
+        .items = values,
+        .index = 0,
+    };
+    return Value{ .collection_iterator = state };
+}
+
+fn formDataEntries(
+    allocator: std.mem.Allocator,
+    form_data: *const FormDataState,
+) errors.Result(Value) {
+    const items = try formDataSnapshotItems(allocator, form_data);
+    defer allocator.free(items);
+
+    var values = try allocator.alloc(Value, items.len);
+    var index: usize = 0;
+    errdefer freeFormDataIteratorValues(allocator, values, index);
+
+    for (items, 0..) |entry, i| {
+        values[i] = .{
+            .form_data_entry = .{
+                .name = try allocator.dupe(u8, entry.name),
+                .value = try allocator.dupe(u8, entry.value),
+            },
+        };
+        index += 1;
+    }
+
+    const state = allocator.create(CollectionIteratorState) catch {
+        freeFormDataIteratorValues(allocator, values, index);
+        return error.OutOfMemory;
+    };
+    state.* = .{
+        .items = values,
+        .index = 0,
+    };
+    return Value{ .collection_iterator = state };
+}
+
+fn formDataForEach(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    form_data: *FormDataState,
+    args: []*Expr,
+) errors.Result(Value) {
+    const callback_expr: *Expr = switch (args.len) {
+        1, 2 => args[0],
+        else => return error.ScriptRuntime,
+    };
+    const this_arg_expr: ?*Expr = if (args.len == 2) args[1] else null;
+
+    const callback_value = try evalExpr(allocator, host, bindings, callback_expr);
+    const callback = switch (callback_value) {
+        .function => |function| function,
+        else => return error.ScriptRuntime,
+    };
+
+    if (this_arg_expr) |expr| {
+        _ = try evalExpr(allocator, host, bindings, expr);
+    }
+
+    const items = try formDataSnapshotItems(allocator, form_data);
+    defer allocator.free(items);
+
+    for (items, 0..) |entry, index| {
+        const value_copy = try allocator.dupe(u8, entry.value);
+        defer allocator.free(value_copy);
+        const name_copy = try allocator.dupe(u8, entry.name);
+        defer allocator.free(name_copy);
+
+        const positional = [_]Value{
+            .{ .string = value_copy },
+            .{ .string = name_copy },
+            .{ .form_data = form_data },
+        };
+        var function_bindings = try functionBindings(allocator, callback, positional[0..]);
+        defer function_bindings.deinit(allocator);
+
+        const source_name = try std.fmt.allocPrint(allocator, "formdata:forEach:{d}", .{index});
+        defer allocator.free(source_name);
+
+        try executeScriptSource(
+            allocator,
+            host,
+            callback.body_source,
+            source_name,
+            function_bindings.items,
+        );
+    }
+
+    return Value{ .undefined_value = {} };
+}
+
 fn collectionIteratorNext(
     allocator: std.mem.Allocator,
     iterator: *CollectionIteratorState,
@@ -12126,6 +14184,250 @@ fn formElementsItems(
     }
 
     return try items.toOwnedSlice(allocator);
+}
+
+fn nodeHasAncestorElementByTagName(
+    host: anytype,
+    node_id: dom.NodeId,
+    tag_name: []const u8,
+) bool {
+    const current = host.domStore().nodeAt(node_id) orelse return false;
+    var parent_id = current.parent;
+    while (parent_id) |ancestor_id| {
+        const ancestor = host.domStore().nodeAt(ancestor_id) orelse return false;
+        switch (ancestor.kind) {
+            .element => |element| {
+                if (std.mem.eql(u8, element.tag_name, tag_name)) return true;
+            },
+            else => {},
+        }
+        parent_id = ancestor.parent;
+    }
+    return false;
+}
+
+fn elementDirectionalityText(
+    host: anytype,
+    node_id: dom.NodeId,
+) errors.Result([]const u8) {
+    var current = node_id;
+    while (true) {
+        const node = host.domStore().nodeAt(current) orelse break;
+        switch (node.kind) {
+            .element => {
+                if (try host.domStore().getAttribute(current, "dir")) |value| {
+                    const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+                    if (trimmed.len != 0) {
+                        if (std.ascii.eqlIgnoreCase(trimmed, "ltr")) return "ltr";
+                        if (std.ascii.eqlIgnoreCase(trimmed, "rtl")) return "rtl";
+                    }
+                }
+                if (node.parent) |parent_id| {
+                    current = parent_id;
+                    continue;
+                }
+                break;
+            },
+            .document => break,
+            else => break,
+        }
+    }
+    return "ltr";
+}
+
+fn formDataBuildState(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    form_id: ?dom.NodeId,
+    submitter_node: ?dom.NodeId,
+) errors.Result(*FormDataState) {
+    const state = try formDataStateCreate(allocator);
+    errdefer state.deinit();
+
+    const form = form_id orelse return state;
+    const controls = try formElementsItems(allocator, host, form);
+    defer allocator.free(controls);
+
+    for (controls) |control_id| {
+        const tag_name = host.domStore().tagNameForNode(control_id) orelse continue;
+        if (nodeHasAncestorElementByTagName(host, control_id, "datalist")) continue;
+
+        const disabled = host.domStore().hasAttribute(control_id, "disabled") catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.ScriptRuntime,
+        };
+        if (disabled) continue;
+
+        if (std.mem.eql(u8, tag_name, "button")) {
+            if (submitter_node) |submitter| {
+                if (!sameNodeId(submitter, control_id)) continue;
+            } else {
+                continue;
+            }
+            const name = (try host.domStore().getAttribute(control_id, "name")) orelse "";
+            if (name.len == 0) continue;
+            const value = (try host.domStore().getAttribute(control_id, "value")) orelse "";
+            try state.append(name, value);
+            if (try host.domStore().getAttribute(control_id, "dirname")) |dir_name| {
+                const trimmed = std.mem.trim(u8, dir_name, " \t\r\n\x0c");
+                if (trimmed.len != 0) {
+                    const dir = try elementDirectionalityText(host, control_id);
+                    try state.append(trimmed, dir);
+                }
+            }
+            continue;
+        }
+
+        if (std.ascii.eqlIgnoreCase(tag_name, "input")) {
+            const input_type = (try host.domStore().getAttribute(control_id, "type")) orelse "text";
+            if (std.mem.eql(u8, input_type, "button") or std.mem.eql(u8, input_type, "reset")) continue;
+
+            if (std.mem.eql(u8, input_type, "image")) {
+                if (submitter_node) |submitter| {
+                    if (!sameNodeId(submitter, control_id)) continue;
+                } else {
+                    continue;
+                }
+                const name = (try host.domStore().getAttribute(control_id, "name")) orelse "";
+                const prefix = if (name.len == 0)
+                    ""
+                else
+                    try std.fmt.allocPrint(allocator, "{s}.", .{name});
+                defer if (name.len != 0) allocator.free(prefix);
+                const x_name = if (name.len == 0)
+                    "x"
+                else
+                    try std.fmt.allocPrint(allocator, "{s}x", .{prefix});
+                defer if (name.len != 0) allocator.free(x_name);
+                const y_name = if (name.len == 0)
+                    "y"
+                else
+                    try std.fmt.allocPrint(allocator, "{s}y", .{prefix});
+                defer if (name.len != 0) allocator.free(y_name);
+                try state.append(x_name, "0");
+                try state.append(y_name, "0");
+                if (try host.domStore().getAttribute(control_id, "dirname")) |dir_name| {
+                    const trimmed = std.mem.trim(u8, dir_name, " \t\r\n\x0c");
+                    if (trimmed.len != 0) {
+                        const dir = try elementDirectionalityText(host, control_id);
+                        try state.append(trimmed, dir);
+                    }
+                }
+                continue;
+            }
+
+            const name = (try host.domStore().getAttribute(control_id, "name")) orelse "";
+            if (name.len == 0) continue;
+
+            if (std.mem.eql(u8, input_type, "checkbox") or std.mem.eql(u8, input_type, "radio")) {
+                const checked = host.domStore().checkedForNode(control_id) orelse false;
+                if (!checked) continue;
+                const value = (try host.domStore().getAttribute(control_id, "value")) orelse "on";
+                try state.append(name, value);
+            } else if (std.mem.eql(u8, input_type, "file")) {
+                const files = try fileInputFilesValue(allocator, host, control_id);
+                defer allocator.free(files.items);
+                if (files.items.len == 0) {
+                    try state.append(name, "");
+                } else {
+                    for (files.items) |file_name| {
+                        try state.append(name, file_name);
+                    }
+                }
+            } else if (std.mem.eql(u8, input_type, "hidden") and std.ascii.eqlIgnoreCase(name, "_charset_")) {
+                try state.append(name, host.documentCharacterSet());
+            } else {
+                const value = try host.domStore().valueForNode(allocator, control_id);
+                defer allocator.free(value);
+                try state.append(name, value);
+            }
+
+            if (try host.domStore().getAttribute(control_id, "dirname")) |dir_name| {
+                const trimmed = std.mem.trim(u8, dir_name, " \t\r\n\x0c");
+                if (trimmed.len != 0) {
+                    const dir = try elementDirectionalityText(host, control_id);
+                    try state.append(trimmed, dir);
+                }
+            }
+            continue;
+        }
+
+        if (std.mem.eql(u8, tag_name, "select")) {
+            const name = (try host.domStore().getAttribute(control_id, "name")) orelse "";
+            if (name.len == 0) continue;
+            const options = try selectedOptionsItems(allocator, host, control_id);
+            defer allocator.free(options);
+            for (options) |option_id| {
+                const disabled_option = host.domStore().hasAttribute(option_id, "disabled") catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ScriptRuntime,
+                };
+                if (disabled_option) continue;
+                const value = try host.domStore().valueForNode(allocator, option_id);
+                defer allocator.free(value);
+                try state.append(name, value);
+            }
+            continue;
+        }
+
+        if (std.mem.eql(u8, tag_name, "textarea")) {
+            const name = (try host.domStore().getAttribute(control_id, "name")) orelse "";
+            if (name.len == 0) continue;
+            const value = try host.domStore().valueForNode(allocator, control_id);
+            defer allocator.free(value);
+            try state.append(name, value);
+            if (try host.domStore().getAttribute(control_id, "dirname")) |dir_name| {
+                const trimmed = std.mem.trim(u8, dir_name, " \t\r\n\x0c");
+                if (trimmed.len != 0) {
+                    const dir = try elementDirectionalityText(host, control_id);
+                    try state.append(trimmed, dir);
+                }
+            }
+            continue;
+        }
+    }
+
+    return state;
+}
+
+fn makeFormDataValue(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    bindings: []const Binding,
+    args: []*Expr,
+) errors.Result(Value) {
+    if (args.len == 0) {
+        return .{ .form_data = try formDataBuildState(allocator, host, null, null) };
+    }
+
+    const form_value = try evalExpr(allocator, host, bindings, args[0]);
+    const form_id = switch (form_value) {
+        .undefined_value, .null_value => null,
+        .element => |element| blk: {
+            const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+            if (!std.mem.eql(u8, tag_name, "form")) return error.ScriptRuntime;
+            break :blk element;
+        },
+        else => return error.ScriptRuntime,
+    };
+
+    var submitter_node: ?dom.NodeId = null;
+    if (args.len == 2) {
+        const submitter_value = try evalExpr(allocator, host, bindings, args[1]);
+        submitter_node = switch (submitter_value) {
+            .undefined_value, .null_value => null,
+            .element => |element| element,
+            else => return error.ScriptRuntime,
+        };
+        if (submitter_node) |submitter_id| {
+            if (form_id == null) return error.ScriptRuntime;
+            const owner = try elementFormOwner(host, submitter_id) orelse return error.ScriptRuntime;
+            if (!sameNodeId(owner, form_id.?)) return error.ScriptRuntime;
+            if (!try elementIsSubmitControl(host, submitter_id)) return error.ScriptRuntime;
+        }
+    }
+
+    return .{ .form_data = try formDataBuildState(allocator, host, form_id, submitter_node) };
 }
 
 fn fieldsetElementsItems(
@@ -15645,7 +17947,7 @@ fn isStyleSheetLinkElement(host: anytype, element_id: dom.NodeId) errors.Result(
 
 fn isLabelableElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
-    if (std.mem.eql(u8, tag_name, "input")) {
+    if (std.ascii.eqlIgnoreCase(tag_name, "input")) {
         const input_type = (try host.domStore().getAttribute(element_id, "type")) orelse "";
         return !std.ascii.eqlIgnoreCase(input_type, "hidden");
     }
@@ -15696,37 +17998,54 @@ fn labelControlId(
 
 fn elementSupportsPlaceholderProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
-    return std.mem.eql(u8, tag_name, "input") or
+    return std.ascii.eqlIgnoreCase(tag_name, "input") or
         std.mem.eql(u8, tag_name, "textarea");
 }
 
 fn elementSupportsPatternProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
-    return std.mem.eql(u8, tag_name, "input");
+    return std.ascii.eqlIgnoreCase(tag_name, "input");
 }
 
 fn elementSupportsTextLengthProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
-    return std.mem.eql(u8, tag_name, "input") or
+    return std.ascii.eqlIgnoreCase(tag_name, "input") or
         std.mem.eql(u8, tag_name, "textarea");
 }
 
 fn elementSupportsInputProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
-    return std.mem.eql(u8, tag_name, "input");
+    return std.ascii.eqlIgnoreCase(tag_name, "input");
 }
 
 fn elementSupportsFilesProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
-    if (!std.mem.eql(u8, tag_name, "input")) return false;
+    if (!std.ascii.eqlIgnoreCase(tag_name, "input")) return false;
 
     const input_type = (try host.domStore().getAttribute(element_id, "type")) orelse "";
     return std.ascii.eqlIgnoreCase(input_type, "file");
 }
 
+fn elementSupportsCaptureProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    return elementSupportsFilesProperty(host, element_id);
+}
+
+fn elementSupportsColorInputProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    if (!std.ascii.eqlIgnoreCase(tag_name, "input")) return false;
+
+    const input_type = (try host.domStore().getAttribute(element_id, "type")) orelse "";
+    return std.ascii.eqlIgnoreCase(input_type, "color");
+}
+
 fn elementSupportsPickerProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
-    return std.mem.eql(u8, tag_name, "input") or std.mem.eql(u8, tag_name, "select");
+    return std.ascii.eqlIgnoreCase(tag_name, "input") or std.mem.eql(u8, tag_name, "select");
+}
+
+fn elementSupportsTrackProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.mem.eql(u8, tag_name, "track");
 }
 
 fn elementSupportsPopoverProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
@@ -15738,7 +18057,128 @@ fn elementSupportsPopoverTargetProperty(host: anytype, element_id: dom.NodeId) e
     const namespace_uri = host.domStore().namespaceUriForNode(element_id) orelse return false;
     if (!std.mem.eql(u8, namespace_uri, "http://www.w3.org/1999/xhtml")) return false;
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
-    return std.mem.eql(u8, tag_name, "button") or std.mem.eql(u8, tag_name, "input");
+    return std.mem.eql(u8, tag_name, "button") or std.ascii.eqlIgnoreCase(tag_name, "input");
+}
+
+const ButtonTypeState = enum {
+    auto,
+    submit,
+    reset,
+    button,
+};
+
+const ButtonCommandKind = union(enum) {
+    unknown,
+    custom: []const u8,
+    toggle_popover,
+    show_popover,
+    hide_popover,
+    close,
+    request_close,
+    show_modal,
+};
+
+fn buttonTypeState(host: anytype, element_id: dom.NodeId) errors.Result(ButtonTypeState) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return error.ScriptRuntime;
+    if (!std.mem.eql(u8, tag_name, "button")) return error.ScriptRuntime;
+
+    const type_text = (try host.domStore().getAttribute(element_id, "type")) orelse return .auto;
+    const trimmed = std.mem.trim(u8, type_text, " \t\r\n\x0c");
+    if (trimmed.len == 0) return .auto;
+    if (std.ascii.eqlIgnoreCase(trimmed, "submit")) return .submit;
+    if (std.ascii.eqlIgnoreCase(trimmed, "reset")) return .reset;
+    if (std.ascii.eqlIgnoreCase(trimmed, "button")) return .button;
+    return .auto;
+}
+
+fn buttonCommandKind(host: anytype, element_id: dom.NodeId) errors.Result(ButtonCommandKind) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return error.ScriptRuntime;
+    if (!std.mem.eql(u8, tag_name, "button")) return error.ScriptRuntime;
+
+    const command_text = (try host.domStore().getAttribute(element_id, "command")) orelse return .unknown;
+    const trimmed = std.mem.trim(u8, command_text, " \t\r\n\x0c");
+    if (trimmed.len == 0) return .unknown;
+    if (trimmed.len >= 2 and trimmed[0] == '-' and trimmed[1] == '-') return .{ .custom = trimmed };
+    if (std.ascii.eqlIgnoreCase(trimmed, "toggle-popover")) return .toggle_popover;
+    if (std.ascii.eqlIgnoreCase(trimmed, "show-popover")) return .show_popover;
+    if (std.ascii.eqlIgnoreCase(trimmed, "hide-popover")) return .hide_popover;
+    if (std.ascii.eqlIgnoreCase(trimmed, "close")) return .close;
+    if (std.ascii.eqlIgnoreCase(trimmed, "request-close")) return .request_close;
+    if (std.ascii.eqlIgnoreCase(trimmed, "show-modal")) return .show_modal;
+    return .unknown;
+}
+
+pub fn buttonCommandValue(host: anytype, element_id: dom.NodeId) errors.Result([]const u8) {
+    return switch (try buttonCommandKind(host, element_id)) {
+        .unknown => "",
+        .custom => |value| value,
+        .toggle_popover => "toggle-popover",
+        .show_popover => "show-popover",
+        .hide_popover => "hide-popover",
+        .close => "close",
+        .request_close => "request-close",
+        .show_modal => "show-modal",
+    };
+}
+
+pub fn buttonCommandForElement(host: anytype, element_id: dom.NodeId) errors.Result(?dom.NodeId) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return null;
+    if (!std.mem.eql(u8, tag_name, "button")) return null;
+
+    const commandfor_text = (try host.domStore().getAttribute(element_id, "commandfor")) orelse return null;
+    const trimmed = std.mem.trim(u8, commandfor_text, " \t\r\n\x0c");
+    if (trimmed.len == 0) return null;
+
+    return host.domStore().findElementById(trimmed);
+}
+
+pub fn buttonCommandValidForTarget(host: anytype, target_id: dom.NodeId, command: []const u8) errors.Result(bool) {
+    if (command.len == 0) return false;
+    if (command.len >= 2 and command[0] == '-' and command[1] == '-') return true;
+
+    const node = host.domStore().nodeAt(target_id) orelse return false;
+    const element = switch (node.kind) {
+        .element => |element| element,
+        else => return false,
+    };
+    if (!std.mem.eql(u8, element.namespace_uri, "http://www.w3.org/1999/xhtml")) return false;
+
+    if (std.mem.eql(u8, command, "toggle-popover") or
+        std.mem.eql(u8, command, "show-popover") or
+        std.mem.eql(u8, command, "hide-popover"))
+    {
+        return true;
+    }
+
+    if (std.mem.eql(u8, element.tag_name, "dialog") and
+        (std.mem.eql(u8, command, "close") or
+            std.mem.eql(u8, command, "request-close") or
+            std.mem.eql(u8, command, "show-modal")))
+    {
+        return true;
+    }
+
+    return false;
+}
+
+pub fn buttonIsSubmitButton(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const state = try buttonTypeState(host, element_id);
+    switch (state) {
+        .submit => return true,
+        .reset, .button => return false,
+        .auto => {},
+    }
+
+    if (try host.domStore().hasAttribute(element_id, "command")) return false;
+    if (try host.domStore().hasAttribute(element_id, "commandfor")) return false;
+
+    const node = host.domStore().nodeAt(element_id) orelse return false;
+    const parent_id = node.parent orelse return true;
+    const parent = host.domStore().nodeAt(parent_id) orelse return false;
+    return switch (parent.kind) {
+        .element => |element| !std.mem.eql(u8, element.tag_name, "select"),
+        else => true,
+    };
 }
 
 fn elementSupportsClickProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
@@ -15786,7 +18226,7 @@ pub fn popoverTargetElement(host: anytype, element_id: dom.NodeId) errors.Result
 
 fn inputListElement(host: anytype, element_id: dom.NodeId) errors.Result(?dom.NodeId) {
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return null;
-    if (!std.mem.eql(u8, tag_name, "input")) return null;
+    if (!std.ascii.eqlIgnoreCase(tag_name, "input")) return null;
 
     const list_ref = (try host.domStore().getAttribute(element_id, "list")) orelse return null;
     const trimmed = std.mem.trim(u8, list_ref, " \t\r\n\x0c");
@@ -15807,14 +18247,90 @@ fn inputSizeValue(host: anytype, element_id: dom.NodeId) errors.Result(usize) {
     return std.math.cast(usize, parsed) orelse 20;
 }
 
+fn selectSizeValue(host: anytype, element_id: dom.NodeId) errors.Result(usize) {
+    const attr = (try host.domStore().getAttribute(element_id, "size")) orelse return 0;
+    const trimmed = std.mem.trim(u8, attr, " \t\r\n\x0c");
+    if (trimmed.len == 0) return 0;
+    return std.fmt.parseInt(usize, trimmed, 10) catch 0;
+}
+
 fn inputSizeFromValue(allocator: std.mem.Allocator, value: Value) errors.Result(usize) {
     const size = try tableCellSpanFromValue(allocator, value);
     return std.math.cast(usize, size) orelse error.ScriptRuntime;
 }
 
+fn textareaDimensionValue(host: anytype, element_id: dom.NodeId, attribute_name: []const u8, fallback: usize) errors.Result(usize) {
+    const attr = (try host.domStore().getAttribute(element_id, attribute_name)) orelse return fallback;
+    const trimmed = std.mem.trim(u8, attr, " \t\r\n\x0c");
+    if (trimmed.len == 0) return fallback;
+    const parsed = std.fmt.parseInt(usize, trimmed, 10) catch return fallback;
+    return if (parsed == 0) fallback else parsed;
+}
+
+fn canvasDimensionValue(host: anytype, element_id: dom.NodeId, attribute_name: []const u8, fallback: usize) errors.Result(usize) {
+    const attr = (try host.domStore().getAttribute(element_id, attribute_name)) orelse return fallback;
+    const trimmed = std.mem.trim(u8, attr, " \t\r\n\x0c");
+    if (trimmed.len == 0) return fallback;
+    return std.fmt.parseInt(usize, trimmed, 10) catch fallback;
+}
+
+fn textareaWrapValue(host: anytype, element_id: dom.NodeId) errors.Result([]const u8) {
+    const attr = (try host.domStore().getAttribute(element_id, "wrap")) orelse return "soft";
+    const trimmed = std.mem.trim(u8, attr, " \t\r\n\x0c");
+    if (trimmed.len == 0) return "soft";
+    if (std.ascii.eqlIgnoreCase(trimmed, "hard")) return "hard";
+    return "soft";
+}
+
+fn textTrackKindValue(text: ?[]const u8) []const u8 {
+    const value = text orelse return "";
+    const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+    if (trimmed.len == 0) return "";
+    if (std.ascii.eqlIgnoreCase(trimmed, "subtitles")) return "subtitles";
+    if (std.ascii.eqlIgnoreCase(trimmed, "captions")) return "captions";
+    if (std.ascii.eqlIgnoreCase(trimmed, "descriptions")) return "descriptions";
+    if (std.ascii.eqlIgnoreCase(trimmed, "chapters")) return "chapters";
+    if (std.ascii.eqlIgnoreCase(trimmed, "metadata")) return "metadata";
+    return "";
+}
+
+fn textTrackModeFromString(text: []const u8) ?TextTrackMode {
+    if (std.ascii.eqlIgnoreCase(text, "disabled")) return .disabled;
+    if (std.ascii.eqlIgnoreCase(text, "hidden")) return .hidden;
+    if (std.ascii.eqlIgnoreCase(text, "showing")) return .showing;
+    return null;
+}
+
+fn textTrackModeName(mode: TextTrackMode) []const u8 {
+    return switch (mode) {
+        .disabled => "disabled",
+        .hidden => "hidden",
+        .showing => "showing",
+    };
+}
+
+fn unsignedLongFromValue(allocator: std.mem.Allocator, value: Value) errors.Result(usize) {
+    return switch (value) {
+        .number => |number| blk: {
+            if (!std.math.isFinite(number)) return error.ScriptRuntime;
+            if (std.math.round(number) != number) return error.ScriptRuntime;
+            if (number < 0) return error.ScriptRuntime;
+            const max: f64 = @floatFromInt(std.math.maxInt(usize));
+            if (number > max) return error.ScriptRuntime;
+            break :blk @as(usize, @intFromFloat(number));
+        },
+        else => blk: {
+            const text = try asString(allocator, value);
+            const trimmed = std.mem.trim(u8, text, " \t\r\n\x0c");
+            if (trimmed.len == 0) return error.ScriptRuntime;
+            break :blk std.fmt.parseInt(usize, trimmed, 10) catch error.ScriptRuntime;
+        },
+    };
+}
+
 fn elementSupportsDirNameProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
-    return std.mem.eql(u8, tag_name, "input") or
+    return std.ascii.eqlIgnoreCase(tag_name, "input") or
         std.mem.eql(u8, tag_name, "textarea");
 }
 
@@ -15824,8 +18340,9 @@ fn elementSupportsStepProperty(host: anytype, element_id: dom.NodeId) errors.Res
 
 fn elementSupportsTypeProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
-    return std.mem.eql(u8, tag_name, "input") or
-        std.mem.eql(u8, tag_name, "button");
+    return std.ascii.eqlIgnoreCase(tag_name, "input") or
+        std.mem.eql(u8, tag_name, "button") or
+        std.ascii.eqlIgnoreCase(tag_name, "source");
 }
 
 fn elementSupportsDownloadProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
@@ -15849,7 +18366,15 @@ fn elementSupportsRelProperty(host: anytype, element_id: dom.NodeId) errors.Resu
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
     return std.ascii.eqlIgnoreCase(tag_name, "a") or
         std.ascii.eqlIgnoreCase(tag_name, "area") or
-        std.ascii.eqlIgnoreCase(tag_name, "link");
+        std.ascii.eqlIgnoreCase(tag_name, "link") or
+        std.ascii.eqlIgnoreCase(tag_name, "form");
+}
+
+fn elementSupportsBlockingProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.ascii.eqlIgnoreCase(tag_name, "link") or
+        std.ascii.eqlIgnoreCase(tag_name, "script") or
+        std.ascii.eqlIgnoreCase(tag_name, "style");
 }
 
 fn elementSupportsHyperlinkMetadataProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
@@ -15869,9 +18394,102 @@ fn elementIsAreaElement(host: anytype, element_id: dom.NodeId) errors.Result(boo
     return std.ascii.eqlIgnoreCase(tag_name, "area");
 }
 
+fn elementIsImageElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.ascii.eqlIgnoreCase(tag_name, "img");
+}
+
+fn elementIsCanvasElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.ascii.eqlIgnoreCase(tag_name, "canvas");
+}
+
+fn elementIsImageInputElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    if (!std.ascii.eqlIgnoreCase(tag_name, "input")) return false;
+    const input_type = (try host.domStore().getAttribute(element_id, "type")) orelse "";
+    return std.ascii.eqlIgnoreCase(input_type, "image");
+}
+
+fn elementIsSourceElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.ascii.eqlIgnoreCase(tag_name, "source");
+}
+
+fn elementIsIFrameElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.ascii.eqlIgnoreCase(tag_name, "iframe");
+}
+
+fn elementIsMediaElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.ascii.eqlIgnoreCase(tag_name, "audio") or
+        std.ascii.eqlIgnoreCase(tag_name, "video");
+}
+
+fn elementIsVideoElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.ascii.eqlIgnoreCase(tag_name, "video");
+}
+
+fn elementIsDataElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.ascii.eqlIgnoreCase(tag_name, "data");
+}
+
+fn elementIsTimeElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.ascii.eqlIgnoreCase(tag_name, "time");
+}
+
+fn elementIsTemplateElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.ascii.eqlIgnoreCase(tag_name, "template");
+}
+
+fn elementIsSlotElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.ascii.eqlIgnoreCase(tag_name, "slot");
+}
+
+fn elementIsImageOrMediaElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    if (try elementIsImageElement(host, element_id)) return true;
+    return try elementIsMediaElement(host, element_id);
+}
+
+fn elementIsImageOrSourceElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    if (try elementIsImageElement(host, element_id)) return true;
+    return try elementIsSourceElement(host, element_id);
+}
+
+fn elementIsImageOrIFrameElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    if (try elementIsImageElement(host, element_id)) return true;
+    return try elementIsIFrameElement(host, element_id);
+}
+
+fn elementIsObjectElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.mem.eql(u8, tag_name, "object");
+}
+
+fn elementIsObjectOrIFrameElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    if (try elementIsObjectElement(host, element_id)) return true;
+    return try elementIsIFrameElement(host, element_id);
+}
+
+fn elementIsImageOrObjectElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    if (try elementIsImageElement(host, element_id)) return true;
+    return try elementIsObjectElement(host, element_id);
+}
+
 fn elementIsScriptElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
     return std.ascii.eqlIgnoreCase(tag_name, "script");
+}
+
+fn elementIsMetaElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.mem.eql(u8, tag_name, "meta");
 }
 
 fn elementSupportsDialogProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
@@ -15891,17 +18509,19 @@ fn elementSupportsNameProperty(host: anytype, element_id: dom.NodeId) errors.Res
         std.mem.eql(u8, tag_name, "fieldset") or
         std.mem.eql(u8, tag_name, "form") or
         std.mem.eql(u8, tag_name, "iframe") or
-        std.mem.eql(u8, tag_name, "input") or
+        std.mem.eql(u8, tag_name, "meta") or
+        std.ascii.eqlIgnoreCase(tag_name, "input") or
         std.mem.eql(u8, tag_name, "map") or
         std.mem.eql(u8, tag_name, "object") or
         std.mem.eql(u8, tag_name, "output") or
+        std.mem.eql(u8, tag_name, "slot") or
         std.mem.eql(u8, tag_name, "select") or
         std.mem.eql(u8, tag_name, "textarea");
 }
 
 fn elementSupportsMultipleProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
-    return std.mem.eql(u8, tag_name, "input") or
+    return std.ascii.eqlIgnoreCase(tag_name, "input") or
         std.mem.eql(u8, tag_name, "select");
 }
 
@@ -15909,7 +18529,7 @@ fn elementSupportsDisabledProperty(host: anytype, element_id: dom.NodeId) errors
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
     return std.mem.eql(u8, tag_name, "button") or
         std.mem.eql(u8, tag_name, "fieldset") or
-        std.mem.eql(u8, tag_name, "input") or
+        std.ascii.eqlIgnoreCase(tag_name, "input") or
         std.mem.eql(u8, tag_name, "optgroup") or
         std.mem.eql(u8, tag_name, "option") or
         std.mem.eql(u8, tag_name, "select") or
@@ -15918,7 +18538,7 @@ fn elementSupportsDisabledProperty(host: anytype, element_id: dom.NodeId) errors
 
 fn elementSupportsRequiredProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
-    return std.mem.eql(u8, tag_name, "input") or
+    return std.ascii.eqlIgnoreCase(tag_name, "input") or
         std.mem.eql(u8, tag_name, "select") or
         std.mem.eql(u8, tag_name, "textarea");
 }
@@ -15937,7 +18557,7 @@ fn elementSupportsFormOwnerProperty(host: anytype, element_id: dom.NodeId) error
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
     return std.mem.eql(u8, tag_name, "button") or
         std.mem.eql(u8, tag_name, "fieldset") or
-        std.mem.eql(u8, tag_name, "input") or
+        std.ascii.eqlIgnoreCase(tag_name, "input") or
         std.mem.eql(u8, tag_name, "meter") or
         std.mem.eql(u8, tag_name, "object") or
         std.mem.eql(u8, tag_name, "optgroup") or
@@ -15948,9 +18568,22 @@ fn elementSupportsFormOwnerProperty(host: anytype, element_id: dom.NodeId) error
         std.mem.eql(u8, tag_name, "textarea");
 }
 
+fn legendFormOwner(host: anytype, element_id: dom.NodeId) errors.Result(?dom.NodeId) {
+    const node = host.domStore().nodeAt(element_id) orelse return null;
+    const parent_id = node.parent orelse return null;
+    const parent = host.domStore().nodeAt(parent_id) orelse return null;
+    return switch (parent.kind) {
+        .element => |element| if (std.ascii.eqlIgnoreCase(element.tag_name, "fieldset"))
+            try elementFormOwner(host, parent_id)
+        else
+            null,
+        else => null,
+    };
+}
+
 fn elementSupportsFormNoValidateProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
-    return std.mem.eql(u8, tag_name, "input") or
+    return std.ascii.eqlIgnoreCase(tag_name, "input") or
         std.mem.eql(u8, tag_name, "button");
 }
 
@@ -15961,7 +18594,7 @@ fn elementIsSubmitControl(host: anytype, element_id: dom.NodeId) errors.Result(b
         return !std.mem.eql(u8, type_value, "button") and !std.mem.eql(u8, type_value, "reset");
     }
 
-    if (std.mem.eql(u8, tag_name, "input")) {
+    if (std.ascii.eqlIgnoreCase(tag_name, "input")) {
         const type_value = (try host.domStore().getAttribute(element_id, "type")) orelse "text";
         return std.mem.eql(u8, type_value, "submit") or std.mem.eql(u8, type_value, "image");
     }
@@ -16017,10 +18650,11 @@ fn elementFormOwner(
 
 fn elementSupportsCustomValidityProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
-    return std.mem.eql(u8, tag_name, "input") or
+    return std.ascii.eqlIgnoreCase(tag_name, "input") or
         std.mem.eql(u8, tag_name, "select") or
         std.mem.eql(u8, tag_name, "textarea") or
-        std.mem.eql(u8, tag_name, "output");
+        std.mem.eql(u8, tag_name, "output") or
+        std.mem.eql(u8, tag_name, "object");
 }
 
 fn formActionValue(
@@ -16103,7 +18737,7 @@ fn fileInputFilesValue(
 
 fn isTabIndexFocusableElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
-    if (std.mem.eql(u8, tag_name, "input")) {
+    if (std.ascii.eqlIgnoreCase(tag_name, "input")) {
         const input_type = (try host.domStore().getAttribute(element_id, "type")) orelse "";
         return !std.ascii.eqlIgnoreCase(input_type, "hidden");
     }
@@ -18134,11 +20768,15 @@ fn asString(allocator: std.mem.Allocator, value: Value) errors.Result([]const u8
         .node => "[object Node]",
         .template_content => "[object DocumentFragment]",
         .file_list => "[object FileList]",
+        .form_data => "[object FormData]",
+        .form_data_entry => "[object FormDataEntry]",
         .attribute => "[object Attr]",
         .named_node_map => "[object NamedNodeMap]",
         .class_list => "[object DOMTokenList]",
         .part_list => "[object DOMTokenList]",
         .rel_list => "[object DOMTokenList]",
+        .blocking_list => "[object DOMTokenList]",
+        .controls_list => "[object DOMTokenList]",
         .output_html_for => "[object DOMTokenList]",
         .dataset => "[object DOMStringMap]",
         .node_list => "[object NodeList]",
@@ -18192,12 +20830,20 @@ fn asString(allocator: std.mem.Allocator, value: Value) errors.Result([]const u8
         .storage => "[object Storage]",
         .history => "[object History]",
         .media_list => |media| try media.currentText(allocator),
+        .text_track => "[object TextTrack]",
         .dom_rect => "[object DOMRect]",
         .dom_rect_list => "[object DOMRectList]",
         .range => |range| range.selected_text,
         .selection => |selection| selection.selected_text,
         .collection_entry => "[object IteratorEntry]",
-        .event => "[object Event]",
+        .event => |event| if (event.form_data != null)
+            "[object FormDataEvent]"
+        else if (event.command_text != null)
+            "[object CommandEvent]"
+        else if (event.is_submit_event)
+            "[object SubmitEvent]"
+        else
+            "[object Event]",
         .document => "[object Document]",
         .window => "[object Window]",
         .function => "[function]",
@@ -18228,7 +20874,7 @@ fn isTruthy(value: Value) bool {
         .boolean => |flag| flag,
         .number => |number| number != 0,
         .string => |text| text.len != 0,
-        .element, .node, .template_content, .file_list, .attribute, .named_node_map, .class_list, .part_list, .rel_list, .output_html_for, .dataset, .node_list, .collection_iterator, .iterator_result, .collection_entry, .html_collection, .document_scripts, .document_anchors, .document_style_sheets, .css_rule_list, .css_rule, .style_sheet, .style_declaration, .radio_node_list, .media_query_list, .validity_state, .string_list, .media_list, .date, .dom_rect, .dom_rect_list, .range, .selection, .math, .crypto, .navigator, .mime_type_array, .performance, .screen, .screen_orientation, .storage, .location, .history, .event, .document, .window, .function => true,
+        .element, .node, .template_content, .file_list, .form_data, .form_data_entry, .attribute, .named_node_map, .class_list, .part_list, .rel_list, .blocking_list, .controls_list, .output_html_for, .dataset, .node_list, .collection_iterator, .iterator_result, .collection_entry, .html_collection, .document_scripts, .document_anchors, .document_style_sheets, .css_rule_list, .css_rule, .style_sheet, .style_declaration, .radio_node_list, .media_query_list, .validity_state, .string_list, .media_list, .text_track, .date, .dom_rect, .dom_rect_list, .range, .selection, .math, .crypto, .navigator, .mime_type_array, .performance, .screen, .screen_orientation, .storage, .location, .history, .event, .document, .window, .function => true,
     };
 }
 
@@ -18660,6 +21306,11 @@ fn makeSelectionValue(allocator: std.mem.Allocator, host: anytype) errors.Result
     }
 
     return .{ .selection = selection };
+}
+
+fn makeTextTrackValue(host: anytype, element: dom.NodeId) errors.Result(Value) {
+    const state = try host.domStoreMut().ensureTextTrackState(element);
+    return .{ .text_track = state };
 }
 
 fn namespaceUriFromValue(allocator: std.mem.Allocator, value: Value) errors.Result(?[]const u8) {
@@ -19617,6 +22268,22 @@ fn relListTokens(
     return tokenListTokens(allocator, host, element, "rel");
 }
 
+fn blockingListTokens(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    element: dom.NodeId,
+) errors.Result(std.ArrayList([]const u8)) {
+    return tokenListTokens(allocator, host, element, "blocking");
+}
+
+fn controlsListTokens(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    element: dom.NodeId,
+) errors.Result(std.ArrayList([]const u8)) {
+    return tokenListTokens(allocator, host, element, "controlslist");
+}
+
 fn outputHtmlForTokens(
     allocator: std.mem.Allocator,
     host: anytype,
@@ -19709,6 +22376,48 @@ fn relListSupportsToken(token: []const u8) bool {
     return false;
 }
 
+fn formRelListSupportsToken(token: []const u8) bool {
+    const supported_tokens = [_][]const u8{
+        "noreferrer",
+        "noopener",
+        "opener",
+    };
+    for (supported_tokens) |candidate| {
+        if (std.ascii.eqlIgnoreCase(candidate, token)) return true;
+    }
+    return false;
+}
+
+fn relListSupportsTokenForElement(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    element_id: dom.NodeId,
+    token: []const u8,
+) errors.Result(bool) {
+    _ = allocator;
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    if (std.ascii.eqlIgnoreCase(tag_name, "form")) {
+        return formRelListSupportsToken(token);
+    }
+    return relListSupportsToken(token);
+}
+
+fn blockingListSupportsToken(token: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(token, "render");
+}
+
+fn controlsListSupportsToken(token: []const u8) bool {
+    const supported_tokens = [_][]const u8{
+        "nodownload",
+        "nofullscreen",
+        "noremoteplayback",
+    };
+    for (supported_tokens) |candidate| {
+        if (std.ascii.eqlIgnoreCase(candidate, token)) return true;
+    }
+    return false;
+}
+
 fn validateClassListToken(
     allocator: std.mem.Allocator,
     value: Value,
@@ -19747,6 +22456,24 @@ fn writeRelListTokens(
     tokens: []const []const u8,
 ) errors.Result(void) {
     return writeTokenListTokens(allocator, host, element, tokens, "rel");
+}
+
+fn writeBlockingListTokens(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    element: dom.NodeId,
+    tokens: []const []const u8,
+) errors.Result(void) {
+    return writeTokenListTokens(allocator, host, element, tokens, "blocking");
+}
+
+fn writeControlsListTokens(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    element: dom.NodeId,
+    tokens: []const []const u8,
+) errors.Result(void) {
+    return writeTokenListTokens(allocator, host, element, tokens, "controlslist");
 }
 
 fn writeOutputHtmlForTokens(

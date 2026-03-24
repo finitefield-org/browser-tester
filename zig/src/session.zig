@@ -287,12 +287,12 @@ pub const Session = struct {
             .match_media_onchange_listeners = &match_media_onchange_listeners,
             .location = mock_registry.location(),
             .match_media = mock_registry.matchMedia(),
-    .open_mocks = mock_registry.open(),
-    .close_mocks = mock_registry.close(),
-    .print_mocks = mock_registry.print(),
-    .scroll_mocks = mock_registry.scroll(),
-    .download_mocks = mock_registry.downloads(),
-    .history = &history,
+            .open_mocks = mock_registry.open(),
+            .close_mocks = mock_registry.close(),
+            .print_mocks = mock_registry.print(),
+            .scroll_mocks = mock_registry.scroll(),
+            .download_mocks = mock_registry.downloads(),
+            .history = &history,
             .allocator = arena.allocator(),
             .window_name = &window_name,
             .window_load_handler = &window_load_handler,
@@ -1896,17 +1896,20 @@ pub const Session = struct {
         return;
     }
 
-    pub fn submitNode(self: *Session, node_id: dom.NodeId) errors.Result(void) {
+    pub fn submitNode(self: *Session, node_id: dom.NodeId, submitter: ?dom.NodeId) errors.Result(void) {
         try self.ensureElementNode(node_id);
         const node = self.dom_store.nodeAt(node_id) orelse return error.DomError;
+        const submitter_node = submitter orelse if (isFormNode(node)) null else node_id;
         if (isFormNode(node)) {
-            _ = try self.dispatchDomEvent(node_id, "submit", true, true);
+            var runtime = script.ScriptRuntime{};
+            _ = try runtime.dispatchSubmitEvent(self.arena.allocator(), self, node_id, submitter_node);
             try self.flush();
             return;
         }
 
         const form_id = self.findAssociatedForm(node_id) orelse return error.DomError;
-        _ = try self.dispatchDomEvent(form_id, "submit", true, true);
+        var runtime = script.ScriptRuntime{};
+        _ = try runtime.dispatchSubmitEvent(self.arena.allocator(), self, form_id, submitter_node);
         try self.flush();
         return;
     }
@@ -2025,7 +2028,8 @@ pub const Session = struct {
             !std.mem.eql(u8, tag_name, "input") and
             !std.mem.eql(u8, tag_name, "textarea") and
             !std.mem.eql(u8, tag_name, "select") and
-            !std.mem.eql(u8, tag_name, "output"))
+            !std.mem.eql(u8, tag_name, "output") and
+            !std.mem.eql(u8, tag_name, "object"))
         {
             return error.DomError;
         }
@@ -3219,7 +3223,7 @@ const BootstrapHost = struct {
         return self.assignLocation(url_source);
     }
 
-    pub fn submitNode(self: *BootstrapHost, node_id: dom.NodeId) errors.Result(void) {
+    pub fn submitNode(self: *BootstrapHost, node_id: dom.NodeId, submitter: ?dom.NodeId) errors.Result(void) {
         const node = self.dom_store.nodeAt(node_id) orelse return error.DomError;
         const form_id = if (isFormNode(node))
             node_id
@@ -3227,7 +3231,7 @@ const BootstrapHost = struct {
             self.findAssociatedForm(node_id) orelse return error.DomError;
 
         var runtime = script.ScriptRuntime{};
-        _ = try runtime.dispatchDomEvent(self.allocator, self, form_id, "submit", true, true);
+        _ = try runtime.dispatchSubmitEvent(self.allocator, self, form_id, submitter);
         return;
     }
 
@@ -3337,7 +3341,8 @@ const BootstrapHost = struct {
             !std.mem.eql(u8, tag_name, "input") and
             !std.mem.eql(u8, tag_name, "textarea") and
             !std.mem.eql(u8, tag_name, "select") and
-            !std.mem.eql(u8, tag_name, "output"))
+            !std.mem.eql(u8, tag_name, "output") and
+            !std.mem.eql(u8, tag_name, "object"))
         {
             return error.DomError;
         }
@@ -3631,10 +3636,16 @@ fn runClickDefaultActionsForHost(
         _ = try runtime.dispatchDomEvent(allocator, host, node_id, "change", true, false);
     }
 
-    if (isSubmitControl(element.tag_name, input_type)) {
+    const is_button = std.mem.eql(u8, element.tag_name, "button");
+    const should_submit = if (is_button)
+        try script.buttonIsSubmitButton(host, node_id)
+    else
+        isSubmitControl(element.tag_name, input_type);
+
+    if (should_submit) {
         if (form_owner) |form_id| {
             var runtime = script.ScriptRuntime{};
-            _ = try runtime.dispatchDomEvent(allocator, host, form_id, "submit", true, true);
+            _ = try runtime.dispatchSubmitEvent(allocator, host, form_id, node_id);
             return;
         }
     }
@@ -3664,6 +3675,80 @@ fn runClickDefaultActionsForHost(
     if (form_owner != null and std.mem.eql(u8, element.tag_name, "input")) {
         const type_text = input_type orelse "text";
         if (!std.mem.eql(u8, type_text, "button")) {
+            return;
+        }
+    }
+
+    if (is_button) {
+        const command_target = try script.buttonCommandForElement(host, node_id);
+        if (command_target) |target_id| {
+            const command = try script.buttonCommandValue(host, node_id);
+            if (!try script.buttonCommandValidForTarget(host, target_id, command)) {
+                return;
+            }
+
+            var runtime = script.ScriptRuntime{};
+            const outcome = try runtime.dispatchCommandEvent(allocator, host, target_id, node_id, command);
+            if (outcome.default_prevented) return;
+            if (!dom.isConnected(host.domStore(), target_id)) return;
+
+            if (command.len == 0) return;
+            if (command.len >= 2 and command[0] == '-' and command[1] == '-') return;
+
+            if (std.mem.eql(u8, command, "toggle-popover")) {
+                if (host.domStore().popoverStateForNode(target_id)) |state| {
+                    if (state == .no_popover) return;
+                    if (host.domStore().popoverVisibleForNode(target_id) orelse return error.DomError) {
+                        try host.hidePopover(target_id);
+                    } else {
+                        try host.showPopover(target_id);
+                    }
+                }
+                return;
+            }
+
+            if (std.mem.eql(u8, command, "show-popover")) {
+                if (host.domStore().popoverStateForNode(target_id)) |_| {
+                    try host.showPopover(target_id);
+                }
+                return;
+            }
+
+            if (std.mem.eql(u8, command, "hide-popover")) {
+                if (host.domStore().popoverStateForNode(target_id)) |_| {
+                    try host.hidePopover(target_id);
+                }
+                return;
+            }
+
+            if (std.mem.eql(u8, command, "close") or
+                std.mem.eql(u8, command, "request-close") or
+                std.mem.eql(u8, command, "show-modal"))
+            {
+                const target_node = host.domStore().nodeAt(target_id) orelse return error.DomError;
+                const target_element = switch (target_node.kind) {
+                    .element => |target_element| target_element,
+                    else => return error.DomError,
+                };
+                if (!std.mem.eql(u8, target_element.tag_name, "dialog")) return;
+
+                const return_value = elementAttributeValue(element, "value");
+                if (std.mem.eql(u8, command, "close")) {
+                    if (!try host.domStore().hasAttribute(target_id, "open")) return;
+                    try host.closeDialog(target_id, return_value);
+                    return;
+                }
+
+                if (std.mem.eql(u8, command, "request-close")) {
+                    try host.requestCloseDialog(target_id, return_value);
+                    return;
+                }
+
+                if (try host.domStore().hasAttribute(target_id, "open")) return;
+                try host.showDialog(target_id);
+                return;
+            }
+
             return;
         }
     }

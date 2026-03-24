@@ -94,6 +94,73 @@ func TestSessionSchedulerBackedTime(t *testing.T) {
 	}
 }
 
+func TestSessionUserValidityLifecycle(t *testing.T) {
+	cfg := DefaultSessionConfig()
+	cfg.HTML = `<main><form id="profile"><input id="name" type="text" required><input id="agree" type="checkbox" required checked><select id="mode" required><option value="a">A</option><option value="b" selected>B</option></select><button id="reset" type="reset">Reset</button></form></main>`
+	s := NewSession(cfg)
+
+	if err := s.TypeText("#name", "Ada"); err != nil {
+		t.Fatalf("TypeText(#name) error = %v", err)
+	}
+	if err := s.SetChecked("#agree", false); err != nil {
+		t.Fatalf("SetChecked(#agree) error = %v", err)
+	}
+	if err := s.SetSelectValue("#mode", "a"); err != nil {
+		t.Fatalf("SetSelectValue(#mode) error = %v", err)
+	}
+
+	store, err := s.ensureDOM()
+	if err != nil {
+		t.Fatalf("ensureDOM() error = %v", err)
+	}
+
+	nameNodes, err := store.Select("#name")
+	if err != nil {
+		t.Fatalf("Select(#name) error = %v", err)
+	}
+	if len(nameNodes) != 1 {
+		t.Fatalf("Select(#name) len = %d, want 1", len(nameNodes))
+	}
+	agreeNodes, err := store.Select("#agree")
+	if err != nil {
+		t.Fatalf("Select(#agree) error = %v", err)
+	}
+	if len(agreeNodes) != 1 {
+		t.Fatalf("Select(#agree) len = %d, want 1", len(agreeNodes))
+	}
+	modeNodes, err := store.Select("#mode")
+	if err != nil {
+		t.Fatalf("Select(#mode) error = %v", err)
+	}
+	if len(modeNodes) != 1 {
+		t.Fatalf("Select(#mode) len = %d, want 1", len(modeNodes))
+	}
+
+	if node := store.Node(nameNodes[0]); node == nil || !node.UserValidity {
+		t.Fatalf("node(#name).UserValidity = %v, want true", node)
+	}
+	if node := store.Node(agreeNodes[0]); node == nil || !node.UserValidity {
+		t.Fatalf("node(#agree).UserValidity = %v, want true", node)
+	}
+	if node := store.Node(modeNodes[0]); node == nil || !node.UserValidity {
+		t.Fatalf("node(#mode).UserValidity = %v, want true", node)
+	}
+
+	if err := s.Click("#reset"); err != nil {
+		t.Fatalf("Click(#reset) error = %v", err)
+	}
+
+	if node := store.Node(nameNodes[0]); node == nil || node.UserValidity {
+		t.Fatalf("node(#name).UserValidity after reset = %v, want false", node)
+	}
+	if node := store.Node(agreeNodes[0]); node == nil || node.UserValidity {
+		t.Fatalf("node(#agree).UserValidity after reset = %v, want false", node)
+	}
+	if node := store.Node(modeNodes[0]); node == nil || node.UserValidity {
+		t.Fatalf("node(#mode).UserValidity after reset = %v, want false", node)
+	}
+}
+
 func TestSessionConfigReturnsDeepClones(t *testing.T) {
 	s := NewSession(SessionConfig{
 		URL:            "https://example.test/",
@@ -168,11 +235,73 @@ func TestSessionNavigateResetsScrollState(t *testing.T) {
 	if got, want := s.URL(), "https://example.test/next"; got != want {
 		t.Fatalf("URL() after Navigate = %q, want %q", got, want)
 	}
+	if got, want := s.windowHistoryLength(), 2; got != want {
+		t.Fatalf("windowHistoryLength() after Navigate = %d, want %d", got, want)
+	}
 	if got := s.Registry().Location().Navigations(); len(got) != 1 || got[0] != "https://example.test/next" {
 		t.Fatalf("Location().Navigations() = %#v, want one navigation to example.test/next", got)
 	}
 	if gotX, gotY := s.scrollX, s.scrollY; gotX != 0 || gotY != 0 {
 		t.Fatalf("scroll state after Navigate = (%d, %d), want (0, 0)", gotX, gotY)
+	}
+	if gotX, gotY := s.ScrollPosition(); gotX != 0 || gotY != 0 {
+		t.Fatalf("ScrollPosition() after Navigate = (%d, %d), want (0, 0)", gotX, gotY)
+	}
+}
+
+func TestSessionTracksTargetFromURLFragments(t *testing.T) {
+	cfg := DefaultSessionConfig()
+	cfg.URL = "https://example.test/page#legacy"
+	cfg.HTML = `<main id="root"><a name="legacy">legacy</a><div id="space target">space</div><p id="tail">tail</p></main>`
+	s := NewSession(cfg)
+
+	store, err := s.ensureDOM()
+	if err != nil {
+		t.Fatalf("ensureDOM() error = %v", err)
+	}
+
+	legacyNodes, err := store.Select("a")
+	if err != nil {
+		t.Fatalf("Select(a) error = %v", err)
+	}
+	if len(legacyNodes) != 1 {
+		t.Fatalf("Select(a) len = %d, want 1", len(legacyNodes))
+	}
+	spaceNodes, err := store.Select("div")
+	if err != nil {
+		t.Fatalf("Select(div) error = %v", err)
+	}
+	if len(spaceNodes) != 1 {
+		t.Fatalf("Select(div) len = %d, want 1", len(spaceNodes))
+	}
+	legacyID := legacyNodes[0]
+	spaceID := spaceNodes[0]
+
+	if got := store.TargetNodeID(); got != legacyID {
+		t.Fatalf("TargetNodeID() after bootstrap = %d, want %d", got, legacyID)
+	}
+	if err := s.AssertText("a:target", "legacy"); err != nil {
+		t.Fatalf("AssertText(a:target) error = %v", err)
+	}
+
+	if err := s.ReplaceLocation("#space%20target"); err != nil {
+		t.Fatalf("ReplaceLocation(#space%%20target) error = %v", err)
+	}
+	if got := store.TargetNodeID(); got != spaceID {
+		t.Fatalf("TargetNodeID() after ReplaceLocation(#space%%20target) = %d, want %d", got, spaceID)
+	}
+	if err := s.AssertText("div:target", "space"); err != nil {
+		t.Fatalf("AssertText(div:target) error = %v", err)
+	}
+
+	if err := s.Navigate("#missing"); err != nil {
+		t.Fatalf("Navigate(#missing) error = %v", err)
+	}
+	if got := store.TargetNodeID(); got != 0 {
+		t.Fatalf("TargetNodeID() after missing fragment = %d, want 0", got)
+	}
+	if err := s.AssertExists(":target"); err == nil {
+		t.Fatalf("AssertExists(:target) after missing fragment error = nil, want no match")
 	}
 }
 
@@ -203,6 +332,77 @@ func TestSessionAttributeReflectionDelegatesToDOM(t *testing.T) {
 	}
 }
 
+func TestSessionClassListAndDatasetDelegatesToDOM(t *testing.T) {
+	s := NewSession(SessionConfig{
+		HTML: `<main><div id="root" class="alpha beta" data-foo-bar="1"></div></main>`,
+	})
+
+	classList, err := s.ClassList("#root")
+	if err != nil {
+		t.Fatalf("ClassList(#root) error = %v", err)
+	}
+	if got := classList.Values(); len(got) != 2 || got[0] != "alpha" || got[1] != "beta" {
+		t.Fatalf("ClassList.Values() = %#v, want [alpha beta]", got)
+	}
+	if !classList.Contains("beta") {
+		t.Fatalf("ClassList.Contains(beta) = false, want true")
+	}
+
+	classTokens := classList.Values()
+	classTokens[0] = "mutated"
+	if got := classList.Values(); got[0] != "alpha" {
+		t.Fatalf("ClassList.Values() should return copies, got %#v", got)
+	}
+
+	if err := classList.Add("gamma"); err != nil {
+		t.Fatalf("ClassList.Add(gamma) error = %v", err)
+	}
+	if err := classList.Remove("alpha"); err != nil {
+		t.Fatalf("ClassList.Remove(alpha) error = %v", err)
+	}
+
+	dataset, err := s.Dataset("#root")
+	if err != nil {
+		t.Fatalf("Dataset(#root) error = %v", err)
+	}
+	if got := dataset.Values(); got["fooBar"] != "1" || len(got) != 1 {
+		t.Fatalf("Dataset.Values() = %#v, want fooBar=1", got)
+	}
+	if got, ok := dataset.Get("fooBar"); !ok || got != "1" {
+		t.Fatalf("Dataset.Get(fooBar) = (%q, %v), want (\"1\", true)", got, ok)
+	}
+
+	values := dataset.Values()
+	values["fooBar"] = "mutated"
+	if got, ok := dataset.Get("fooBar"); !ok || got != "1" {
+		t.Fatalf("Dataset.Get(fooBar) after Values mutation = (%q, %v), want (\"1\", true)", got, ok)
+	}
+
+	if err := dataset.Set("shipId", "92432"); err != nil {
+		t.Fatalf("Dataset.Set(shipId) error = %v", err)
+	}
+	if err := dataset.Remove("fooBar"); err != nil {
+		t.Fatalf("Dataset.Remove(fooBar) error = %v", err)
+	}
+
+	if got, want := s.DumpDOM(), `<main><div id="root" class="beta gamma" data-ship-id="92432"></div></main>`; got != want {
+		t.Fatalf("DumpDOM() after class/dataset view mutation = %q, want %q", got, want)
+	}
+}
+
+func TestSessionClassListAndDatasetRejectInvalidTargets(t *testing.T) {
+	s := NewSession(SessionConfig{
+		HTML: `<main><div id="root"></div></main>`,
+	})
+
+	if _, err := s.ClassList("main[item="); err == nil {
+		t.Fatalf("ClassList(main[item=) error = nil, want selector error")
+	}
+	if _, err := s.Dataset("#missing"); err == nil {
+		t.Fatalf("Dataset(#missing) error = nil, want missing-element error")
+	}
+}
+
 func TestSessionExecutesInlineScriptsDuringBootstrap(t *testing.T) {
 	s := NewSession(SessionConfig{
 		HTML: `<main><div id="target">old</div><script>host:setInnerHTML("#target", "<em>updated</em>")</script></main>`,
@@ -219,6 +419,179 @@ func TestSessionExecutesInlineScriptsDuringBootstrap(t *testing.T) {
 	}
 }
 
+func TestSessionInlineScriptsCanWriteHTMLMidScript(t *testing.T) {
+	s := NewSession(SessionConfig{
+		HTML: `<main><div id="out">old</div><script>host:writeHTML('<main><div id="out">new</div></main>'); host:setInnerHTML("#out", "after")</script></main>`,
+	})
+
+	if got, want := s.DumpDOM(), `<main><div id="out">after</div></main>`; got != want {
+		t.Fatalf("DumpDOM() after writeHTML bootstrap = %q, want %q", got, want)
+	}
+	if got, want := s.HTML(), `<main><div id="out">new</div></main>`; got != want {
+		t.Fatalf("HTML() after writeHTML bootstrap = %q, want %q", got, want)
+	}
+}
+
+func TestSessionInlineScriptsCanDriveLocationMock(t *testing.T) {
+	tests := []struct {
+		name           string
+		url            string
+		html           string
+		wantURL        string
+		wantNavs       []string
+		wantHistoryLen int
+	}{
+		{
+			name:           "assign",
+			url:            "https://example.test/start",
+			html:           `<main><script>host:locationAssign("/assign")</script></main>`,
+			wantURL:        "https://example.test/assign",
+			wantHistoryLen: 2,
+			wantNavs: []string{
+				"https://example.test/assign",
+			},
+		},
+		{
+			name:           "replace",
+			url:            "https://example.test/start",
+			html:           `<main><script>host:locationReplace("replace")</script></main>`,
+			wantURL:        "https://example.test/replace",
+			wantHistoryLen: 1,
+			wantNavs: []string{
+				"https://example.test/replace",
+			},
+		},
+		{
+			name:           "reload",
+			url:            "https://example.test/reload",
+			html:           `<main><script>host:locationReload()</script></main>`,
+			wantURL:        "https://example.test/reload",
+			wantHistoryLen: 1,
+			wantNavs: []string{
+				"https://example.test/reload",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewSession(SessionConfig{
+				URL:  tc.url,
+				HTML: tc.html,
+			})
+
+			if got := s.DumpDOM(); got == "" {
+				t.Fatalf("DumpDOM() after location %s bootstrap = empty string, want DOM snapshot", tc.name)
+			}
+			if got, want := s.URL(), tc.wantURL; got != want {
+				t.Fatalf("URL() after location %s bootstrap = %q, want %q", tc.name, got, want)
+			}
+			if got, want := s.windowHistoryLength(), tc.wantHistoryLen; got != want {
+				t.Fatalf("windowHistoryLength() after location %s bootstrap = %d, want %d", tc.name, got, want)
+			}
+			if got := s.Registry().Location().Navigations(); len(got) != len(tc.wantNavs) {
+				t.Fatalf("Location().Navigations() = %#v, want %#v", got, tc.wantNavs)
+			} else {
+				for i := range got {
+					if got[i] != tc.wantNavs[i] {
+						t.Fatalf("Location().Navigations()[%d] = %q, want %q", i, got[i], tc.wantNavs[i])
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestSessionInlineScriptsCanSetLocationProperties(t *testing.T) {
+	s := NewSession(SessionConfig{
+		URL:  "https://example.test/start?old=1",
+		HTML: `<main><script>host:locationSet("hash", "#next"); host:locationSet("pathname", "detail"); host:locationSet("search", "?mode=full")</script></main>`,
+	})
+
+	if got := s.DumpDOM(); got == "" {
+		t.Fatalf("DumpDOM() after locationSet bootstrap = empty string, want DOM snapshot")
+	}
+	if got, want := s.URL(), "https://example.test/detail?mode=full#next"; got != want {
+		t.Fatalf("URL() after locationSet bootstrap = %q, want %q", got, want)
+	}
+	if got, want := s.windowHistoryLength(), 4; got != want {
+		t.Fatalf("windowHistoryLength() after locationSet bootstrap = %d, want %d", got, want)
+	}
+	if got := s.Registry().Location().Navigations(); len(got) != 3 || got[0] != "https://example.test/start?old=1#next" || got[1] != "https://example.test/detail?old=1#next" || got[2] != "https://example.test/detail?mode=full#next" {
+		t.Fatalf("Location().Navigations() after locationSet bootstrap = %#v, want ordered property updates", got)
+	}
+}
+
+func TestSessionInlineScriptsCanSetDocumentCookie(t *testing.T) {
+	s := NewSession(SessionConfig{
+		URL:  "https://example.test/start",
+		HTML: `<main><script>host:setDocumentCookie("theme=dark"); host:setDocumentCookie("lang=en; Path=/")</script></main>`,
+	})
+
+	if got := s.DumpDOM(); got == "" {
+		t.Fatalf("DumpDOM() after documentCookie bootstrap = empty string, want DOM snapshot")
+	}
+	if got, want := s.documentCookie(), "lang=en; theme=dark"; got != want {
+		t.Fatalf("documentCookie() after bootstrap = %q, want %q", got, want)
+	}
+	if got, want := s.navigatorCookieEnabled(), true; got != want {
+		t.Fatalf("navigatorCookieEnabled() = %v, want %v", got, want)
+	}
+}
+
+func TestSessionRejectsMalformedDocumentCookieFromInlineScript(t *testing.T) {
+	s := NewSession(SessionConfig{
+		URL:  "https://example.test/start",
+		HTML: `<main><script>host:setDocumentCookie("badcookie")</script></main>`,
+	})
+
+	if _, err := s.ensureDOM(); err == nil {
+		t.Fatalf("ensureDOM() error = nil, want malformed cookie assignment error")
+	}
+	if got := s.documentCookie(); got != "" {
+		t.Fatalf("documentCookie() after rejected bootstrap = %q, want empty string", got)
+	}
+}
+
+func TestSessionRejectsUnsupportedLocationPropertyFromInlineScript(t *testing.T) {
+	s := NewSession(SessionConfig{
+		URL:  "https://example.test/start",
+		HTML: `<main><script>host:locationSet("origin", "https://example.test/other")</script></main>`,
+	})
+
+	if _, err := s.ensureDOM(); err == nil {
+		t.Fatalf("ensureDOM() error = nil, want unsupported location property error")
+	}
+	if got := s.Registry().Location().Navigations(); len(got) != 0 {
+		t.Fatalf("Location().Navigations() after rejected origin assignment = %#v, want empty", got)
+	}
+	if got, want := s.windowHistoryLength(), 1; got != want {
+		t.Fatalf("windowHistoryLength() after rejected origin assignment = %d, want %d", got, want)
+	}
+	if got, want := s.URL(), "https://example.test/start"; got != want {
+		t.Fatalf("URL() after rejected origin assignment = %q, want %q", got, want)
+	}
+}
+
+func TestSessionRejectsEmptyLocationAssignmentFromInlineScript(t *testing.T) {
+	s := NewSession(SessionConfig{
+		HTML: `<main><script>host:locationAssign("")</script></main>`,
+	})
+
+	if got := s.DumpDOM(); got != "" {
+		t.Fatalf("DumpDOM() after rejected location assignment = %q, want empty string", got)
+	}
+	if got, want := s.URL(), "https://app.local/"; got != want {
+		t.Fatalf("URL() after rejected location assignment = %q, want %q", got, want)
+	}
+	if got := s.Registry().Location().Navigations(); len(got) != 0 {
+		t.Fatalf("Location().Navigations() after rejected location assignment = %#v, want empty", got)
+	}
+	if got, want := s.windowHistoryLength(), 1; got != want {
+		t.Fatalf("windowHistoryLength() after rejected location assignment = %d, want %d", got, want)
+	}
+}
+
 func TestSessionRejectsInlineScriptHostErrors(t *testing.T) {
 	s := NewSession(SessionConfig{
 		HTML: `<main><div id="target">old</div><script>host:setInnerHTML("#missing", "<em>updated</em>")</script></main>`,
@@ -229,6 +602,30 @@ func TestSessionRejectsInlineScriptHostErrors(t *testing.T) {
 	}
 	if got := s.DumpDOM(); got != "" {
 		t.Fatalf("DumpDOM() after failed inline script bootstrap = %q, want empty string", got)
+	}
+}
+
+func TestSessionRunsQueuedMicrotasksDuringBootstrap(t *testing.T) {
+	s := NewSession(SessionConfig{
+		HTML: `<main><div id="out">start</div><script>host:queueMicrotask('host:setInnerHTML(#out, micro)')</script></main>`,
+	})
+
+	if got, want := s.DumpDOM(), `<main><div id="out">micro</div><script>host:queueMicrotask('host:setInnerHTML(#out, micro)')</script></main>`; got != want {
+		t.Fatalf("DumpDOM() after queued bootstrap microtask = %q, want %q", got, want)
+	}
+}
+
+func TestSessionClickRunsQueuedMicrotasksAfterDispatch(t *testing.T) {
+	s := NewSession(SessionConfig{
+		HTML: `<main><button id="btn">Go</button><div id="out">start</div><script>host:addEventListener("#btn", "click", "host:queueMicrotask('host:setInnerHTML(#out, micro)')")</script></main>`,
+	})
+
+	if err := s.Click("#btn"); err != nil {
+		t.Fatalf("Click(#btn) error = %v", err)
+	}
+
+	if got, want := s.DumpDOM(), `<main><button id="btn">Go</button><div id="out">micro</div><script>host:addEventListener("#btn", "click", "host:queueMicrotask('host:setInnerHTML(#out, micro)')")</script></main>`; got != want {
+		t.Fatalf("DumpDOM() after queued click microtask = %q, want %q", got, want)
 	}
 }
 
@@ -302,6 +699,12 @@ func TestNilSessionHelpersStaySafe(t *testing.T) {
 	if err := s.RemoveAttribute("#cta", "id"); err == nil {
 		t.Fatalf("RemoveAttribute(#cta) error = nil, want session unavailable error")
 	}
+	if _, err := s.ClassList("#cta"); err == nil {
+		t.Fatalf("ClassList(#cta) error = nil, want session unavailable error")
+	}
+	if _, err := s.Dataset("#cta"); err == nil {
+		t.Fatalf("Dataset(#cta) error = nil, want session unavailable error")
+	}
 	if err := s.Submit("#cta"); err == nil {
 		t.Fatalf("Submit(#cta) error = nil, want session unavailable error")
 	}
@@ -310,6 +713,12 @@ func TestNilSessionHelpersStaySafe(t *testing.T) {
 	}
 	if err := s.Blur(); err == nil {
 		t.Fatalf("Blur() error = nil, want session unavailable error")
+	}
+	if err := s.Dispatch("#cta", "custom"); err == nil {
+		t.Fatalf("Dispatch(#cta, custom) error = nil, want session unavailable error")
+	}
+	if err := s.DispatchKeyboard("#cta"); err == nil {
+		t.Fatalf("DispatchKeyboard(#cta) error = nil, want session unavailable error")
 	}
 }
 
@@ -324,6 +733,21 @@ func TestSessionTracksFocusAndInteractions(t *testing.T) {
 	if got, want := s.FocusedSelector(), "#name"; got != want {
 		t.Fatalf("FocusedSelector() after Focus = %q, want %q", got, want)
 	}
+	store, err := s.ensureDOM()
+	if err != nil {
+		t.Fatalf("ensureDOM() after Focus error = %v", err)
+	}
+	nameMatches, err := store.Select("#name")
+	if err != nil {
+		t.Fatalf("Select(#name) after Focus error = %v", err)
+	}
+	if len(nameMatches) != 1 {
+		t.Fatalf("Select(#name) after Focus len = %d, want 1", len(nameMatches))
+	}
+	nameID := nameMatches[0]
+	if got := store.FocusedNodeID(); got != nameID {
+		t.Fatalf("FocusedNodeID() after Focus = %d, want %d", got, nameID)
+	}
 
 	if err := s.Click("#cta"); err != nil {
 		t.Fatalf("Click(#cta) error = %v", err)
@@ -337,6 +761,9 @@ func TestSessionTracksFocusAndInteractions(t *testing.T) {
 	}
 	if got := s.FocusedSelector(); got != "" {
 		t.Fatalf("FocusedSelector() after Blur = %q, want empty", got)
+	}
+	if got := store.FocusedNodeID(); got != 0 {
+		t.Fatalf("FocusedNodeID() after Blur = %d, want 0", got)
 	}
 
 	log := s.InteractionLog()
@@ -365,17 +792,58 @@ func TestSessionInteractionsValidateSelectorsAgainstDOM(t *testing.T) {
 		HTML: `<main><button id="cta">Go</button></main>`,
 	})
 
-	if err := s.Click("main + button"); err == nil {
-		t.Fatalf("Click(main + button) error = nil, want selector syntax error")
+	if err := s.Click("main[item="); err == nil {
+		t.Fatalf("Click(main[item=) error = nil, want selector syntax error")
 	}
 	if err := s.Focus("#missing"); err == nil {
 		t.Fatalf("Focus(#missing) error = nil, want missing-element error")
+	}
+	if err := s.Dispatch("#missing", "custom"); err == nil {
+		t.Fatalf("Dispatch(#missing, custom) error = nil, want missing-element error")
 	}
 	if got := len(s.InteractionLog()); got != 0 {
 		t.Fatalf("InteractionLog() len after rejected interactions = %d, want 0", got)
 	}
 	if got := s.FocusedSelector(); got != "" {
 		t.Fatalf("FocusedSelector() after rejected interactions = %q, want empty", got)
+	}
+}
+
+func TestSessionDispatchesCustomEventListeners(t *testing.T) {
+	s := NewSession(SessionConfig{
+		HTML: `<main><section id="wrap"><button id="btn">Go</button></section><div id="log"></div><script>host:addEventListener("#wrap", "custom", 'host:insertAdjacentHTML("#log", "beforeend", "<span>capture</span>")', "capture"); host:addEventListener("#btn", "custom", 'host:insertAdjacentHTML("#log", "beforeend", "<span>target</span>")'); host:addEventListener("#wrap", "custom", 'host:insertAdjacentHTML("#log", "beforeend", "<span>bubble</span>")', "bubble")</script></main>`,
+	})
+
+	if err := s.Dispatch("#btn", "custom"); err != nil {
+		t.Fatalf("Dispatch(#btn, custom) error = %v", err)
+	}
+
+	if got, want := s.DumpDOM(), `<main><section id="wrap"><button id="btn">Go</button></section><div id="log"><span>capture</span><span>target</span><span>bubble</span></div><script>host:addEventListener("#wrap", "custom", 'host:insertAdjacentHTML("#log", "beforeend", "<span>capture</span>")', "capture"); host:addEventListener("#btn", "custom", 'host:insertAdjacentHTML("#log", "beforeend", "<span>target</span>")'); host:addEventListener("#wrap", "custom", 'host:insertAdjacentHTML("#log", "beforeend", "<span>bubble</span>")', "bubble")</script></main>`; got != want {
+		t.Fatalf("DumpDOM() after custom dispatch = %q, want %q", got, want)
+	}
+}
+
+func TestSessionDispatchRejectsBlankEventType(t *testing.T) {
+	s := NewSession(SessionConfig{
+		HTML: `<main><button id="btn">Go</button></main>`,
+	})
+
+	if err := s.Dispatch("#btn", " "); err == nil {
+		t.Fatalf("Dispatch(#btn, blank) error = nil, want blank-event error")
+	}
+}
+
+func TestSessionDispatchKeyboardFiresKeyboardEventSequence(t *testing.T) {
+	s := NewSession(SessionConfig{
+		HTML: `<main><button id="btn">Go</button><div id="log"></div><script>host:addEventListener("#btn", "keydown", 'host:insertAdjacentHTML("#log", "beforeend", "<span>down</span>")'); host:addEventListener("#btn", "keypress", 'host:insertAdjacentHTML("#log", "beforeend", "<span>press</span>")'); host:addEventListener("#btn", "keyup", 'host:insertAdjacentHTML("#log", "beforeend", "<span>up</span>")')</script></main>`,
+	})
+
+	if err := s.DispatchKeyboard("#btn"); err != nil {
+		t.Fatalf("DispatchKeyboard(#btn) error = %v", err)
+	}
+
+	if got, want := s.DumpDOM(), `<main><button id="btn">Go</button><div id="log"><span>down</span><span>press</span><span>up</span></div><script>host:addEventListener("#btn", "keydown", 'host:insertAdjacentHTML("#log", "beforeend", "<span>down</span>")'); host:addEventListener("#btn", "keypress", 'host:insertAdjacentHTML("#log", "beforeend", "<span>press</span>")'); host:addEventListener("#btn", "keyup", 'host:insertAdjacentHTML("#log", "beforeend", "<span>up</span>")')</script></main>`; got != want {
+		t.Fatalf("DumpDOM() after keyboard dispatch = %q, want %q", got, want)
 	}
 }
 
@@ -404,6 +872,34 @@ func TestSessionActionsSupportBoundedCombinators(t *testing.T) {
 	}
 	if log[1].Kind != InteractionKindFocus || log[1].Selector != "main > input" {
 		t.Fatalf("InteractionLog()[1] = %#v, want focus main > input", log[1])
+	}
+}
+
+func TestSessionActionsSupportBoundedPseudoClasses(t *testing.T) {
+	s := NewSession(SessionConfig{
+		HTML: `<main><input id="enabled" type="text"><input id="flag" type="checkbox" checked><input id="off" type="text" disabled><div id="empty"></div><p id="last">two</p></main>`,
+	})
+
+	if err := s.Focus("input:first-child"); err != nil {
+		t.Fatalf("Focus(input:first-child) error = %v", err)
+	}
+	if got, want := s.FocusedSelector(), "input:first-child"; got != want {
+		t.Fatalf("FocusedSelector() = %q, want %q", got, want)
+	}
+
+	if err := s.Click("div:empty"); err != nil {
+		t.Fatalf("Click(div:empty) error = %v", err)
+	}
+
+	log := s.InteractionLog()
+	if len(log) != 2 {
+		t.Fatalf("InteractionLog() len = %d, want 2", len(log))
+	}
+	if log[0].Kind != InteractionKindFocus || log[0].Selector != "input:first-child" {
+		t.Fatalf("InteractionLog()[0] = %#v, want focus input:first-child", log[0])
+	}
+	if log[1].Kind != InteractionKindClick || log[1].Selector != "div:empty" {
+		t.Fatalf("InteractionLog()[1] = %#v, want click div:empty", log[1])
 	}
 }
 
@@ -609,6 +1105,117 @@ func TestSessionDispatchesInputListenersFromTypeText(t *testing.T) {
 
 	if got, want := s.DumpDOM(), `<main><input id="name" value="Ada"><div id="out">typed</div><script>host:addEventListener("#name", "input", 'host:setInnerHTML("#out", "typed")')</script></main>`; got != want {
 		t.Fatalf("DumpDOM() after input listener = %q, want %q", got, want)
+	}
+}
+
+func TestSessionDispatchesCaptureTargetAndBubbleListeners(t *testing.T) {
+	s := NewSession(SessionConfig{
+		HTML: `<main><section id="wrap"><button id="btn">Go</button></section><div id="log"></div><script>host:addEventListener("#wrap", "click", 'host:insertAdjacentHTML("#log", "beforeend", "<span>capture</span>")', "capture"); host:addEventListener("#btn", "click", 'host:insertAdjacentHTML("#log", "beforeend", "<span>target</span>")'); host:addEventListener("#wrap", "click", 'host:insertAdjacentHTML("#log", "beforeend", "<span>bubble</span>")', "bubble")</script></main>`,
+	})
+
+	if err := s.Click("#btn"); err != nil {
+		t.Fatalf("Click(#btn) error = %v", err)
+	}
+
+	if got, want := s.DumpDOM(), `<main><section id="wrap"><button id="btn">Go</button></section><div id="log"><span>capture</span><span>target</span><span>bubble</span></div><script>host:addEventListener("#wrap", "click", 'host:insertAdjacentHTML("#log", "beforeend", "<span>capture</span>")', "capture"); host:addEventListener("#btn", "click", 'host:insertAdjacentHTML("#log", "beforeend", "<span>target</span>")'); host:addEventListener("#wrap", "click", 'host:insertAdjacentHTML("#log", "beforeend", "<span>bubble</span>")', "bubble")</script></main>`; got != want {
+		t.Fatalf("DumpDOM() after capture/target/bubble listeners = %q, want %q", got, want)
+	}
+}
+
+func TestSessionFocusRemainsTargetOnly(t *testing.T) {
+	s := NewSession(SessionConfig{
+		HTML: `<main><section id="wrap"><input id="name"></section><div id="log"></div><script>host:addEventListener("#wrap", "focus", 'host:insertAdjacentHTML("#log", "beforeend", "<span>ancestor</span>")', "capture"); host:addEventListener("#name", "focus", 'host:insertAdjacentHTML("#log", "beforeend", "<span>target</span>")')</script></main>`,
+	})
+
+	if err := s.Focus("#name"); err != nil {
+		t.Fatalf("Focus(#name) error = %v", err)
+	}
+
+	if got, want := s.DumpDOM(), `<main><section id="wrap"><input id="name"></section><div id="log"><span>target</span></div><script>host:addEventListener("#wrap", "focus", 'host:insertAdjacentHTML("#log", "beforeend", "<span>ancestor</span>")', "capture"); host:addEventListener("#name", "focus", 'host:insertAdjacentHTML("#log", "beforeend", "<span>target</span>")')</script></main>`; got != want {
+		t.Fatalf("DumpDOM() after focus target-only dispatch = %q, want %q", got, want)
+	}
+}
+
+func TestSessionClickHonorsPreventDefaultFromListeners(t *testing.T) {
+	s := NewSession(SessionConfig{
+		URL:  "https://example.test/base/",
+		HTML: `<main><a id="nav" href="/next">Go</a><div id="out"></div><script>host:addEventListener("#nav", "click", 'host:preventDefault(); host:setInnerHTML("#out", "blocked")')</script></main>`,
+	})
+
+	if err := s.Click("#nav"); err != nil {
+		t.Fatalf("Click(#nav) error = %v", err)
+	}
+
+	if got, want := s.URL(), "https://example.test/base/"; got != want {
+		t.Fatalf("URL() after prevented click = %q, want %q", got, want)
+	}
+	if got := s.Registry().Location().Navigations(); len(got) != 0 {
+		t.Fatalf("Location().Navigations() = %#v, want no navigation", got)
+	}
+	if got, want := s.DumpDOM(), `<main><a id="nav" href="/next">Go</a><div id="out">blocked</div><script>host:addEventListener("#nav", "click", 'host:preventDefault(); host:setInnerHTML("#out", "blocked")')</script></main>`; got != want {
+		t.Fatalf("DumpDOM() after prevented click = %q, want %q", got, want)
+	}
+}
+
+func TestSessionClickHonorsStopPropagationFromCaptureListeners(t *testing.T) {
+	s := NewSession(SessionConfig{
+		HTML: `<main><section id="wrap"><button id="btn">Go</button></section><div id="log"></div><script>host:addEventListener("#wrap", "click", 'host:insertAdjacentHTML("#log", "beforeend", "<span>capture</span>"); host:stopPropagation()', "capture"); host:addEventListener("#btn", "click", 'host:insertAdjacentHTML("#log", "beforeend", "<span>target</span>")'); host:addEventListener("#wrap", "click", 'host:insertAdjacentHTML("#log", "beforeend", "<span>bubble</span>")', "bubble")</script></main>`,
+	})
+
+	if err := s.Click("#btn"); err != nil {
+		t.Fatalf("Click(#btn) error = %v", err)
+	}
+
+	if got, want := s.DumpDOM(), `<main><section id="wrap"><button id="btn">Go</button></section><div id="log"><span>capture</span><span>target</span></div><script>host:addEventListener("#wrap", "click", 'host:insertAdjacentHTML("#log", "beforeend", "<span>capture</span>"); host:stopPropagation()', "capture"); host:addEventListener("#btn", "click", 'host:insertAdjacentHTML("#log", "beforeend", "<span>target</span>")'); host:addEventListener("#wrap", "click", 'host:insertAdjacentHTML("#log", "beforeend", "<span>bubble</span>")', "bubble")</script></main>`; got != want {
+		t.Fatalf("DumpDOM() after stopPropagation click = %q, want %q", got, want)
+	}
+}
+
+func TestSessionClickHonorsOnceListeners(t *testing.T) {
+	s := NewSession(SessionConfig{
+		HTML: `<main><button id="btn">Go</button><div id="log"></div><script>host:addEventListener("#btn", "click", 'host:insertAdjacentHTML("#log", "beforeend", "<span>once</span>")', "target", true)</script></main>`,
+	})
+
+	if err := s.Click("#btn"); err != nil {
+		t.Fatalf("Click(#btn) first error = %v", err)
+	}
+	if err := s.Click("#btn"); err != nil {
+		t.Fatalf("Click(#btn) second error = %v", err)
+	}
+
+	if got, want := s.DumpDOM(), `<main><button id="btn">Go</button><div id="log"><span>once</span></div><script>host:addEventListener("#btn", "click", 'host:insertAdjacentHTML("#log", "beforeend", "<span>once</span>")', "target", true)</script></main>`; got != want {
+		t.Fatalf("DumpDOM() after once listener = %q, want %q", got, want)
+	}
+}
+
+func TestSessionClickAllowsCaptureListenersToRemoveLaterTargetListeners(t *testing.T) {
+	s := NewSession(SessionConfig{
+		HTML: `<main><section id="wrap"><button id="btn">Go</button></section><div id="log"></div><script>host:addEventListener("#wrap", "click", 'host:removeEventListener("#btn", "click", host:removeNode("#btn")); host:insertAdjacentHTML("#log", "beforeend", "<span>remover</span>")', "capture"); host:addEventListener("#btn", "click", 'host:removeNode("#btn")'); host:addEventListener("#wrap", "click", 'host:insertAdjacentHTML("#log", "beforeend", "<span>bubble</span>")', "bubble")</script></main>`,
+	})
+
+	if err := s.Click("#btn"); err != nil {
+		t.Fatalf("Click(#btn) error = %v", err)
+	}
+
+	if got, want := s.DumpDOM(), `<main><section id="wrap"><button id="btn">Go</button></section><div id="log"><span>remover</span><span>bubble</span></div><script>host:addEventListener("#wrap", "click", 'host:removeEventListener("#btn", "click", host:removeNode("#btn")); host:insertAdjacentHTML("#log", "beforeend", "<span>remover</span>")', "capture"); host:addEventListener("#btn", "click", 'host:removeNode("#btn")'); host:addEventListener("#wrap", "click", 'host:insertAdjacentHTML("#log", "beforeend", "<span>bubble</span>")', "bubble")</script></main>`; got != want {
+		t.Fatalf("DumpDOM() after listener removal = %q, want %q", got, want)
+	}
+}
+
+func TestSessionResetListenersCanPreventResetDefaultAction(t *testing.T) {
+	s := NewSession(SessionConfig{
+		HTML: `<form id="profile"><input id="name"><button id="reset" type="reset">Reset</button><div id="out"></div><script>host:addEventListener("#profile", "reset", 'host:preventDefault(); host:setInnerHTML("#out", "reset-blocked")')</script></form>`,
+	})
+
+	if err := s.TypeText("#name", "Ada"); err != nil {
+		t.Fatalf("TypeText(#name) error = %v", err)
+	}
+	if err := s.Click("#reset"); err != nil {
+		t.Fatalf("Click(#reset) error = %v", err)
+	}
+
+	if got, want := s.DumpDOM(), `<form id="profile"><input id="name" value="Ada"><button id="reset" type="reset">Reset</button><div id="out">reset-blocked</div><script>host:addEventListener("#profile", "reset", 'host:preventDefault(); host:setInnerHTML("#out", "reset-blocked")')</script></form>`; got != want {
+		t.Fatalf("DumpDOM() after prevented reset = %q, want %q", got, want)
 	}
 }
 

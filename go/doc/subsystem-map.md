@@ -11,6 +11,7 @@ Owns:
 - `Error` and its classification helpers
 - `DebugView`
 - `MockRegistryView`
+- public live view helper types such as `ClassListView` and `DatasetView`
 - public seed/value helper types that are part of constructors or mock APIs
 
 Location:
@@ -117,4 +118,3 @@ Choose this layer when the question is:
 5. Add a new mock in `internal/runtime` or `internal/mocks`, then wire it through the public facade without bypassing the registry.
 6. Use explicit config fields for builder seeds and bootstrap failures. Do not hide them in storage or other unrelated state.
 7. Check `../html-standard/` before implementing any new HTML or DOM slice.
-

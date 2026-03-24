@@ -41,6 +41,20 @@ func (v DebugView) FocusedSelector() string {
 	return v.session.FocusedSelector()
 }
 
+func (v DebugView) ScrollPosition() (int64, int64) {
+	if v.session == nil {
+		return 0, 0
+	}
+	return v.session.ScrollPosition()
+}
+
+func (v DebugView) WindowName() string {
+	if v.session == nil {
+		return ""
+	}
+	return v.session.WindowName()
+}
+
 func (v DebugView) Interactions() []Interaction {
 	if v.session == nil {
 		return nil

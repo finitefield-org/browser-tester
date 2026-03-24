@@ -61,3 +61,13 @@ func (h *Harness) RemoveNode(selector string) error {
 	}
 	return nil
 }
+
+func (h *Harness) WriteHTML(markup string) error {
+	if h == nil || h.session == nil {
+		return NewError(ErrorKindDOM, "write html is unavailable")
+	}
+	if err := h.session.WriteHTML(markup); err != nil {
+		return NewError(ErrorKindDOM, err.Error())
+	}
+	return nil
+}

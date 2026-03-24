@@ -191,9 +191,30 @@ func TestResetFormControlsRestoresInitialState(t *testing.T) {
 	if err := store.SetSelectValue(modeID, "B"); err != nil {
 		t.Fatalf("SetSelectValue(#mode) error = %v", err)
 	}
+	if err := store.SetUserValidity(nameID, true); err != nil {
+		t.Fatalf("SetUserValidity(#name) error = %v", err)
+	}
+	if err := store.SetUserValidity(flagID, true); err != nil {
+		t.Fatalf("SetUserValidity(#flag) error = %v", err)
+	}
+	if err := store.SetUserValidity(radioBID, true); err != nil {
+		t.Fatalf("SetUserValidity(#radio-b) error = %v", err)
+	}
+	if err := store.SetUserValidity(bioID, true); err != nil {
+		t.Fatalf("SetUserValidity(#bio) error = %v", err)
+	}
+	if err := store.SetUserValidity(modeID, true); err != nil {
+		t.Fatalf("SetUserValidity(#mode) error = %v", err)
+	}
 
 	if err := store.ResetFormControls(formID); err != nil {
 		t.Fatalf("ResetFormControls(#profile) error = %v", err)
+	}
+
+	for _, nodeID := range []NodeID{nameID, flagID, radioBID, bioID, modeID} {
+		if node := store.Node(nodeID); node == nil || node.UserValidity {
+			t.Fatalf("node(%d).UserValidity after reset = %v, want false", nodeID, node)
+		}
 	}
 
 	if got, want := store.DumpDOM(), input; got != want {

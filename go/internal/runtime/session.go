@@ -32,17 +32,33 @@ func DefaultSessionConfig() SessionConfig {
 }
 
 type Session struct {
-	config          SessionConfig
-	scheduler       Scheduler
-	scrollX         int64
-	scrollY         int64
-	registry        *mocks.Registry
-	domStore        *dom.Store
-	domReady        bool
-	domErr          error
-	focusedSelector string
-	interactions    []Interaction
-	eventListeners  []eventListenerRecord
+	config                   SessionConfig
+	scheduler                Scheduler
+	scrollX                  int64
+	scrollY                  int64
+	registry                 *mocks.Registry
+	domStore                 *dom.Store
+	domReady                 bool
+	domErr                   error
+	focusedSelector          string
+	writingHTML              bool
+	interactions             []Interaction
+	eventListeners           []eventListenerRecord
+	nextEventListenerID      int64
+	eventDispatch            *eventDispatchContext
+	microtasks               []string
+	currentScriptHTML        string
+	historyEntries           []historyEntry
+	historyIndex             int
+	historyScrollRestoration string
+	windowName               string
+	cookieJar                map[string]string
+	timers                   map[int64]timerRecord
+	animationFrames          map[int64]animationFrameRecord
+	nextTimerID              int64
+	nextAnimationFrameID     int64
+	runningTimerID           int64
+	runningTimerCancelled    bool
 }
 
 func NewSession(config SessionConfig) *Session {
@@ -112,6 +128,9 @@ func (s *Session) HTML() string {
 	if s == nil {
 		return ""
 	}
+	if s.domStore != nil {
+		return s.domStore.SourceHTML()
+	}
 	return s.config.HTML
 }
 
@@ -129,8 +148,12 @@ func (s *Session) AdvanceTime(deltaMs int64) error {
 	if deltaMs < 0 {
 		return fmt.Errorf("advance_time() requires a non-negative delta")
 	}
+	store, err := s.ensureDOM()
+	if err != nil {
+		return err
+	}
 	s.scheduler.Advance(deltaMs)
-	return nil
+	return s.settlePendingWork(store)
 }
 
 func (s *Session) SetNowMs(nowMs int64) {
@@ -145,6 +168,9 @@ func (s *Session) ResetTime() {
 		return
 	}
 	s.scheduler.Reset()
+	s.clearTimers()
+	s.clearAnimationFrames()
+	s.discardMicrotasks()
 }
 
 func (s *Session) Scheduler() *Scheduler {
@@ -177,6 +203,13 @@ func (s *Session) FocusedSelector() string {
 		return ""
 	}
 	return s.focusedSelector
+}
+
+func (s *Session) ScrollPosition() (int64, int64) {
+	if s == nil {
+		return 0, 0
+	}
+	return s.scrollX, s.scrollY
 }
 
 func (s *Session) InteractionLog() []Interaction {
@@ -305,10 +338,36 @@ func (s *Session) Navigate(url string) error {
 	if normalized == "" {
 		return fmt.Errorf("navigate() requires a non-empty URL")
 	}
-	s.Registry().Location().RecordNavigation(normalized)
-	s.scrollX = 0
-	s.scrollY = 0
-	return nil
+	return s.recordNavigation(resolveHyperlinkURL(s.URL(), normalized))
+}
+
+func (s *Session) AssignLocation(url string) error {
+	if s == nil {
+		return fmt.Errorf("session is unavailable")
+	}
+	normalized := strings.TrimSpace(url)
+	if normalized == "" {
+		return fmt.Errorf("location assignment requires a non-empty URL")
+	}
+	return s.recordNavigation(resolveHyperlinkURL(s.URL(), normalized))
+}
+
+func (s *Session) ReplaceLocation(url string) error {
+	if s == nil {
+		return fmt.Errorf("session is unavailable")
+	}
+	normalized := strings.TrimSpace(url)
+	if normalized == "" {
+		return fmt.Errorf("location replacement requires a non-empty URL")
+	}
+	return s.replaceNavigation(resolveHyperlinkURL(s.URL(), normalized))
+}
+
+func (s *Session) ReloadLocation() error {
+	if s == nil {
+		return fmt.Errorf("session is unavailable")
+	}
+	return s.reloadNavigation()
 }
 
 func (s *Session) CaptureDownload(fileName string, bytes []byte) error {
@@ -326,7 +385,19 @@ func (s *Session) SetFiles(selector string, files []string) error {
 	if s == nil {
 		return fmt.Errorf("session is unavailable")
 	}
+	store, err := s.ensureDOM()
+	if err != nil {
+		return err
+	}
 	s.Registry().FileInput().SetFiles(selector, files)
+	normalized := strings.TrimSpace(selector)
+	if normalized != "" {
+		if matches, err := store.Select(normalized); err == nil && len(matches) > 0 {
+			if node := store.Node(matches[0]); node != nil && node.Kind == dom.NodeKindElement && node.TagName == "input" && inputType(node) == "file" {
+				_ = store.SetUserValidity(matches[0], true)
+			}
+		}
+	}
 	return nil
 }
 
@@ -337,7 +408,7 @@ func (s *Session) MatchMedia(query string) (bool, error) {
 	return s.Registry().MatchMedia().Resolve(query)
 }
 
-func (s *Session) Click(selector string) error {
+func (s *Session) Click(selector string) (err error) {
 	if s == nil {
 		return fmt.Errorf("session is unavailable")
 	}
@@ -345,25 +416,45 @@ func (s *Session) Click(selector string) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			s.discardMicrotasks()
+		}
+	}()
 	s.interactions = append(s.interactions, Interaction{
 		Kind:     InteractionKindClick,
 		Selector: normalized,
 	})
-	if err := s.dispatchEventListeners(store, nodeID, "click"); err != nil {
+	prevented, err := s.dispatchEventListeners(store, nodeID, "click")
+	if err != nil {
 		return err
 	}
-	if err := s.applyClickDefaultAction(normalized); err != nil {
+	if s.domStore != nil && s.domStore != store {
+		return s.drainMicrotasks(s.domStore)
+	}
+	if prevented {
+		return s.drainMicrotasks(store)
+	}
+	if err = s.applyClickDefaultAction(normalized); err != nil {
 		return err
 	}
-	return nil
+	return s.drainMicrotasks(store)
 }
 
-func (s *Session) Focus(selector string) error {
+func (s *Session) Focus(selector string) (err error) {
 	if s == nil {
 		return fmt.Errorf("session is unavailable")
 	}
 	store, nodeID, _, normalized, err := s.resolveActionTarget(selector)
 	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			s.discardMicrotasks()
+		}
+	}()
+	if err := store.SetFocusedNode(nodeID); err != nil {
 		return err
 	}
 	s.focusedSelector = normalized
@@ -371,33 +462,39 @@ func (s *Session) Focus(selector string) error {
 		Kind:     InteractionKindFocus,
 		Selector: normalized,
 	})
-	if err := s.dispatchEventListeners(store, nodeID, "focus"); err != nil {
+	if _, err := s.dispatchTargetEventListeners(store, nodeID, "focus"); err != nil {
 		return err
 	}
-	return nil
+	return s.drainMicrotasks(store)
 }
 
-func (s *Session) Blur() error {
+func (s *Session) Blur() (err error) {
 	if s == nil {
 		return fmt.Errorf("session is unavailable")
 	}
 	previous := s.focusedSelector
+	previousNodeID := dom.NodeID(0)
+	if s.domStore != nil {
+		previousNodeID = s.domStore.FocusedNodeID()
+		s.domStore.ClearFocusedNode()
+	}
 	s.focusedSelector = ""
 	s.interactions = append(s.interactions, Interaction{
 		Kind:     InteractionKindBlur,
 		Selector: previous,
 	})
-	if previous == "" {
+	if previousNodeID == 0 || s.domStore == nil {
 		return nil
 	}
-	store, nodeID, _, _, err := s.resolveActionTarget(previous)
-	if err != nil {
-		return nil
-	}
-	if err := s.dispatchEventListeners(store, nodeID, "blur"); err != nil {
+	defer func() {
+		if err != nil {
+			s.discardMicrotasks()
+		}
+	}()
+	if _, err := s.dispatchTargetEventListeners(s.domStore, previousNodeID, "blur"); err != nil {
 		return err
 	}
-	return nil
+	return s.drainMicrotasks(s.domStore)
 }
 
 func (s *Session) validateSelector(selector string) (string, error) {
@@ -463,6 +560,13 @@ func (s *Session) RemoveAttribute(selector, name string) error {
 	return store.RemoveAttribute(nodeID, name)
 }
 
+func (s *Session) recordNavigation(url string) error {
+	if s == nil {
+		return fmt.Errorf("session is unavailable")
+	}
+	return s.pushHistoryNavigation(url)
+}
+
 func (s *Session) ensureDOM() (*dom.Store, error) {
 	if s == nil {
 		return nil, fmt.Errorf("session is unavailable")
@@ -485,11 +589,22 @@ func (s *Session) ensureDOM() (*dom.Store, error) {
 
 	s.domStore = store
 	s.domReady = true
+	s.syncDocumentState(s.URL())
 	if err := s.executeInlineScripts(store); err != nil {
 		s.domErr = err
 		return nil, err
 	}
 	return s.domStore, nil
+}
+
+func (s *Session) syncDocumentState(url string) {
+	if s == nil || s.domStore == nil {
+		return
+	}
+	s.ensureHistoryInitialized()
+	s.domStore.SyncTargetFromURL(url)
+	s.domStore.SyncCurrentURL(url)
+	s.domStore.SyncVisitedURLs(s.visitedHistoryURLs(url))
 }
 
 func cloneSessionConfig(config SessionConfig) SessionConfig {

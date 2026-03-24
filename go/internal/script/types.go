@@ -3,17 +3,19 @@ package script
 type ValueKind string
 
 const (
-	ValueKindUndefined ValueKind = "undefined"
-	ValueKindString    ValueKind = "string"
-	ValueKindBool      ValueKind = "bool"
-	ValueKindNumber    ValueKind = "number"
+	ValueKindUndefined  ValueKind = "undefined"
+	ValueKindString     ValueKind = "string"
+	ValueKindBool       ValueKind = "bool"
+	ValueKindNumber     ValueKind = "number"
+	ValueKindInvocation ValueKind = "invocation"
 )
 
 type Value struct {
-	Kind   ValueKind
-	String string
-	Bool   bool
-	Number float64
+	Kind       ValueKind
+	String     string
+	Bool       bool
+	Number     float64
+	Invocation string
 }
 
 func UndefinedValue() Value {
@@ -38,5 +40,12 @@ func NumberValue(value float64) Value {
 	return Value{
 		Kind:   ValueKindNumber,
 		Number: value,
+	}
+}
+
+func InvocationValue(source string) Value {
+	return Value{
+		Kind:       ValueKindInvocation,
+		Invocation: source,
 	}
 }

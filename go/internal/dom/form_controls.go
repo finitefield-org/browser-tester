@@ -22,6 +22,7 @@ func (s *Store) SetFormControlValue(nodeID NodeID, value string) error {
 			)
 		}
 		node.Attrs = setAttribute(node.Attrs, "value", value, true)
+		node.Attrs = removeAttribute(node.Attrs, "autofill")
 		return nil
 	default:
 		return fmt.Errorf("node %d is not a supported form control", nodeID)
@@ -125,7 +126,10 @@ func (s *Store) ResetFormControls(nodeID NodeID) error {
 		switch current.TagName {
 		case "input":
 			resetInputControl(current)
+		case "select":
+			current.UserValidity = false
 		case "textarea":
+			current.UserValidity = false
 			_ = s.SetTextContent(current.ID, current.DefaultText)
 		case "option":
 			if defaultHasAttribute(current, "selected") {
@@ -205,6 +209,7 @@ func resetInputControl(node *Node) {
 	if node == nil || node.Kind != NodeKindElement || node.TagName != "input" {
 		return
 	}
+	node.UserValidity = false
 
 	switch inputType(node) {
 	case "checkbox", "radio":

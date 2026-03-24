@@ -124,6 +124,101 @@ func TestRemoveNodeRemovesSubtree(t *testing.T) {
 	}
 }
 
+func TestMutationHelpersUpdateFocusedNodeState(t *testing.T) {
+	store := NewStore()
+	if err := store.BootstrapHTML(`<section id="wrap"><div id="target"><span id="child">x</span></div><p id="keep">k</p></section>`); err != nil {
+		t.Fatalf("BootstrapHTML() error = %v", err)
+	}
+
+	targetID := mustSelectSingle(t, store, "#target")
+	childID := mustSelectSingle(t, store, "#child")
+	keepID := mustSelectSingle(t, store, "#keep")
+
+	if err := store.SetFocusedNode(childID); err != nil {
+		t.Fatalf("SetFocusedNode(#child) error = %v", err)
+	}
+	if err := store.SetInnerHTML(targetID, `<em id="next">updated</em>`); err != nil {
+		t.Fatalf("SetInnerHTML(#target) error = %v", err)
+	}
+	if got := store.FocusedNodeID(); got != 0 {
+		t.Fatalf("FocusedNodeID() after removing focused descendant = %d, want 0", got)
+	}
+
+	if err := store.SetFocusedNode(targetID); err != nil {
+		t.Fatalf("SetFocusedNode(#target) error = %v", err)
+	}
+	if err := store.SetInnerHTML(targetID, `<em id="next">updated</em>`); err != nil {
+		t.Fatalf("SetInnerHTML(#target) preserve focus error = %v", err)
+	}
+	if got := store.FocusedNodeID(); got != targetID {
+		t.Fatalf("FocusedNodeID() after SetInnerHTML on focused node = %d, want %d", got, targetID)
+	}
+
+	if err := store.SetFocusedNode(targetID); err != nil {
+		t.Fatalf("SetFocusedNode(#target) before SetOuterHTML error = %v", err)
+	}
+	if err := store.SetOuterHTML(targetID, `<article id="next">n</article>`); err != nil {
+		t.Fatalf("SetOuterHTML(#target) error = %v", err)
+	}
+	if got := store.FocusedNodeID(); got != 0 {
+		t.Fatalf("FocusedNodeID() after SetOuterHTML = %d, want 0", got)
+	}
+
+	if err := store.SetFocusedNode(keepID); err != nil {
+		t.Fatalf("SetFocusedNode(#keep) error = %v", err)
+	}
+	if err := store.RemoveNode(keepID); err != nil {
+		t.Fatalf("RemoveNode(#keep) error = %v", err)
+	}
+	if got := store.FocusedNodeID(); got != 0 {
+		t.Fatalf("FocusedNodeID() after RemoveNode = %d, want 0", got)
+	}
+}
+
+func TestMutationHelpersUpdateTargetNodeState(t *testing.T) {
+	store := NewStore()
+	if err := store.BootstrapHTML(`<section id="wrap"><div id="target"><span id="child">x</span></div><p id="keep">k</p></section>`); err != nil {
+		t.Fatalf("BootstrapHTML() error = %v", err)
+	}
+
+	targetID := mustSelectSingle(t, store, "#target")
+	childID := mustSelectSingle(t, store, "#child")
+	keepID := mustSelectSingle(t, store, "#keep")
+
+	store.SyncTargetFromURL("https://example.test/page#child")
+	if got := store.TargetNodeID(); got != childID {
+		t.Fatalf("TargetNodeID() after #child = %d, want %d", got, childID)
+	}
+	if err := store.SetInnerHTML(targetID, `<em id="next">updated</em>`); err != nil {
+		t.Fatalf("SetInnerHTML(#target) error = %v", err)
+	}
+	if got := store.TargetNodeID(); got != 0 {
+		t.Fatalf("TargetNodeID() after removing targeted descendant = %d, want 0", got)
+	}
+
+	store.SyncTargetFromURL("https://example.test/page#target")
+	if got := store.TargetNodeID(); got != targetID {
+		t.Fatalf("TargetNodeID() after #target = %d, want %d", got, targetID)
+	}
+	if err := store.SetOuterHTML(targetID, `<article id="next">n</article>`); err != nil {
+		t.Fatalf("SetOuterHTML(#target) error = %v", err)
+	}
+	if got := store.TargetNodeID(); got != 0 {
+		t.Fatalf("TargetNodeID() after SetOuterHTML = %d, want 0", got)
+	}
+
+	store.SyncTargetFromURL("https://example.test/page#keep")
+	if got := store.TargetNodeID(); got != keepID {
+		t.Fatalf("TargetNodeID() after #keep = %d, want %d", got, keepID)
+	}
+	if err := store.RemoveNode(keepID); err != nil {
+		t.Fatalf("RemoveNode(#keep) error = %v", err)
+	}
+	if got := store.TargetNodeID(); got != 0 {
+		t.Fatalf("TargetNodeID() after RemoveNode = %d, want 0", got)
+	}
+}
+
 func TestCloneNodeDeepAndShallow(t *testing.T) {
 	store := NewStore()
 	if err := store.BootstrapHTML(`<div id="root"><p id="p" class="copy"><span>text</span></p></div>`); err != nil {
@@ -162,6 +257,34 @@ func TestCloneNodeDeepAndShallow(t *testing.T) {
 	}
 	if got, want := shallowOuter, `<p id="p" class="copy"></p>`; got != want {
 		t.Fatalf("OuterHTMLForNode(shallowCloneID) = %q, want %q", got, want)
+	}
+}
+
+func TestCloneNodePreservesUserValidity(t *testing.T) {
+	store := NewStore()
+	if err := store.BootstrapHTML(`<form id="profile"><input id="name" type="text" required value="Ada"></form>`); err != nil {
+		t.Fatalf("BootstrapHTML() error = %v", err)
+	}
+
+	nameID := mustSelectSingle(t, store, "#name")
+	if err := store.SetUserValidity(nameID, true); err != nil {
+		t.Fatalf("SetUserValidity(#name) error = %v", err)
+	}
+
+	deepCloneID, err := store.CloneNode(nameID, true)
+	if err != nil {
+		t.Fatalf("CloneNode(deep) error = %v", err)
+	}
+	if node := store.Node(deepCloneID); node == nil || !node.UserValidity {
+		t.Fatalf("CloneNode(deep) UserValidity = %v, want true", node)
+	}
+
+	shallowCloneID, err := store.CloneNode(nameID, false)
+	if err != nil {
+		t.Fatalf("CloneNode(shallow) error = %v", err)
+	}
+	if node := store.Node(shallowCloneID); node == nil || !node.UserValidity {
+		t.Fatalf("CloneNode(shallow) UserValidity = %v, want true", node)
 	}
 }
 

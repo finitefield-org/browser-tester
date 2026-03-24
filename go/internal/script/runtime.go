@@ -97,7 +97,11 @@ func (r *Runtime) dispatchStatement(source string) (DispatchResult, error) {
 		if r.host == nil {
 			return DispatchResult{}, NewError(ErrorKindHost, "host bindings are unavailable")
 		}
-		value, err := r.host.Call(method, args)
+		resolvedArgs, err := r.resolveArgs(args)
+		if err != nil {
+			return DispatchResult{}, err
+		}
+		value, err := r.host.Call(method, resolvedArgs)
 		if err != nil {
 			return DispatchResult{}, NewError(ErrorKindHost, err.Error())
 		}
@@ -108,6 +112,25 @@ func (r *Runtime) dispatchStatement(source string) (DispatchResult, error) {
 		ErrorKindUnsupported,
 		"unsupported script source; this scaffold supports only `noop`, `host:<method>`, and `;`-separated host statements",
 	)
+}
+
+func (r *Runtime) resolveArgs(args []Value) ([]Value, error) {
+	if len(args) == 0 {
+		return nil, nil
+	}
+	resolved := make([]Value, len(args))
+	for i, arg := range args {
+		if arg.Kind != ValueKindInvocation {
+			resolved[i] = arg
+			continue
+		}
+		result, err := r.Dispatch(DispatchRequest{Source: arg.Invocation})
+		if err != nil {
+			return nil, err
+		}
+		resolved[i] = result.Value
+	}
+	return resolved, nil
 }
 
 func splitScriptStatements(source string) ([]string, error) {

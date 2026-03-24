@@ -127,8 +127,8 @@ func TestSessionMutationHelpersRejectInvalidInputs(t *testing.T) {
 		t.Fatalf("RemoveNode(#missing) error = nil, want missing target error")
 	}
 
-	if _, err := s.InnerHTML("div + p"); err == nil {
-		t.Fatalf("InnerHTML(div + p) error = nil, want selector syntax error")
+	if _, err := s.InnerHTML("div[item="); err == nil {
+		t.Fatalf("InnerHTML(div[item=) error = nil, want selector syntax error")
 	}
 	if err := s.InsertAdjacentHTML("#inner", "sideways", "<p>x</p>"); err == nil {
 		t.Fatalf("InsertAdjacentHTML(invalid position) error = nil, want invalid position error")
@@ -142,5 +142,59 @@ func TestSessionMutationHelpersRejectInvalidInputs(t *testing.T) {
 	}
 	if err := s.InsertAdjacentHTML("#top", "afterend", `<a id="ae"></a>`); err == nil {
 		t.Fatalf("InsertAdjacentHTML(#top,afterend) error = nil, want document-parent restriction")
+	}
+}
+
+func TestSessionWriteHTMLReplacesDocumentAndResetsTransientState(t *testing.T) {
+	s := NewSession(SessionConfig{
+		HTML: `<main><button id="btn">old</button><div id="out">before</div><script>host:addEventListener("#btn", "click", 'host:setInnerHTML("#out", "old-listener")')</script></main>`,
+	})
+
+	if err := s.Focus("#btn"); err != nil {
+		t.Fatalf("Focus(#btn) error = %v", err)
+	}
+	if err := s.ScrollTo(4, 5); err != nil {
+		t.Fatalf("ScrollTo(4, 5) error = %v", err)
+	}
+
+	markup := `<main><button id="btn">new</button><div id="out">fresh</div><script>host:setInnerHTML("#out", "written")</script></main>`
+	if err := s.WriteHTML(markup); err != nil {
+		t.Fatalf("WriteHTML() error = %v", err)
+	}
+
+	if got, want := s.DumpDOM(), `<main><button id="btn">new</button><div id="out">written</div><script>host:setInnerHTML("#out", "written")</script></main>`; got != want {
+		t.Fatalf("DumpDOM() after WriteHTML = %q, want %q", got, want)
+	}
+	if got, want := s.HTML(), markup; got != want {
+		t.Fatalf("HTML() after WriteHTML = %q, want %q", got, want)
+	}
+	if got := s.FocusedSelector(); got != "" {
+		t.Fatalf("FocusedSelector() after WriteHTML = %q, want empty", got)
+	}
+	if gotX, gotY := s.ScrollPosition(); gotX != 0 || gotY != 0 {
+		t.Fatalf("ScrollPosition() after WriteHTML = (%d, %d), want (0, 0)", gotX, gotY)
+	}
+
+	if err := s.Click("#btn"); err != nil {
+		t.Fatalf("Click(#btn) after WriteHTML error = %v", err)
+	}
+	if got, want := s.DumpDOM(), `<main><button id="btn">new</button><div id="out">written</div><script>host:setInnerHTML("#out", "written")</script></main>`; got != want {
+		t.Fatalf("DumpDOM() after Click on rewritten document = %q, want %q", got, want)
+	}
+}
+
+func TestSessionWriteHTMLRejectsInvalidMarkupWithoutMutatingDocument(t *testing.T) {
+	s := NewSession(SessionConfig{
+		HTML: `<main><div id="out">old</div></main>`,
+	})
+
+	if err := s.WriteHTML(`<main><div id="broken"></main>`); err == nil {
+		t.Fatalf("WriteHTML(invalid) error = nil, want parse error")
+	}
+	if got, want := s.DumpDOM(), `<main><div id="out">old</div></main>`; got != want {
+		t.Fatalf("DumpDOM() after failed WriteHTML = %q, want %q", got, want)
+	}
+	if got, want := s.HTML(), `<main><div id="out">old</div></main>`; got != want {
+		t.Fatalf("HTML() after failed WriteHTML = %q, want %q", got, want)
 	}
 }

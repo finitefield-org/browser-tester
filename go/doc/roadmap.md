@@ -30,7 +30,7 @@ Exit criteria:
 ## Phase 2: Script Core
 
 - Implement the minimum script parser/evaluator slice.
-- Add host bindings needed for inline bootstrap.
+- Add host bindings needed for inline bootstrap, including a bounded `documentCurrentScript` helper for classic inline scripts and an explicit `expr(...)` wrapper for nested host expressions.
 - Keep unsupported syntax explicit.
 
 Exit criteria:
@@ -40,9 +40,9 @@ Exit criteria:
 
 ## Phase 3: Events and Form Controls
 
-- Add target-phase event dispatch, default actions, and user-like actions.
+- Add bounded capture/target/bubble event dispatch for click/input/change/submit, target-only focus/blur/reset behavior, `preventDefault`/`stopPropagation`-style event control, bounded listener removal, bounded `once` listeners, default actions, and user-like actions.
 - Add input, checkbox, select, focus, blur, and submit behavior.
-- Keep bubbling/capture out of scope until a bounded need appears.
+- Keep broader event semantics out of scope until a bounded need appears.
 
 Exit criteria:
 
@@ -51,7 +51,7 @@ Exit criteria:
 
 ## Phase 4: Deterministic Runtime and Mocks
 
-- Add fake clock, scheduler, timers, and microtasks.
+- Add fake clock, scheduler, bounded timers, bounded animation-frame callbacks, a bounded microtask queue, bounded history entries/state/scroll restoration, a bounded cookie jar, and bounded `window.name` state. The current workspace already has `host:queueMicrotask()` draining at script/action boundaries.
 - Add typed mock families and thin `Harness` actions.
 - Keep capture and failure injection explicit.
 
@@ -59,6 +59,10 @@ Exit criteria:
 
 - mock families are inspectable
 - time-based behavior is deterministic
+- timer-driven behavior is driven through `AdvanceTime()` and stays bounded
+- history-driven behavior is deterministic and bounded
+- cookie-state behavior is deterministic and bounded
+- window-name behavior is deterministic and bounded
 
 ## Phase 5: Hardening
 
@@ -71,7 +75,7 @@ Exit criteria:
 
 ## Phase 6: Selector and Query Expansion
 
-- Expand selector support in bounded slices.
+- Expand selector support in bounded slices, including descendant, child, sibling combinators, and a bounded pseudo-class slice for `:root`, `:scope`, `:defined`, `:state(identifier)`, `:active`, `:hover`, `:empty`, `:checked`, `:indeterminate`, `:autofill`, `:-webkit-autofill`, `:default`, `:enabled`, `:disabled`, `:required`, `:optional`, `:read-only`, `:read-write`, `:valid`, `:invalid`, `:user-valid`, `:user-invalid`, `:in-range`, `:out-of-range`, `:first-child`, `:last-child`, `:first-of-type`, `:last-of-type`, `:only-child`, `:only-of-type`, `:nth-child()`, `:nth-of-type()`, `:nth-last-child()`, `:nth-last-of-type()`, `:link`, `:any-link`, `:visited`, `:local-link`, `:lang()`, `:dir()`, `:placeholder-shown`, `:blank`, `:heading`, `:heading(integer#)`, `:playing`, `:paused`, `:seeking`, `:buffering`, `:stalled`, `:muted`, `:volume-locked`, `:modal`, `:popover-open`, `:open`, `:focus`, `:focus-visible`, `:focus-within`, `:target`, `:target-within`, `:is()`, `:where()`, `:not()`, and `:has()` first.
 - Add script-side query APIs that reuse the same selector engine, plus a minimal snapshot `NodeList` and bounded live `HTMLCollection` slices for `children`.
 - Expand live collections only as needed by user-visible gaps.
 
@@ -82,7 +86,7 @@ Exit criteria:
 ## Phase 7: Reflection, Mutation, Serialization
 
 - Add bounded attribute reflection helpers, then bounded `classList` / `dataset` views, tree mutation primitives, and HTML serialization/insertion surfaces.
-- The current workspace already has public selector-based tree-mutation wrappers plus the bounded `internal/dom` helpers; keep expanding only the slices that are still missing.
+- The current workspace already has public `classList` / `dataset` views plus the public selector-based tree-mutation wrappers, including `WriteHTML()` for bounded document-write-style replay; keep expanding only the slices that are still missing.
 - Keep each slice bounded and documented.
 
 Exit criteria:

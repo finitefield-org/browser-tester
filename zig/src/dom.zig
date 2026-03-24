@@ -58,6 +58,24 @@ pub const PopoverState = enum {
     manual,
 };
 
+pub const MediaPlaybackState = struct {
+    volume: f64 = 1.0,
+    default_playback_rate: f64 = 1.0,
+    playback_rate: f64 = 1.0,
+    preserves_pitch: bool = true,
+};
+
+pub const TextTrackMode = enum {
+    disabled,
+    hidden,
+    showing,
+};
+
+pub const TextTrackState = struct {
+    element: NodeId,
+    mode: TextTrackMode = .disabled,
+};
+
 const SerializationNamespace = enum {
     html,
     svg,
@@ -262,6 +280,9 @@ pub const DomStore = struct {
     target_fragment: ?[]const u8 = null,
     selection: std.AutoHashMapUnmanaged(NodeId, SelectionState) = .{},
     document_selection_cleared: bool = false,
+    media_muted: std.AutoHashMapUnmanaged(NodeId, bool) = .{},
+    media_playback: std.AutoHashMapUnmanaged(NodeId, MediaPlaybackState) = .{},
+    text_track: std.AutoHashMapUnmanaged(NodeId, TextTrackState) = .{},
     indeterminate: std.AutoHashMapUnmanaged(NodeId, void) = .{},
     custom_validity: std.AutoHashMapUnmanaged(NodeId, []const u8) = .{},
 
@@ -279,6 +300,9 @@ pub const DomStore = struct {
             .target_fragment = null,
             .selection = .{},
             .document_selection_cleared = false,
+            .media_muted = .{},
+            .media_playback = .{},
+            .text_track = .{},
             .indeterminate = .{},
             .custom_validity = .{},
         };
@@ -297,6 +321,9 @@ pub const DomStore = struct {
         while (custom_values.next()) |message| {
             self.allocator.free(message.*);
         }
+        self.media_playback.deinit(self.allocator);
+        self.media_muted.deinit(self.allocator);
+        self.text_track.deinit(self.allocator);
         self.indeterminate.deinit(self.allocator);
         self.custom_validity.deinit(self.allocator);
         self.selection.deinit(self.allocator);
@@ -370,7 +397,8 @@ pub const DomStore = struct {
         if (!std.mem.eql(u8, element.tag_name, "input") and
             !std.mem.eql(u8, element.tag_name, "select") and
             !std.mem.eql(u8, element.tag_name, "textarea") and
-            !std.mem.eql(u8, element.tag_name, "output"))
+            !std.mem.eql(u8, element.tag_name, "output") and
+            !std.mem.eql(u8, element.tag_name, "object"))
         {
             return error.DomError;
         }
@@ -393,6 +421,67 @@ pub const DomStore = struct {
         }
 
         try self.custom_validity.put(self.allocator, node_id, message_copy);
+    }
+
+    pub fn mediaVolumeForNode(self: *const DomStore, node_id: NodeId) errors.Result(f64) {
+        const state = try self.mediaPlaybackStateForNode(node_id);
+        return state.volume;
+    }
+
+    pub fn setMediaVolume(self: *DomStore, node_id: NodeId, volume: f64) errors.Result(void) {
+        if (!std.math.isFinite(volume)) return error.DomError;
+        if (volume < 0.0 or volume > 1.0) return error.DomError;
+        const state = try self.ensureMediaPlaybackState(node_id);
+        state.volume = volume;
+    }
+
+    pub fn mediaMutedForNode(self: *const DomStore, node_id: NodeId) errors.Result(bool) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return error.DomError,
+        };
+        if (!self.isMediaElementNode(element.tag_name)) return error.DomError;
+        if (self.media_muted.get(node_id)) |muted| return muted;
+        return self.hasAttribute(node_id, "muted");
+    }
+
+    pub fn setMediaMuted(self: *DomStore, node_id: NodeId, muted: bool) errors.Result(void) {
+        const state = try self.ensureMediaPlaybackState(node_id);
+        _ = state;
+        try self.media_muted.put(self.allocator, node_id, muted);
+    }
+
+    pub fn mediaDefaultPlaybackRateForNode(self: *const DomStore, node_id: NodeId) errors.Result(f64) {
+        const state = try self.mediaPlaybackStateForNode(node_id);
+        return state.default_playback_rate;
+    }
+
+    pub fn setMediaDefaultPlaybackRate(self: *DomStore, node_id: NodeId, playback_rate: f64) errors.Result(void) {
+        if (!std.math.isFinite(playback_rate)) return error.DomError;
+        const state = try self.ensureMediaPlaybackState(node_id);
+        state.default_playback_rate = playback_rate;
+    }
+
+    pub fn mediaPlaybackRateForNode(self: *const DomStore, node_id: NodeId) errors.Result(f64) {
+        const state = try self.mediaPlaybackStateForNode(node_id);
+        return state.playback_rate;
+    }
+
+    pub fn setMediaPlaybackRate(self: *DomStore, node_id: NodeId, playback_rate: f64) errors.Result(void) {
+        if (!std.math.isFinite(playback_rate)) return error.DomError;
+        const state = try self.ensureMediaPlaybackState(node_id);
+        state.playback_rate = playback_rate;
+    }
+
+    pub fn mediaPreservesPitchForNode(self: *const DomStore, node_id: NodeId) errors.Result(bool) {
+        const state = try self.mediaPlaybackStateForNode(node_id);
+        return state.preserves_pitch;
+    }
+
+    pub fn setMediaPreservesPitch(self: *DomStore, node_id: NodeId, preserves_pitch: bool) errors.Result(void) {
+        const state = try self.ensureMediaPlaybackState(node_id);
+        state.preserves_pitch = preserves_pitch;
     }
 
     pub fn dialogReturnValue(self: *const DomStore, node_id: NodeId) errors.Result([]const u8) {
@@ -464,7 +553,8 @@ pub const DomStore = struct {
         if (!std.mem.eql(u8, element.tag_name, "input") and
             !std.mem.eql(u8, element.tag_name, "select") and
             !std.mem.eql(u8, element.tag_name, "textarea") and
-            !std.mem.eql(u8, element.tag_name, "output"))
+            !std.mem.eql(u8, element.tag_name, "output") and
+            !std.mem.eql(u8, element.tag_name, "object"))
         {
             return error.DomError;
         }
@@ -1980,6 +2070,7 @@ pub const DomStore = struct {
         self.clearSelectionStateForSubtree(node_id);
         self.clearIndeterminateStateForSubtree(node_id);
         self.clearCustomValidityStateForSubtree(node_id);
+        self.clearTextTrackStateForSubtree(node_id);
 
         const record = self.nodeAtMut(node_id) orelse return error.DomError;
         record.parent = null;
@@ -2679,6 +2770,60 @@ pub const DomStore = struct {
         }
     }
 
+    fn clearTextTrackStateForSubtree(self: *DomStore, node_id: NodeId) void {
+        _ = self.text_track.remove(node_id);
+        const node = self.nodeAt(node_id) orelse return;
+        for (node.children.items) |child_id| {
+            self.clearTextTrackStateForSubtree(child_id);
+        }
+    }
+
+    fn mediaPlaybackStateForNode(self: *const DomStore, node_id: NodeId) errors.Result(MediaPlaybackState) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return error.DomError,
+        };
+        if (!self.isMediaElementNode(element.tag_name)) return error.DomError;
+        return self.media_playback.get(node_id) orelse MediaPlaybackState{};
+    }
+
+    fn ensureMediaPlaybackState(self: *DomStore, node_id: NodeId) errors.Result(*MediaPlaybackState) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return error.DomError,
+        };
+        if (!self.isMediaElementNode(element.tag_name)) return error.DomError;
+
+        if (self.media_playback.getPtr(node_id)) |state| return state;
+        try self.media_playback.put(self.allocator, node_id, .{});
+        return self.media_playback.getPtr(node_id).?;
+    }
+
+    pub fn textTrackStateForNode(self: *const DomStore, node_id: NodeId) errors.Result(TextTrackState) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return error.DomError,
+        };
+        if (!std.mem.eql(u8, element.tag_name, "track")) return error.DomError;
+        return self.text_track.get(node_id) orelse TextTrackState{ .element = node_id };
+    }
+
+    pub fn ensureTextTrackState(self: *DomStore, node_id: NodeId) errors.Result(*TextTrackState) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return error.DomError,
+        };
+        if (!std.mem.eql(u8, element.tag_name, "track")) return error.DomError;
+
+        if (self.text_track.getPtr(node_id)) |state| return state;
+        try self.text_track.put(self.allocator, node_id, .{ .element = node_id });
+        return self.text_track.getPtr(node_id).?;
+    }
+
     fn isTextareaNode(self: *const DomStore, node_id: NodeId) bool {
         const node = self.nodeAt(node_id) orelse return false;
         const element = switch (node.kind) {
@@ -2686,6 +2831,11 @@ pub const DomStore = struct {
             else => return false,
         };
         return std.mem.eql(u8, element.tag_name, "textarea");
+    }
+
+    fn isMediaElementNode(self: *const DomStore, tag_name: []const u8) bool {
+        _ = self;
+        return std.ascii.eqlIgnoreCase(tag_name, "audio") or std.ascii.eqlIgnoreCase(tag_name, "video");
     }
 
     fn resetSelectionToEnd(self: *DomStore, node_id: NodeId) errors.Result(void) {
@@ -5151,6 +5301,11 @@ pub fn validityStateForNode(self: *const DomStore, allocator: std.mem.Allocator,
         return state;
     }
 
+    if (std.mem.eql(u8, element.tag_name, "object")) {
+        state.valid = !state.custom_error;
+        return state;
+    }
+
     if (!std.mem.eql(u8, element.tag_name, "input")) {
         return default_state;
     }
@@ -5401,7 +5556,11 @@ fn isValidityFormControlCandidate(self: *const DomStore, node_id: NodeId) bool {
         else => return false,
     };
 
-    if (std.mem.eql(u8, element.tag_name, "textarea") or std.mem.eql(u8, element.tag_name, "select") or std.mem.eql(u8, element.tag_name, "output")) {
+    if (std.mem.eql(u8, element.tag_name, "textarea") or
+        std.mem.eql(u8, element.tag_name, "select") or
+        std.mem.eql(u8, element.tag_name, "output") or
+        std.mem.eql(u8, element.tag_name, "object"))
+    {
         return true;
     }
 

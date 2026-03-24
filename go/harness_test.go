@@ -13,6 +13,9 @@ func TestHarnessBuilderBuildsWithDefaults(t *testing.T) {
 	if got, want := harness.NowMs(), int64(0); got != want {
 		t.Fatalf("NowMs() = %d, want %d", got, want)
 	}
+	if got := harness.Debug().WindowName(); got != "" {
+		t.Fatalf("Debug().WindowName() = %q, want empty", got)
+	}
 	if harness.Mocks().Fetch() == nil {
 		t.Fatalf("Mocks().Fetch() = nil")
 	}
@@ -102,6 +105,7 @@ func TestHarnessActionsRouteThroughMockFamilies(t *testing.T) {
 	harness.Mocks().Dialogs().QueueConfirm(true)
 	harness.Mocks().Dialogs().QueuePromptText("typed answer")
 	harness.Mocks().Clipboard().SeedText("seeded text")
+	harness.Mocks().MatchMedia().RespondMatches("(prefers-reduced-motion: reduce)", true)
 
 	if err := harness.Alert("hello"); err != nil {
 		t.Fatalf("Alert() error = %v", err)
@@ -158,6 +162,18 @@ func TestHarnessActionsRouteThroughMockFamilies(t *testing.T) {
 	}
 	if got, want := harness.Debug().URL(), "https://example.test/next"; got != want {
 		t.Fatalf("Debug().URL() after Navigate() = %q, want %q", got, want)
+	}
+	if err := harness.Navigate("relative"); err != nil {
+		t.Fatalf("Navigate(relative) error = %v", err)
+	}
+	if got, want := harness.URL(), "https://example.test/relative"; got != want {
+		t.Fatalf("URL() after relative Navigate() = %q, want %q", got, want)
+	}
+	if got, want := harness.Debug().URL(), "https://example.test/relative"; got != want {
+		t.Fatalf("Debug().URL() after relative Navigate() = %q, want %q", got, want)
+	}
+	if matches, err := harness.MatchMedia("(prefers-reduced-motion: reduce)"); err != nil || !matches {
+		t.Fatalf("MatchMedia() = (%v, %v), want (true, nil)", matches, err)
 	}
 	if err := harness.CaptureDownload("report.csv", []byte("downloaded bytes")); err != nil {
 		t.Fatalf("CaptureDownload() error = %v", err)
@@ -221,8 +237,11 @@ func TestHarnessActionsRouteThroughMockFamilies(t *testing.T) {
 	if got := harness.Mocks().Scroll().Calls(); len(got) != 2 || got[0].Method != ScrollMethodTo || got[1].Method != ScrollMethodBy {
 		t.Fatalf("Scroll().Calls() = %#v, want to/by calls", got)
 	}
-	if got := harness.Mocks().Location().Navigations(); len(got) != 1 || got[0] != "https://example.test/next" {
-		t.Fatalf("Location().Navigations() = %#v, want one navigation", got)
+	if got := harness.Mocks().MatchMedia().Calls(); len(got) != 1 || got[0].Query != "(prefers-reduced-motion: reduce)" {
+		t.Fatalf("MatchMedia().Calls() = %#v, want one query call", got)
+	}
+	if got := harness.Mocks().Location().Navigations(); len(got) != 2 || got[0] != "https://example.test/next" || got[1] != "https://example.test/relative" {
+		t.Fatalf("Location().Navigations() = %#v, want [https://example.test/next https://example.test/relative]", got)
 	}
 	if got := harness.Mocks().Downloads().Artifacts(); len(got) != 1 || got[0].FileName != "report.csv" {
 		t.Fatalf("Downloads().Artifacts() = %#v, want one artifact", got)
@@ -279,5 +298,23 @@ func TestHarnessFailurePathsAreReported(t *testing.T) {
 	}
 	if _, err := unseededHarness.ReadClipboard(); err == nil {
 		t.Fatalf("ReadClipboard() error = nil, want unseeded clipboard error")
+	}
+}
+
+func TestHarnessWriteHTMLRoutesThroughRuntime(t *testing.T) {
+	harness, err := FromHTML(`<main><div id="out">old</div></main>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if err := harness.WriteHTML(`<main><div id="out">new</div></main>`); err != nil {
+		t.Fatalf("WriteHTML() error = %v", err)
+	}
+
+	if got, want := harness.Debug().DumpDOM(), `<main><div id="out">new</div></main>`; got != want {
+		t.Fatalf("Debug().DumpDOM() after WriteHTML = %q, want %q", got, want)
+	}
+	if got, want := harness.HTML(), `<main><div id="out">new</div></main>`; got != want {
+		t.Fatalf("HTML() after WriteHTML = %q, want %q", got, want)
 	}
 }

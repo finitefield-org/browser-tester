@@ -35,6 +35,8 @@ func (s *Store) SetInnerHTML(nodeID NodeID, markup string) error {
 		return err
 	}
 
+	s.clearFocusedNodeIfSubtreeContains(nodeID, false)
+	s.clearTargetNodeIfSubtreeContains(nodeID, false)
 	oldChildren := append([]NodeID(nil), node.Children...)
 	node.Children = node.Children[:0]
 	for _, childID := range oldChildren {
@@ -72,6 +74,8 @@ func (s *Store) SetOuterHTML(nodeID NodeID, markup string) error {
 		return err
 	}
 
+	s.clearFocusedNodeIfSubtreeContains(nodeID, true)
+	s.clearTargetNodeIfSubtreeContains(nodeID, true)
 	index := indexOfNodeID(parent.Children, nodeID)
 	if index < 0 {
 		return fmt.Errorf("node %d is not attached to its parent", nodeID)
@@ -196,6 +200,8 @@ func (s *Store) RemoveNode(nodeID NodeID) error {
 		return nil
 	}
 
+	s.clearFocusedNodeIfSubtreeContains(nodeID, true)
+	s.clearTargetNodeIfSubtreeContains(nodeID, true)
 	parent := s.Node(node.Parent)
 	if parent != nil {
 		parent.Children = removeNodeID(parent.Children, nodeID)
@@ -248,6 +254,7 @@ func (s *Store) cloneNodeRecursive(nodeID NodeID, deep bool) NodeID {
 		Text:         node.Text,
 		DefaultAttrs: cloneAttributes(node.DefaultAttrs),
 		DefaultText:  node.DefaultText,
+		UserValidity: node.UserValidity,
 	})
 	if !deep {
 		return clonedID
@@ -278,6 +285,7 @@ func (s *Store) cloneNodeFrom(src *Store, nodeID NodeID, deep bool) NodeID {
 		Text:         node.Text,
 		DefaultAttrs: cloneAttributes(node.DefaultAttrs),
 		DefaultText:  node.DefaultText,
+		UserValidity: node.UserValidity,
 	})
 	if !deep {
 		return clonedID

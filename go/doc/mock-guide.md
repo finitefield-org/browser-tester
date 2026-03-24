@@ -56,7 +56,7 @@ Examples:
 - `Fetch`: response rules, error rules, request call capture
 - `Dialogs`: queued confirm/prompt answers, alert capture, and message capture
 - `Clipboard`: seeded read state and write capture
-- `Location`: current URL seed and navigation capture, including `window.location.assign()`, `window.location.replace()`, `window.location.reload()`, and URL-property assignments
+- `Location`: current URL seed and navigation capture, including `window.location.assign()`, `window.location.replace()`, `window.location.reload()`, and URL-property assignments; inline scripts drive the same family through `host:locationAssign(...)`, `host:locationReplace(...)`, `host:locationReload()`, and `host:locationSet(property, value)`, and navigation URLs are resolved against the current URL
 - `Downloads`: artifact capture through the registry and `Harness.CaptureDownload(...)`, plus hyperlink clicks on `a` / `area` elements with `download` attributes
 - `FileInput`: file selection capture and the `input.files` snapshot
 - `Open`: call capture and optional bootstrap failure

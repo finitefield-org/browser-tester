@@ -28,13 +28,18 @@ type Node struct {
 
 	DefaultAttrs []Attribute
 	DefaultText  string
+	UserValidity bool
 }
 
 type Store struct {
-	nodes      map[NodeID]*Node
-	documentID NodeID
-	nextNodeID NodeID
-	sourceHTML string
+	nodes         map[NodeID]*Node
+	documentID    NodeID
+	focusedNodeID NodeID
+	targetNodeID  NodeID
+	currentURL    string
+	visitedURLs   map[string]struct{}
+	nextNodeID    NodeID
+	sourceHTML    string
 }
 
 func NewStore() *Store {
@@ -50,10 +55,21 @@ func NewEmpty() *Store {
 func (s *Store) Reset() {
 	s.nodes = map[NodeID]*Node{}
 	s.sourceHTML = ""
+	s.focusedNodeID = 0
+	s.targetNodeID = 0
+	s.currentURL = ""
+	s.visitedURLs = map[string]struct{}{}
 	s.nextNodeID = 1
 	s.documentID = s.newNode(Node{
 		Kind: NodeKindDocument,
 	})
+}
+
+func (s *Store) CurrentURL() string {
+	if s == nil {
+		return ""
+	}
+	return s.currentURL
 }
 
 func (s *Store) DocumentID() NodeID {

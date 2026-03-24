@@ -36,6 +36,7 @@ internal/
     events.go
     history.go
     location.go
+    window_name.go
   script/
     runtime.go
     parser.go
@@ -84,7 +85,7 @@ Exit criteria:
 ### Phase 2: Script Runtime Minimum
 
 - Implement the lexer/parser/evaluator slice needed for inline bootstrap.
-- Add host bindings for the initial DOM and document/window accessors.
+- Add host bindings for the initial DOM and document/window accessors, including a bounded `documentCurrentScript` helper for classic inline script execution and the explicit `expr(...)` wrapper for nested host expressions.
 - Keep the runtime deterministic and explicit about unsupported syntax.
 
 Exit criteria:
@@ -94,18 +95,19 @@ Exit criteria:
 
 ### Phase 3: Events and User-Like Actions
 
-- Implement target-phase listener dispatch, default actions, and form-control state updates.
+- Implement bounded capture/target/bubble listener dispatch for click/input/change/submit, plus target-only focus/blur/reset behavior, `preventDefault`/`stopPropagation`-style event control, bounded listener removal, bounded `once` listeners, default actions, and form-control state updates.
 - Add `Click`, `TypeText`, `SetChecked`, `SetSelectValue`, `Focus`, `Blur`, `Dispatch`, `DispatchKeyboard`, and `Submit`.
 
 Exit criteria:
 
-- Target listeners and default actions are deterministic.
-- Bubbling/capture remain later unless explicitly added to the matrix.
+- Listener ordering and default actions are deterministic.
+- `preventDefault` only suppresses bounded default actions that exist in the current slice, `stopPropagation` only suppresses later propagation within the current slice, `removeEventListener` only unregisters exact listener registrations that were added in the same bounded slice, and `once` listeners remove themselves after a single invocation.
+- Later event semantics stay bounded unless explicitly added to the matrix.
 - Default actions and form updates are covered by tests.
 
 ### Phase 4: Runtime Services and Mock Registry
 
-- Implement the deterministic clock, timers, microtasks, and scheduler.
+- Implement the deterministic clock, a bounded microtask queue, bounded timers, bounded animation-frame callbacks, bounded history entries/state/scroll restoration, bounded cookie state, bounded `window.name` state, and scheduler.
 - Implement typed mock families for fetch, dialogs, clipboard, location, open, close, print, scroll, matchMedia, downloads, file input, and storage.
 - Add public mock actions on `Harness` as thin wrappers.
 
@@ -113,6 +115,7 @@ Exit criteria:
 
 - Every family supports seed state, capture, and reset.
 - Public actions remain thin and do not duplicate registry logic.
+- Time control remains deterministic through `Harness.AdvanceTime()` and the bounded time/history/cookie queues.
 
 ### Phase 5: Hardening
 
@@ -127,7 +130,7 @@ Exit criteria:
 
 ### Phase 6: Selector and Query Expansion
 
-- Expand selectors in bounded slices.
+- Expand selectors in bounded slices, starting with bounded descendant, child, sibling combinators, and a bounded pseudo-class slice for `:root`, `:scope`, `:defined`, `:state(identifier)`, `:active`, `:hover`, `:empty`, `:checked`, `:indeterminate`, `:autofill`, `:-webkit-autofill`, `:default`, `:enabled`, `:disabled`, `:required`, `:optional`, `:read-only`, `:read-write`, `:valid`, `:invalid`, `:user-valid`, `:user-invalid`, `:in-range`, `:out-of-range`, `:first-child`, `:last-child`, `:first-of-type`, `:last-of-type`, `:only-child`, `:only-of-type`, `:nth-child()`, `:nth-of-type()`, `:nth-last-child()`, `:nth-last-of-type()`, `:link`, `:any-link`, `:visited`, `:local-link`, `:lang()`, `:dir()`, `:placeholder-shown`, `:blank`, `:heading`, `:heading(integer#)`, `:playing`, `:paused`, `:seeking`, `:buffering`, `:stalled`, `:muted`, `:volume-locked`, `:modal`, `:popover-open`, `:open`, `:focus`, `:focus-visible`, `:focus-within`, `:target`, `:target-within`, `:is()`, `:where()`, `:not()`, and `:has()`.
 - Add script-side `querySelector`, `querySelectorAll`, `matches`, and `closest`.
 - Add live collection slices only when a user-visible gap demands them.
 
@@ -138,6 +141,7 @@ Exit criteria:
 ### Phase 7: Reflection, Mutation, and Serialization
 
 - Add attribute reflection, class/dataset views, selector-based tree mutation helpers, and HTML serialization/insertion helpers.
+- The current workspace already has public `ClassList` / `Dataset` views on top of the internal helpers, plus public tree-mutation wrappers including `WriteHTML()` for bounded document-write-style replay; later work should keep the slice bounded rather than widening the facade.
 - Keep the supported slice bounded and documented.
 
 Exit criteria:

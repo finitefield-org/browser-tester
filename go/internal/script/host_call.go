@@ -94,6 +94,13 @@ func parseHostArg(input string, start int) (Value, int, error) {
 		if raw == "" {
 			return Value{}, 0, fmt.Errorf("host dispatch argument is missing")
 		}
+		if strings.HasPrefix(raw, "expr(") && strings.HasSuffix(raw, ")") {
+			inner := strings.TrimSpace(raw[len("expr(") : len(raw)-1])
+			if inner == "" {
+				return Value{}, 0, fmt.Errorf("expression wrapper requires a non-empty source")
+			}
+			return InvocationValue(inner), i, nil
+		}
 		if strings.EqualFold(raw, "true") {
 			return BoolValue(true), i, nil
 		}
