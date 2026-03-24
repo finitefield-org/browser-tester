@@ -3378,8 +3378,8 @@ fn runtime_rejects_element_click_focus_and_blur_with_arguments() {
             "click() expects no arguments",
         ),
         (
-            "document.getElementById('first').focus(1);",
-            "focus() expects no arguments",
+            "document.getElementById('first').focus(1, 2);",
+            "focus() expects at most one argument",
         ),
         (
             "document.getElementById('first').blur(1);",

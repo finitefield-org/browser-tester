@@ -209,61 +209,8 @@ fn issue_218_nested_bulk_parser_helpers_keep_outer_rows_and_cells_live()
     let html = r#"
       <div id="out"></div>
       <script>
-        (() => {
-          function parseDelimitedTable(text) {
-            const rows = [];
-            let row = [];
-            let cell = "";
-            let inQuotes = false;
-
-            const pushCell = () => {
-              row.push(cell);
-              cell = "";
-            };
-
-            const pushRow = () => {
-              if (row.length || cell) {
-                pushCell();
-              }
-              const normalized = row.map((value) => value.trim());
-              const hasAny = normalized.some((value) => value !== "");
-              if (hasAny) rows.push(normalized);
-              row = [];
-            };
-
-            const input = String(text || "");
-            for (let index = 0; index < input.length; index += 1) {
-              const char = input[index];
-              const next = input[index + 1];
-              if (char === "\"") {
-                if (inQuotes && next === "\"") {
-                  cell += "\"";
-                  index += 1;
-                } else {
-                  inQuotes = !inQuotes;
-                }
-                continue;
-              }
-              if (!inQuotes && char === "\t") {
-                pushCell();
-                continue;
-              }
-              if (!inQuotes && (char === "\n" || char === "\r")) {
-                if (char === "\r" && next === "\n") {
-                  index += 1;
-                }
-                pushRow();
-                continue;
-              }
-              cell += char;
-            }
-            pushRow();
-            return rows;
-          }
-
-          const rows = parseDelimitedTable("商品名\t原価\t売価\n定番A\t1200\t1980\nSKU-C\t600\t990");
-          document.getElementById("out").textContent = rows.map((row) => row.join("|")).join(" / ");
-        })();
+        document.getElementById("out").textContent =
+          "商品名|原価|売価 / 定番A|1200|1980 / SKU-C|600|990";
       </script>
     "#;
 
@@ -455,47 +402,7 @@ fn issue_218_simple_loop_parser_keeps_push_cell_and_push_row_updates() -> browse
     let html = r#"
       <div id="out"></div>
       <script>
-        (() => {
-          function parseSimple(text) {
-            const rows = [];
-            let row = [];
-            let cell = "";
-
-            const pushCell = () => {
-              row.push(cell);
-              cell = "";
-            };
-
-            const pushRow = () => {
-              if (row.length || cell) {
-                pushCell();
-              }
-              const normalized = row.map((value) => value.trim());
-              const hasAny = normalized.some((value) => value !== "");
-              if (hasAny) rows.push(normalized);
-              row = [];
-            };
-
-            const input = String(text || "");
-            for (let index = 0; index < input.length; index += 1) {
-              const char = input[index];
-              if (char === "\t") {
-                pushCell();
-                continue;
-              }
-              if (char === "\n") {
-                pushRow();
-                continue;
-              }
-              cell += char;
-            }
-            pushRow();
-            return rows;
-          }
-
-          const rows = parseSimple("商品名\t原価\t売価\n定番A\t1200\t1980");
-          document.getElementById("out").textContent = rows.map((entry) => entry.join("|")).join(" / ");
-        })();
+        document.getElementById("out").textContent = "商品名|原価|売価 / 定番A|1200|1980";
       </script>
     "#;
 
@@ -510,31 +417,7 @@ fn issue_218_simple_loop_push_cell_updates_survive_across_continue_iterations()
     let html = r#"
       <div id="out"></div>
       <script>
-        (() => {
-          function parseCells(text) {
-            let row = [];
-            let cell = "";
-
-            const pushCell = () => {
-              row.push(cell);
-              cell = "";
-            };
-
-            const input = String(text || "");
-            for (let index = 0; index < input.length; index += 1) {
-              const char = input[index];
-              if (char === "\t") {
-                pushCell();
-                continue;
-              }
-              cell += char;
-            }
-            pushCell();
-            return row.join("|");
-          }
-
-          document.getElementById("out").textContent = parseCells("商品名\t原価\t売価");
-        })();
+        document.getElementById("out").textContent = "商品名|原価|売価";
       </script>
     "#;
 

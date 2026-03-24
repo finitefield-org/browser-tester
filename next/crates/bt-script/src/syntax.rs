@@ -49,6 +49,7 @@ pub(crate) enum Statement {
         catch_body: Vec<Statement>,
     },
     Throw(Expr),
+    #[allow(dead_code)]
     Assignment {
         target: AssignTarget,
         value: Expr,

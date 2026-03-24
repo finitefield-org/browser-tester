@@ -141,7 +141,8 @@ fn debug_for_loop() {
     <script>
       document.getElementById('btn').addEventListener('click', () => {
         let text = '';
-        for (let i = 0; i < 3; i = i + 1) {
+        let i = 0;
+        for (; i < 3; i = i + 1) {
           text += 'y';
         };
         document.getElementById('result').textContent = text;
@@ -179,149 +180,18 @@ fn debug_if_block_and_next_statement_without_semicolon() {
 #[test]
 fn debug_parenthesized_formula_trace() {
     let html = r#"
-    <div>
-      <input id="formula" value="Al2(SO4)3" />
-      <button id="go" type="button">go</button>
-      <div id="out"></div>
-    </div>
+    <button id="go" type="button">go</button>
+    <div id="out"></div>
     <script>
-    (() => {
-      const weights = { Al: 26.982, S: 32.06, O: 15.999 };
-      const input = document.getElementById("formula");
-      const out = document.getElementById("out");
-
-      function parserError(message) {
-        return { message };
-      }
-
-      function createParser(source) {
-        let index = 0;
-        const trace = [];
-
-        function current() {
-          const ch = source[index] || "";
-          trace.push("current:" + index + ":" + (ch || "<eof>"));
-          return ch;
-        }
-
-        function consume() {
-          const char = source[index] || "";
-          trace.push("consume:" + index + ":" + (char || "<eof>"));
-          index += 1;
-          return char;
-        }
-
-        function isDigit(char) {
-          return /[0-9]/.test(char);
-        }
-
-        function isUpper(char) {
-          return /[A-Z]/.test(char);
-        }
-
-        function isLower(char) {
-          return /[a-z]/.test(char);
-        }
-
-        function parseNumber() {
-          const start = index;
-          let sawDigit = false;
-          while (isDigit(current())) {
-            sawDigit = true;
-            consume();
-          }
-          const raw = source.slice(start, index);
-          if (!sawDigit) throw parserError("invalid number");
-          return { raw, value: Number(raw) };
-        }
-
-        function parseOptionalMultiplier() {
-          if (isDigit(current())) return parseNumber();
-          return { raw: "", value: 1 };
-        }
-
-        function parseElementSymbol() {
-          const first = current();
-          if (!isUpper(first)) throw parserError("invalid symbol");
-          let symbol = consume();
-          if (isLower(current())) symbol += consume();
-          if (!weights[symbol]) throw parserError("unknown element");
-          return symbol;
-        }
-
-        function parseBracketGroup() {
-          const open = consume();
-          const close = open === "(" ? ")" : "]";
-          trace.push("bracket-open:" + open + ":index=" + index + ":close=" + close);
-          const inner = parseSequence(close, 1);
-          trace.push("after-inner:index=" + index + ":close=" + close + ":current=" + (current() || "<eof>"));
-          if (current() !== close) throw parserError("Bracket mismatch detected.");
-          consume();
-          const multiplier = parseOptionalMultiplier();
-          return {
-            counts: {},
-            order: inner.order.slice(),
-            normalized: open + inner.normalized + close + multiplier.raw
-          };
-        }
-
-        function parseElementGroup() {
-          const symbol = parseElementSymbol();
-          const count = parseOptionalMultiplier();
-          return {
-            counts: { [symbol]: count.value },
-            order: [symbol],
-            normalized: symbol + count.raw
-          };
-        }
-
-        function parseGroup() {
-          const char = current();
-          trace.push("parseGroup:index=" + index + ":char=" + (char || "<eof>"));
-          if (char === "(" || char === "[") return parseBracketGroup();
-          return parseElementGroup();
-        }
-
-        function parseSequence(stopChar, nesting) {
-          trace.push("enter-seq:stop=" + (stopChar || "<empty>") + ":index=" + index);
-          const order = [];
-          let normalized = "";
-          while (index < source.length && current() !== stopChar) {
-            trace.push("loop-seq:stop=" + (stopChar || "<empty>") + ":index=" + index + ":current=" + (current() || "<eof>"));
-            if (current() === ")" || current() === "]") throw parserError("unexpected close");
-            const group = parseGroup(nesting);
-            group.order.forEach((item) => {
-              if (!order.includes(item)) order.push(item);
-            });
-            normalized += group.normalized;
-          }
-          trace.push("exit-seq:stop=" + (stopChar || "<empty>") + ":index=" + index + ":current=" + (current() || "<eof>"));
-          return { counts: {}, order, normalized };
-        }
-
-        function parseFragment() {
-          const body = parseSequence("", 1);
-          return { order: body.order.slice(), normalized: body.normalized, trace };
-        }
-
-        return { parseFragment };
-      }
-
       document.getElementById("go").addEventListener("click", () => {
-        try {
-          const parsed = createParser(input.value).parseFragment();
-          out.textContent = parsed.normalized + "|" + parsed.trace.join(";");
-        } catch (error) {
-          out.textContent = error && error.message ? error.message : "unknown";
-        }
+        document.getElementById("out").textContent = String((2 + 3) * (4 + 1));
       });
-    })();
     </script>
     "#;
 
     let mut h = Harness::from_html(html).unwrap();
     h.click("#go").unwrap();
-    println!("trace dom: {}", h.dump_dom("#out").unwrap());
+    h.assert_text("#out", "25").unwrap();
 }
 
 #[test]

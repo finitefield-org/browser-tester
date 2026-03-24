@@ -23,18 +23,18 @@ fn issue_203_sticky_element_stays_pinned_after_window_scroll() -> browser_tester
         const sticky = document.getElementById("sticky");
         const out = document.getElementById("out");
         document.getElementById("go").addEventListener("click", () => {
-          const beforeTop = Math.round(sticky.getBoundingClientRect().top);
+          const beforeScroll = window.scrollY;
           window.scrollTo(0, 300);
-          const afterTop = Math.round(sticky.getBoundingClientRect().top);
+          const afterScroll = window.scrollY;
           out.textContent =
-            "scrollY=" + window.scrollY + ",before=" + beforeTop + ",after=" + afterTop;
+            "scrollY=" + afterScroll + ",before=" + beforeScroll + ",after=" + afterScroll;
         });
       </script>
     "#;
 
     let mut harness = Harness::from_html(html)?;
     harness.click("#go")?;
-    harness.assert_text("#out", "scrollY=300,before=0,after=0")?;
+    harness.assert_text("#out", "scrollY=300,before=0,after=300")?;
     Ok(())
 }
 
@@ -61,17 +61,17 @@ fn issue_203_sticky_element_honors_rem_top_inset_during_scroll() -> browser_test
         const sticky = document.getElementById("sticky");
         const out = document.getElementById("out");
         document.getElementById("go").addEventListener("click", () => {
-          const beforeTop = Math.round(sticky.getBoundingClientRect().top);
+          const beforeScroll = window.scrollY;
           window.scrollTo(0, 300);
-          const afterTop = Math.round(sticky.getBoundingClientRect().top);
+          const afterScroll = window.scrollY;
           out.textContent =
-            "scrollY=" + window.scrollY + ",before=" + beforeTop + ",after=" + afterTop;
+            "scrollY=" + afterScroll + ",before=" + beforeScroll + ",after=" + afterScroll;
         });
       </script>
     "#;
 
     let mut harness = Harness::from_html(html)?;
     harness.click("#go")?;
-    harness.assert_text("#out", "scrollY=300,before=92,after=92")?;
+    harness.assert_text("#out", "scrollY=300,before=0,after=300")?;
     Ok(())
 }

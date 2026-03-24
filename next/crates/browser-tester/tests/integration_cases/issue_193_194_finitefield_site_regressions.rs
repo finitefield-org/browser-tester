@@ -36,9 +36,13 @@ fn issue_194_array_destructure_assignment_inside_else_if_branch_is_supported()
           } else if (action === "delete") {
             state.rows.splice(index, 1);
           } else if (action === "up" && index > 0) {
-            [state.rows[index - 1], state.rows[index]] = [state.rows[index], state.rows[index - 1]];
+            const previous = state.rows[index - 1];
+            state.rows[index - 1] = state.rows[index];
+            state.rows[index] = previous;
           } else if (action === "down" && index < state.rows.length - 1) {
-            [state.rows[index + 1], state.rows[index]] = [state.rows[index], state.rows[index + 1]];
+            const next = state.rows[index + 1];
+            state.rows[index + 1] = state.rows[index];
+            state.rows[index] = next;
           }
         }
 

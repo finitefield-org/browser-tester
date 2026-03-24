@@ -4,8 +4,7 @@ use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{
-    DateTime, Datelike, Duration, Local, LocalResult, NaiveDate, NaiveTime, Offset, TimeZone,
-    Timelike, Utc,
+    DateTime, Datelike, Duration, Local, LocalResult, NaiveDate, Offset, TimeZone, Timelike, Utc,
 };
 use chrono_tz::Tz;
 use fancy_regex::{Regex as FancyRegex, RegexBuilder};
@@ -4295,8 +4294,8 @@ fn call_script_function_value<H: HostBindings>(
 fn call_native_global_function<H: HostBindings>(
     name: &str,
     args: &[Value],
-    env: &mut BTreeMap<String, Value>,
-    host: &mut H,
+    _env: &mut BTreeMap<String, Value>,
+    _host: &mut H,
 ) -> Result<Value> {
     match name {
         "Boolean" => {
@@ -8918,10 +8917,6 @@ fn is_truthy(value: &Value) -> bool {
         | Value::Node(_)
         | Value::NodeList(_)
         | Value::RadioNodeList(_)
-        | Value::Date(_)
-        | Value::IntlNumberFormat(_)
-        | Value::IntlDateTimeFormat(_)
-        | Value::IntlCollator(_)
         | Value::Storage(_)
         | Value::MediaQueryList(_)
         | Value::StringList(_)
@@ -8987,6 +8982,7 @@ fn array_to_string(array: &crate::ArrayHandle, separator: &str, limit: Option<us
     rendered.join(separator)
 }
 
+#[allow(dead_code)]
 fn object_property_entries(
     properties: &[(PropertyKey, crate::PropertyValue)],
 ) -> Vec<(PropertyKey, crate::PropertyValue)> {
@@ -9021,6 +9017,7 @@ fn object_find_property_mut<'a>(
         .map(|(_, value)| value)
 }
 
+#[allow(dead_code)]
 fn object_remove_property(
     properties: &mut Vec<(PropertyKey, crate::PropertyValue)>,
     key: &PropertyKey,
@@ -9042,6 +9039,7 @@ fn object_own_string_keys(object: &crate::ObjectHandle) -> Vec<String> {
         .collect()
 }
 
+#[allow(dead_code)]
 fn object_own_symbol_keys(object: &crate::ObjectHandle) -> Vec<crate::SymbolValue> {
     let state = object.0.borrow();
     state
@@ -9232,10 +9230,12 @@ fn array_set_property_value<H: HostBindings>(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn object_value_keys(object: &crate::ObjectHandle) -> Vec<String> {
     object_own_string_keys(object)
 }
 
+#[allow(dead_code)]
 fn object_value_entries(object: &crate::ObjectHandle) -> Vec<(String, Value)> {
     let state = object.0.borrow();
     state
@@ -9250,6 +9250,7 @@ fn object_value_entries(object: &crate::ObjectHandle) -> Vec<(String, Value)> {
         .collect()
 }
 
+#[allow(dead_code)]
 fn array_value_entries(array: &crate::ArrayHandle) -> Vec<(String, Value)> {
     let state = array.0.borrow();
     let mut entries = state
@@ -9321,6 +9322,7 @@ fn map_key_from_value(value: &Value) -> MapKey {
     }
 }
 
+#[allow(dead_code)]
 fn map_values_from_handle(map: &MapHandle) -> Vec<(MapKey, Value)> {
     map.0.borrow().entries.clone()
 }
@@ -9613,7 +9615,7 @@ fn object_assign_from_source<H: HostBindings>(
 
 fn array_from_value<H: HostBindings>(
     source: Value,
-    env: &mut BTreeMap<String, Value>,
+    _env: &mut BTreeMap<String, Value>,
     host: &mut H,
 ) -> Result<Vec<Value>> {
     match source {
@@ -11430,6 +11432,7 @@ fn date_to_iso_string(epoch_ms: i64) -> Option<String> {
     Some(datetime.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
 }
 
+#[allow(dead_code)]
 fn date_value_from_value(value: &Value) -> DateValue {
     DateValue {
         epoch_ms: date_epoch_ms_from_value(value),
@@ -11684,6 +11687,7 @@ fn date_format_string(epoch_ms: i64, formatter: &IntlDateTimeFormatValue) -> Opt
     Some(parts.into_iter().map(|(_, value)| value).collect())
 }
 
+#[allow(dead_code)]
 fn date_format_locale_string(epoch_ms: i64, locale: &str, include_time: bool) -> Option<String> {
     let formatter = IntlDateTimeFormatValue {
         locale: locale.to_string(),
@@ -12357,8 +12361,8 @@ fn date_to_iso_string_method<H: HostBindings>(
 fn date_to_json<H: HostBindings>(
     date: &DateValue,
     args: &[Expr],
-    env: &mut BTreeMap<String, Value>,
-    host: &mut H,
+    _env: &mut BTreeMap<String, Value>,
+    _host: &mut H,
 ) -> Result<Value> {
     if !args.is_empty() {
         return Err(ScriptError::new(
@@ -12536,6 +12540,7 @@ fn date_get_timezone_offset(date: &DateValue, args: &[Expr]) -> Result<Value> {
     }))
 }
 
+#[allow(dead_code)]
 fn date_to_locale_epoch_string(date: &DateValue, locale: &str, include_time: bool) -> String {
     match date.epoch_ms {
         Some(epoch_ms) => date_format_locale_string(epoch_ms, locale, include_time)

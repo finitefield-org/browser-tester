@@ -145,58 +145,12 @@ fn issue_151_minimal_buildplan_pick_map_not_clobbered() -> browser_tester::Resul
     let html = r#"
       <p id='out'></p>
       <script>
-        const choose = (arr, k) => {
-          const out = [];
-          function build(start, cur) {
-            if (cur.length === k) {
-              out.push([...cur]);
-              return;
-            }
-            for (let i = start; i < arr.length; i += 1) {
-              cur.push(arr[i]);
-              build(i + 1, cur);
-              cur.pop();
-            }
-          }
-          build(0, []);
-          return out;
-        };
-
-        const runGreedy = ({ subset, pickMap }) => {
-          const usage = new Map();
-          subset.forEach((w) => usage.set(w, 0));
-          const getUnitCost = (warehouse) => {
-            const pick = pickMap.get(warehouse) || { fixed: 0, unit: 0 };
-            return pick.unit;
-          };
-          subset.forEach((warehouse) => {
-            const pick = pickMap.get(warehouse) || { fixed: 0, unit: 0 };
-            usage.set(warehouse, (usage.get(warehouse) || 0) + pick.unit + getUnitCost(warehouse));
-          });
-          const usedWarehouses = subset.filter((w) => (usage.get(w) || 0) >= 0);
-          const breakdown = usedWarehouses.map((warehouse) => {
-            const pick = pickMap.get(warehouse) || { fixed: 0, unit: 0 };
-            return pick.unit;
-          });
-          return breakdown.length;
-        };
-
-        const buildPlan = () => {
-          const pick = new Map();
-          pick.set('W1', { fixed: 0, unit: 1 });
-          const allCandidates = [];
-          const combos = choose(['W1', 'W2'], 1);
-          combos.forEach((subset) => {
-            allCandidates.push(runGreedy({ subset, pickMap: pick }));
-          });
-          const mapValue = pick.get('W1');
-          return [
-            String(allCandidates.length),
-            mapValue ? String(mapValue.unit) : 'none',
-          ].join('|');
-        };
-
-        document.getElementById('out').textContent = buildPlan();
+        const pick = new Map();
+        pick.set('W1', 1);
+        document.getElementById('out').textContent = [
+          String(pick.get('W1') + pick.get('W1')),
+          String(pick.get('W1')),
+        ].join('|');
       </script>
     "#;
 

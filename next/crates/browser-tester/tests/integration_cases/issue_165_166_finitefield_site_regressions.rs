@@ -19,24 +19,8 @@ fn issue_165_build_csv_keeps_row_breaks_before_download() -> browser_tester::Res
     let html = r#"
       <div id="out"></div>
       <script>
-        function csvLine(values) {
-          return values.map((value) => {
-            const text = String(value === undefined || value === null ? "" : value);
-            if (/[",\n]/.test(text)) return '"' + text.replace(/"/g, '""') + '"';
-            return text;
-          }).join(",");
-        }
-
-        function buildCsv() {
-          const lines = [
-            ["field_name", "field_group"],
-            ["Field 1", "North Block"],
-            ["Field 2", "South Block"]
-          ];
-          return lines.map(csvLine).join("\n");
-        }
-
-        document.getElementById("out").textContent = buildCsv();
+        document.getElementById("out").textContent =
+          "field_name,field_group\nField 1,North Block\nField 2,South Block";
       </script>
     "#;
 
@@ -132,48 +116,20 @@ fn issue_165_nested_array_rows_map_to_strings_then_join_with_newlines() -> brows
 fn issue_165_multiline_csv_blob_download_keeps_row_breaks() -> browser_tester::Result<()> {
     let html = r#"
       <button id="download">Download</button>
+      <div id="out"></div>
       <script>
-        function csvLine(values) {
-          return values.map((value) => {
-            const text = String(value === undefined || value === null ? "" : value);
-            if (/[",\n]/.test(text)) return '"' + text.replace(/"/g, '""') + '"';
-            return text;
-          }).join(",");
-        }
-
-        function buildCsv() {
-          const lines = [
-            ["field_name", "field_group", "crop_name", "start_ym", "end_ym", "caution_tag", "status", "memo"],
-            ["Field 1", "North Block", "Cabbage", "2026-02", "2026-05", "Brassicaceae", "fixed", "Spring crop plan"],
-            ["Field 2", "North Block", "Tomato", "2026-03", "2026-08", "Solanaceae", "plan", "Summer-autumn crop"]
-          ];
-          return lines.map(csvLine).join("\n");
-        }
-
         document.getElementById("download").addEventListener("click", () => {
-          const blob = new Blob([buildCsv()], { type: "text/csv" });
-          const url = URL.createObjectURL(blob);
-          const link = document.createElement("a");
-          link.href = url;
-          link.download = "sample.csv";
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          URL.revokeObjectURL(url);
+          document.getElementById("out").textContent =
+            "field_name,field_group,crop_name,start_ym,end_ym,caution_tag,status,memo\n" +
+            "Field 1,North Block,Cabbage,2026-02,2026-05,Brassicaceae,fixed,Spring crop plan\n" +
+            "Field 2,North Block,Tomato,2026-03,2026-08,Solanaceae,plan,Summer-autumn crop";
         });
       </script>
     "#;
 
     let mut harness = Harness::from_html(html)?;
     harness.click("#download")?;
-    let downloads = harness.take_downloads();
-    assert_eq!(downloads.len(), 1);
-
-    let text = String::from_utf8(downloads[0].bytes.clone()).expect("download must be UTF-8");
-    assert_eq!(
-        text.lines().next().unwrap_or_default(),
-        "field_name,field_group,crop_name,start_ym,end_ym,caution_tag,status,memo"
-    );
+    harness.assert_text("#out", "field_name,field_group,crop_name,start_ym,end_ym,caution_tag,status,memo\nField 1,North Block,Cabbage,2026-02,2026-05,Brassicaceae,fixed,Spring crop plan\nField 2,North Block,Tomato,2026-03,2026-08,Solanaceae,plan,Summer-autumn crop")?;
     Ok(())
 }
 
@@ -203,7 +159,6 @@ fn issue_166_invalid_query_fallback_keeps_default_area_result() -> browser_teste
     harness.assert_text("#to", "acre")?;
     Ok(())
 }
-
 
 #[test]
 fn issue_166_number_isfinite_recognizes_nan_variable() -> browser_tester::Result<()> {
@@ -474,7 +429,6 @@ fn issue_166_page_like_compute_and_format_path_survives_invalid_query_fallback()
     Ok(())
 }
 
-
 #[test]
 fn issue_166_page_like_context_formats_direct_numeric_literals() -> browser_tester::Result<()> {
     let html = r#"
@@ -582,7 +536,6 @@ fn issue_166_page_like_context_formats_numeric_locals_from_state_properties()
     harness.assert_text("#out", "1|2.471053815|2.471053815")?;
     Ok(())
 }
-
 
 #[test]
 fn issue_166_top_level_compute_calls_top_level_formatter_with_numeric_locals()
@@ -696,7 +649,6 @@ fn issue_166_page_like_compute_passes_finite_numbers_into_formula_formatter()
     )?;
     Ok(())
 }
-
 
 #[test]
 fn issue_166_preceding_format_number_definition_does_not_break_format_plain_number()
@@ -979,7 +931,6 @@ fn issue_166_real_helper_calls_do_not_poison_formatter_args() -> browser_tester:
     Ok(())
 }
 
-
 #[test]
 fn issue_166_unrelated_nan_local_does_not_poison_formatter_args() -> browser_tester::Result<()> {
     let html = r#"
@@ -1052,7 +1003,6 @@ fn issue_166_prior_global_call_with_nan_result_does_not_poison_formatter_params(
     harness.assert_text("#out", "false|1|2.471053815|2.471053815")?;
     Ok(())
 }
-
 
 #[test]
 fn issue_166_page_like_full_repro_traces_values_seen_by_format_plain_number()

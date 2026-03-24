@@ -175,7 +175,7 @@ fn dialogs_clipboard_and_location_are_wired() -> browser_tester_next::Result<()>
 
 #[test]
 fn navigator_clipboard_write_text_is_publicly_supported() -> browser_tester_next::Result<()> {
-    let mut harness = Harness::from_html(
+    let harness = Harness::from_html(
         "<div id='out'></div><script>window.navigator.clipboard.writeText('copied'); document.getElementById('out').textContent = String(window.navigator.clipboard) + ':' + window.navigator.clipboard.readText();</script>",
     )?;
 

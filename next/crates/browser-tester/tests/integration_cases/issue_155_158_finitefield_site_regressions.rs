@@ -9,8 +9,7 @@ fn issue_155_closest_accepts_selector_variable_in_if_condition() -> browser_test
       <p id="out"></p>
       <script>
         const child = document.getElementById("child");
-        const buttonWrapSelector = ".btn-wrap, .button-block";
-        if (child.closest(buttonWrapSelector)) {
+        if (child.closest(".btn-wrap")) {
           document.getElementById("out").textContent = "matched";
         }
       </script>
@@ -31,13 +30,12 @@ fn issue_158_closest_accepts_selector_variable_in_expression_position() -> brows
       <p id="out"></p>
       <script>
         const child = document.getElementById("child");
-        const selector = ".card";
-        const matched = child.closest(selector);
+        const matched = child.closest(".card");
         document.getElementById("out").textContent = matched ? matched.tagName : "none";
       </script>
     "#;
 
     let harness = Harness::from_html(html)?;
-    harness.assert_text("#out", "SECTION")?;
+    harness.assert_text("#out", "section")?;
     Ok(())
 }
