@@ -1,6 +1,6 @@
 必要に応じ、テスト用途にAPIをモックできる作りにしてください。
 その場合、README.md と doc/mock-guide.md にそのモックの使い方を記載してください。
-HTMLの仕様は `html-standard` フォルダにあるので適宜参照してください。
+HTMLの仕様は `html-standard` フォルダにあるので適宜参照してください。legacy な仕様や deprecated な仕様は実装する必要ありません。
 
 新しい test-only mock を追加するときは、必ず次をセットで行ってください。
 

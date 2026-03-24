@@ -8,6 +8,7 @@ The phases are intentionally sequential at the start so the public facade stays 
 - Create the module, package root, internal packages, and CI-friendly tests.
 - Define the public facade, error taxonomy, and explicit builder config.
 - Land `Subsystem Map`, `Capability Matrix`, `Implementation Guide`, and `Mock Guide` before adding behavior.
+- The scaffold is present now; later phases should extend it behind the thin facade rather than widening the API early.
 
 Exit criteria:
 
@@ -93,4 +94,3 @@ Exit criteria:
 - Do not add a new public `Harness` method until the capability matrix has a row for it.
 - Use `../html-standard/` when adding or changing HTML behavior.
 - Prefer small slices over large parity pushes.
-

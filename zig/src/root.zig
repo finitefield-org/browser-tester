@@ -1081,6 +1081,17 @@ test "contract: Harness.fromHtml runs map.areas and table.tBodies during bootstr
     try subject.assertExists("#second-body");
 }
 
+test "contract: Harness.fromHtml exposes table body creation during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<table id='table'><caption id='caption'></caption><colgroup id='group'></colgroup><tbody id='body-1'></tbody></table><div id='out'></div><script>const table = document.getElementById('table'); const before = String(table.children.length) + ':' + String(table.children.item(0).getAttribute('id')) + ':' + String(table.children.item(1).getAttribute('id')) + ':' + String(table.children.item(2).getAttribute('id')) + ':' + String(table.tBodies.length); const head = table.createTHead(); head.id = 'head'; const body2 = table.createTBody(); body2.id = 'body-2'; const foot = table.createTFoot(); foot.id = 'foot'; document.getElementById('out').textContent = before + '|' + String(table.children.length) + ':' + String(table.children.item(0).getAttribute('id')) + ':' + String(table.children.item(1).getAttribute('id')) + ':' + String(table.children.item(2).getAttribute('id')) + ':' + String(table.children.item(3).getAttribute('id')) + ':' + String(table.children.item(4).getAttribute('id')) + ':' + String(table.children.item(5).getAttribute('id')) + ':' + String(table.tBodies.length) + ':' + String(table.tHead.getAttribute('id')) + ':' + String(table.tFoot.getAttribute('id'));</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "3:caption:group:body-1:1|6:caption:group:head:body-1:body-2:foot:2:head:foot");
+}
+
 test "contract: Harness.fromHtml runs element.labels during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -2678,6 +2689,20 @@ test "contract: Harness.fromHtml exposes HTMLTableElement legacy reflection duri
     );
 }
 
+test "contract: Harness.fromHtml exposes table section row and cell legacy reflection during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<table id='table'><thead id='head' align='center' char='.' charoff='1' valign='top'><tr id='row' align='right' char=':' charoff='2' valign='middle' bgcolor='cyan'><td id='cell' align='left' axis='axis' height='10' width='20px' char='|' charoff='3' nowrap valign='bottom' bgcolor='pink'>A</td></tr></thead></table><div id='out'></div><script>const head = document.getElementById('head'); const row = document.getElementById('row'); const cell = document.getElementById('cell'); const detachedHead = document.createElement('thead'); const detachedRow = document.createElement('tr'); const detachedCell = document.createElement('td'); const before = 'head[align=' + head.align + ';ch=' + head.ch + ';chOff=' + head.chOff + ';vAlign=' + head.vAlign + ']|row[align=' + row.align + ';ch=' + row.ch + ';chOff=' + row.chOff + ';vAlign=' + row.vAlign + ';bgColor=' + row.bgColor + ']|cell[align=' + cell.align + ';axis=' + cell.axis + ';height=' + cell.height + ';width=' + cell.width + ';ch=' + cell.ch + ';chOff=' + cell.chOff + ';noWrap=' + String(cell.noWrap) + ';vAlign=' + cell.vAlign + ';bgColor=' + cell.bgColor + ']|detachedHead[align=' + detachedHead.align + ';ch=' + detachedHead.ch + ';chOff=' + detachedHead.chOff + ';vAlign=' + detachedHead.vAlign + ']|detachedRow[align=' + detachedRow.align + ';ch=' + detachedRow.ch + ';chOff=' + detachedRow.chOff + ';vAlign=' + detachedRow.vAlign + ';bgColor=' + detachedRow.bgColor + ']|detachedCell[align=' + detachedCell.align + ';axis=' + detachedCell.axis + ';height=' + detachedCell.height + ';width=' + detachedCell.width + ';ch=' + detachedCell.ch + ';chOff=' + detachedCell.chOff + ';noWrap=' + String(detachedCell.noWrap) + ';vAlign=' + detachedCell.vAlign + ';bgColor=' + detachedCell.bgColor + ']'; head.align = 'left'; head.ch = '*'; head.chOff = '4'; head.vAlign = 'bottom'; row.align = 'center'; row.ch = ';'; row.chOff = '5'; row.vAlign = 'top'; row.bgColor = null; cell.align = 'right'; cell.axis = 'y'; cell.height = '11'; cell.width = '30px'; cell.ch = '='; cell.chOff = '6'; cell.noWrap = false; cell.vAlign = 'middle'; cell.bgColor = null; detachedHead.align = 'justify'; detachedHead.ch = '!'; detachedHead.chOff = '7'; detachedHead.vAlign = 'baseline'; detachedRow.align = 'start'; detachedRow.ch = ','; detachedRow.chOff = '8'; detachedRow.vAlign = 'sub'; detachedRow.bgColor = null; detachedCell.align = 'end'; detachedCell.axis = 'z'; detachedCell.height = '12'; detachedCell.width = '40px'; detachedCell.ch = '~'; detachedCell.chOff = '9'; detachedCell.noWrap = true; detachedCell.vAlign = 'super'; detachedCell.bgColor = null; document.getElementById('out').textContent = before + '|head[align=' + head.align + ';ch=' + head.ch + ';chOff=' + head.chOff + ';vAlign=' + head.vAlign + ']|row[align=' + row.align + ';ch=' + row.ch + ';chOff=' + row.chOff + ';vAlign=' + row.vAlign + ';bgColor=' + row.bgColor + ';attrBgColor=' + row.getAttribute('bgcolor') + ']|cell[align=' + cell.align + ';axis=' + cell.axis + ';height=' + cell.height + ';width=' + cell.width + ';ch=' + cell.ch + ';chOff=' + cell.chOff + ';noWrap=' + String(cell.noWrap) + ';vAlign=' + cell.vAlign + ';bgColor=' + cell.bgColor + ';attrBgColor=' + cell.getAttribute('bgcolor') + ';attrNoWrap=' + String(cell.hasAttribute('nowrap')) + ']|detachedHead[align=' + detachedHead.align + ';ch=' + detachedHead.ch + ';chOff=' + detachedHead.chOff + ';vAlign=' + detachedHead.vAlign + ']|detachedRow[align=' + detachedRow.align + ';ch=' + detachedRow.ch + ';chOff=' + detachedRow.chOff + ';vAlign=' + detachedRow.vAlign + ';bgColor=' + detachedRow.bgColor + ';attrBgColor=' + detachedRow.getAttribute('bgcolor') + ']|detachedCell[align=' + detachedCell.align + ';axis=' + detachedCell.axis + ';height=' + detachedCell.height + ';width=' + detachedCell.width + ';ch=' + detachedCell.ch + ';chOff=' + detachedCell.chOff + ';noWrap=' + String(detachedCell.noWrap) + ';vAlign=' + detachedCell.vAlign + ';bgColor=' + detachedCell.bgColor + ';attrBgColor=' + detachedCell.getAttribute('bgcolor') + ';attrNoWrap=' + String(detachedCell.hasAttribute('nowrap')) + ']';</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "head[align=center;ch=.;chOff=1;vAlign=top]|row[align=right;ch=:;chOff=2;vAlign=middle;bgColor=cyan]|cell[align=left;axis=axis;height=10;width=20px;ch=|;chOff=3;noWrap=true;vAlign=bottom;bgColor=pink]|detachedHead[align=;ch=;chOff=;vAlign=]|detachedRow[align=;ch=;chOff=;vAlign=;bgColor=]|detachedCell[align=;axis=;height=;width=;ch=;chOff=;noWrap=false;vAlign=;bgColor=]|head[align=left;ch=*;chOff=4;vAlign=bottom]|row[align=center;ch=;;chOff=5;vAlign=top;bgColor=;attrBgColor=]|cell[align=right;axis=y;height=11;width=30px;ch==;chOff=6;noWrap=false;vAlign=middle;bgColor=;attrBgColor=;attrNoWrap=false]|detachedHead[align=justify;ch=!;chOff=7;vAlign=baseline]|detachedRow[align=start;ch=,;chOff=8;vAlign=sub;bgColor=;attrBgColor=]|detachedCell[align=end;axis=z;height=12;width=40px;ch=~;chOff=9;noWrap=true;vAlign=super;bgColor=;attrBgColor=;attrNoWrap=true]",
+    );
+}
+
 test "contract: Harness.fromHtml runs table section row mutation during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -2780,7 +2805,28 @@ test "failure: Harness.fromHtml rejects table row and cell index access on wrong
         error.ScriptRuntime,
         Harness.fromHtml(
             allocator,
+            "<main id='root'></main><script>document.createElement('div').axis;</script>",
+        ),
+    );
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>document.createElement('div').height;</script>",
+        ),
+    );
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
             "<main id='root'></main><script>document.createElement('div').cellPadding = null;</script>",
+        ),
+    );
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>document.createElement('div').noWrap = true;</script>",
         ),
     );
     try std.testing.expectError(
@@ -4130,6 +4176,28 @@ test "contract: Harness.fromHtml runs form.reset during bootstrap" {
     defer subject.deinit();
 
     try subject.assertValue("#out", "reset:true:true");
+}
+
+test "contract: Harness.fromHtml runs HTMLDialogElement.showModal and close during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><dialog id='dlg'></dialog><div id='out'></div><script>const dialog = document.getElementById('dlg'); dialog.closedBy = 'none'; dialog.addEventListener('cancel', () => { document.getElementById('out').textContent = 'cancel:' + String(document.getElementById('dlg').open) + ':' + document.getElementById('dlg').returnValue; }); dialog.addEventListener('close', () => { document.getElementById('out').textContent += '|close:' + String(document.getElementById('dlg').open) + ':' + document.getElementById('dlg').returnValue; }); dialog.showModal(); dialog.requestClose('done'); document.getElementById('out').textContent += '|after:' + String(dialog.open) + ':' + dialog.returnValue + ':' + dialog.closedBy;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "cancel:true:|close:false:done|after:false:done:none");
+}
+
+test "contract: Harness.fromHtml runs HTMLDetailsElement open and name reflection during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><details id='details'><summary id='summary'>Title</summary><div>Body</div></details><div id='out'></div><script>const details = document.getElementById('details'); const out = document.getElementById('out'); details.name = 'accordion'; out.textContent = String(details.open) + ':' + details.name; details.addEventListener('toggle', () => { out.textContent += '|' + String(details.open) + ':' + details.name; }); details.open = true;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "false:accordion|true:accordion");
 }
 
 test "contract: Harness.fromHtml exposes form owner reflection during bootstrap" {
@@ -7079,6 +7147,17 @@ test "failure: Harness.fromHtml rejects non-table tBodies access" {
     );
 }
 
+test "failure: Harness.fromHtml rejects createTBody on wrong elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<div id='wrapper'><div id='not-table'></div></div><script>document.getElementById('not-table').createTBody();</script>",
+        ),
+    );
+}
+
 test "failure: Harness.fromHtml rejects non-labelable labels access" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -7466,6 +7545,42 @@ test "failure: Harness.fromHtml rejects form.reset on non-forms" {
         Harness.fromHtml(
             allocator,
             "<main id='root'></main><script>document.createElement('div').reset();</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects dialog methods on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>document.createElement('div').showModal();</script>",
+        ),
+    );
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>document.createElement('div').requestClose();</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects details open and name on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>document.createElement('div').open = true;</script>",
+        ),
+    );
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>document.createElement('div').name = 'accordion';</script>",
         ),
     );
 }

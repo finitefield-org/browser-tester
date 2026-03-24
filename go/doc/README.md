@@ -1,7 +1,7 @@
 # browser-tester go
 
 This directory is the Go rewrite workspace for `browser-tester`.
-It is a plan and specification set, not an implementation.
+It is still a plan and specification set, but the phase 0 scaffold now exists and the module builds with skeleton tests.
 
 The design follows the lessons captured in [`../next.md`](../../next.md) and [`../next-reflection.md`](../../next-reflection.md):
 
@@ -26,7 +26,15 @@ The design follows the lessons captured in [`../next.md`](../../next.md) and [`.
 - Add a new test-only mock through the runtime registry, then expose it through the public facade.
 - Prefer explicit configuration structs over hidden encodings or seed keys.
 - Keep the Go implementation deterministic. Avoid background goroutines unless a subsystem explicitly requires them.
+
+## Current Status
+
+- Phase 0 scaffold is present, and internal DOM/runtime/script scaffolds have landed.
+- `go test ./...` passes for the current skeleton.
+- The clipboard mock family scaffold is present, including `ReadClipboard` and `WriteClipboard`.
+- Later phases remain intentionally bounded and future-facing.
 - Keep this index aligned with the capability matrix and mock guide when the public surface changes.
+- Do not implement legacy or deprecated spec branches unless they are required for a clearly bounded user-visible gap and are explicitly added to the capability matrix.
 
 ## Target Shape
 

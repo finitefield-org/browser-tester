@@ -20,6 +20,7 @@ pub const ElementData = struct {
     tag_name: []const u8,
     namespace_uri: []const u8 = "http://www.w3.org/1999/xhtml",
     attributes: std.ArrayListUnmanaged(Attribute) = .{},
+    dialog_return_value: []const u8 = "",
 };
 
 pub const NodeKind = union(enum) {
@@ -378,6 +379,27 @@ pub const DomStore = struct {
         }
 
         try self.custom_validity.put(self.allocator, node_id, message_copy);
+    }
+
+    pub fn dialogReturnValue(self: *const DomStore, node_id: NodeId) errors.Result([]const u8) {
+        const node = self.nodeAt(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |element| element,
+            else => return error.DomError,
+        };
+        if (!std.mem.eql(u8, element.tag_name, "dialog")) return error.DomError;
+        return element.dialog_return_value;
+    }
+
+    pub fn setDialogReturnValue(self: *DomStore, node_id: NodeId, value: []const u8) errors.Result(void) {
+        const node = self.nodeAtMut(node_id) orelse return error.DomError;
+        const element = switch (node.kind) {
+            .element => |*element| element,
+            else => return error.DomError,
+        };
+        if (!std.mem.eql(u8, element.tag_name, "dialog")) return error.DomError;
+        element.dialog_return_value = try duplicateString(self, value);
+        return;
     }
 
     pub fn validationMessageForNode(
@@ -1961,6 +1983,11 @@ pub const DomStore = struct {
                     attributes,
                     element.namespace_uri,
                 );
+                const cloned_element = self.nodeAtMut(node_id) orelse return error.DomError;
+                if (cloned_element.kind == .element) {
+                    cloned_element.kind.element.dialog_return_value =
+                        try duplicateString(self, element.dialog_return_value);
+                }
                 break :blk node_id;
             },
         };

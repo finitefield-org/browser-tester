@@ -3736,6 +3736,47 @@ fn evalAssignment(
                 }
                 return;
             }
+            if (std.mem.eql(u8, target.property, "open")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "dialog")) {
+                    if (isTruthy(value)) {
+                        try host.domStoreMut().setAttribute(element, "open", "");
+                    } else {
+                        try host.domStoreMut().removeAttribute(element, "open");
+                    }
+                    return;
+                }
+                if (std.mem.eql(u8, tag_name, "details")) {
+                    try host.setDetailsOpen(element, isTruthy(value));
+                    return;
+                }
+                return error.ScriptRuntime;
+            }
+            if (std.mem.eql(u8, target.property, "name")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "details")) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "name", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "returnValue")) {
+                if (!try elementSupportsDialogProperty(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setDialogReturnValue(element, text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "closedBy")) {
+                if (!try elementSupportsDialogProperty(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "closedby", text);
+                return;
+            }
             if (std.mem.eql(u8, target.property, "disabled")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
                 if (std.mem.eql(u8, tag_name, "style") or std.mem.eql(u8, tag_name, "link")) {
@@ -4041,7 +4082,7 @@ fn evalAssignment(
             }
             if (std.mem.eql(u8, target.property, "width")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
-                if (!(tableElementTagAllowed(tag_name) or tableColumnTagAllowed(tag_name))) {
+                if (!(tableElementTagAllowed(tag_name) or tableCellTagAllowed(tag_name) or tableColumnTagAllowed(tag_name))) {
                     return error.ScriptRuntime;
                 }
                 const text = try asString(allocator, value);
@@ -4050,7 +4091,7 @@ fn evalAssignment(
             }
             if (std.mem.eql(u8, target.property, "align")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
-                if (!(tableElementTagAllowed(tag_name) or tableColumnTagAllowed(tag_name))) {
+                if (!(tableElementTagAllowed(tag_name) or tableSectionTagAllowed(tag_name) or tableRowTagAllowed(tag_name) or tableCellTagAllowed(tag_name) or tableColumnTagAllowed(tag_name))) {
                     return error.ScriptRuntime;
                 }
                 const text = try asString(allocator, value);
@@ -4059,7 +4100,7 @@ fn evalAssignment(
             }
             if (std.mem.eql(u8, target.property, "ch")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
-                if (!tableColumnTagAllowed(tag_name)) {
+                if (!(tableSectionTagAllowed(tag_name) or tableRowTagAllowed(tag_name) or tableCellTagAllowed(tag_name) or tableColumnTagAllowed(tag_name))) {
                     return error.ScriptRuntime;
                 }
                 const text = try asString(allocator, value);
@@ -4068,7 +4109,7 @@ fn evalAssignment(
             }
             if (std.mem.eql(u8, target.property, "chOff")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
-                if (!tableColumnTagAllowed(tag_name)) {
+                if (!(tableSectionTagAllowed(tag_name) or tableRowTagAllowed(tag_name) or tableCellTagAllowed(tag_name) or tableColumnTagAllowed(tag_name))) {
                     return error.ScriptRuntime;
                 }
                 const text = try asString(allocator, value);
@@ -4077,7 +4118,7 @@ fn evalAssignment(
             }
             if (std.mem.eql(u8, target.property, "vAlign")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
-                if (!tableColumnTagAllowed(tag_name)) {
+                if (!(tableSectionTagAllowed(tag_name) or tableRowTagAllowed(tag_name) or tableCellTagAllowed(tag_name) or tableColumnTagAllowed(tag_name))) {
                     return error.ScriptRuntime;
                 }
                 const text = try asString(allocator, value);
@@ -4091,11 +4132,46 @@ fn evalAssignment(
                     try host.domStoreMut().setAttribute(element, "bgcolor", text);
                     return;
                 }
+                if (tableRowTagAllowed(tag_name) or tableCellTagAllowed(tag_name)) {
+                    const text = try legacyNullToEmptyString(allocator, value);
+                    try host.domStoreMut().setAttribute(element, "bgcolor", text);
+                    return;
+                }
                 if (!tableColumnTagAllowed(tag_name)) {
                     return error.ScriptRuntime;
                 }
                 const text = try asString(allocator, value);
                 try host.domStoreMut().setAttribute(element, "bgcolor", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "axis")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!tableCellTagAllowed(tag_name)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "axis", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "height")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!tableCellTagAllowed(tag_name)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "height", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "noWrap")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (!tableCellTagAllowed(tag_name)) {
+                    return error.ScriptRuntime;
+                }
+                if (isTruthy(value)) {
+                    try host.domStoreMut().setAttribute(element, "nowrap", "");
+                } else {
+                    try host.domStoreMut().removeAttribute(element, "nowrap");
+                }
                 return;
             }
             if (std.mem.eql(u8, target.property, "border")) {
@@ -5471,6 +5547,27 @@ fn evalMember(
                 const inert = try host.domStore().hasAttribute(element, "inert");
                 break :blk Value{ .boolean = inert };
             }
+            if (std.mem.eql(u8, member.property, "open")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!std.mem.eql(u8, tag_name, "dialog") and !std.mem.eql(u8, tag_name, "details")) break :blk error.ScriptRuntime;
+                const open = try host.domStore().hasAttribute(element, "open");
+                break :blk Value{ .boolean = open };
+            }
+            if (std.mem.eql(u8, member.property, "name")) {
+                if (!try elementSupportsDetailsProperty(host, element)) break :blk error.ScriptRuntime;
+                const name = (try host.domStore().getAttribute(element, "name")) orelse "";
+                break :blk Value{ .string = name };
+            }
+            if (std.mem.eql(u8, member.property, "returnValue")) {
+                if (!try elementSupportsDialogProperty(host, element)) break :blk error.ScriptRuntime;
+                const return_value = try host.domStore().dialogReturnValue(element);
+                break :blk Value{ .string = return_value };
+            }
+            if (std.mem.eql(u8, member.property, "closedBy")) {
+                if (!try elementSupportsDialogProperty(host, element)) break :blk error.ScriptRuntime;
+                const closed_by = (try host.domStore().getAttribute(element, "closedby")) orelse "";
+                break :blk Value{ .string = closed_by };
+            }
             if (std.mem.eql(u8, member.property, "disabled")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
                 if (std.mem.eql(u8, tag_name, "style") or std.mem.eql(u8, tag_name, "link")) {
@@ -6247,7 +6344,7 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "width")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (!(tableElementTagAllowed(tag_name) or tableColumnTagAllowed(tag_name))) {
+                if (!(tableElementTagAllowed(tag_name) or tableCellTagAllowed(tag_name) or tableColumnTagAllowed(tag_name))) {
                     break :blk error.ScriptRuntime;
                 }
                 const width_text = (try host.domStore().getAttribute(element, "width")) orelse "";
@@ -6255,7 +6352,7 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "align")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (!(tableElementTagAllowed(tag_name) or tableColumnTagAllowed(tag_name))) {
+                if (!(tableElementTagAllowed(tag_name) or tableSectionTagAllowed(tag_name) or tableRowTagAllowed(tag_name) or tableCellTagAllowed(tag_name) or tableColumnTagAllowed(tag_name))) {
                     break :blk error.ScriptRuntime;
                 }
                 const align_text = (try host.domStore().getAttribute(element, "align")) orelse "";
@@ -6263,7 +6360,7 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "ch")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (!tableColumnTagAllowed(tag_name)) {
+                if (!(tableSectionTagAllowed(tag_name) or tableRowTagAllowed(tag_name) or tableCellTagAllowed(tag_name) or tableColumnTagAllowed(tag_name))) {
                     break :blk error.ScriptRuntime;
                 }
                 const ch_text = (try host.domStore().getAttribute(element, "char")) orelse "";
@@ -6271,7 +6368,7 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "chOff")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (!tableColumnTagAllowed(tag_name)) {
+                if (!(tableSectionTagAllowed(tag_name) or tableRowTagAllowed(tag_name) or tableCellTagAllowed(tag_name) or tableColumnTagAllowed(tag_name))) {
                     break :blk error.ScriptRuntime;
                 }
                 const choff_text = (try host.domStore().getAttribute(element, "charoff")) orelse "";
@@ -6279,7 +6376,7 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "vAlign")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
-                if (!tableColumnTagAllowed(tag_name)) {
+                if (!(tableSectionTagAllowed(tag_name) or tableRowTagAllowed(tag_name) or tableCellTagAllowed(tag_name) or tableColumnTagAllowed(tag_name))) {
                     break :blk error.ScriptRuntime;
                 }
                 const valign_text = (try host.domStore().getAttribute(element, "valign")) orelse "";
@@ -6291,11 +6388,29 @@ fn evalMember(
                     const bgcolor_text = (try host.domStore().getAttribute(element, "bgcolor")) orelse "";
                     break :blk Value{ .string = bgcolor_text };
                 }
-                if (tableColumnTagAllowed(tag_name)) {
+                if (tableRowTagAllowed(tag_name) or tableCellTagAllowed(tag_name) or tableColumnTagAllowed(tag_name)) {
                     const bgcolor_text = (try host.domStore().getAttribute(element, "bgcolor")) orelse "";
                     break :blk Value{ .string = bgcolor_text };
                 }
                 break :blk error.ScriptRuntime;
+            }
+            if (std.mem.eql(u8, member.property, "axis")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!tableCellTagAllowed(tag_name)) break :blk error.ScriptRuntime;
+                const axis_text = (try host.domStore().getAttribute(element, "axis")) orelse "";
+                break :blk Value{ .string = axis_text };
+            }
+            if (std.mem.eql(u8, member.property, "height")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!tableCellTagAllowed(tag_name)) break :blk error.ScriptRuntime;
+                const height_text = (try host.domStore().getAttribute(element, "height")) orelse "";
+                break :blk Value{ .string = height_text };
+            }
+            if (std.mem.eql(u8, member.property, "noWrap")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (!tableCellTagAllowed(tag_name)) break :blk error.ScriptRuntime;
+                const nowrap = try host.domStore().hasAttribute(element, "nowrap");
+                break :blk Value{ .boolean = nowrap };
             }
             if (std.mem.eql(u8, member.property, "cellPadding")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
@@ -8559,6 +8674,46 @@ fn evalMethodCall(
                 else => return error.ScriptRuntime,
             };
             break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "show")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            if (!try elementSupportsDialogProperty(host, element)) return error.ScriptRuntime;
+            host.showDialog(element) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "showModal")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            if (!try elementSupportsDialogProperty(host, element)) return error.ScriptRuntime;
+            host.showDialog(element) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "requestClose")) blk: {
+            if (args.len > 1) return error.ScriptRuntime;
+            if (!try elementSupportsDialogProperty(host, element)) return error.ScriptRuntime;
+            const return_value = if (args.len == 1)
+                try asString(allocator, try evalExpr(allocator, host, bindings, args[0]))
+            else
+                null;
+            host.requestCloseDialog(element, return_value) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "close")) blk: {
+            if (args.len > 1) return error.ScriptRuntime;
+            if (!try elementSupportsDialogProperty(host, element)) return error.ScriptRuntime;
+            const return_value = if (args.len == 1)
+                try asString(allocator, try evalExpr(allocator, host, bindings, args[0]))
+            else
+                null;
+            host.closeDialog(element, return_value) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.ScriptRuntime,
+            };
+            break :blk Value{ .undefined_value = {} };
         } else if (std.mem.eql(u8, method, "toggleAttribute")) blk: {
             if (args.len != 1 and args.len != 2) return error.ScriptRuntime;
             const name_value = try evalExpr(allocator, host, bindings, args[0]);
@@ -8644,6 +8799,9 @@ fn evalMethodCall(
         } else if (std.mem.eql(u8, method, "deleteTHead")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk try tableElementDeleteTaggedChild(allocator, host, element, "thead");
+        } else if (std.mem.eql(u8, method, "createTBody")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk try tableElementCreateTBody(allocator, host, element);
         } else if (std.mem.eql(u8, method, "createTFoot")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk try tableElementCreateTFoot(allocator, host, element);
@@ -11812,6 +11970,26 @@ fn tableDirectChildTagged(
     return null;
 }
 
+fn tableDirectChildInsertReferenceAfterLastTagged(
+    host: anytype,
+    table_id: dom.NodeId,
+    tag: []const u8,
+) ?dom.NodeId {
+    const children = host.domStore().childIds(table_id);
+    var last_index: ?usize = null;
+    for (children, 0..) |child_id, index| {
+        const child_tag = host.domStore().tagNameForNode(child_id) orelse continue;
+        if (std.mem.eql(u8, child_tag, tag)) {
+            last_index = index;
+        }
+    }
+    const index = last_index orelse return null;
+    if (index + 1 < children.len) {
+        return children[index + 1];
+    }
+    return null;
+}
+
 fn tableElementCreateCaption(
     allocator: std.mem.Allocator,
     host: anytype,
@@ -11881,14 +12059,12 @@ fn tableElementCreateTHead(
         else => return error.ScriptRuntime,
     };
 
-    var reference = tableDirectChildTagged(host, table_id, "tbody");
-    if (reference == null) {
-        reference = tableDirectChildTagged(host, table_id, "tfoot");
-    }
-    if (reference == null) {
-        const children = host.domStore().childIds(table_id);
-        if (children.len > 0) {
-            reference = children[0];
+    var reference: ?dom.NodeId = null;
+    for (host.domStore().childIds(table_id)) |child_id| {
+        const child_tag = host.domStore().tagNameForNode(child_id) orelse continue;
+        if (!std.mem.eql(u8, child_tag, "caption") and !std.mem.eql(u8, child_tag, "colgroup")) {
+            reference = child_id;
+            break;
         }
     }
     if (reference) |ref| {
@@ -11903,6 +12079,34 @@ fn tableElementCreateTHead(
         };
     }
     return Value{ .element = thead };
+}
+
+fn tableElementCreateTBody(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    table_id: dom.NodeId,
+) errors.Result(Value) {
+    _ = allocator;
+    const tag_name = host.domStore().tagNameForNode(table_id) orelse return error.ScriptRuntime;
+    if (!std.mem.eql(u8, tag_name, "table")) return error.ScriptRuntime;
+
+    const tbody = host.domStoreMut().createElementDetached("tbody") catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
+
+    if (tableDirectChildInsertReferenceAfterLastTagged(host, table_id, "tbody")) |reference| {
+        _ = host.domStoreMut().insertBefore(table_id, tbody, reference) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.ScriptRuntime,
+        };
+    } else {
+        _ = host.domStoreMut().appendChild(table_id, tbody) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.ScriptRuntime,
+        };
+    }
+    return Value{ .element = tbody };
 }
 
 fn tableElementCreateTFoot(
@@ -11923,18 +12127,10 @@ fn tableElementCreateTFoot(
         else => return error.ScriptRuntime,
     };
 
-    const reference = tableDirectChildTagged(host, table_id, "tbody");
-    if (reference) |ref| {
-        _ = host.domStoreMut().insertBefore(table_id, tfoot, ref) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return error.ScriptRuntime,
-        };
-    } else {
-        _ = host.domStoreMut().appendChild(table_id, tfoot) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return error.ScriptRuntime,
-        };
-    }
+    _ = host.domStoreMut().appendChild(table_id, tfoot) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ScriptRuntime,
+    };
     return Value{ .element = tfoot };
 }
 
@@ -12126,6 +12322,20 @@ fn tableCellSpanValue(
 
 fn tableElementTagAllowed(tag_name: []const u8) bool {
     return std.mem.eql(u8, tag_name, "table");
+}
+
+fn tableSectionTagAllowed(tag_name: []const u8) bool {
+    return std.mem.eql(u8, tag_name, "thead") or
+        std.mem.eql(u8, tag_name, "tbody") or
+        std.mem.eql(u8, tag_name, "tfoot");
+}
+
+fn tableRowTagAllowed(tag_name: []const u8) bool {
+    return std.mem.eql(u8, tag_name, "tr");
+}
+
+fn tableCellTagAllowed(tag_name: []const u8) bool {
+    return std.mem.eql(u8, tag_name, "td") or std.mem.eql(u8, tag_name, "th");
 }
 
 fn tableColumnTagAllowed(tag_name: []const u8) bool {
@@ -15048,6 +15258,16 @@ fn elementIsAreaElement(host: anytype, element_id: dom.NodeId) errors.Result(boo
 fn elementIsScriptElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
     return std.ascii.eqlIgnoreCase(tag_name, "script");
+}
+
+fn elementSupportsDialogProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.ascii.eqlIgnoreCase(tag_name, "dialog");
+}
+
+fn elementSupportsDetailsProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.mem.eql(u8, tag_name, "details");
 }
 
 fn elementSupportsMultipleProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {

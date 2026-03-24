@@ -127,13 +127,14 @@ import (
 func main() error {
 	h, err := browsertester.NewHarnessBuilder().
 		PrintFailure("print blocked").
-		HTML("<script>window.print()</script>").
 		Build()
-	if err == nil {
-		return fmt.Errorf("expected build failure")
+	if err != nil {
+		return err
 	}
 
-	_ = h
+	if err := h.Print(); err == nil {
+		return fmt.Errorf("expected print failure")
+	}
 	return nil
 }
 ```
@@ -144,7 +145,7 @@ Other failure cases the workspace should keep covered:
 - a confirm or prompt call with an empty queue
 - a clipboard read with no seed
 - an unseeded `matchMedia(...)` query
-- bootstrap-time `window.open()`, `window.close()`, `window.print()`, or `window.scrollTo()` failures seeded through the builder
+- builder-seeded `Open`, `Close`, `Print`, `ScrollTo`, and `ScrollBy` failures, with the same seeds later available to bootstrap-time window bindings
 
 ## Adding a New Test-Only Mock
 
@@ -161,3 +162,4 @@ When a new mock family is added, the change set must include:
 
 Do not bypass the registry when wiring a new mock.
 Add it in runtime, expose it through the facade, and keep the family typed.
+Legacy and deprecated spec branches are not mock targets unless the capability matrix explicitly lists a bounded compatibility exception.

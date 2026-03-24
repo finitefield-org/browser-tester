@@ -1713,7 +1713,7 @@ test "regression: phase 17j5 HTMLTableColElement span and width resolve on the c
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
-test "regression: phase 17j6 HTMLTableElement legacy reflection resolve on the copied html snapshot" {
+test "regression: phase 17j6a HTMLTableSectionElement HTMLTableRowElement and HTMLTableCellElement legacy reflection resolve on the copied html snapshot" {
     const allocator = std.testing.allocator;
     const original = "<table id='table' align='center' border='1' frame='box' rules='all' summary='Summary' width='100px' bgcolor='pink' cellpadding='2' cellspacing='3'></table><div id='out'></div><script>const table = document.getElementById('table'); const detached = document.createElement('table'); const before = 'table[align=' + table.align + ';border=' + table.border + ';frame=' + table.frame + ';rules=' + table.rules + ';summary=' + table.summary + ';width=' + table.width + ';bgColor=' + table.bgColor + ';cellPadding=' + table.cellPadding + ';cellSpacing=' + table.cellSpacing + ']|detached[align=' + detached.align + ';border=' + detached.border + ';frame=' + detached.frame + ';rules=' + detached.rules + ';summary=' + detached.summary + ';width=' + detached.width + ';bgColor=' + detached.bgColor + ';cellPadding=' + detached.cellPadding + ';cellSpacing=' + detached.cellSpacing + ']'; table.align = 'left'; table.border = '2'; table.frame = 'void'; table.rules = 'rows'; table.summary = 'Updated'; table.width = '200px'; table.bgColor = null; table.cellPadding = null; table.cellSpacing = null; detached.align = 'right'; detached.border = '3'; detached.frame = 'above'; detached.rules = 'cols'; detached.summary = 'Detached'; detached.width = '300px'; detached.bgColor = null; detached.cellPadding = null; detached.cellSpacing = null; document.getElementById('out').textContent = before + '|table[align=' + table.align + ';border=' + table.border + ';frame=' + table.frame + ';rules=' + table.rules + ';summary=' + table.summary + ';width=' + table.width + ';bgColor=' + table.bgColor + ';cellPadding=' + table.cellPadding + ';cellSpacing=' + table.cellSpacing + ';attrBgColor=' + String(table.getAttribute('bgcolor')) + ';attrCellPadding=' + String(table.getAttribute('cellpadding')) + ';attrCellSpacing=' + String(table.getAttribute('cellspacing')) + ']|detached[align=' + detached.align + ';border=' + detached.border + ';frame=' + detached.frame + ';rules=' + detached.rules + ';summary=' + detached.summary + ';width=' + detached.width + ';bgColor=' + detached.bgColor + ';cellPadding=' + detached.cellPadding + ';cellSpacing=' + detached.cellSpacing + ';attrBgColor=' + String(detached.getAttribute('bgcolor')) + ';attrCellPadding=' + String(detached.getAttribute('cellpadding')) + ';attrCellSpacing=' + String(detached.getAttribute('cellspacing')) + ']';</script>";
     var html_bytes = try allocator.dupe(u8, original);
@@ -1727,6 +1727,24 @@ test "regression: phase 17j6 HTMLTableElement legacy reflection resolve on the c
     try subject.assertValue(
         "#out",
         "table[align=center;border=1;frame=box;rules=all;summary=Summary;width=100px;bgColor=pink;cellPadding=2;cellSpacing=3]|detached[align=;border=;frame=;rules=;summary=;width=;bgColor=;cellPadding=;cellSpacing=]|table[align=left;border=2;frame=void;rules=rows;summary=Updated;width=200px;bgColor=;cellPadding=;cellSpacing=;attrBgColor=;attrCellPadding=;attrCellSpacing=]|detached[align=right;border=3;frame=above;rules=cols;summary=Detached;width=300px;bgColor=;cellPadding=;cellSpacing=;attrBgColor=;attrCellPadding=;attrCellSpacing=]",
+    );
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 17j6 HTMLTableElement legacy reflection resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<table id='table' align='center' border='1' frame='box' rules='all' summary='Summary' width='100px' bgcolor='pink' cellpadding='2' cellspacing='3'><thead id='head' align='center' char='.' charoff='1' valign='top'><tr id='row' align='right' char=':' charoff='2' valign='middle' bgcolor='cyan'><td id='cell' align='left' axis='axis' height='10' width='20px' char='|' charoff='3' nowrap valign='bottom' bgcolor='pink'>A</td></tr></thead></table><div id='out'></div><script>const head = document.getElementById('head'); const row = document.getElementById('row'); const cell = document.getElementById('cell'); const detachedHead = document.createElement('thead'); const detachedRow = document.createElement('tr'); const detachedCell = document.createElement('td'); const before = 'head[align=' + head.align + ';ch=' + head.ch + ';chOff=' + head.chOff + ';vAlign=' + head.vAlign + ']|row[align=' + row.align + ';ch=' + row.ch + ';chOff=' + row.chOff + ';vAlign=' + row.vAlign + ';bgColor=' + row.bgColor + ']|cell[align=' + cell.align + ';axis=' + cell.axis + ';height=' + cell.height + ';width=' + cell.width + ';ch=' + cell.ch + ';chOff=' + cell.chOff + ';noWrap=' + String(cell.noWrap) + ';vAlign=' + cell.vAlign + ';bgColor=' + cell.bgColor + ']|detachedHead[align=' + detachedHead.align + ';ch=' + detachedHead.ch + ';chOff=' + detachedHead.chOff + ';vAlign=' + detachedHead.vAlign + ']|detachedRow[align=' + detachedRow.align + ';ch=' + detachedRow.ch + ';chOff=' + detachedRow.chOff + ';vAlign=' + detachedRow.vAlign + ';bgColor=' + detachedRow.bgColor + ']|detachedCell[align=' + detachedCell.align + ';axis=' + detachedCell.axis + ';height=' + detachedCell.height + ';width=' + detachedCell.width + ';ch=' + detachedCell.ch + ';chOff=' + detachedCell.chOff + ';noWrap=' + String(detachedCell.noWrap) + ';vAlign=' + detachedCell.vAlign + ';bgColor=' + detachedCell.bgColor + ']'; head.align = 'left'; head.ch = '*'; head.chOff = '4'; head.vAlign = 'bottom'; row.align = 'center'; row.ch = ';'; row.chOff = '5'; row.vAlign = 'top'; row.bgColor = null; cell.align = 'right'; cell.axis = 'y'; cell.height = '11'; cell.width = '30px'; cell.ch = '='; cell.chOff = '6'; cell.noWrap = false; cell.vAlign = 'middle'; cell.bgColor = null; detachedHead.align = 'justify'; detachedHead.ch = '!'; detachedHead.chOff = '7'; detachedHead.vAlign = 'baseline'; detachedRow.align = 'start'; detachedRow.ch = ','; detachedRow.chOff = '8'; detachedRow.vAlign = 'sub'; detachedRow.bgColor = null; detachedCell.align = 'end'; detachedCell.axis = 'z'; detachedCell.height = '12'; detachedCell.width = '40px'; detachedCell.ch = '~'; detachedCell.chOff = '9'; detachedCell.noWrap = true; detachedCell.vAlign = 'super'; detachedCell.bgColor = null; document.getElementById('out').textContent = before + '|head[align=' + head.align + ';ch=' + head.ch + ';chOff=' + head.chOff + ';vAlign=' + head.vAlign + ']|row[align=' + row.align + ';ch=' + row.ch + ';chOff=' + row.chOff + ';vAlign=' + row.vAlign + ';bgColor=' + row.bgColor + ';attrBgColor=' + row.getAttribute('bgcolor') + ']|cell[align=' + cell.align + ';axis=' + cell.axis + ';height=' + cell.height + ';width=' + cell.width + ';ch=' + cell.ch + ';chOff=' + cell.chOff + ';noWrap=' + String(cell.noWrap) + ';vAlign=' + cell.vAlign + ';bgColor=' + cell.bgColor + ';attrBgColor=' + cell.getAttribute('bgcolor') + ';attrNoWrap=' + String(cell.hasAttribute('nowrap')) + ']|detachedHead[align=' + detachedHead.align + ';ch=' + detachedHead.ch + ';chOff=' + detachedHead.chOff + ';vAlign=' + detachedHead.vAlign + ']|detachedRow[align=' + detachedRow.align + ';ch=' + detachedRow.ch + ';chOff=' + detachedRow.chOff + ';vAlign=' + detachedRow.vAlign + ';bgColor=' + detachedRow.bgColor + ';attrBgColor=' + detachedRow.getAttribute('bgcolor') + ']|detachedCell[align=' + detachedCell.align + ';axis=' + detachedCell.axis + ';height=' + detachedCell.height + ';width=' + detachedCell.width + ';ch=' + detachedCell.ch + ';chOff=' + detachedCell.chOff + ';noWrap=' + String(detachedCell.noWrap) + ';vAlign=' + detachedCell.vAlign + ';bgColor=' + detachedCell.bgColor + ';attrBgColor=' + detachedCell.getAttribute('bgcolor') + ';attrNoWrap=' + String(detachedCell.hasAttribute('nowrap')) + ']';</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue(
+        "#out",
+        "head[align=center;ch=.;chOff=1;vAlign=top]|row[align=right;ch=:;chOff=2;vAlign=middle;bgColor=cyan]|cell[align=left;axis=axis;height=10;width=20px;ch=|;chOff=3;noWrap=true;vAlign=bottom;bgColor=pink]|detachedHead[align=;ch=;chOff=;vAlign=]|detachedRow[align=;ch=;chOff=;vAlign=;bgColor=]|detachedCell[align=;axis=;height=;width=;ch=;chOff=;noWrap=false;vAlign=;bgColor=]|head[align=left;ch=*;chOff=4;vAlign=bottom]|row[align=center;ch=;;chOff=5;vAlign=top;bgColor=;attrBgColor=]|cell[align=right;axis=y;height=11;width=30px;ch==;chOff=6;noWrap=false;vAlign=middle;bgColor=;attrBgColor=;attrNoWrap=false]|detachedHead[align=justify;ch=!;chOff=7;vAlign=baseline]|detachedRow[align=start;ch=,;chOff=8;vAlign=sub;bgColor=;attrBgColor=]|detachedCell[align=end;axis=z;height=12;width=40px;ch=~;chOff=9;noWrap=true;vAlign=super;bgColor=;attrBgColor=;attrNoWrap=true]",
     );
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
@@ -2365,6 +2383,21 @@ test "regression: phase 18c table section reflection resolve on the copied html 
     html_bytes[1] = 'Z';
 
     try subject.assertValue("#out", "null:null:null|caption:head:foot|null:null:null");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 18c1 table body creation resolves on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<table id='table'><caption id='caption'></caption><colgroup id='group'></colgroup><tbody id='body-1'></tbody></table><div id='out'></div><script>const table = document.getElementById('table'); const before = String(table.children.length) + ':' + String(table.children.item(0).getAttribute('id')) + ':' + String(table.children.item(1).getAttribute('id')) + ':' + String(table.children.item(2).getAttribute('id')) + ':' + String(table.tBodies.length); const head = table.createTHead(); head.id = 'head'; const body2 = table.createTBody(); body2.id = 'body-2'; const foot = table.createTFoot(); foot.id = 'foot'; document.getElementById('out').textContent = before + '|' + String(table.children.length) + ':' + String(table.children.item(0).getAttribute('id')) + ':' + String(table.children.item(1).getAttribute('id')) + ':' + String(table.children.item(2).getAttribute('id')) + ':' + String(table.children.item(3).getAttribute('id')) + ':' + String(table.children.item(4).getAttribute('id')) + ':' + String(table.children.item(5).getAttribute('id')) + ':' + String(table.tBodies.length) + ':' + String(table.tHead.getAttribute('id')) + ':' + String(table.tFoot.getAttribute('id'));</script>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "3:caption:group:body-1:1|6:caption:group:head:body-1:body-2:foot:2:head:foot");
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 
@@ -3052,6 +3085,37 @@ test "regression: phase 8 form.reset resolves on the copied html snapshot" {
     html_bytes[1] = 'Z';
 
     try subject.assertValue("#out", "reset:true:true");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 8 dialog controls resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><dialog id='dlg'></dialog><div id='out'></div><script>const dialog = document.getElementById('dlg'); dialog.closedBy = 'none'; dialog.addEventListener('cancel', () => { document.getElementById('out').textContent = 'cancel:' + String(document.getElementById('dlg').open) + ':' + document.getElementById('dlg').returnValue; }); dialog.addEventListener('close', () => { document.getElementById('out').textContent += '|close:' + String(document.getElementById('dlg').open) + ':' + document.getElementById('dlg').returnValue; }); dialog.show(); dialog.requestClose('done'); document.getElementById('out').textContent += '|after:' + String(dialog.open) + ':' + dialog.returnValue + ':' + dialog.closedBy;</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.assertValue("#out", "cancel:true:|close:false:done|after:false:done:none");
+    try std.testing.expectEqualStrings(original, subject.html().?);
+}
+
+test "regression: phase 8 details controls resolve on the copied html snapshot" {
+    const allocator = std.testing.allocator;
+    const original = "<main id='root'><details id='details' name='accordion'><summary id='summary'>Title</summary><div>Body</div></details><div id='out'></div><script>const details = document.getElementById('details'); const out = document.getElementById('out'); out.textContent = String(details.open) + ':' + details.name; details.addEventListener('toggle', () => { out.textContent += '|' + String(details.open) + ':' + details.name; });</script></main>";
+    var html_bytes = try allocator.dupe(u8, original);
+    defer allocator.free(html_bytes);
+
+    var subject = try Harness.fromHtml(allocator, html_bytes);
+    defer subject.deinit();
+
+    html_bytes[1] = 'Z';
+
+    try subject.click("#summary");
+    try subject.assertValue("#out", "false:accordion|true:accordion");
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 

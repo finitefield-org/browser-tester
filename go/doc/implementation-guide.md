@@ -11,6 +11,7 @@ It is deliberately conservative: explicit subsystems, thin public facade, and de
 4. Keep builder configuration explicit. Do not encode mock seeds into unrelated state.
 5. Use `../html-standard/` as the reference for any HTML/DOM slice before coding it.
 6. Prefer bounded slices over broad partial compatibility. Each new slice should have a clear exit criterion.
+7. Do not spend implementation budget on legacy or deprecated spec behavior. Treat those branches as out of scope unless a specific, documented user-visible need requires them.
 
 ## Suggested File Layout
 
@@ -63,6 +64,7 @@ internal/
 - Define the error taxonomy and the public facade types.
 - Define `SessionConfig` with explicit fields.
 - Define `MockRegistryView` and `DebugView` early so later APIs have a place to live.
+- The current scaffold already compiles with `go test ./...`; later phases should extend it without widening the facade prematurely.
 
 Exit criteria:
 
@@ -155,3 +157,4 @@ Exit criteria:
 - If a new behavior is user-facing, update the capability matrix and `README.md` before or with the code.
 - If a new mock family is added, update the mock guide and add a minimal example plus failure coverage.
 - Do not let `Harness` become a bag of setter methods.
+- Legacy and deprecated spec paths are not implementation targets unless the capability matrix explicitly lists them for a concrete compatibility reason.

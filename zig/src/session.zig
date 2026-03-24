@@ -1920,6 +1920,56 @@ pub const Session = struct {
         return;
     }
 
+    pub fn showDialog(self: *Session, node_id: dom.NodeId) errors.Result(void) {
+        const node = self.dom_store.nodeAt(node_id) orelse return error.DomError;
+        if (!isDialogNode(node)) return error.DomError;
+        if (try self.dom_store.hasAttribute(node_id, "open")) return error.ScriptRuntime;
+        try self.dom_store.setAttribute(node_id, "open", "");
+        return;
+    }
+
+    pub fn setDetailsOpen(self: *Session, node_id: dom.NodeId, open: bool) errors.Result(void) {
+        const node = self.dom_store.nodeAt(node_id) orelse return error.DomError;
+        if (!isDetailsNode(node)) return error.DomError;
+        const is_open = try self.dom_store.hasAttribute(node_id, "open");
+        if (open == is_open) return;
+        if (open) {
+            try self.dom_store.setAttribute(node_id, "open", "");
+        } else {
+            try self.dom_store.removeAttribute(node_id, "open");
+        }
+        _ = try self.dispatchDomEvent(node_id, "toggle", false, false);
+        try self.flush();
+        return;
+    }
+
+    pub fn closeDialog(self: *Session, node_id: dom.NodeId, return_value: ?[]const u8) errors.Result(void) {
+        const node = self.dom_store.nodeAt(node_id) orelse return error.DomError;
+        if (!isDialogNode(node)) return error.DomError;
+        if (!try self.dom_store.hasAttribute(node_id, "open")) return;
+        try self.dom_store.setDialogReturnValue(node_id, return_value orelse "");
+        try self.dom_store.removeAttribute(node_id, "open");
+        _ = try self.dispatchDomEvent(node_id, "close", false, false);
+        try self.flush();
+        return;
+    }
+
+    pub fn requestCloseDialog(self: *Session, node_id: dom.NodeId, return_value: ?[]const u8) errors.Result(void) {
+        const node = self.dom_store.nodeAt(node_id) orelse return error.DomError;
+        if (!isDialogNode(node)) return error.DomError;
+        if (!try self.dom_store.hasAttribute(node_id, "open")) return;
+
+        var runtime = script.ScriptRuntime{};
+        const outcome = try runtime.dispatchDomEvent(self.arena.allocator(), self, node_id, "cancel", false, true);
+        if (outcome.default_prevented) {
+            try self.flush();
+            return;
+        }
+
+        try self.closeDialog(node_id, return_value);
+        return;
+    }
+
     pub fn reportValidityNode(self: *Session, node_id: dom.NodeId) errors.Result(bool) {
         try self.ensureElementNode(node_id);
         const node = self.dom_store.nodeAt(node_id) orelse return error.DomError;
@@ -2148,6 +2198,21 @@ pub const Session = struct {
         if (isResetControl(element.tag_name, input_type)) {
             if (self.findAssociatedForm(node_id)) |form_id| {
                 try self.resetNode(form_id);
+            }
+        }
+
+        if (std.mem.eql(u8, element.tag_name, "summary")) {
+            if (node.parent) |parent_id| {
+                const parent = self.dom_store.nodeAt(parent_id) orelse return error.DomError;
+                if (isDetailsNode(parent)) {
+                    if (self.dom_store.firstElementChild(parent_id)) |first_summary_id| {
+                        if (sameNodeId(first_summary_id, node_id)) {
+                            const is_open = try self.dom_store.hasAttribute(parent_id, "open");
+                            try self.setDetailsOpen(parent_id, !is_open);
+                            return;
+                        }
+                    }
+                }
             }
         }
 
@@ -3200,6 +3265,53 @@ const BootstrapHost = struct {
         return;
     }
 
+    pub fn showDialog(self: *BootstrapHost, node_id: dom.NodeId) errors.Result(void) {
+        const node = self.dom_store.nodeAt(node_id) orelse return error.DomError;
+        if (!isDialogNode(node)) return error.DomError;
+        if (try self.dom_store.hasAttribute(node_id, "open")) return error.ScriptRuntime;
+        try self.dom_store.setAttribute(node_id, "open", "");
+        return;
+    }
+
+    pub fn setDetailsOpen(self: *BootstrapHost, node_id: dom.NodeId, open: bool) errors.Result(void) {
+        const node = self.dom_store.nodeAt(node_id) orelse return error.DomError;
+        if (!isDetailsNode(node)) return error.DomError;
+        const is_open = try self.dom_store.hasAttribute(node_id, "open");
+        if (open == is_open) return;
+        if (open) {
+            try self.dom_store.setAttribute(node_id, "open", "");
+        } else {
+            try self.dom_store.removeAttribute(node_id, "open");
+        }
+        var runtime = script.ScriptRuntime{};
+        _ = try runtime.dispatchDomEvent(self.allocator, self, node_id, "toggle", false, false);
+        return;
+    }
+
+    pub fn closeDialog(self: *BootstrapHost, node_id: dom.NodeId, return_value: ?[]const u8) errors.Result(void) {
+        const node = self.dom_store.nodeAt(node_id) orelse return error.DomError;
+        if (!isDialogNode(node)) return error.DomError;
+        if (!try self.dom_store.hasAttribute(node_id, "open")) return;
+        try self.dom_store.setDialogReturnValue(node_id, return_value orelse "");
+        try self.dom_store.removeAttribute(node_id, "open");
+        var runtime = script.ScriptRuntime{};
+        _ = try runtime.dispatchDomEvent(self.allocator, self, node_id, "close", false, false);
+        return;
+    }
+
+    pub fn requestCloseDialog(self: *BootstrapHost, node_id: dom.NodeId, return_value: ?[]const u8) errors.Result(void) {
+        const node = self.dom_store.nodeAt(node_id) orelse return error.DomError;
+        if (!isDialogNode(node)) return error.DomError;
+        if (!try self.dom_store.hasAttribute(node_id, "open")) return;
+
+        var runtime = script.ScriptRuntime{};
+        const outcome = try runtime.dispatchDomEvent(self.allocator, self, node_id, "cancel", false, true);
+        if (outcome.default_prevented) return;
+
+        try self.closeDialog(node_id, return_value);
+        return;
+    }
+
     pub fn reportValidityNode(self: *BootstrapHost, node_id: dom.NodeId) errors.Result(bool) {
         const node = self.dom_store.nodeAt(node_id) orelse return error.DomError;
         const tag_name = switch (node.kind) {
@@ -3826,6 +3938,20 @@ fn downloadFileNameFromHref(allocator: std.mem.Allocator, href: []const u8) erro
 fn isFormNode(node: *const dom.NodeRecord) bool {
     return switch (node.kind) {
         .element => |element| std.mem.eql(u8, element.tag_name, "form"),
+        else => false,
+    };
+}
+
+fn isDialogNode(node: *const dom.NodeRecord) bool {
+    return switch (node.kind) {
+        .element => |element| std.mem.eql(u8, element.tag_name, "dialog"),
+        else => false,
+    };
+}
+
+fn isDetailsNode(node: *const dom.NodeRecord) bool {
+    return switch (node.kind) {
+        .element => |element| std.mem.eql(u8, element.tag_name, "details"),
         else => false,
     };
 }
