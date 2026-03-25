@@ -1,0 +1,6098 @@
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, VecDeque};
+use std::error::Error as StdError;
+use std::fmt;
+
+use bt_dom::{
+    DomStore, ElementData, HTML_NAMESPACE_URI, MATHML_NAMESPACE_URI, NodeId, NodeKind,
+    SVG_NAMESPACE_URI,
+};
+use bt_script::{
+    ElementHandle, EventPhase, HostBindings, HtmlCollectionScope, HtmlCollectionTarget,
+    KeyboardEventInit, ListenerTarget, MediaQueryListState, NodeHandle, RadioNodeListTarget,
+    ScreenOrientationState, ScriptError, ScriptEventHandle, ScriptFunction, ScriptRuntime,
+    ScriptValue, StorageTarget,
+};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionConfig {
+    pub url: String,
+    pub html: Option<String>,
+    pub local_storage: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DocumentReadyState {
+    Loading,
+    Complete,
+}
+
+const MATCH_MEDIA_SEED_PREFIX: &str = "__browser_tester_match_media__";
+const OPEN_FAILURE_SEED_KEY: &str = "__browser_tester_open_failure__";
+const CLOSE_FAILURE_SEED_KEY: &str = "__browser_tester_close_failure__";
+const PRINT_FAILURE_SEED_KEY: &str = "__browser_tester_print_failure__";
+const SCROLL_FAILURE_SEED_KEY: &str = "__browser_tester_scroll_failure__";
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            url: "https://app.local/".to_string(),
+            html: None,
+            local_storage: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScheduledTimer {
+    pub id: u64,
+    pub at_ms: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Scheduler {
+    now_ms: i64,
+    timers: Vec<ScheduledTimer>,
+    microtasks: usize,
+    next_timer_id: u64,
+    step_limit: usize,
+}
+
+impl Default for Scheduler {
+    fn default() -> Self {
+        Self {
+            now_ms: 0,
+            timers: Vec::new(),
+            microtasks: 0,
+            next_timer_id: 1,
+            step_limit: 10_000,
+        }
+    }
+}
+
+impl Scheduler {
+    pub fn now_ms(&self) -> i64 {
+        self.now_ms
+    }
+
+    pub fn advance_time(&mut self, delta_ms: i64) {
+        self.now_ms += delta_ms;
+        let _ = self.run_due_timers();
+    }
+
+    pub fn advance_time_to(&mut self, target_ms: i64) {
+        self.now_ms = self.now_ms.max(target_ms);
+        let _ = self.run_due_timers();
+    }
+
+    pub fn queue_timer(&mut self, at_ms: i64) -> u64 {
+        let id = self.next_timer_id;
+        self.next_timer_id += 1;
+        self.timers.push(ScheduledTimer { id, at_ms });
+        self.timers.sort_by_key(|timer| (timer.at_ms, timer.id));
+        id
+    }
+
+    pub fn cancel_timer(&mut self, id: u64) -> bool {
+        let before = self.timers.len();
+        self.timers.retain(|timer| timer.id != id);
+        before != self.timers.len()
+    }
+
+    pub fn pending_timers(&self) -> &[ScheduledTimer] {
+        &self.timers
+    }
+
+    pub fn run_due_timers(&mut self) -> Vec<ScheduledTimer> {
+        let split = self
+            .timers
+            .iter()
+            .position(|timer| timer.at_ms > self.now_ms)
+            .unwrap_or(self.timers.len());
+        self.timers.drain(..split).collect()
+    }
+
+    pub fn queue_microtask(&mut self) {
+        self.microtasks += 1;
+    }
+
+    pub fn microtask_count(&self) -> usize {
+        self.microtasks
+    }
+
+    pub fn flush(&mut self) {
+        while let Some(next_due) = self.timers.first().map(|timer| timer.at_ms) {
+            self.now_ms = self.now_ms.max(next_due);
+            let _ = self.run_due_timers();
+        }
+        self.microtasks = 0;
+    }
+
+    pub fn step_limit(&self) -> usize {
+        self.step_limit
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FetchResponseRule {
+    pub url: String,
+    pub status: u16,
+    pub body: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FetchErrorRule {
+    pub url: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FetchCall {
+    pub url: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FetchResponse {
+    pub url: String,
+    pub status: u16,
+    pub body: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FetchMocks {
+    responses: Vec<FetchResponseRule>,
+    errors: Vec<FetchErrorRule>,
+    calls: Vec<FetchCall>,
+}
+
+impl FetchMocks {
+    pub fn respond_text(&mut self, url: impl Into<String>, status: u16, body: impl Into<String>) {
+        self.responses.push(FetchResponseRule {
+            url: url.into(),
+            status,
+            body: body.into(),
+        });
+    }
+
+    pub fn fail(&mut self, url: impl Into<String>, message: impl Into<String>) {
+        self.errors.push(FetchErrorRule {
+            url: url.into(),
+            message: message.into(),
+        });
+    }
+
+    pub fn record_call(&mut self, url: impl Into<String>) {
+        self.calls.push(FetchCall { url: url.into() });
+    }
+
+    pub fn responses(&self) -> &[FetchResponseRule] {
+        &self.responses
+    }
+
+    pub fn errors(&self) -> &[FetchErrorRule] {
+        &self.errors
+    }
+
+    pub fn calls(&self) -> &[FetchCall] {
+        &self.calls
+    }
+
+    pub fn reset(&mut self) {
+        self.responses.clear();
+        self.errors.clear();
+        self.calls.clear();
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DialogMocks {
+    confirm_queue: Vec<bool>,
+    prompt_queue: Vec<Option<String>>,
+    alert_messages: Vec<String>,
+    confirm_messages: Vec<String>,
+    prompt_messages: Vec<String>,
+}
+
+impl DialogMocks {
+    pub fn push_confirm(&mut self, value: bool) {
+        self.confirm_queue.push(value);
+    }
+
+    pub fn push_prompt(&mut self, value: Option<impl Into<String>>) {
+        self.prompt_queue.push(value.map(Into::into));
+    }
+
+    pub fn record_alert(&mut self, message: impl Into<String>) {
+        self.alert_messages.push(message.into());
+    }
+
+    pub fn record_confirm(&mut self, message: impl Into<String>) {
+        self.confirm_messages.push(message.into());
+    }
+
+    pub fn record_prompt(&mut self, message: impl Into<String>) {
+        self.prompt_messages.push(message.into());
+    }
+
+    pub fn confirm_queue(&self) -> &[bool] {
+        &self.confirm_queue
+    }
+
+    pub fn prompt_queue(&self) -> &[Option<String>] {
+        &self.prompt_queue
+    }
+
+    pub fn alert_messages(&self) -> &[String] {
+        &self.alert_messages
+    }
+
+    pub fn confirm_messages(&self) -> &[String] {
+        &self.confirm_messages
+    }
+
+    pub fn prompt_messages(&self) -> &[String] {
+        &self.prompt_messages
+    }
+
+    pub fn reset(&mut self) {
+        self.confirm_queue.clear();
+        self.prompt_queue.clear();
+        self.alert_messages.clear();
+        self.confirm_messages.clear();
+        self.prompt_messages.clear();
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClipboardMocks {
+    seeded_text: Option<String>,
+    writes: Vec<String>,
+    read_error: Option<String>,
+    write_error: Option<String>,
+}
+
+impl ClipboardMocks {
+    pub fn seed_text(&mut self, value: impl Into<String>) {
+        self.seeded_text = Some(value.into());
+    }
+
+    pub fn seeded_text(&self) -> Option<&str> {
+        self.seeded_text.as_deref()
+    }
+
+    pub fn set_read_error(&mut self, error: Option<&str>) {
+        self.read_error = error.map(std::string::ToString::to_string);
+    }
+
+    pub fn set_write_error(&mut self, error: Option<&str>) {
+        self.write_error = error.map(std::string::ToString::to_string);
+    }
+
+    pub fn clear_errors(&mut self) {
+        self.read_error = None;
+        self.write_error = None;
+    }
+
+    pub fn read_error(&self) -> Option<&str> {
+        self.read_error.as_deref()
+    }
+
+    pub fn write_error(&self) -> Option<&str> {
+        self.write_error.as_deref()
+    }
+
+    pub fn record_write(&mut self, value: impl Into<String>) {
+        self.writes.push(value.into());
+    }
+
+    pub fn writes(&self) -> &[String] {
+        &self.writes
+    }
+
+    pub fn reset(&mut self) {
+        self.seeded_text = None;
+        self.writes.clear();
+        self.read_error = None;
+        self.write_error = None;
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LocationMocks {
+    current_url: Option<String>,
+    navigations: Vec<String>,
+}
+
+impl LocationMocks {
+    pub fn set_current(&mut self, url: impl Into<String>) {
+        self.current_url = Some(url.into());
+    }
+
+    pub fn record_navigation(&mut self, url: impl Into<String>) {
+        self.navigations.push(url.into());
+    }
+
+    pub fn current_url(&self) -> Option<&str> {
+        self.current_url.as_deref()
+    }
+
+    pub fn navigations(&self) -> &[String] {
+        &self.navigations
+    }
+
+    pub fn reset(&mut self) {
+        self.current_url = None;
+        self.navigations.clear();
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MatchMediaCall {
+    pub query: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MatchMediaListenerCall {
+    pub query: String,
+    pub method: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MatchMediaMocks {
+    matches: Vec<(String, bool)>,
+    calls: Vec<MatchMediaCall>,
+    listener_calls: Vec<MatchMediaListenerCall>,
+}
+
+impl MatchMediaMocks {
+    pub fn respond_matches(&mut self, query: impl Into<String>, matches: bool) {
+        self.matches.push((query.into(), matches));
+    }
+
+    pub fn record_call(&mut self, query: impl Into<String>) {
+        self.calls.push(MatchMediaCall {
+            query: query.into(),
+        });
+    }
+
+    pub fn record_listener_call(&mut self, query: impl Into<String>, method: impl Into<String>) {
+        self.listener_calls.push(MatchMediaListenerCall {
+            query: query.into(),
+            method: method.into(),
+        });
+    }
+
+    pub fn resolve(&mut self, query: &str) -> Result<MediaQueryListState, String> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Err("matchMedia() requires a non-empty media query".to_string());
+        }
+
+        self.record_call(query.to_string());
+
+        if let Some((_, matches)) = self
+            .matches
+            .iter()
+            .rev()
+            .find(|(rule_query, _)| rule_query == query)
+        {
+            return Ok(MediaQueryListState::new(query, *matches));
+        }
+
+        Err(format!("no matchMedia mock configured for `{query}`"))
+    }
+
+    pub fn calls(&self) -> &[MatchMediaCall] {
+        &self.calls
+    }
+
+    pub fn take_calls(&mut self) -> Vec<MatchMediaCall> {
+        std::mem::take(&mut self.calls)
+    }
+
+    pub fn listener_calls(&self) -> &[MatchMediaListenerCall] {
+        &self.listener_calls
+    }
+
+    pub fn reset(&mut self) {
+        self.matches.clear();
+        self.calls.clear();
+        self.listener_calls.clear();
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenCall {
+    pub url: Option<String>,
+    pub target: Option<String>,
+    pub features: Option<String>,
+}
+
+impl Default for OpenCall {
+    fn default() -> Self {
+        Self {
+            url: None,
+            target: None,
+            features: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OpenMocks {
+    failure: Option<String>,
+    calls: Vec<OpenCall>,
+}
+
+impl OpenMocks {
+    pub fn fail(&mut self, message: impl Into<String>) {
+        self.failure = Some(message.into());
+    }
+
+    pub fn clear_failure(&mut self) {
+        self.failure = None;
+    }
+
+    fn invoke(
+        &mut self,
+        url: Option<&str>,
+        target: Option<&str>,
+        features: Option<&str>,
+    ) -> Result<(), String> {
+        self.record_call(url, target, features);
+        if let Some(message) = &self.failure {
+            return Err(message.clone());
+        }
+
+        Ok(())
+    }
+
+    pub fn record_call(&mut self, url: Option<&str>, target: Option<&str>, features: Option<&str>) {
+        self.calls.push(OpenCall {
+            url: url.map(str::to_string),
+            target: target.map(str::to_string),
+            features: features.map(str::to_string),
+        });
+    }
+
+    pub fn calls(&self) -> &[OpenCall] {
+        &self.calls
+    }
+
+    pub fn reset(&mut self) {
+        self.failure = None;
+        self.calls.clear();
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CloseCall;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CloseMocks {
+    failure: Option<String>,
+    calls: Vec<CloseCall>,
+}
+
+impl CloseMocks {
+    pub fn fail(&mut self, message: impl Into<String>) {
+        self.failure = Some(message.into());
+    }
+
+    pub fn clear_failure(&mut self) {
+        self.failure = None;
+    }
+
+    fn invoke(&mut self) -> Result<(), String> {
+        self.record_call();
+        if let Some(message) = &self.failure {
+            return Err(message.clone());
+        }
+
+        Ok(())
+    }
+
+    pub fn record_call(&mut self) {
+        self.calls.push(CloseCall);
+    }
+
+    pub fn calls(&self) -> &[CloseCall] {
+        &self.calls
+    }
+
+    pub fn reset(&mut self) {
+        self.failure = None;
+        self.calls.clear();
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrintCall;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrintMocks {
+    failure: Option<String>,
+    calls: Vec<PrintCall>,
+}
+
+impl PrintMocks {
+    pub fn fail(&mut self, message: impl Into<String>) {
+        self.failure = Some(message.into());
+    }
+
+    pub fn clear_failure(&mut self) {
+        self.failure = None;
+    }
+
+    fn invoke(&mut self) -> Result<(), String> {
+        self.record_call();
+        if let Some(message) = &self.failure {
+            return Err(message.clone());
+        }
+
+        Ok(())
+    }
+
+    pub fn record_call(&mut self) {
+        self.calls.push(PrintCall);
+    }
+
+    pub fn calls(&self) -> &[PrintCall] {
+        &self.calls
+    }
+
+    pub fn take(&mut self) -> Vec<PrintCall> {
+        std::mem::take(&mut self.calls)
+    }
+
+    pub fn reset(&mut self) {
+        self.failure = None;
+        self.calls.clear();
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScrollMethod {
+    To,
+    By,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScrollCall {
+    pub method: ScrollMethod,
+    pub x: i64,
+    pub y: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScrollMocks {
+    failure: Option<String>,
+    calls: Vec<ScrollCall>,
+}
+
+impl ScrollMocks {
+    pub fn fail(&mut self, message: impl Into<String>) {
+        self.failure = Some(message.into());
+    }
+
+    pub fn clear_failure(&mut self) {
+        self.failure = None;
+    }
+
+    fn invoke(&mut self, method: ScrollMethod, x: i64, y: i64) -> Result<(), String> {
+        self.record_call(method, x, y);
+        if let Some(message) = &self.failure {
+            return Err(message.clone());
+        }
+
+        Ok(())
+    }
+
+    pub fn record_call(&mut self, method: ScrollMethod, x: i64, y: i64) {
+        self.calls.push(ScrollCall { method, x, y });
+    }
+
+    pub fn calls(&self) -> &[ScrollCall] {
+        &self.calls
+    }
+
+    pub fn reset(&mut self) {
+        self.failure = None;
+        self.calls.clear();
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DownloadCapture {
+    pub file_name: String,
+    pub filename: Option<String>,
+    pub mime_type: Option<String>,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DownloadMocks {
+    artifacts: Vec<DownloadCapture>,
+}
+
+impl DownloadMocks {
+    pub fn capture(&mut self, file_name: impl Into<String>, bytes: impl Into<Vec<u8>>) {
+        let file_name = file_name.into();
+        self.artifacts.push(DownloadCapture {
+            filename: Some(file_name.clone()),
+            mime_type: None,
+            file_name,
+            bytes: bytes.into(),
+        });
+    }
+
+    pub fn artifacts(&self) -> &[DownloadCapture] {
+        &self.artifacts
+    }
+
+    pub fn take(&mut self) -> Vec<DownloadCapture> {
+        std::mem::take(&mut self.artifacts)
+    }
+
+    pub fn reset(&mut self) {
+        self.artifacts.clear();
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FileInputSelection {
+    pub selector: String,
+    pub files: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FileInputMocks {
+    selections: Vec<FileInputSelection>,
+}
+
+impl FileInputMocks {
+    pub fn set_files(
+        &mut self,
+        selector: impl Into<String>,
+        files: impl IntoIterator<Item = impl Into<String>>,
+    ) {
+        self.selections.push(FileInputSelection {
+            selector: selector.into(),
+            files: files.into_iter().map(Into::into).collect(),
+        });
+    }
+
+    pub fn selections(&self) -> &[FileInputSelection] {
+        &self.selections
+    }
+
+    pub fn reset(&mut self) {
+        self.selections.clear();
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StorageSeeds {
+    local: BTreeMap<String, String>,
+    session: BTreeMap<String, String>,
+}
+
+impl StorageSeeds {
+    pub fn seed_local(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.local.insert(key.into(), value.into());
+    }
+
+    pub fn seed_session(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.session.insert(key.into(), value.into());
+    }
+
+    pub fn local(&self) -> &BTreeMap<String, String> {
+        &self.local
+    }
+
+    pub fn session(&self) -> &BTreeMap<String, String> {
+        &self.session
+    }
+
+    pub fn reset(&mut self) {
+        self.local.clear();
+        self.session.clear();
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SessionError {
+    HtmlParse(String),
+    Script(ScriptError),
+    Selector(String),
+    Dom(String),
+    Event(String),
+    Mock(String),
+}
+
+impl fmt::Display for SessionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::HtmlParse(message) => write!(f, "HTML parse error: {message}"),
+            Self::Script(err) => write!(f, "Script error: {err}"),
+            Self::Selector(message) => write!(f, "Selector error: {message}"),
+            Self::Dom(message) => write!(f, "DOM error: {message}"),
+            Self::Event(message) => write!(f, "Event error: {message}"),
+            Self::Mock(message) => write!(f, "Mock error: {message}"),
+        }
+    }
+}
+
+impl StdError for SessionError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::HtmlParse(_) => None,
+            Self::Script(err) => Some(err),
+            Self::Selector(_) | Self::Dom(_) | Self::Event(_) | Self::Mock(_) => None,
+        }
+    }
+}
+
+impl From<ScriptError> for SessionError {
+    fn from(value: ScriptError) -> Self {
+        Self::Script(value)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ScriptListenerRecord {
+    target: SessionEventTarget,
+    event_type: String,
+    capture: bool,
+    handler: ScriptFunction,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum ScheduledScriptTimerKind {
+    AnimationFrame,
+    Timeout,
+    Interval { interval_ms: i64 },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ScheduledScriptTimerRecord {
+    kind: ScheduledScriptTimerKind,
+    handler: ScriptFunction,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionEventTarget {
+    Window,
+    Document,
+    Element(NodeId),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DefaultActionKind {
+    CheckboxToggle,
+    SubmitButton,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct DispatchOutcome {
+    default_prevented: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MockRegistry {
+    fetch: FetchMocks,
+    dialogs: DialogMocks,
+    clipboard: ClipboardMocks,
+    location: LocationMocks,
+    match_media: MatchMediaMocks,
+    open: OpenMocks,
+    close: CloseMocks,
+    print: PrintMocks,
+    scroll: ScrollMocks,
+    downloads: DownloadMocks,
+    file_input: FileInputMocks,
+    storage: StorageSeeds,
+}
+
+impl MockRegistry {
+    pub fn fetch(&self) -> &FetchMocks {
+        &self.fetch
+    }
+
+    pub fn fetch_mut(&mut self) -> &mut FetchMocks {
+        &mut self.fetch
+    }
+
+    pub fn dialogs(&self) -> &DialogMocks {
+        &self.dialogs
+    }
+
+    pub fn dialogs_mut(&mut self) -> &mut DialogMocks {
+        &mut self.dialogs
+    }
+
+    pub fn clipboard(&self) -> &ClipboardMocks {
+        &self.clipboard
+    }
+
+    pub fn clipboard_mut(&mut self) -> &mut ClipboardMocks {
+        &mut self.clipboard
+    }
+
+    pub fn location(&self) -> &LocationMocks {
+        &self.location
+    }
+
+    pub fn location_mut(&mut self) -> &mut LocationMocks {
+        &mut self.location
+    }
+
+    pub fn match_media(&self) -> &MatchMediaMocks {
+        &self.match_media
+    }
+
+    pub fn match_media_mut(&mut self) -> &mut MatchMediaMocks {
+        &mut self.match_media
+    }
+
+    pub fn open(&self) -> &OpenMocks {
+        &self.open
+    }
+
+    pub fn open_mut(&mut self) -> &mut OpenMocks {
+        &mut self.open
+    }
+
+    pub fn close(&self) -> &CloseMocks {
+        &self.close
+    }
+
+    pub fn close_mut(&mut self) -> &mut CloseMocks {
+        &mut self.close
+    }
+
+    pub fn print(&self) -> &PrintMocks {
+        &self.print
+    }
+
+    pub fn print_mut(&mut self) -> &mut PrintMocks {
+        &mut self.print
+    }
+
+    pub fn scroll(&self) -> &ScrollMocks {
+        &self.scroll
+    }
+
+    pub fn scroll_mut(&mut self) -> &mut ScrollMocks {
+        &mut self.scroll
+    }
+
+    pub fn downloads(&self) -> &DownloadMocks {
+        &self.downloads
+    }
+
+    pub fn downloads_mut(&mut self) -> &mut DownloadMocks {
+        &mut self.downloads
+    }
+
+    pub fn file_input(&self) -> &FileInputMocks {
+        &self.file_input
+    }
+
+    pub fn file_input_mut(&mut self) -> &mut FileInputMocks {
+        &mut self.file_input
+    }
+
+    pub fn storage(&self) -> &StorageSeeds {
+        &self.storage
+    }
+
+    pub fn storage_mut(&mut self) -> &mut StorageSeeds {
+        &mut self.storage
+    }
+
+    pub fn reset_all(&mut self) {
+        self.fetch.reset();
+        self.dialogs.reset();
+        self.clipboard.reset();
+        self.location.reset();
+        self.match_media.reset();
+        self.open.reset();
+        self.close.reset();
+        self.print.reset();
+        self.scroll.reset();
+        self.downloads.reset();
+        self.file_input.reset();
+        self.storage.reset();
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DebugState {
+    trace_enabled: bool,
+    trace_events: bool,
+    trace_timers: bool,
+    trace_logs: VecDeque<String>,
+    trace_log_limit: usize,
+    trace_to_stderr: bool,
+}
+
+impl Default for DebugState {
+    fn default() -> Self {
+        Self {
+            trace_enabled: false,
+            trace_events: true,
+            trace_timers: true,
+            trace_logs: VecDeque::new(),
+            trace_log_limit: 10_000,
+            trace_to_stderr: true,
+        }
+    }
+}
+
+impl DebugState {
+    pub fn enable_trace(&mut self) {
+        self.trace_enabled = true;
+    }
+
+    pub fn set_trace_enabled(&mut self, enabled: bool) {
+        self.trace_enabled = enabled;
+    }
+
+    pub fn set_trace_stderr(&mut self, enabled: bool) {
+        self.trace_to_stderr = enabled;
+    }
+
+    pub fn set_trace_events(&mut self, enabled: bool) {
+        self.trace_events = enabled;
+    }
+
+    pub fn set_trace_timers(&mut self, enabled: bool) {
+        self.trace_timers = enabled;
+    }
+
+    pub fn set_trace_log_limit(&mut self, max_entries: usize) -> Result<(), ScriptError> {
+        if max_entries == 0 {
+            return Err(ScriptError::new(
+                "set_trace_log_limit requires at least 1 entry",
+            ));
+        }
+        self.trace_log_limit = max_entries;
+        while self.trace_logs.len() > self.trace_log_limit {
+            self.trace_logs.pop_front();
+        }
+        Ok(())
+    }
+
+    pub fn take_trace_logs(&mut self) -> Vec<String> {
+        self.trace_logs.drain(..).collect()
+    }
+
+    pub fn trace_enabled(&self) -> bool {
+        self.trace_enabled
+    }
+
+    pub fn trace_log_limit(&self) -> usize {
+        self.trace_log_limit
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Session {
+    dom: DomStore,
+    scheduler: Scheduler,
+    mocks: MockRegistry,
+    script: ScriptRuntime,
+    config: SessionConfig,
+    rng_state: u64,
+    debug: DebugState,
+    script_event_listeners: Vec<ScriptListenerRecord>,
+    scheduled_script_timers: BTreeMap<u64, ScheduledScriptTimerRecord>,
+    default_actions: Vec<DefaultActionKind>,
+    focused_node: Option<NodeId>,
+    current_script: Option<NodeId>,
+    document_ready_state: DocumentReadyState,
+    document_design_mode: String,
+    window_name: String,
+    cookie_jar: BTreeMap<String, String>,
+    history_entries: Vec<String>,
+    history_states: Vec<Option<String>>,
+    history_index: usize,
+    history_scroll_restoration: String,
+    scroll_x: i64,
+    scroll_y: i64,
+}
+
+impl Session {
+    pub fn new(config: SessionConfig) -> Result<Self, SessionError> {
+        let mut dom = DomStore::new_empty();
+        if let Some(html) = &config.html {
+            dom.bootstrap_html(html.clone())
+                .map_err(SessionError::HtmlParse)?;
+        }
+
+        let mut mocks = MockRegistry::default();
+        for (key, value) in &config.local_storage {
+            if let Some(query) = key.strip_prefix(MATCH_MEDIA_SEED_PREFIX) {
+                let matches = value.parse::<bool>().map_err(|_| {
+                    SessionError::Mock(format!(
+                        "invalid matchMedia seed value for `{query}`: {value}"
+                    ))
+                })?;
+                mocks
+                    .match_media_mut()
+                    .respond_matches(query.to_string(), matches);
+            } else if key == OPEN_FAILURE_SEED_KEY {
+                mocks.open_mut().fail(value.clone());
+            } else if key == CLOSE_FAILURE_SEED_KEY {
+                mocks.close_mut().fail(value.clone());
+            } else if key == PRINT_FAILURE_SEED_KEY {
+                mocks.print_mut().fail(value.clone());
+            } else if key == SCROLL_FAILURE_SEED_KEY {
+                mocks.scroll_mut().fail(value.clone());
+            } else {
+                mocks.storage_mut().seed_local(key.clone(), value.clone());
+            }
+        }
+        let initial_url = config.url.clone();
+        mocks.location_mut().set_current(config.url.clone());
+        dom.set_target_fragment(Self::fragment_identifier_from_url(&config.url));
+
+        let mut session = Self {
+            dom,
+            scheduler: Scheduler::default(),
+            mocks,
+            script: ScriptRuntime::default(),
+            config,
+            rng_state: 0x9E37_79B9_7F4A_7C15,
+            debug: DebugState::default(),
+            script_event_listeners: Vec::new(),
+            scheduled_script_timers: BTreeMap::new(),
+            default_actions: vec![
+                DefaultActionKind::CheckboxToggle,
+                DefaultActionKind::SubmitButton,
+            ],
+            focused_node: None,
+            current_script: None,
+            document_ready_state: DocumentReadyState::Loading,
+            document_design_mode: "off".to_string(),
+            window_name: String::new(),
+            cookie_jar: BTreeMap::new(),
+            history_entries: vec![initial_url],
+            history_states: vec![None],
+            history_index: 0,
+            history_scroll_restoration: "auto".to_string(),
+            scroll_x: 0,
+            scroll_y: 0,
+        };
+        session.bootstrap_inline_scripts()?;
+        session.document_ready_state = DocumentReadyState::Complete;
+        Ok(session)
+    }
+
+    pub fn dom(&self) -> &DomStore {
+        &self.dom
+    }
+
+    pub fn dom_mut(&mut self) -> &mut DomStore {
+        &mut self.dom
+    }
+
+    pub fn scheduler(&self) -> &Scheduler {
+        &self.scheduler
+    }
+
+    pub fn scheduler_mut(&mut self) -> &mut Scheduler {
+        &mut self.scheduler
+    }
+
+    pub fn advance_time(&mut self, delta_ms: i64) -> Result<usize, SessionError> {
+        self.scheduler.now_ms = self.scheduler.now_ms.saturating_add(delta_ms);
+        let due_timers = self.scheduler.run_due_timers();
+        self.run_due_script_timers(due_timers)
+    }
+
+    pub fn flush(&mut self) -> Result<usize, SessionError> {
+        let mut executed = 0usize;
+        let mut steps = 0usize;
+        while let Some(next_due) = self.scheduler.timers.first().map(|timer| timer.at_ms) {
+            self.scheduler.now_ms = self.scheduler.now_ms.max(next_due);
+            let due_timers = self.scheduler.run_due_timers();
+            executed = executed.saturating_add(self.run_due_script_timers(due_timers)?);
+            steps += 1;
+            if steps > self.scheduler.step_limit() {
+                return Err(SessionError::Mock(
+                    "timer flush exceeded the scheduler step limit".to_string(),
+                ));
+            }
+        }
+        self.scheduler.microtasks = 0;
+        Ok(executed)
+    }
+
+    pub fn run_due_timers(&mut self) -> Result<usize, SessionError> {
+        let due_timers = self.scheduler.run_due_timers();
+        self.run_due_script_timers(due_timers)
+    }
+
+    pub fn mocks(&self) -> &MockRegistry {
+        &self.mocks
+    }
+
+    pub fn mocks_mut(&mut self) -> &mut MockRegistry {
+        &mut self.mocks
+    }
+
+    pub fn script(&self) -> &ScriptRuntime {
+        &self.script
+    }
+
+    pub fn script_mut(&mut self) -> &mut ScriptRuntime {
+        &mut self.script
+    }
+
+    pub fn config(&self) -> &SessionConfig {
+        &self.config
+    }
+
+    pub fn debug(&self) -> &DebugState {
+        &self.debug
+    }
+
+    pub fn debug_mut(&mut self) -> &mut DebugState {
+        &mut self.debug
+    }
+
+    pub fn enable_trace(&mut self, enabled: bool) {
+        self.debug.set_trace_enabled(enabled);
+    }
+
+    pub fn set_trace_stderr(&mut self, enabled: bool) {
+        self.debug.set_trace_stderr(enabled);
+    }
+
+    pub fn set_trace_events(&mut self, enabled: bool) {
+        self.debug.set_trace_events(enabled);
+    }
+
+    pub fn set_trace_timers(&mut self, enabled: bool) {
+        self.debug.set_trace_timers(enabled);
+    }
+
+    pub fn set_trace_log_limit(&mut self, max_entries: usize) -> Result<(), SessionError> {
+        self.debug
+            .set_trace_log_limit(max_entries)
+            .map_err(SessionError::Script)
+    }
+
+    pub fn take_trace_logs(&mut self) -> Vec<String> {
+        self.debug.take_trace_logs()
+    }
+
+    pub fn set_random_seed(&mut self, seed: u64) {
+        self.rng_state = if seed == 0 {
+            0xA5A5_A5A5_A5A5_A5A5
+        } else {
+            seed
+        };
+    }
+
+    pub fn set_timer_step_limit(&mut self, max_steps: usize) -> Result<(), SessionError> {
+        if max_steps == 0 {
+            return Err(SessionError::Script(ScriptError::new(
+                "set_timer_step_limit requires at least 1 step",
+            )));
+        }
+        self.scheduler.step_limit = max_steps;
+        Ok(())
+    }
+
+    pub fn dispatch_node(&mut self, node_id: NodeId, event_type: &str) -> Result<(), SessionError> {
+        let event_type = event_type.trim();
+        if event_type.is_empty() {
+            return Err(SessionError::Event(
+                "event type must not be empty".to_string(),
+            ));
+        }
+
+        self.dispatch_dom_event_for_target(
+            SessionEventTarget::Element(node_id),
+            event_type,
+            true,
+            true,
+            None,
+        )?;
+        Ok(())
+    }
+
+    pub fn dispatch_keyboard(
+        &mut self,
+        selector: &str,
+        event_type: &str,
+        init: KeyboardEventInit,
+    ) -> Result<(), SessionError> {
+        let event_type = event_type.trim();
+        if event_type.is_empty() {
+            return Err(SessionError::Event(
+                "event type must not be empty".to_string(),
+            ));
+        }
+
+        let target = self.resolve_keyboard_target(selector)?;
+        let bubbles = matches!(target, SessionEventTarget::Element(_));
+        self.dispatch_dom_event_for_target(target, event_type, bubbles, false, Some(&init))?;
+        Ok(())
+    }
+
+    pub fn click_node(&mut self, node_id: NodeId) -> Result<(), SessionError> {
+        self.ensure_element_node(node_id)?;
+        let outcome = self.dispatch_dom_event(node_id, "click", true, true)?;
+        if !outcome.default_prevented {
+            self.run_click_default_actions(node_id)?;
+        }
+        Ok(())
+    }
+
+    pub fn type_text_node(&mut self, node_id: NodeId, text: &str) -> Result<(), SessionError> {
+        self.ensure_element_node(node_id)?;
+        self.dom
+            .set_form_control_value(node_id, text)
+            .map_err(SessionError::Dom)?;
+        self.dispatch_dom_event(node_id, "input", true, false)?;
+        Ok(())
+    }
+
+    pub fn set_checked_node(&mut self, node_id: NodeId, checked: bool) -> Result<(), SessionError> {
+        self.ensure_element_node(node_id)?;
+        self.dom
+            .set_form_control_checked(node_id, checked)
+            .map_err(SessionError::Dom)?;
+        self.dispatch_dom_event(node_id, "input", true, false)?;
+        self.dispatch_dom_event(node_id, "change", true, false)?;
+        Ok(())
+    }
+
+    pub fn set_select_value_node(
+        &mut self,
+        node_id: NodeId,
+        value: &str,
+    ) -> Result<(), SessionError> {
+        self.ensure_element_node(node_id)?;
+        self.dom
+            .set_select_value(node_id, value)
+            .map_err(SessionError::Dom)?;
+        self.dispatch_dom_event(node_id, "input", true, false)?;
+        self.dispatch_dom_event(node_id, "change", true, false)?;
+        Ok(())
+    }
+
+    pub fn focus_node(&mut self, node_id: NodeId) -> Result<(), SessionError> {
+        self.ensure_element_node(node_id)?;
+        if self.focused_node == Some(node_id) {
+            return Ok(());
+        }
+
+        if let Some(previous) = self.focused_node.take() {
+            self.dom.set_focused_node(None);
+            self.dispatch_dom_event(previous, "blur", false, false)?;
+        }
+
+        self.focused_node = Some(node_id);
+        self.dom.set_focused_node(Some(node_id));
+        self.dispatch_dom_event(node_id, "focus", false, false)?;
+        Ok(())
+    }
+
+    pub fn blur_node(&mut self, node_id: NodeId) -> Result<(), SessionError> {
+        self.ensure_element_node(node_id)?;
+        if self.focused_node != Some(node_id) {
+            return Ok(());
+        }
+
+        self.focused_node = None;
+        self.dom.set_focused_node(None);
+        self.dispatch_dom_event(node_id, "blur", false, false)?;
+        Ok(())
+    }
+
+    pub fn submit_node(&mut self, node_id: NodeId) -> Result<(), SessionError> {
+        self.ensure_element_node(node_id)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(SessionError::Dom(format!("invalid node id: {:?}", node_id)));
+        };
+        if matches!(&node.kind, NodeKind::Element(element) if element.tag_name == "form") {
+            self.dispatch_dom_event(node_id, "submit", true, true)?;
+            return Ok(());
+        }
+
+        let Some(form_id) = self.find_associated_form(node_id) else {
+            return Err(SessionError::Dom(format!(
+                "submit is only supported on <form> elements or submit controls with an associated form, not {:?}",
+                node_id
+            )));
+        };
+
+        self.dispatch_dom_event(form_id, "submit", true, true)?;
+        Ok(())
+    }
+
+    pub fn text_content_for_node(&self, node_id: NodeId) -> String {
+        self.dom.text_content_for_node(node_id)
+    }
+
+    pub fn value_for_node(&self, node_id: NodeId) -> String {
+        self.dom.value_for_node(node_id)
+    }
+
+    pub fn checked_for_node(&self, node_id: NodeId) -> Option<bool> {
+        self.dom.checked_for_node(node_id)
+    }
+
+    pub fn alert(&mut self, message: &str) {
+        self.mocks.dialogs_mut().record_alert(message.to_string());
+    }
+
+    pub fn confirm(&mut self, message: &str) -> Result<bool, SessionError> {
+        let dialogs = self.mocks.dialogs_mut();
+        dialogs.record_confirm(message.to_string());
+        if dialogs.confirm_queue.is_empty() {
+            return Err(SessionError::Mock(
+                "confirm() requires a queued response".to_string(),
+            ));
+        }
+        Ok(dialogs.confirm_queue.remove(0))
+    }
+
+    pub fn prompt(&mut self, message: &str) -> Result<Option<String>, SessionError> {
+        let dialogs = self.mocks.dialogs_mut();
+        dialogs.record_prompt(message.to_string());
+        if dialogs.prompt_queue.is_empty() {
+            return Err(SessionError::Mock(
+                "prompt() requires a queued response".to_string(),
+            ));
+        }
+        Ok(dialogs.prompt_queue.remove(0))
+    }
+
+    pub fn read_clipboard(&self) -> Result<String, SessionError> {
+        if let Some(reason) = self.mocks.clipboard().read_error() {
+            return Err(SessionError::Mock(reason.to_string()));
+        }
+        self.mocks
+            .clipboard()
+            .seeded_text()
+            .map(ToString::to_string)
+            .ok_or_else(|| SessionError::Mock("clipboard text has not been seeded".to_string()))
+    }
+
+    pub fn write_clipboard(&mut self, text: &str) -> Result<(), SessionError> {
+        if let Some(reason) = self.mocks.clipboard().write_error() {
+            return Err(SessionError::Mock(reason.to_string()));
+        }
+        let clipboard = self.mocks.clipboard_mut();
+        clipboard.record_write(text.to_string());
+        clipboard.seed_text(text.to_string());
+        Ok(())
+    }
+
+    pub fn capture_download(
+        &mut self,
+        file_name: &str,
+        bytes: impl Into<Vec<u8>>,
+    ) -> Result<(), SessionError> {
+        if file_name.trim().is_empty() {
+            return Err(SessionError::Mock(
+                "capture_download() requires a non-empty file name".to_string(),
+            ));
+        }
+
+        self.mocks
+            .downloads_mut()
+            .capture(file_name.to_string(), bytes);
+        Ok(())
+    }
+
+    pub fn take_downloads(&mut self) -> Vec<DownloadCapture> {
+        self.mocks.downloads_mut().take()
+    }
+
+    pub fn print(&mut self) -> Result<(), SessionError> {
+        self.mocks.print_mut().invoke().map_err(SessionError::Mock)
+    }
+
+    pub fn scroll_to(&mut self, x: i64, y: i64) -> Result<(), SessionError> {
+        self.mocks
+            .scroll_mut()
+            .invoke(ScrollMethod::To, x, y)
+            .map_err(SessionError::Mock)?;
+        self.scroll_x = x;
+        self.scroll_y = y;
+        Ok(())
+    }
+
+    pub fn scroll_by(&mut self, x: i64, y: i64) -> Result<(), SessionError> {
+        self.mocks
+            .scroll_mut()
+            .invoke(ScrollMethod::By, x, y)
+            .map_err(SessionError::Mock)?;
+        self.scroll_x += x;
+        self.scroll_y += y;
+        Ok(())
+    }
+
+    pub fn close(&mut self) -> Result<(), SessionError> {
+        self.mocks.close_mut().invoke().map_err(SessionError::Mock)
+    }
+
+    pub fn open(
+        &mut self,
+        url: Option<&str>,
+        target: Option<&str>,
+        features: Option<&str>,
+    ) -> Result<(), SessionError> {
+        self.mocks
+            .open_mut()
+            .invoke(url, target, features)
+            .map_err(SessionError::Mock)
+    }
+
+    pub fn fetch(&mut self, url: &str) -> Result<FetchResponse, SessionError> {
+        let url = url.trim();
+        if url.is_empty() {
+            return Err(SessionError::Mock(
+                "fetch() requires a non-empty URL".to_string(),
+            ));
+        }
+
+        self.mocks.fetch_mut().record_call(url.to_string());
+
+        if let Some(error) = self
+            .mocks
+            .fetch()
+            .errors()
+            .iter()
+            .rev()
+            .find(|rule| rule.url == url)
+        {
+            return Err(SessionError::Mock(error.message.clone()));
+        }
+
+        if let Some(response) = self
+            .mocks
+            .fetch()
+            .responses()
+            .iter()
+            .rev()
+            .find(|rule| rule.url == url)
+        {
+            return Ok(FetchResponse {
+                url: url.to_string(),
+                status: response.status,
+                body: response.body.clone(),
+            });
+        }
+
+        Err(SessionError::Mock(format!(
+            "no fetch mock configured for `{url}`"
+        )))
+    }
+
+    pub fn navigate(&mut self, url: &str) -> Result<(), SessionError> {
+        let url = url.trim();
+        if url.is_empty() {
+            return Err(SessionError::Mock(
+                "navigate() requires a non-empty URL".to_string(),
+            ));
+        }
+
+        if self.history_entries.is_empty() {
+            self.history_entries.push(url.to_string());
+            self.history_states.push(None);
+            self.history_index = 0;
+        } else {
+            let next_index = self.history_index.saturating_add(1);
+            self.history_entries.truncate(next_index);
+            self.history_states.truncate(next_index);
+            self.history_entries.push(url.to_string());
+            self.history_states.push(None);
+            self.history_index = self.history_entries.len().saturating_sub(1);
+        }
+
+        self.apply_history_navigation(url);
+        Ok(())
+    }
+
+    pub fn window_history_push_state(
+        &mut self,
+        state: Option<&str>,
+        url: Option<&str>,
+    ) -> Result<(), SessionError> {
+        let next_url = self.resolve_history_url(url);
+        let next_state = state.map(str::to_string);
+
+        if self.history_entries.is_empty() {
+            self.history_entries.push(next_url.clone());
+            self.history_states.push(next_state);
+            self.history_index = 0;
+        } else {
+            let next_index = self.history_index.saturating_add(1);
+            self.history_entries.truncate(next_index);
+            self.history_states.truncate(next_index);
+            self.history_entries.push(next_url.clone());
+            self.history_states.push(next_state);
+            self.history_index = self.history_entries.len().saturating_sub(1);
+        }
+
+        self.apply_history_url_update(&next_url);
+        Ok(())
+    }
+
+    pub fn window_history_replace_state(
+        &mut self,
+        state: Option<&str>,
+        url: Option<&str>,
+    ) -> Result<(), SessionError> {
+        let next_url = self.resolve_history_url(url);
+        let next_state = state.map(str::to_string);
+
+        if self.history_entries.is_empty() {
+            self.history_entries.push(next_url.clone());
+            self.history_states.push(next_state);
+            self.history_index = 0;
+        } else {
+            self.history_entries[self.history_index] = next_url.clone();
+            self.history_states[self.history_index] = next_state;
+        }
+
+        self.apply_history_url_update(&next_url);
+        Ok(())
+    }
+
+    pub fn window_history_back(&mut self) -> Result<(), SessionError> {
+        if self.history_index == 0 {
+            return Ok(());
+        }
+
+        let target_index = self.history_index - 1;
+        self.history_index = target_index;
+        let url = self.history_entries[target_index].clone();
+        self.apply_history_navigation(&url);
+        Ok(())
+    }
+
+    pub fn window_history_forward(&mut self) -> Result<(), SessionError> {
+        if self.history_index + 1 >= self.history_entries.len() {
+            return Ok(());
+        }
+
+        let target_index = self.history_index + 1;
+        self.history_index = target_index;
+        let url = self.history_entries[target_index].clone();
+        self.apply_history_navigation(&url);
+        Ok(())
+    }
+
+    pub fn window_history_go(&mut self, delta: i64) -> Result<(), SessionError> {
+        if delta == 0 || self.history_entries.is_empty() {
+            return Ok(());
+        }
+
+        let current = self.history_index as i64;
+        let max_index = (self.history_entries.len() - 1) as i64;
+        let target = current.saturating_add(delta).clamp(0, max_index) as usize;
+        if target == self.history_index {
+            return Ok(());
+        }
+
+        self.history_index = target;
+        let url = self.history_entries[target].clone();
+        self.apply_history_navigation(&url);
+        Ok(())
+    }
+
+    pub fn set_files_node(
+        &mut self,
+        node_id: NodeId,
+        selector: &str,
+        files: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Result<(), SessionError> {
+        self.ensure_element_node(node_id)?;
+        let files: Vec<String> = files.into_iter().map(Into::into).collect();
+        self.dom
+            .set_file_input_files(node_id, files.clone())
+            .map_err(SessionError::Dom)?;
+        self.mocks
+            .file_input_mut()
+            .set_files(selector.to_string(), files);
+        self.dispatch_dom_event(node_id, "input", true, false)?;
+        self.dispatch_dom_event(node_id, "change", true, false)?;
+        Ok(())
+    }
+
+    fn ensure_element_node(&self, node_id: NodeId) -> Result<(), SessionError> {
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(SessionError::Dom(format!("invalid node id: {:?}", node_id)));
+        };
+
+        match &node.kind {
+            NodeKind::Element(_) => Ok(()),
+            _ => Err(SessionError::Dom(format!(
+                "node {:?} is not an element",
+                node_id
+            ))),
+        }
+    }
+
+    fn apply_history_navigation(&mut self, url: &str) {
+        self.apply_history_url_update(url);
+        self.scroll_x = 0;
+        self.scroll_y = 0;
+    }
+
+    fn apply_history_url_update(&mut self, url: &str) {
+        let location = self.mocks.location_mut();
+        location.set_current(url.to_string());
+        location.record_navigation(url.to_string());
+        self.dom
+            .set_target_fragment(Self::fragment_identifier_from_url(url));
+    }
+
+    fn resolve_history_url(&self, url: Option<&str>) -> String {
+        match url.map(str::trim) {
+            Some(url) if !url.is_empty() => url.to_string(),
+            _ => self
+                .history_entries
+                .get(self.history_index)
+                .cloned()
+                .unwrap_or_else(|| self.config.url.clone()),
+        }
+    }
+
+    fn dispatch_dom_event(
+        &mut self,
+        node_id: NodeId,
+        event_type: &str,
+        bubbles: bool,
+        cancelable: bool,
+    ) -> Result<DispatchOutcome, SessionError> {
+        self.dispatch_dom_event_for_target(
+            SessionEventTarget::Element(node_id),
+            event_type,
+            bubbles,
+            cancelable,
+            None,
+        )
+    }
+
+    fn dispatch_dom_event_for_target(
+        &mut self,
+        target: SessionEventTarget,
+        event_type: &str,
+        bubbles: bool,
+        cancelable: bool,
+        keyboard_init: Option<&KeyboardEventInit>,
+    ) -> Result<DispatchOutcome, SessionError> {
+        let event = match keyboard_init {
+            Some(init) => ScriptEventHandle::new_keyboard(
+                event_type.to_string(),
+                Self::script_listener_target(target),
+                bubbles,
+                cancelable,
+                init,
+            ),
+            None => ScriptEventHandle::new(
+                event_type.to_string(),
+                Self::script_listener_target(target),
+                bubbles,
+                cancelable,
+            ),
+        };
+        let ancestors = self.event_ancestor_targets_for_target(target);
+
+        for target in ancestors.iter().rev() {
+            self.run_event_listeners(*target, event_type, true, EventPhase::Capturing, &event)?;
+            if event.immediate_propagation_stopped() || event.propagation_stopped() {
+                event.set_current_target(None);
+                event.set_phase(EventPhase::None);
+                let outcome = DispatchOutcome {
+                    default_prevented: event.default_prevented(),
+                };
+                self.trace_event_line(format!("[event] {event_type} done {event_type}"));
+                return Ok(outcome);
+            }
+        }
+
+        self.run_event_listeners(target, event_type, true, EventPhase::AtTarget, &event)?;
+        if event.immediate_propagation_stopped() {
+            event.set_current_target(None);
+            event.set_phase(EventPhase::None);
+            let outcome = DispatchOutcome {
+                default_prevented: event.default_prevented(),
+            };
+            self.trace_event_line(format!("[event] {event_type} done {event_type}"));
+            return Ok(outcome);
+        }
+
+        self.run_event_listeners(target, event_type, false, EventPhase::AtTarget, &event)?;
+        if event.immediate_propagation_stopped() || event.propagation_stopped() {
+            event.set_current_target(None);
+            event.set_phase(EventPhase::None);
+            let outcome = DispatchOutcome {
+                default_prevented: event.default_prevented(),
+            };
+            self.trace_event_line(format!("[event] {event_type} done {event_type}"));
+            return Ok(outcome);
+        }
+
+        if bubbles {
+            for target in &ancestors {
+                self.run_event_listeners(*target, event_type, false, EventPhase::Bubbling, &event)?;
+                if event.immediate_propagation_stopped() || event.propagation_stopped() {
+                    break;
+                }
+            }
+        }
+
+        event.set_current_target(None);
+        event.set_phase(EventPhase::None);
+        let outcome = DispatchOutcome {
+            default_prevented: event.default_prevented(),
+        };
+        self.trace_event_line(format!("[event] {event_type} done {event_type}"));
+        Ok(outcome)
+    }
+
+    fn run_event_listeners(
+        &mut self,
+        target: SessionEventTarget,
+        event_type: &str,
+        capture: bool,
+        phase: EventPhase,
+        event: &ScriptEventHandle,
+    ) -> Result<(), SessionError> {
+        let listeners: Vec<ScriptListenerRecord> = self
+            .script_event_listeners
+            .iter()
+            .filter(|listener| {
+                listener.target == target
+                    && listener.event_type == event_type
+                    && listener.capture == capture
+            })
+            .cloned()
+            .collect();
+
+        for (index, listener) in listeners.iter().enumerate() {
+            if event.immediate_propagation_stopped() {
+                break;
+            }
+
+            event.set_current_target(Some(Self::script_listener_target(target)));
+            event.set_phase(phase);
+            let source_name = format!("event:{event_type}:{}:{index}", Self::phase_label(phase));
+            let bindings = Self::listener_bindings(target, &listener.handler, event);
+            self.eval_script_source_with_bindings(
+                &listener.handler.body_source,
+                &source_name,
+                bindings,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn eval_script_source(&mut self, source: &str, source_name: &str) -> Result<(), SessionError> {
+        self.eval_script_source_with_bindings(source, source_name, BTreeMap::new())
+    }
+
+    fn eval_script_source_with_bindings(
+        &mut self,
+        source: &str,
+        source_name: &str,
+        initial_bindings: BTreeMap<String, ScriptValue>,
+    ) -> Result<(), SessionError> {
+        let mut script = std::mem::take(&mut self.script);
+        let result = script
+            .eval_program_with_bindings(source, source_name, self, initial_bindings)
+            .map_err(SessionError::Script);
+        self.script = script;
+        result
+    }
+
+    fn run_click_default_actions(&mut self, node_id: NodeId) -> Result<(), SessionError> {
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(SessionError::Dom(format!("invalid node id: {:?}", node_id)));
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(SessionError::Dom(format!(
+                "node {:?} is not an element",
+                node_id
+            )));
+        };
+
+        let tag_name = element.tag_name.clone();
+        let input_type = element.attributes.get("type").cloned();
+
+        let actions = self.default_actions.clone();
+        for action in actions {
+            match action {
+                DefaultActionKind::CheckboxToggle
+                    if tag_name == "input" && is_checkable_input_type(input_type.as_deref()) =>
+                {
+                    let checked = self.checked_for_node(node_id).unwrap_or(false);
+                    self.dom
+                        .set_form_control_checked(node_id, !checked)
+                        .map_err(SessionError::Dom)?;
+                    if matches!(input_type.as_deref(), Some("checkbox")) {
+                        self.dom
+                            .set_form_control_indeterminate(node_id, false)
+                            .map_err(SessionError::Dom)?;
+                    }
+                    self.dispatch_dom_event(node_id, "input", true, false)?;
+                    self.dispatch_dom_event(node_id, "change", true, false)?;
+                }
+                DefaultActionKind::SubmitButton
+                    if is_submit_control(tag_name.as_str(), input_type.as_deref()) =>
+                {
+                    if let Some(form_id) = self.find_associated_form(node_id) {
+                        self.dispatch_dom_event(form_id, "submit", true, true)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    fn find_associated_form(&self, mut node_id: NodeId) -> Option<NodeId> {
+        loop {
+            let node = self.dom.nodes().get(node_id.index() as usize)?;
+            match &node.kind {
+                NodeKind::Element(element) if element.tag_name == "form" => return Some(node_id),
+                NodeKind::Element(_) | NodeKind::Text(_) | NodeKind::Comment(_) => {
+                    node_id = node.parent?;
+                }
+                NodeKind::Document => return None,
+            }
+        }
+    }
+
+    fn resolve_keyboard_target(&self, selector: &str) -> Result<SessionEventTarget, SessionError> {
+        let selector = selector.trim();
+        if selector.is_empty() {
+            return Err(SessionError::Selector(
+                "selector must not be empty".to_string(),
+            ));
+        }
+
+        match selector {
+            "window" => Ok(SessionEventTarget::Window),
+            "document" => Ok(SessionEventTarget::Document),
+            _ => {
+                let matches = self.dom.select(selector).map_err(SessionError::Selector)?;
+                let Some(node_id) = matches.first().copied() else {
+                    return Err(SessionError::Dom(format!(
+                        "selector `{selector}` did not match any elements"
+                    )));
+                };
+                self.ensure_element_node(node_id)?;
+                Ok(SessionEventTarget::Element(node_id))
+            }
+        }
+    }
+
+    fn event_ancestor_targets_for_target(
+        &self,
+        target: SessionEventTarget,
+    ) -> Vec<SessionEventTarget> {
+        match target {
+            SessionEventTarget::Window => Vec::new(),
+            SessionEventTarget::Document => vec![SessionEventTarget::Window],
+            SessionEventTarget::Element(node_id) => self.event_ancestor_targets(node_id),
+        }
+    }
+
+    fn event_ancestor_targets(&self, node_id: NodeId) -> Vec<SessionEventTarget> {
+        let mut targets = Vec::new();
+        let mut current = self
+            .dom
+            .nodes()
+            .get(node_id.index() as usize)
+            .and_then(|node| node.parent);
+
+        while let Some(parent_id) = current {
+            let Some(parent) = self.dom.nodes().get(parent_id.index() as usize) else {
+                break;
+            };
+
+            match &parent.kind {
+                NodeKind::Document => {
+                    targets.push(SessionEventTarget::Document);
+                    break;
+                }
+                NodeKind::Element(_) | NodeKind::Text(_) | NodeKind::Comment(_) => {
+                    targets.push(SessionEventTarget::Element(parent_id));
+                    current = parent.parent;
+                }
+            }
+        }
+
+        targets.push(SessionEventTarget::Window);
+        targets
+    }
+
+    fn listener_bindings(
+        target: SessionEventTarget,
+        handler: &ScriptFunction,
+        event: &ScriptEventHandle,
+    ) -> BTreeMap<String, ScriptValue> {
+        let mut bindings = (*handler.captured_bindings).clone();
+        bindings.insert("event".to_string(), ScriptValue::Event(event.clone()));
+        bindings.insert("this".to_string(), Self::listener_this_value(target));
+
+        for (index, param) in handler.params.iter().enumerate() {
+            if index == 0 {
+                bindings.insert(param.clone(), ScriptValue::Event(event.clone()));
+            } else {
+                bindings.insert(param.clone(), ScriptValue::Undefined);
+            }
+        }
+
+        bindings
+    }
+
+    fn listener_this_value(target: SessionEventTarget) -> ScriptValue {
+        match target {
+            SessionEventTarget::Window => ScriptValue::Window,
+            SessionEventTarget::Document => ScriptValue::Document,
+            SessionEventTarget::Element(node_id) => {
+                ScriptValue::Element(Self::node_id_to_handle(node_id))
+            }
+        }
+    }
+
+    fn script_listener_target(target: SessionEventTarget) -> ListenerTarget {
+        match target {
+            SessionEventTarget::Window => ListenerTarget::Window,
+            SessionEventTarget::Document => ListenerTarget::Document,
+            SessionEventTarget::Element(node_id) => {
+                ListenerTarget::Element(Self::node_id_to_handle(node_id))
+            }
+        }
+    }
+
+    fn phase_label(phase: EventPhase) -> &'static str {
+        match phase {
+            EventPhase::None => "none",
+            EventPhase::Capturing => "capture",
+            EventPhase::AtTarget => "target",
+            EventPhase::Bubbling => "bubble",
+        }
+    }
+
+    fn bootstrap_inline_scripts(&mut self) -> Result<(), SessionError> {
+        let sources = self.collect_inline_script_sources()?;
+        for (index, (script_node_id, source)) in sources.iter().enumerate() {
+            let previous_current_script = self.current_script;
+            self.current_script = Some(*script_node_id);
+            let result = self.eval_script_source(source, &format!("inline-script-{index}"));
+            self.current_script = previous_current_script;
+            result?;
+        }
+        Ok(())
+    }
+
+    fn collect_inline_script_sources(&self) -> Result<Vec<(NodeId, String)>, SessionError> {
+        let mut sources = Vec::new();
+        self.collect_inline_script_sources_from(self.dom.document_id(), &mut sources)?;
+        Ok(sources)
+    }
+
+    fn collect_inline_script_sources_from(
+        &self,
+        node_id: NodeId,
+        sources: &mut Vec<(NodeId, String)>,
+    ) -> Result<(), SessionError> {
+        let node = &self.dom.nodes()[node_id.index() as usize];
+        if let NodeKind::Element(element) = &node.kind {
+            if element.tag_name == "script" {
+                if element.attributes.contains_key("src") {
+                    return Err(SessionError::Script(ScriptError::new(
+                        "external <script src=...> tags are not supported in this workspace yet",
+                    )));
+                }
+
+                let source = self.dom.text_content_for_node(node_id);
+                if !source.trim().is_empty() {
+                    sources.push((node_id, source));
+                }
+            }
+        }
+
+        for child in &node.children {
+            self.collect_inline_script_sources_from(*child, sources)?;
+        }
+
+        Ok(())
+    }
+
+    fn node_id_to_handle(node_id: NodeId) -> ElementHandle {
+        ElementHandle::new(((node_id.generation() as u64) << 32) | node_id.index() as u64)
+    }
+
+    fn node_id_to_node_handle(node_id: NodeId) -> NodeHandle {
+        NodeHandle::new(((node_id.generation() as u64) << 32) | node_id.index() as u64)
+    }
+
+    fn element_handle_to_node_id(handle: ElementHandle) -> NodeId {
+        let raw = handle.raw();
+        NodeId::new(raw as u32, (raw >> 32) as u32)
+    }
+
+    fn node_contains_id(dom: &DomStore, container: NodeId, candidate: NodeId) -> bool {
+        let mut current = Some(candidate);
+        while let Some(node_id) = current {
+            if node_id == container {
+                return true;
+            }
+            current = dom
+                .nodes()
+                .get(node_id.index() as usize)
+                .and_then(|record| record.parent);
+        }
+        false
+    }
+
+    fn node_root_id(dom: &DomStore, node: NodeId) -> Option<NodeId> {
+        let mut current = Some(node);
+        while let Some(node_id) = current {
+            let Some(record) = dom.nodes().get(node_id.index() as usize) else {
+                return None;
+            };
+            current = record.parent;
+            if current.is_none() {
+                return Some(node_id);
+            }
+        }
+        None
+    }
+
+    fn node_preorder_index_id(dom: &DomStore, root: NodeId, target: NodeId) -> Option<usize> {
+        let mut index = 0usize;
+        let mut stack = vec![root];
+
+        while let Some(node_id) = stack.pop() {
+            if node_id == target {
+                return Some(index);
+            }
+
+            index += 1;
+            let Some(record) = dom.nodes().get(node_id.index() as usize) else {
+                continue;
+            };
+
+            for child in record.children.iter().rev() {
+                stack.push(*child);
+            }
+        }
+
+        None
+    }
+
+    fn node_compare_document_position_id(dom: &DomStore, node: NodeId, other: NodeId) -> u16 {
+        const DISCONNECTED: u16 = 0x01;
+        const PRECEDING: u16 = 0x02;
+        const FOLLOWING: u16 = 0x04;
+        const CONTAINS: u16 = 0x08;
+        const CONTAINED_BY: u16 = 0x10;
+        const IMPLEMENTATION_SPECIFIC: u16 = 0x20;
+
+        if node == other {
+            return 0;
+        }
+
+        let Some(node_root) = Self::node_root_id(dom, node) else {
+            return DISCONNECTED | IMPLEMENTATION_SPECIFIC | FOLLOWING;
+        };
+        let Some(other_root) = Self::node_root_id(dom, other) else {
+            return DISCONNECTED | IMPLEMENTATION_SPECIFIC | PRECEDING;
+        };
+
+        if node_root != other_root {
+            return match node_root.cmp(&other_root) {
+                Ordering::Less => DISCONNECTED | IMPLEMENTATION_SPECIFIC | FOLLOWING,
+                Ordering::Greater => DISCONNECTED | IMPLEMENTATION_SPECIFIC | PRECEDING,
+                Ordering::Equal => 0,
+            };
+        }
+
+        if Self::node_contains_id(dom, node, other) {
+            return CONTAINED_BY | FOLLOWING;
+        }
+
+        if Self::node_contains_id(dom, other, node) {
+            return CONTAINS | PRECEDING;
+        }
+
+        let node_index = Self::node_preorder_index_id(dom, node_root, node);
+        let other_index = Self::node_preorder_index_id(dom, node_root, other);
+        match (node_index, other_index) {
+            (Some(node_index), Some(other_index)) if node_index < other_index => FOLLOWING,
+            (Some(_), Some(_)) => PRECEDING,
+            _ => DISCONNECTED | IMPLEMENTATION_SPECIFIC | FOLLOWING,
+        }
+    }
+
+    fn node_has_child_nodes_id(dom: &DomStore, node: NodeId) -> bool {
+        dom.nodes()
+            .get(node.index() as usize)
+            .is_some_and(|record| !record.children.is_empty())
+    }
+
+    fn node_is_equal_node_id(dom: &DomStore, node: NodeId, other: NodeId) -> bool {
+        let Some(node_record) = dom.nodes().get(node.index() as usize) else {
+            return false;
+        };
+        let Some(other_record) = dom.nodes().get(other.index() as usize) else {
+            return false;
+        };
+
+        match (&node_record.kind, &other_record.kind) {
+            (NodeKind::Document, NodeKind::Document) => {
+                Self::node_children_equal_id(dom, &node_record.children, &other_record.children)
+            }
+            (NodeKind::Element(left), NodeKind::Element(right)) => {
+                left == right
+                    && Self::node_children_equal_id(
+                        dom,
+                        &node_record.children,
+                        &other_record.children,
+                    )
+            }
+            (NodeKind::Text(left), NodeKind::Text(right)) => left == right,
+            (NodeKind::Comment(left), NodeKind::Comment(right)) => left == right,
+            _ => false,
+        }
+    }
+
+    fn node_children_equal_id(dom: &DomStore, left: &[NodeId], right: &[NodeId]) -> bool {
+        left.len() == right.len()
+            && left
+                .iter()
+                .zip(right.iter())
+                .all(|(left_child, right_child)| {
+                    Self::node_is_equal_node_id(dom, *left_child, *right_child)
+                })
+    }
+
+    fn template_content_is_equal_node_id(dom: &DomStore, left: NodeId, right: NodeId) -> bool {
+        let Some(left_record) = dom.nodes().get(left.index() as usize) else {
+            return false;
+        };
+        let Some(right_record) = dom.nodes().get(right.index() as usize) else {
+            return false;
+        };
+
+        matches!(&left_record.kind, NodeKind::Element(_))
+            && matches!(&right_record.kind, NodeKind::Element(_))
+            && Self::node_children_equal_id(dom, &left_record.children, &right_record.children)
+    }
+
+    fn fragment_identifier_from_url(url: &str) -> Option<String> {
+        let fragment = url.split_once('#')?.1;
+        if fragment.is_empty() {
+            None
+        } else {
+            Some(fragment.to_string())
+        }
+    }
+
+    fn query_selector_handle(
+        &self,
+        scope: Option<NodeId>,
+        selector: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        Ok(self
+            .query_selector_handles(scope, selector)?
+            .into_iter()
+            .next())
+    }
+
+    fn query_selector_handles(
+        &self,
+        scope: Option<NodeId>,
+        selector: &str,
+    ) -> Result<Vec<ElementHandle>, ScriptError> {
+        let scope_root = scope.or_else(|| self.dom.root_element_id());
+        let matches = self
+            .dom
+            .select_with_scope(selector, scope_root)
+            .map_err(ScriptError::new)?;
+        Ok(matches
+            .into_iter()
+            .filter(|node_id| match scope {
+                None => true,
+                Some(scope_id) => self.is_descendant_of(*node_id, scope_id),
+            })
+            .map(Self::node_id_to_handle)
+            .collect())
+    }
+
+    fn element_matches_selector(
+        &self,
+        node_id: NodeId,
+        selector: &str,
+    ) -> Result<bool, ScriptError> {
+        let matches = self
+            .dom
+            .select_with_scope(selector, Some(node_id))
+            .map_err(ScriptError::new)?;
+        Ok(matches.contains(&node_id))
+    }
+
+    fn element_closest_selector(
+        &self,
+        node_id: NodeId,
+        selector: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let matches = self
+            .dom
+            .select_with_scope(selector, Some(node_id))
+            .map_err(ScriptError::new)?;
+        let mut current = Some(node_id);
+
+        while let Some(candidate) = current {
+            if matches.contains(&candidate) {
+                return Ok(Some(Self::node_id_to_handle(candidate)));
+            }
+
+            current = self
+                .dom
+                .nodes()
+                .get(candidate.index() as usize)
+                .and_then(|node| node.parent);
+        }
+
+        Ok(None)
+    }
+
+    fn collection_root_for_scope(
+        &self,
+        scope: &HtmlCollectionScope,
+    ) -> Result<NodeId, ScriptError> {
+        match scope {
+            HtmlCollectionScope::Document => Ok(self.dom.document_id()),
+            HtmlCollectionScope::Element(element) => self.node_id_for_handle(*element),
+            HtmlCollectionScope::Node(node) => self.node_id_for_node_handle(*node),
+        }
+    }
+
+    fn collect_descendant_elements_matching<F>(
+        &self,
+        node_id: NodeId,
+        collected: &mut Vec<NodeId>,
+        matches: &F,
+    ) where
+        F: Fn(&ElementData) -> bool,
+    {
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return;
+        };
+
+        for child in &node.children {
+            self.collect_descendant_elements_matching_inner(*child, collected, matches);
+        }
+    }
+
+    fn collect_descendant_elements_matching_inner<F>(
+        &self,
+        node_id: NodeId,
+        collected: &mut Vec<NodeId>,
+        matches: &F,
+    ) where
+        F: Fn(&ElementData) -> bool,
+    {
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return;
+        };
+
+        if let NodeKind::Element(element) = &node.kind {
+            if matches(element) {
+                collected.push(node_id);
+            }
+        }
+
+        for child in &node.children {
+            self.collect_descendant_elements_matching_inner(*child, collected, matches);
+        }
+    }
+
+    fn direct_child_elements_matching<F>(
+        &self,
+        node_id: NodeId,
+        matches: &F,
+    ) -> Result<Vec<NodeId>, ScriptError>
+    where
+        F: Fn(&ElementData) -> bool,
+    {
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid node id"));
+        };
+
+        Ok(node
+            .children
+            .iter()
+            .copied()
+            .filter_map(|child_id| {
+                let Some(child) = self.dom.nodes().get(child_id.index() as usize) else {
+                    return None;
+                };
+                let NodeKind::Element(element) = &child.kind else {
+                    return None;
+                };
+                matches(element).then_some(child_id)
+            })
+            .collect())
+    }
+
+    fn elements_by_tag_name(
+        &self,
+        scope: &HtmlCollectionScope,
+        tag_name: &str,
+    ) -> Result<Vec<ElementHandle>, ScriptError> {
+        let root = self.collection_root_for_scope(scope)?;
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| {
+                tag_name == "*" || element.tag_name.eq_ignore_ascii_case(tag_name)
+            },
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn elements_by_tag_name_ns(
+        &self,
+        scope: &HtmlCollectionScope,
+        namespace_uri: &str,
+        local_name: &str,
+    ) -> Result<Vec<ElementHandle>, ScriptError> {
+        let root = self.collection_root_for_scope(scope)?;
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| {
+                Self::matches_namespace_uri(element, namespace_uri)
+                    && (local_name == "*" || element.local_name.eq_ignore_ascii_case(local_name))
+            },
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn named_item_for_tag_name_collection(
+        &self,
+        scope: &HtmlCollectionScope,
+        tag_name: &str,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let root = self.collection_root_for_scope(scope)?;
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| {
+                tag_name == "*" || element.tag_name.eq_ignore_ascii_case(tag_name)
+            },
+        );
+        Ok(self.first_named_item_in_nodes(&collected, name))
+    }
+
+    fn named_item_for_tag_name_ns_collection(
+        &self,
+        scope: &HtmlCollectionScope,
+        namespace_uri: &str,
+        local_name: &str,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let root = self.collection_root_for_scope(scope)?;
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| {
+                Self::matches_namespace_uri(element, namespace_uri)
+                    && (local_name == "*" || element.local_name.eq_ignore_ascii_case(local_name))
+            },
+        );
+        Ok(self.first_named_item_in_nodes(&collected, name))
+    }
+
+    fn elements_by_class_name(
+        &self,
+        scope: &HtmlCollectionScope,
+        class_names: &str,
+    ) -> Result<Vec<ElementHandle>, ScriptError> {
+        let class_tokens = Self::ordered_class_names(class_names);
+        if class_tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let root = self.collection_root_for_scope(scope)?;
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| {
+                let Some(value) = element.attributes.get("class") else {
+                    return false;
+                };
+
+                class_tokens.iter().all(|class_name| {
+                    value
+                        .split_ascii_whitespace()
+                        .any(|candidate| candidate == class_name)
+                })
+            },
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn named_item_for_class_name_collection(
+        &self,
+        scope: &HtmlCollectionScope,
+        class_names: &str,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let class_tokens = Self::ordered_class_names(class_names);
+        if class_tokens.is_empty() {
+            return Ok(None);
+        }
+
+        let root = self.collection_root_for_scope(scope)?;
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| {
+                let Some(value) = element.attributes.get("class") else {
+                    return false;
+                };
+
+                class_tokens.iter().all(|class_name| {
+                    value
+                        .split_ascii_whitespace()
+                        .any(|candidate| candidate == class_name)
+                })
+            },
+        );
+        Ok(self.first_named_item_in_nodes(&collected, name))
+    }
+
+    fn elements_by_name(&self, name: &str) -> Result<Vec<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| {
+                element
+                    .attributes
+                    .get("name")
+                    .is_some_and(|value| value == name)
+            },
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn element_labels(&self, element: ElementHandle) -> Result<Vec<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(element)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element_data) = &node.kind else {
+            return Err(ScriptError::new("node is not a labelable element"));
+        };
+
+        if !Self::is_labelable_element(element_data) {
+            return Err(ScriptError::new("node is not a labelable element"));
+        }
+
+        let target_id = element_data.attributes.get("id").cloned();
+        let root = self.dom.document_id();
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| element.tag_name == "label",
+        );
+
+        let mut labels = Vec::new();
+        for label_id in collected {
+            let Some(label_node) = self.dom.nodes().get(label_id.index() as usize) else {
+                continue;
+            };
+            let NodeKind::Element(label_element) = &label_node.kind else {
+                continue;
+            };
+
+            let explicit = target_id.as_deref().is_some_and(|target_id| {
+                label_element
+                    .attributes
+                    .get("for")
+                    .is_some_and(|value| value == target_id)
+            });
+            let implicit = self.is_descendant_of(node_id, label_id);
+            if explicit || implicit {
+                labels.push(Self::node_id_to_handle(label_id));
+            }
+        }
+
+        Ok(labels)
+    }
+
+    fn form_elements(&self, form: ElementHandle) -> Result<Vec<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(form)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a form element"));
+        };
+
+        if !matches!(element.tag_name.as_str(), "form" | "fieldset") {
+            return Err(ScriptError::new("node is not a form element"));
+        }
+
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            node_id,
+            &mut collected,
+            &|element: &ElementData| Self::is_form_control_element(element),
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn form_elements_named_item(
+        &self,
+        form: ElementHandle,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let items = self.form_elements_named_items(form, name)?;
+        Ok(items.first().copied())
+    }
+
+    fn form_elements_named_items(
+        &self,
+        form: ElementHandle,
+        name: &str,
+    ) -> Result<Vec<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(form)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a form element"));
+        };
+
+        if !matches!(element.tag_name.as_str(), "form" | "fieldset") {
+            return Err(ScriptError::new("node is not a form element"));
+        }
+
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            node_id,
+            &mut collected,
+            &|element: &ElementData| Self::is_form_control_element(element),
+        );
+        Ok(self
+            .named_items_in_nodes(&collected, name)
+            .into_iter()
+            .map(Self::node_id_to_handle)
+            .collect())
+    }
+
+    fn select_options(&self, select: ElementHandle) -> Result<Vec<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(select)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a select element"));
+        };
+
+        if !matches!(element.tag_name.as_str(), "select" | "datalist") {
+            return Err(ScriptError::new("node is not a select element"));
+        }
+
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            node_id,
+            &mut collected,
+            &|element: &ElementData| element.tag_name == "option",
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn select_options_named_item(
+        &self,
+        select: ElementHandle,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(select)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a select element"));
+        };
+
+        if !matches!(element.tag_name.as_str(), "select" | "datalist") {
+            return Err(ScriptError::new("node is not a select element"));
+        }
+
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            node_id,
+            &mut collected,
+            &|element: &ElementData| element.tag_name == "option",
+        );
+        Ok(self.first_named_item_in_nodes(&collected, name))
+    }
+
+    fn selected_options(&self, select: ElementHandle) -> Result<Vec<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(select)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a select element"));
+        };
+
+        if element.tag_name != "select" {
+            return Err(ScriptError::new("node is not a select element"));
+        }
+
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            node_id,
+            &mut collected,
+            &|element: &ElementData| {
+                element.tag_name == "option" && element.attributes.contains_key("selected")
+            },
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn selected_options_named_item(
+        &self,
+        select: ElementHandle,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let selected = self.selected_options(select)?;
+        let selected_ids: Vec<NodeId> = selected
+            .into_iter()
+            .map(|handle| self.node_id_for_handle(handle))
+            .collect::<Result<_, _>>()?;
+        Ok(self.first_named_item_in_nodes(&selected_ids, name))
+    }
+
+    fn select_options_add(
+        &mut self,
+        select: ElementHandle,
+        option: ElementHandle,
+    ) -> Result<(), ScriptError> {
+        let select_id = self.node_id_for_handle(select)?;
+        let Some(node) = self.dom.nodes().get(select_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a select element"));
+        };
+        if element.tag_name != "select" {
+            return Err(ScriptError::new("node is not a select element"));
+        }
+
+        let option_id = self.node_id_for_handle(option)?;
+        let Some(node) = self.dom.nodes().get(option_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not an option element"));
+        };
+        if element.tag_name != "option" {
+            return Err(ScriptError::new("node is not an option element"));
+        }
+
+        self.dom
+            .append_child(select_id, option_id)
+            .map_err(ScriptError::new)
+    }
+
+    fn select_options_remove(
+        &mut self,
+        select: ElementHandle,
+        index: usize,
+    ) -> Result<(), ScriptError> {
+        let select_id = self.node_id_for_handle(select)?;
+        let Some(node) = self.dom.nodes().get(select_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a select element"));
+        };
+        if element.tag_name != "select" {
+            return Err(ScriptError::new("node is not a select element"));
+        }
+
+        let options = self.select_options(select)?;
+        let Some(option_handle) = options.get(index).copied() else {
+            return Ok(());
+        };
+        let option_id = self.node_id_for_handle(option_handle)?;
+        self.dom.remove_node(option_id).map_err(ScriptError::new)
+    }
+
+    fn document_links(&self) -> Result<Vec<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| Self::is_document_link_element(element),
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn document_links_named_item(&self, name: &str) -> Result<Option<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| Self::is_document_link_element(element),
+        );
+        Ok(self.first_named_item_in_nodes(&collected, name))
+    }
+
+    fn document_style_sheets(&self) -> Result<Vec<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| Self::is_document_style_sheet_element(element),
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn document_style_sheets_named_item(
+        &self,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| Self::is_document_style_sheet_element(element),
+        );
+        Ok(self.first_named_item_in_nodes(&collected, name))
+    }
+
+    fn document_document_element(&self) -> Result<Option<ElementHandle>, ScriptError> {
+        Ok(self.dom.document_element_id().map(Self::node_id_to_handle))
+    }
+
+    fn document_head(&self) -> Result<Option<ElementHandle>, ScriptError> {
+        Ok(self.dom.head_element_id().map(Self::node_id_to_handle))
+    }
+
+    fn document_body(&self) -> Result<Option<ElementHandle>, ScriptError> {
+        Ok(self.dom.body_element_id().map(Self::node_id_to_handle))
+    }
+
+    pub fn document_scrolling_element(&self) -> Result<Option<ElementHandle>, ScriptError> {
+        self.document_document_element()
+    }
+
+    fn document_active_element(&self) -> Result<Option<ElementHandle>, ScriptError> {
+        if let Some(node_id) = self.focused_node {
+            return Ok(Some(Self::node_id_to_handle(node_id)));
+        }
+
+        if let Some(body) = self.dom.body_element_id() {
+            return Ok(Some(Self::node_id_to_handle(body)));
+        }
+
+        Ok(self.dom.document_element_id().map(Self::node_id_to_handle))
+    }
+
+    pub fn document_has_focus(&self) -> bool {
+        self.focused_node.is_some()
+    }
+
+    pub fn document_visibility_state(&self) -> &'static str {
+        "visible"
+    }
+
+    pub fn document_hidden(&self) -> bool {
+        false
+    }
+
+    pub fn document_title(&self) -> String {
+        self.dom.document_title()
+    }
+
+    pub fn set_document_title(&mut self, value: &str) -> Result<(), SessionError> {
+        self.dom
+            .set_document_title(value.to_string())
+            .map_err(SessionError::Dom)
+    }
+
+    pub fn document_write(&mut self, html: &str) -> Result<(), SessionError> {
+        self.dom
+            .append_html_to_document(html)
+            .map_err(SessionError::Dom)
+    }
+
+    pub fn document_writeln(&mut self, html: &str) -> Result<(), SessionError> {
+        let mut html = html.to_string();
+        html.push('\n');
+        self.document_write(&html)
+    }
+
+    pub fn document_open(&mut self) -> Result<(), SessionError> {
+        self.dom.document_open().map_err(SessionError::Dom)
+    }
+
+    pub fn document_close(&mut self) -> Result<(), SessionError> {
+        Ok(())
+    }
+
+    pub fn document_location(&self) -> String {
+        self.mocks
+            .location()
+            .current_url()
+            .unwrap_or(self.config.url.as_str())
+            .to_string()
+    }
+
+    pub fn document_url(&self) -> String {
+        self.document_location()
+    }
+
+    pub fn document_document_uri(&self) -> String {
+        self.document_location()
+    }
+
+    pub fn document_base_uri(&self) -> String {
+        self.document_location()
+    }
+
+    pub fn document_origin(&self) -> String {
+        Self::origin_from_url(&self.document_location())
+    }
+
+    pub fn document_domain(&self) -> String {
+        Self::domain_from_url(&self.document_location())
+    }
+
+    pub fn document_referrer(&self) -> String {
+        String::new()
+    }
+
+    fn document_cookie(&self) -> String {
+        self.cookie_jar
+            .iter()
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+
+    fn set_document_cookie(&mut self, value: &str) -> Result<(), SessionError> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(SessionError::Mock(
+                "document.cookie requires a non-empty cookie string".to_string(),
+            ));
+        }
+
+        let pair = trimmed
+            .split_once(';')
+            .map(|(pair, _)| pair)
+            .unwrap_or(trimmed);
+        let Some((name, cookie_value)) = pair.split_once('=') else {
+            return Err(SessionError::Mock(
+                "document.cookie requires `name=value`".to_string(),
+            ));
+        };
+
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(SessionError::Mock(
+                "document.cookie requires a non-empty cookie name".to_string(),
+            ));
+        }
+
+        self.cookie_jar
+            .insert(name.to_string(), cookie_value.trim_start().to_string());
+        Ok(())
+    }
+
+    pub fn window_name(&self) -> &str {
+        &self.window_name
+    }
+
+    pub fn set_window_name(&mut self, value: &str) {
+        self.window_name = value.to_string();
+    }
+
+    pub fn window_navigator_user_agent(&self) -> &'static str {
+        "browser_tester"
+    }
+
+    pub fn window_navigator_app_code_name(&self) -> &'static str {
+        "browser_tester"
+    }
+
+    pub fn window_navigator_app_name(&self) -> &'static str {
+        "browser_tester"
+    }
+
+    pub fn window_navigator_app_version(&self) -> &'static str {
+        "browser_tester"
+    }
+
+    pub fn window_navigator_product(&self) -> &'static str {
+        "browser_tester"
+    }
+
+    pub fn window_navigator_product_sub(&self) -> &'static str {
+        "browser_tester"
+    }
+
+    pub fn window_navigator_platform(&self) -> &'static str {
+        "unknown"
+    }
+
+    pub fn window_navigator_language(&self) -> &'static str {
+        "en-US"
+    }
+
+    pub fn window_navigator_oscpu(&self) -> &'static str {
+        "unknown"
+    }
+
+    fn window_navigator_user_language(&self) -> &'static str {
+        self.window_navigator_language()
+    }
+
+    fn window_navigator_browser_language(&self) -> &'static str {
+        self.window_navigator_language()
+    }
+
+    pub fn window_navigator_system_language(&self) -> &'static str {
+        self.window_navigator_language()
+    }
+
+    pub fn window_navigator_languages(&self) -> Vec<String> {
+        vec![self.window_navigator_language().to_string()]
+    }
+
+    pub fn window_navigator_mime_types(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    pub fn window_navigator_cookie_enabled(&self) -> bool {
+        true
+    }
+
+    pub fn window_navigator_on_line(&self) -> bool {
+        true
+    }
+
+    pub fn window_navigator_webdriver(&self) -> bool {
+        false
+    }
+
+    pub fn window_navigator_vendor(&self) -> &'static str {
+        "browser_tester"
+    }
+
+    pub fn window_navigator_vendor_sub(&self) -> &'static str {
+        "browser_tester"
+    }
+
+    pub fn window_navigator_pdf_viewer_enabled(&self) -> bool {
+        false
+    }
+
+    pub fn window_navigator_do_not_track(&self) -> &'static str {
+        "unspecified"
+    }
+
+    pub fn window_navigator_java_enabled(&self) -> bool {
+        false
+    }
+
+    pub fn window_navigator_hardware_concurrency(&self) -> i64 {
+        8
+    }
+
+    pub fn window_navigator_max_touch_points(&self) -> i64 {
+        0
+    }
+
+    pub fn window_history_length(&self) -> usize {
+        self.history_entries.len()
+    }
+
+    pub fn window_history_state(&self) -> Option<&str> {
+        self.history_states
+            .get(self.history_index)
+            .and_then(|state| state.as_deref())
+    }
+
+    pub fn window_history_scroll_restoration(&self) -> &str {
+        &self.history_scroll_restoration
+    }
+
+    pub fn set_window_history_scroll_restoration(
+        &mut self,
+        value: &str,
+    ) -> Result<(), SessionError> {
+        match value {
+            "auto" | "manual" => {
+                self.history_scroll_restoration = value.to_string();
+                Ok(())
+            }
+            other => Err(SessionError::Mock(format!(
+                "unsupported history scroll restoration value: {other}"
+            ))),
+        }
+    }
+
+    pub fn window_scroll_x(&self) -> i64 {
+        self.scroll_x
+    }
+
+    pub fn window_scroll_y(&self) -> i64 {
+        self.scroll_y
+    }
+
+    pub fn window_page_x_offset(&self) -> i64 {
+        self.scroll_x
+    }
+
+    pub fn window_page_y_offset(&self) -> i64 {
+        self.scroll_y
+    }
+
+    pub fn window_device_pixel_ratio(&self) -> f64 {
+        1.0
+    }
+
+    pub fn window_inner_width(&self) -> i64 {
+        1024
+    }
+
+    pub fn window_inner_height(&self) -> i64 {
+        768
+    }
+
+    pub fn window_outer_width(&self) -> i64 {
+        1024
+    }
+
+    pub fn window_outer_height(&self) -> i64 {
+        768
+    }
+
+    pub fn window_screen_x(&self) -> i64 {
+        0
+    }
+
+    pub fn window_screen_y(&self) -> i64 {
+        0
+    }
+
+    pub fn window_screen_left(&self) -> i64 {
+        self.window_screen_x()
+    }
+
+    pub fn window_screen_top(&self) -> i64 {
+        self.window_screen_y()
+    }
+
+    pub fn window_screen_width(&self) -> i64 {
+        1024
+    }
+
+    pub fn window_screen_height(&self) -> i64 {
+        768
+    }
+
+    pub fn window_screen_avail_width(&self) -> i64 {
+        1024
+    }
+
+    pub fn window_screen_avail_height(&self) -> i64 {
+        768
+    }
+
+    pub fn window_screen_avail_left(&self) -> i64 {
+        0
+    }
+
+    pub fn window_screen_avail_top(&self) -> i64 {
+        0
+    }
+
+    pub fn window_screen_color_depth(&self) -> i64 {
+        24
+    }
+
+    pub fn window_screen_pixel_depth(&self) -> i64 {
+        24
+    }
+
+    pub fn window_screen_orientation(&self) -> ScreenOrientationState {
+        ScreenOrientationState::new("landscape-primary", 0)
+    }
+
+    fn storage_map(&self, target: StorageTarget) -> &BTreeMap<String, String> {
+        match target {
+            StorageTarget::Local => &self.mocks.storage.local,
+            StorageTarget::Session => &self.mocks.storage.session,
+        }
+    }
+
+    fn storage_map_mut(&mut self, target: StorageTarget) -> &mut BTreeMap<String, String> {
+        match target {
+            StorageTarget::Local => &mut self.mocks.storage.local,
+            StorageTarget::Session => &mut self.mocks.storage.session,
+        }
+    }
+
+    pub fn storage_length(&self, target: StorageTarget) -> usize {
+        self.storage_map(target).len()
+    }
+
+    pub fn storage_get_item(&self, target: StorageTarget, key: &str) -> Option<String> {
+        self.storage_map(target).get(key).cloned()
+    }
+
+    pub fn storage_set_item(&mut self, target: StorageTarget, key: &str, value: &str) {
+        self.storage_map_mut(target)
+            .insert(key.to_string(), value.to_string());
+    }
+
+    pub fn storage_remove_item(&mut self, target: StorageTarget, key: &str) {
+        self.storage_map_mut(target).remove(key);
+    }
+
+    pub fn storage_clear(&mut self, target: StorageTarget) {
+        self.storage_map_mut(target).clear();
+    }
+
+    pub fn storage_key(&self, target: StorageTarget, index: usize) -> Option<String> {
+        self.storage_map(target).keys().nth(index).cloned()
+    }
+
+    pub fn document_ready_state(&self) -> &'static str {
+        match self.document_ready_state {
+            DocumentReadyState::Loading => "loading",
+            DocumentReadyState::Complete => "complete",
+        }
+    }
+
+    pub fn document_compat_mode(&self) -> &'static str {
+        "CSS1Compat"
+    }
+
+    pub fn document_character_set(&self) -> &'static str {
+        "UTF-8"
+    }
+
+    pub fn document_content_type(&self) -> &'static str {
+        "text/html"
+    }
+
+    pub fn document_design_mode(&self) -> &str {
+        &self.document_design_mode
+    }
+
+    pub fn set_document_design_mode(&mut self, value: &str) -> Result<(), SessionError> {
+        if value.eq_ignore_ascii_case("on") {
+            self.document_design_mode = "on".to_string();
+            Ok(())
+        } else if value.eq_ignore_ascii_case("off") {
+            self.document_design_mode = "off".to_string();
+            Ok(())
+        } else {
+            Err(SessionError::Mock(format!(
+                "unsupported document designMode value: {value}"
+            )))
+        }
+    }
+
+    pub fn document_dir(&self) -> String {
+        self.dom
+            .document_element_id()
+            .and_then(|node_id| self.dom.get_attribute(node_id, "dir").ok().flatten())
+            .unwrap_or_default()
+    }
+
+    pub fn set_document_dir(&mut self, value: &str) -> Result<(), SessionError> {
+        let Some(document_element) = self.dom.document_element_id() else {
+            return Ok(());
+        };
+
+        self.dom
+            .set_attribute(document_element, "dir", value.to_string())
+            .map_err(SessionError::Dom)
+    }
+
+    pub fn document_current_script(&self) -> Option<ElementHandle> {
+        let script_node_id = self.current_script?;
+        let node = self.dom.nodes().get(script_node_id.index() as usize)?;
+        let NodeKind::Element(element) = &node.kind else {
+            return None;
+        };
+        if element.tag_name != "script" {
+            return None;
+        }
+
+        Some(Self::node_id_to_handle(script_node_id))
+    }
+
+    fn origin_from_url(url: &str) -> String {
+        let Some((scheme, rest)) = url.split_once(':') else {
+            return "null".to_string();
+        };
+
+        let scheme = scheme.to_ascii_lowercase();
+        let Some(after_slashes) = rest.strip_prefix("//") else {
+            return "null".to_string();
+        };
+
+        let authority_end = after_slashes
+            .find(['/', '?', '#'])
+            .unwrap_or(after_slashes.len());
+        let authority = &after_slashes[..authority_end];
+        if authority.is_empty() {
+            return "null".to_string();
+        }
+
+        format!("{scheme}://{authority}")
+    }
+
+    fn domain_from_url(url: &str) -> String {
+        let Some((_, rest)) = url.split_once(':') else {
+            return "null".to_string();
+        };
+
+        let Some(after_slashes) = rest.strip_prefix("//") else {
+            return "null".to_string();
+        };
+
+        let authority_end = after_slashes
+            .find(['/', '?', '#'])
+            .unwrap_or(after_slashes.len());
+        let mut authority = &after_slashes[..authority_end];
+        if authority.is_empty() {
+            return "null".to_string();
+        }
+
+        if let Some((_, host)) = authority.rsplit_once('@') {
+            authority = host;
+        }
+
+        let host = if authority.starts_with('[') {
+            let Some(end_bracket) = authority.find(']') else {
+                return "null".to_string();
+            };
+            &authority[1..end_bracket]
+        } else {
+            authority
+                .split_once(':')
+                .map(|(host, _)| host)
+                .unwrap_or(authority)
+        };
+
+        if host.is_empty() {
+            "null".to_string()
+        } else {
+            host.to_ascii_lowercase()
+        }
+    }
+
+    pub fn set_document_location(&mut self, value: &str) -> Result<(), SessionError> {
+        self.document_location_assign(value)
+    }
+
+    pub fn document_location_assign(&mut self, value: &str) -> Result<(), SessionError> {
+        self.navigate(value)
+    }
+
+    pub fn document_location_replace(&mut self, value: &str) -> Result<(), SessionError> {
+        let url = value.trim();
+        if url.is_empty() {
+            return Err(SessionError::Mock(
+                "document.location.replace() requires a non-empty URL".to_string(),
+            ));
+        }
+
+        if self.history_entries.is_empty() {
+            return self.navigate(url);
+        }
+
+        self.history_entries[self.history_index] = url.to_string();
+        self.apply_history_navigation(url);
+        Ok(())
+    }
+
+    pub fn document_location_reload(&mut self) -> Result<(), SessionError> {
+        let url = Session::document_location(self);
+        self.apply_history_navigation(&url);
+        Ok(())
+    }
+
+    fn document_children(&self) -> Result<Vec<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let Some(node) = self.dom.nodes().get(root.index() as usize) else {
+            return Err(ScriptError::new("invalid document node"));
+        };
+
+        let children = node
+            .children
+            .iter()
+            .copied()
+            .filter(|child_id| {
+                matches!(
+                    self.dom
+                        .nodes()
+                        .get(child_id.index() as usize)
+                        .map(|node| &node.kind),
+                    Some(NodeKind::Element(_))
+                )
+            })
+            .map(Self::node_id_to_handle)
+            .collect();
+
+        Ok(children)
+    }
+
+    fn document_children_named_item(
+        &self,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let Some(node) = self.dom.nodes().get(root.index() as usize) else {
+            return Err(ScriptError::new("invalid document node"));
+        };
+
+        let children: Vec<NodeId> = node
+            .children
+            .iter()
+            .copied()
+            .filter(|child_id| {
+                matches!(
+                    self.dom
+                        .nodes()
+                        .get(child_id.index() as usize)
+                        .map(|node| &node.kind),
+                    Some(NodeKind::Element(_))
+                )
+            })
+            .collect();
+
+        Ok(self.first_named_item_in_nodes(&children, name))
+    }
+
+    fn window_frames(&self) -> Result<Vec<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| matches!(element.tag_name.as_str(), "frame" | "iframe"),
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn window_frames_named_item(&self, name: &str) -> Result<Option<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| matches!(element.tag_name.as_str(), "frame" | "iframe"),
+        );
+        Ok(self.first_named_item_in_nodes(&collected, name))
+    }
+
+    fn node_child_nodes(&self, scope: HtmlCollectionScope) -> Result<Vec<NodeHandle>, ScriptError> {
+        let root = self.collection_root_for_scope(&scope)?;
+        let Some(node) = self.dom.nodes().get(root.index() as usize) else {
+            return Err(ScriptError::new("invalid node id"));
+        };
+
+        Ok(node
+            .children
+            .iter()
+            .copied()
+            .map(Self::node_id_to_node_handle)
+            .collect())
+    }
+
+    fn map_areas(&self, map: ElementHandle) -> Result<Vec<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(map)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new(
+                "node is not a supported map.areas host element",
+            ));
+        };
+
+        if element.tag_name != "map" {
+            return Err(ScriptError::new(
+                "node is not a supported map.areas host element",
+            ));
+        }
+
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            node_id,
+            &mut collected,
+            &|element: &ElementData| element.tag_name == "area",
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn map_areas_named_item(
+        &self,
+        map: ElementHandle,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(map)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new(
+                "node is not a supported map.areas host element",
+            ));
+        };
+
+        if element.tag_name != "map" {
+            return Err(ScriptError::new(
+                "node is not a supported map.areas host element",
+            ));
+        }
+
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            node_id,
+            &mut collected,
+            &|element: &ElementData| element.tag_name == "area",
+        );
+        Ok(self.first_named_item_in_nodes(&collected, name))
+    }
+
+    fn table_bodies(&self, table: ElementHandle) -> Result<Vec<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(table)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new(
+                "node is not a supported table.tBodies host element",
+            ));
+        };
+
+        if element.tag_name != "table" {
+            return Err(ScriptError::new(
+                "node is not a supported table.tBodies host element",
+            ));
+        }
+
+        let collected = self
+            .direct_child_elements_matching(node_id, &|element: &ElementData| {
+                element.tag_name == "tbody"
+            })?;
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn table_bodies_named_item(
+        &self,
+        table: ElementHandle,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(table)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new(
+                "node is not a supported table.tBodies host element",
+            ));
+        };
+
+        if element.tag_name != "table" {
+            return Err(ScriptError::new(
+                "node is not a supported table.tBodies host element",
+            ));
+        }
+
+        let bodies = self.table_bodies(table)?;
+        let body_ids: Vec<NodeId> = bodies
+            .into_iter()
+            .map(|handle| self.node_id_for_handle(handle))
+            .collect::<Result<_, _>>()?;
+        Ok(self.first_named_item_in_nodes(&body_ids, name))
+    }
+
+    fn table_rows(&self, table: ElementHandle) -> Result<Vec<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(table)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a table.rows host element"));
+        };
+
+        let collected = match element.tag_name.as_str() {
+            "table" => {
+                let mut collected = Vec::new();
+                for child_id in &node.children {
+                    let Some(child) = self.dom.nodes().get(child_id.index() as usize) else {
+                        continue;
+                    };
+                    let NodeKind::Element(child_element) = &child.kind else {
+                        continue;
+                    };
+
+                    match child_element.tag_name.as_str() {
+                        "tr" => collected.push(*child_id),
+                        "thead" | "tbody" | "tfoot" => {
+                            collected.extend(self.direct_child_elements_matching(
+                                *child_id,
+                                &|element: &ElementData| element.tag_name == "tr",
+                            )?);
+                        }
+                        _ => {}
+                    }
+                }
+                collected
+            }
+            "thead" | "tbody" | "tfoot" => self
+                .direct_child_elements_matching(node_id, &|element: &ElementData| {
+                    element.tag_name == "tr"
+                })?,
+            _ => {
+                return Err(ScriptError::new(
+                    "node is not a supported table.rows host element",
+                ));
+            }
+        };
+
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn table_rows_named_item(
+        &self,
+        table: ElementHandle,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(table)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a table.rows host element"));
+        };
+
+        match element.tag_name.as_str() {
+            "table" | "thead" | "tbody" | "tfoot" => {
+                let rows = self.table_rows(table)?;
+                let row_ids: Vec<NodeId> = rows
+                    .into_iter()
+                    .map(|handle| self.node_id_for_handle(handle))
+                    .collect::<Result<_, _>>()?;
+                Ok(self.first_named_item_in_nodes(&row_ids, name))
+            }
+            _ => Err(ScriptError::new(
+                "node is not a supported table.rows host element",
+            )),
+        }
+    }
+
+    fn row_cells(&self, row: ElementHandle) -> Result<Vec<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(row)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a tr.cells host element"));
+        };
+
+        if element.tag_name != "tr" {
+            return Err(ScriptError::new(
+                "node is not a supported tr.cells host element",
+            ));
+        }
+
+        let collected = self
+            .direct_child_elements_matching(node_id, &|element: &ElementData| {
+                matches!(element.tag_name.as_str(), "td" | "th")
+            })?;
+
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn row_cells_named_item(
+        &self,
+        row: ElementHandle,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let node_id = self.node_id_for_handle(row)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("node is not a tr.cells host element"));
+        };
+
+        if element.tag_name != "tr" {
+            return Err(ScriptError::new(
+                "node is not a supported tr.cells host element",
+            ));
+        }
+
+        let cells = self.row_cells(row)?;
+        let cell_ids: Vec<NodeId> = cells
+            .into_iter()
+            .map(|handle| self.node_id_for_handle(handle))
+            .collect::<Result<_, _>>()?;
+        Ok(self.first_named_item_in_nodes(&cell_ids, name))
+    }
+
+    fn document_anchors(&self) -> Result<Vec<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| Self::is_document_anchor_element(element),
+        );
+        Ok(collected.into_iter().map(Self::node_id_to_handle).collect())
+    }
+
+    fn document_anchors_named_item(
+        &self,
+        name: &str,
+    ) -> Result<Option<ElementHandle>, ScriptError> {
+        let root = self.dom.document_id();
+        let mut collected = Vec::new();
+        self.collect_descendant_elements_matching(
+            root,
+            &mut collected,
+            &|element: &ElementData| Self::is_document_anchor_element(element),
+        );
+        Ok(self.first_named_item_in_nodes(&collected, name))
+    }
+
+    fn first_named_item_in_nodes(&self, collected: &[NodeId], name: &str) -> Option<ElementHandle> {
+        for node_id in collected {
+            let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+                continue;
+            };
+            let NodeKind::Element(element) = &node.kind else {
+                continue;
+            };
+
+            if element
+                .attributes
+                .get("id")
+                .is_some_and(|value| value == name)
+                || element
+                    .attributes
+                    .get("name")
+                    .is_some_and(|value| value == name)
+            {
+                return Some(Self::node_id_to_handle(*node_id));
+            }
+        }
+
+        None
+    }
+
+    fn named_items_in_nodes(&self, collected: &[NodeId], name: &str) -> Vec<NodeId> {
+        let mut matches = Vec::new();
+        for node_id in collected {
+            let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+                continue;
+            };
+            let NodeKind::Element(element) = &node.kind else {
+                continue;
+            };
+
+            if element
+                .attributes
+                .get("id")
+                .is_some_and(|value| value == name)
+                || element
+                    .attributes
+                    .get("name")
+                    .is_some_and(|value| value == name)
+            {
+                matches.push(*node_id);
+            }
+        }
+
+        matches
+    }
+
+    fn is_form_control_element(element: &ElementData) -> bool {
+        matches!(
+            element.tag_name.as_str(),
+            "input" | "select" | "textarea" | "button"
+        )
+    }
+
+    fn is_labelable_element(element: &ElementData) -> bool {
+        match element.tag_name.as_str() {
+            "button" | "fieldset" | "meter" | "output" | "progress" | "select" | "textarea" => true,
+            "input" => !element
+                .attributes
+                .get("type")
+                .is_some_and(|value| value.eq_ignore_ascii_case("hidden")),
+            _ => false,
+        }
+    }
+
+    fn is_document_link_element(element: &ElementData) -> bool {
+        matches!(element.tag_name.as_str(), "a" | "area") && element.attributes.contains_key("href")
+    }
+
+    fn is_document_style_sheet_element(element: &ElementData) -> bool {
+        if element.tag_name == "style" {
+            return true;
+        }
+
+        if element.tag_name != "link" {
+            return false;
+        }
+
+        let Some(rel) = element.attributes.get("rel") else {
+            return false;
+        };
+
+        rel.split_ascii_whitespace()
+            .any(|token| token.eq_ignore_ascii_case("stylesheet"))
+    }
+
+    fn is_document_anchor_element(element: &ElementData) -> bool {
+        element.tag_name == "a" && element.attributes.contains_key("name")
+    }
+
+    fn matches_namespace_uri(element: &ElementData, namespace_uri: &str) -> bool {
+        match namespace_uri {
+            "*" => true,
+            HTML_NAMESPACE_URI | SVG_NAMESPACE_URI | MATHML_NAMESPACE_URI => {
+                element.namespace_uri == namespace_uri
+            }
+            _ => false,
+        }
+    }
+
+    fn ordered_class_names(class_names: &str) -> Vec<String> {
+        class_names
+            .split_ascii_whitespace()
+            .filter(|class_name| !class_name.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn is_descendant_of(&self, node_id: NodeId, ancestor_id: NodeId) -> bool {
+        let mut current = self
+            .dom
+            .nodes()
+            .get(node_id.index() as usize)
+            .and_then(|node| node.parent);
+
+        while let Some(parent_id) = current {
+            if parent_id == ancestor_id {
+                return true;
+            }
+
+            current = self
+                .dom
+                .nodes()
+                .get(parent_id.index() as usize)
+                .and_then(|node| node.parent);
+        }
+
+        false
+    }
+
+    fn node_id_for_handle(&self, handle: ElementHandle) -> Result<NodeId, ScriptError> {
+        let raw = handle.raw();
+        let index = (raw & 0xffff_ffff) as u32;
+        let generation = (raw >> 32) as u32;
+        let node_id = NodeId::new(index, generation);
+        let Some(record) = self.dom.nodes().get(index as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+        if record.id.generation() != generation {
+            return Err(ScriptError::new("invalid element handle"));
+        }
+        Ok(node_id)
+    }
+
+    fn node_id_for_node_handle(&self, handle: NodeHandle) -> Result<NodeId, ScriptError> {
+        let raw = handle.raw();
+        let index = (raw & 0xffff_ffff) as u32;
+        let generation = (raw >> 32) as u32;
+        let node_id = NodeId::new(index, generation);
+        let Some(record) = self.dom.nodes().get(index as usize) else {
+            return Err(ScriptError::new("invalid node handle"));
+        };
+        if record.id.generation() != generation {
+            return Err(ScriptError::new("invalid node handle"));
+        }
+        Ok(node_id)
+    }
+
+    fn register_script_listener(
+        &mut self,
+        target: SessionEventTarget,
+        event_type: String,
+        capture: bool,
+        handler: ScriptFunction,
+    ) {
+        self.script_event_listeners.push(ScriptListenerRecord {
+            target,
+            event_type,
+            capture,
+            handler,
+        });
+    }
+
+    fn schedule_script_timer(
+        &mut self,
+        kind: ScheduledScriptTimerKind,
+        delay_ms: i64,
+        handler: ScriptFunction,
+    ) -> u64 {
+        let due_at = self.scheduler.now_ms.saturating_add(delay_ms.max(0));
+        let id = self.scheduler.queue_timer(due_at);
+        let trace_kind = match &kind {
+            ScheduledScriptTimerKind::AnimationFrame => "animationFrame",
+            ScheduledScriptTimerKind::Timeout => "timeout",
+            ScheduledScriptTimerKind::Interval { .. } => "interval",
+        };
+        self.scheduled_script_timers
+            .insert(id, ScheduledScriptTimerRecord { kind, handler });
+        self.trace_timer_line(format!("[timer] schedule {trace_kind}"));
+        id
+    }
+
+    fn cancel_script_timer(&mut self, id: u64) {
+        self.scheduler.cancel_timer(id);
+        self.scheduled_script_timers.remove(&id);
+    }
+
+    fn run_timer_callback(
+        &mut self,
+        callback: &ScriptFunction,
+        this_value: ScriptValue,
+        args: &[ScriptValue],
+        source_name: &str,
+    ) -> Result<(), SessionError> {
+        let mut bindings = (*callback.captured_bindings).clone();
+
+        bindings.insert("this".to_string(), this_value);
+
+        for (index, param) in callback.params.iter().enumerate() {
+            let value = args.get(index).cloned().unwrap_or(ScriptValue::Undefined);
+            bindings.insert(param.clone(), value);
+        }
+
+        self.eval_script_source_with_bindings(&callback.body_source, source_name, bindings)
+    }
+
+    fn run_due_script_timers(
+        &mut self,
+        due_timers: Vec<ScheduledTimer>,
+    ) -> Result<usize, SessionError> {
+        let mut executed = 0usize;
+
+        for timer in due_timers {
+            let Some(record) = self.scheduled_script_timers.get(&timer.id).cloned() else {
+                continue;
+            };
+
+            executed = executed.saturating_add(1);
+            let source_name = match &record.kind {
+                ScheduledScriptTimerKind::AnimationFrame => {
+                    format!("timer:requestAnimationFrame:{}", timer.id)
+                }
+                ScheduledScriptTimerKind::Timeout => format!("timer:setTimeout:{}", timer.id),
+                ScheduledScriptTimerKind::Interval { .. } => {
+                    format!("timer:setInterval:{}", timer.id)
+                }
+            };
+            let args = match &record.kind {
+                ScheduledScriptTimerKind::AnimationFrame => {
+                    vec![ScriptValue::Number(self.scheduler.now_ms as f64)]
+                }
+                ScheduledScriptTimerKind::Timeout | ScheduledScriptTimerKind::Interval { .. } => {
+                    Vec::new()
+                }
+            };
+
+            self.run_timer_callback(&record.handler, ScriptValue::Window, &args, &source_name)?;
+
+            match &record.kind {
+                ScheduledScriptTimerKind::AnimationFrame | ScheduledScriptTimerKind::Timeout => {
+                    self.scheduled_script_timers.remove(&timer.id);
+                }
+                ScheduledScriptTimerKind::Interval { interval_ms } => {
+                    if self.scheduled_script_timers.contains_key(&timer.id) {
+                        self.scheduled_script_timers.remove(&timer.id);
+                        self.schedule_script_timer(
+                            ScheduledScriptTimerKind::Interval {
+                                interval_ms: *interval_ms,
+                            },
+                            *interval_ms,
+                            record.handler,
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(executed)
+    }
+
+    fn trace_line(&mut self, line: String) {
+        if !self.debug.trace_enabled {
+            return;
+        }
+        if self.debug.trace_to_stderr {
+            eprintln!("{line}");
+        }
+        if self.debug.trace_logs.len() >= self.debug.trace_log_limit {
+            self.debug.trace_logs.pop_front();
+        }
+        self.debug.trace_logs.push_back(line);
+    }
+
+    fn trace_event_line(&mut self, line: String) {
+        if self.debug.trace_enabled && self.debug.trace_events {
+            self.trace_line(line);
+        }
+    }
+
+    fn trace_timer_line(&mut self, line: String) {
+        if self.debug.trace_enabled && self.debug.trace_timers {
+            self.trace_line(line);
+        }
+    }
+
+    fn next_random_f64(&mut self) -> f64 {
+        let mut x = self.rng_state;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.rng_state = if x == 0 {
+            0xA5A5_A5A5_A5A5_A5A5
+        } else {
+            x
+        };
+        let out = x.wrapping_mul(0x2545_F491_4F6C_DD1D);
+        let mantissa = out >> 11;
+        (mantissa as f64) * (1.0 / ((1u64 << 53) as f64))
+    }
+}
+
+impl HostBindings for Session {
+    fn document_get_element_by_id(&mut self, id: &str) -> bt_script::Result<Option<ElementHandle>> {
+        let Some(node_id) = self.dom.indexes().id_index.get(id).copied() else {
+            return Ok(None);
+        };
+
+        Ok(Some(Self::node_id_to_handle(node_id)))
+    }
+
+    fn document_create_element(&mut self, tag_name: &str) -> bt_script::Result<ElementHandle> {
+        let node_id = self
+            .dom
+            .create_element(tag_name)
+            .map_err(ScriptError::new)?;
+        Ok(Self::node_id_to_handle(node_id))
+    }
+
+    fn document_create_element_ns(
+        &mut self,
+        namespace_uri: &str,
+        tag_name: &str,
+    ) -> bt_script::Result<ElementHandle> {
+        let node_id = self
+            .dom
+            .create_element_ns(namespace_uri, tag_name)
+            .map_err(ScriptError::new)?;
+        Ok(Self::node_id_to_handle(node_id))
+    }
+
+    fn document_create_text_node(&mut self, text: &str) -> bt_script::Result<NodeHandle> {
+        let node_id = self.dom.create_text_node(text).map_err(ScriptError::new)?;
+        Ok(Self::node_id_to_node_handle(node_id))
+    }
+
+    fn document_create_comment(&mut self, text: &str) -> bt_script::Result<NodeHandle> {
+        let node_id = self.dom.create_comment(text).map_err(ScriptError::new)?;
+        Ok(Self::node_id_to_node_handle(node_id))
+    }
+
+    fn document_normalize(&mut self) -> bt_script::Result<()> {
+        self.dom
+            .normalize_node(self.dom.document_id())
+            .map_err(ScriptError::new)
+    }
+
+    fn document_document_element(&mut self) -> bt_script::Result<Option<ElementHandle>> {
+        Session::document_document_element(self)
+    }
+
+    fn document_head(&mut self) -> bt_script::Result<Option<ElementHandle>> {
+        Session::document_head(self)
+    }
+
+    fn document_body(&mut self) -> bt_script::Result<Option<ElementHandle>> {
+        Session::document_body(self)
+    }
+
+    fn document_scrolling_element(&mut self) -> bt_script::Result<Option<ElementHandle>> {
+        Session::document_scrolling_element(self)
+    }
+
+    fn document_active_element(&mut self) -> bt_script::Result<Option<ElementHandle>> {
+        Session::document_active_element(self)
+    }
+
+    fn document_has_focus(&mut self) -> bt_script::Result<bool> {
+        Ok(Session::document_has_focus(self))
+    }
+
+    fn element_click(&mut self, element: ElementHandle) -> bt_script::Result<()> {
+        Session::click_node(self, Self::element_handle_to_node_id(element))
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn element_focus(&mut self, element: ElementHandle) -> bt_script::Result<()> {
+        Session::focus_node(self, Self::element_handle_to_node_id(element))
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn element_blur(&mut self, element: ElementHandle) -> bt_script::Result<()> {
+        Session::blur_node(self, Self::element_handle_to_node_id(element))
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_visibility_state(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_visibility_state(self).to_string())
+    }
+
+    fn document_hidden(&mut self) -> bt_script::Result<bool> {
+        Ok(Session::document_hidden(self))
+    }
+
+    fn document_title(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_title(self))
+    }
+
+    fn document_set_title(&mut self, value: &str) -> bt_script::Result<()> {
+        Session::set_document_title(self, value)
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_write(&mut self, html: &str) -> bt_script::Result<()> {
+        Session::document_write(self, html).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_writeln(&mut self, html: &str) -> bt_script::Result<()> {
+        Session::document_writeln(self, html).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_open(&mut self) -> bt_script::Result<()> {
+        Session::document_open(self).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_close(&mut self) -> bt_script::Result<()> {
+        Session::document_close(self).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_location(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_location(self))
+    }
+
+    fn document_set_location(&mut self, value: &str) -> bt_script::Result<()> {
+        Session::set_document_location(self, value)
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_location_assign(&mut self, value: &str) -> bt_script::Result<()> {
+        Session::document_location_assign(self, value)
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_location_replace(&mut self, value: &str) -> bt_script::Result<()> {
+        Session::document_location_replace(self, value)
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_location_reload(&mut self) -> bt_script::Result<()> {
+        Session::document_location_reload(self).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_url(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_url(self))
+    }
+
+    fn document_document_uri(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_document_uri(self))
+    }
+
+    fn document_base_uri(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_base_uri(self))
+    }
+
+    fn document_origin(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_origin(self))
+    }
+
+    fn document_domain(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_domain(self))
+    }
+
+    fn document_referrer(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_referrer(self))
+    }
+
+    fn document_cookie(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_cookie(self))
+    }
+
+    fn document_set_cookie(&mut self, value: &str) -> bt_script::Result<()> {
+        Session::set_document_cookie(self, value)
+            .map_err(|err| bt_script::ScriptError::new(err.to_string()))
+    }
+
+    fn match_media(&mut self, query: &str) -> bt_script::Result<MediaQueryListState> {
+        self.mocks
+            .match_media_mut()
+            .resolve(query)
+            .map_err(ScriptError::new)
+    }
+
+    fn match_media_add_listener(&mut self, query: &str) -> bt_script::Result<()> {
+        self.mocks
+            .match_media_mut()
+            .record_listener_call(query, "addListener");
+        Ok(())
+    }
+
+    fn match_media_remove_listener(&mut self, query: &str) -> bt_script::Result<()> {
+        self.mocks
+            .match_media_mut()
+            .record_listener_call(query, "removeListener");
+        Ok(())
+    }
+
+    fn window_open(
+        &mut self,
+        url: Option<&str>,
+        target: Option<&str>,
+        features: Option<&str>,
+    ) -> bt_script::Result<()> {
+        Session::open(self, url, target, features)
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_close(&mut self) -> bt_script::Result<()> {
+        Session::close(self).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_print(&mut self) -> bt_script::Result<()> {
+        Session::print(self).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_request_animation_frame(
+        &mut self,
+        callback: ScriptFunction,
+    ) -> bt_script::Result<u64> {
+        Ok(self.schedule_script_timer(ScheduledScriptTimerKind::AnimationFrame, 16, callback))
+    }
+
+    fn window_cancel_animation_frame(&mut self, handle: u64) -> bt_script::Result<()> {
+        self.cancel_script_timer(handle);
+        Ok(())
+    }
+
+    fn window_set_timeout(
+        &mut self,
+        callback: ScriptFunction,
+        delay_ms: i64,
+    ) -> bt_script::Result<u64> {
+        Ok(self.schedule_script_timer(ScheduledScriptTimerKind::Timeout, delay_ms, callback))
+    }
+
+    fn window_clear_timeout(&mut self, handle: u64) -> bt_script::Result<()> {
+        self.cancel_script_timer(handle);
+        Ok(())
+    }
+
+    fn window_set_interval(
+        &mut self,
+        callback: ScriptFunction,
+        delay_ms: i64,
+    ) -> bt_script::Result<u64> {
+        Ok(self.schedule_script_timer(
+            ScheduledScriptTimerKind::Interval {
+                interval_ms: delay_ms.max(0),
+            },
+            delay_ms,
+            callback,
+        ))
+    }
+
+    fn window_clear_interval(&mut self, handle: u64) -> bt_script::Result<()> {
+        self.cancel_script_timer(handle);
+        Ok(())
+    }
+
+    fn window_alert(&mut self, message: &str) -> bt_script::Result<()> {
+        Session::alert(self, message);
+        Ok(())
+    }
+
+    fn window_confirm(&mut self, message: &str) -> bt_script::Result<bool> {
+        Session::confirm(self, message).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_prompt(
+        &mut self,
+        message: &str,
+        _default_text: Option<&str>,
+    ) -> bt_script::Result<Option<String>> {
+        Session::prompt(self, message).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_navigator_user_agent(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_user_agent(self).to_string())
+    }
+
+    fn window_navigator_app_code_name(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_app_code_name(self).to_string())
+    }
+
+    fn window_navigator_app_name(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_app_name(self).to_string())
+    }
+
+    fn window_navigator_app_version(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_app_version(self).to_string())
+    }
+
+    fn window_navigator_product(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_product(self).to_string())
+    }
+
+    fn window_navigator_product_sub(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_product_sub(self).to_string())
+    }
+
+    fn window_navigator_platform(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_platform(self).to_string())
+    }
+
+    fn window_navigator_language(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_language(self).to_string())
+    }
+
+    fn window_navigator_oscpu(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_oscpu(self).to_string())
+    }
+
+    fn window_navigator_user_language(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_user_language(self).to_string())
+    }
+
+    fn window_navigator_browser_language(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_browser_language(self).to_string())
+    }
+
+    fn window_navigator_system_language(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_system_language(self).to_string())
+    }
+
+    fn window_navigator_languages(&mut self) -> bt_script::Result<Vec<String>> {
+        Ok(Session::window_navigator_languages(self))
+    }
+
+    fn window_navigator_mime_types(&mut self) -> bt_script::Result<Vec<String>> {
+        Ok(Session::window_navigator_mime_types(self))
+    }
+
+    fn clipboard_write_text(&mut self, text: &str) -> bt_script::Result<()> {
+        Session::write_clipboard(self, text).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn clipboard_read_text(&mut self) -> bt_script::Result<String> {
+        Session::read_clipboard(self).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn random_f64(&mut self) -> bt_script::Result<f64> {
+        Ok(self.next_random_f64())
+    }
+
+    fn window_navigator_cookie_enabled(&mut self) -> bt_script::Result<bool> {
+        Ok(Session::window_navigator_cookie_enabled(self))
+    }
+
+    fn window_navigator_on_line(&mut self) -> bt_script::Result<bool> {
+        Ok(Session::window_navigator_on_line(self))
+    }
+
+    fn window_navigator_webdriver(&mut self) -> bt_script::Result<bool> {
+        Ok(Session::window_navigator_webdriver(self))
+    }
+
+    fn window_navigator_vendor(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_vendor(self).to_string())
+    }
+
+    fn window_navigator_vendor_sub(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_vendor_sub(self).to_string())
+    }
+
+    fn window_navigator_pdf_viewer_enabled(&mut self) -> bt_script::Result<bool> {
+        Ok(Session::window_navigator_pdf_viewer_enabled(self))
+    }
+
+    fn window_navigator_do_not_track(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_navigator_do_not_track(self).to_string())
+    }
+
+    fn window_navigator_java_enabled(&mut self) -> bt_script::Result<bool> {
+        Ok(Session::window_navigator_java_enabled(self))
+    }
+
+    fn window_navigator_hardware_concurrency(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_navigator_hardware_concurrency(self))
+    }
+
+    fn window_navigator_max_touch_points(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_navigator_max_touch_points(self))
+    }
+
+    fn window_history_length(&mut self) -> bt_script::Result<usize> {
+        Ok(Session::window_history_length(self))
+    }
+
+    fn window_history_scroll_restoration(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_history_scroll_restoration(self).to_string())
+    }
+
+    fn set_window_history_scroll_restoration(&mut self, value: &str) -> bt_script::Result<()> {
+        Session::set_window_history_scroll_restoration(self, value)
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_history_state(&mut self) -> bt_script::Result<Option<String>> {
+        Ok(Session::window_history_state(self).map(str::to_string))
+    }
+
+    fn window_history_push_state(
+        &mut self,
+        state: Option<&str>,
+        url: Option<&str>,
+    ) -> bt_script::Result<()> {
+        Session::window_history_push_state(self, state, url)
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_history_replace_state(
+        &mut self,
+        state: Option<&str>,
+        url: Option<&str>,
+    ) -> bt_script::Result<()> {
+        Session::window_history_replace_state(self, state, url)
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_history_back(&mut self) -> bt_script::Result<()> {
+        Session::window_history_back(self).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_history_forward(&mut self) -> bt_script::Result<()> {
+        Session::window_history_forward(self).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_history_go(&mut self, delta: i64) -> bt_script::Result<()> {
+        Session::window_history_go(self, delta).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_scroll_x(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_scroll_x(self))
+    }
+
+    fn window_scroll_y(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_scroll_y(self))
+    }
+
+    fn window_page_x_offset(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_page_x_offset(self))
+    }
+
+    fn window_page_y_offset(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_page_y_offset(self))
+    }
+
+    fn window_device_pixel_ratio(&mut self) -> bt_script::Result<f64> {
+        Ok(Session::window_device_pixel_ratio(self))
+    }
+
+    fn window_inner_width(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_inner_width(self))
+    }
+
+    fn window_inner_height(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_inner_height(self))
+    }
+
+    fn window_outer_width(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_outer_width(self))
+    }
+
+    fn window_outer_height(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_outer_height(self))
+    }
+
+    fn window_screen_x(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_x(self))
+    }
+
+    fn window_screen_y(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_y(self))
+    }
+
+    fn window_screen_left(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_left(self))
+    }
+
+    fn window_screen_top(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_top(self))
+    }
+
+    fn window_screen_width(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_width(self))
+    }
+
+    fn window_screen_height(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_height(self))
+    }
+
+    fn window_screen_avail_width(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_avail_width(self))
+    }
+
+    fn window_screen_avail_height(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_avail_height(self))
+    }
+
+    fn window_screen_avail_left(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_avail_left(self))
+    }
+
+    fn window_screen_avail_top(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_avail_top(self))
+    }
+
+    fn window_screen_color_depth(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_color_depth(self))
+    }
+
+    fn window_screen_pixel_depth(&mut self) -> bt_script::Result<i64> {
+        Ok(Session::window_screen_pixel_depth(self))
+    }
+
+    fn window_screen_orientation(&mut self) -> bt_script::Result<ScreenOrientationState> {
+        Ok(Session::window_screen_orientation(self))
+    }
+
+    fn window_scroll_to(&mut self, x: i64, y: i64) -> bt_script::Result<()> {
+        Session::scroll_to(self, x, y).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_scroll_by(&mut self, x: i64, y: i64) -> bt_script::Result<()> {
+        Session::scroll_by(self, x, y).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn window_name(&mut self) -> bt_script::Result<String> {
+        Ok(Session::window_name(self).to_string())
+    }
+
+    fn set_window_name(&mut self, value: &str) -> bt_script::Result<()> {
+        Session::set_window_name(self, value);
+        Ok(())
+    }
+
+    fn storage_length(&mut self, target: StorageTarget) -> bt_script::Result<usize> {
+        Ok(Session::storage_length(self, target))
+    }
+
+    fn storage_get_item(
+        &mut self,
+        target: StorageTarget,
+        key: &str,
+    ) -> bt_script::Result<Option<String>> {
+        Ok(Session::storage_get_item(self, target, key))
+    }
+
+    fn storage_set_item(
+        &mut self,
+        target: StorageTarget,
+        key: &str,
+        value: &str,
+    ) -> bt_script::Result<()> {
+        Session::storage_set_item(self, target, key, value);
+        Ok(())
+    }
+
+    fn storage_remove_item(&mut self, target: StorageTarget, key: &str) -> bt_script::Result<()> {
+        Session::storage_remove_item(self, target, key);
+        Ok(())
+    }
+
+    fn storage_clear(&mut self, target: StorageTarget) -> bt_script::Result<()> {
+        Session::storage_clear(self, target);
+        Ok(())
+    }
+
+    fn storage_key(
+        &mut self,
+        target: StorageTarget,
+        index: usize,
+    ) -> bt_script::Result<Option<String>> {
+        Ok(Session::storage_key(self, target, index))
+    }
+
+    fn document_current_script(&mut self) -> bt_script::Result<Option<ElementHandle>> {
+        Ok(Session::document_current_script(self))
+    }
+
+    fn document_ready_state(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_ready_state(self).to_string())
+    }
+
+    fn document_compat_mode(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_compat_mode(self).to_string())
+    }
+
+    fn document_character_set(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_character_set(self).to_string())
+    }
+
+    fn document_content_type(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_content_type(self).to_string())
+    }
+
+    fn document_design_mode(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_design_mode(self).to_string())
+    }
+
+    fn document_set_design_mode(&mut self, value: &str) -> bt_script::Result<()> {
+        Session::set_document_design_mode(self, value)
+            .map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_dir(&mut self) -> bt_script::Result<String> {
+        Ok(Session::document_dir(self))
+    }
+
+    fn document_set_dir(&mut self, value: &str) -> bt_script::Result<()> {
+        Session::set_document_dir(self, value).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn document_query_selector(
+        &mut self,
+        selector: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        self.query_selector_handle(None, selector)
+    }
+
+    fn document_query_selector_all(
+        &mut self,
+        selector: &str,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.query_selector_handles(None, selector)
+    }
+
+    fn document_get_elements_by_name(
+        &mut self,
+        name: &str,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.elements_by_name(name)
+    }
+
+    fn document_style_sheets_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
+        Session::document_style_sheets(self)
+    }
+
+    fn document_style_sheets_named_item(
+        &mut self,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        Session::document_style_sheets_named_item(self, name)
+    }
+
+    fn node_child_nodes_items(
+        &mut self,
+        scope: HtmlCollectionScope,
+    ) -> bt_script::Result<Vec<NodeHandle>> {
+        self.node_child_nodes(scope)
+    }
+
+    fn node_clone(&mut self, node: NodeHandle, deep: bool) -> bt_script::Result<NodeHandle> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let cloned_id = self
+            .dom
+            .clone_node(node_id, deep)
+            .map_err(ScriptError::new)?;
+        Ok(Self::node_id_to_node_handle(cloned_id))
+    }
+
+    fn node_normalize(&mut self, node: NodeHandle) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        self.dom.normalize_node(node_id).map_err(ScriptError::new)
+    }
+
+    fn node_replace_with(
+        &mut self,
+        node: NodeHandle,
+        children: Vec<NodeHandle>,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let Some(parent_id) = self
+            .dom
+            .nodes()
+            .get(node_id.index() as usize)
+            .and_then(|record| record.parent)
+        else {
+            return Ok(());
+        };
+        let children = children
+            .into_iter()
+            .map(|child| self.node_id_for_node_handle(child))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.dom
+            .insert_children_before(parent_id, node_id, children)
+            .map_err(ScriptError::new)?;
+        self.dom.remove_node(node_id).map_err(ScriptError::new)
+    }
+
+    fn node_before(
+        &mut self,
+        node: NodeHandle,
+        children: Vec<NodeHandle>,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let Some(parent_id) = self
+            .dom
+            .nodes()
+            .get(node_id.index() as usize)
+            .and_then(|record| record.parent)
+        else {
+            return Ok(());
+        };
+        let children = children
+            .into_iter()
+            .map(|child| self.node_id_for_node_handle(child))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.dom
+            .insert_children_before(parent_id, node_id, children)
+            .map_err(ScriptError::new)
+    }
+
+    fn node_after(&mut self, node: NodeHandle, children: Vec<NodeHandle>) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let Some(parent_id) = self
+            .dom
+            .nodes()
+            .get(node_id.index() as usize)
+            .and_then(|record| record.parent)
+        else {
+            return Ok(());
+        };
+        let children = children
+            .into_iter()
+            .map(|child| self.node_id_for_node_handle(child))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.dom
+            .insert_children_after(parent_id, node_id, children)
+            .map_err(ScriptError::new)
+    }
+
+    fn document_contains(&mut self, node: NodeHandle) -> bt_script::Result<bool> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        Ok(Self::node_contains_id(
+            &self.dom,
+            self.dom.document_id(),
+            node_id,
+        ))
+    }
+
+    fn node_contains(&mut self, node: NodeHandle, other: NodeHandle) -> bt_script::Result<bool> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let other_id = self.node_id_for_node_handle(other)?;
+        Ok(Self::node_contains_id(&self.dom, node_id, other_id))
+    }
+
+    fn node_compare_document_position(
+        &mut self,
+        node: NodeHandle,
+        other: NodeHandle,
+    ) -> bt_script::Result<u16> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let other_id = self.node_id_for_node_handle(other)?;
+        Ok(Self::node_compare_document_position_id(
+            &self.dom, node_id, other_id,
+        ))
+    }
+
+    fn node_is_equal_node(
+        &mut self,
+        node: NodeHandle,
+        other: NodeHandle,
+    ) -> bt_script::Result<bool> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let other_id = self.node_id_for_node_handle(other)?;
+        Ok(Self::node_is_equal_node_id(&self.dom, node_id, other_id))
+    }
+
+    fn template_content_is_equal_node(
+        &mut self,
+        fragment: ElementHandle,
+        other: ElementHandle,
+    ) -> bt_script::Result<bool> {
+        let fragment_id = self.node_id_for_handle(fragment)?;
+        let other_id = self.node_id_for_handle(other)?;
+        Ok(Self::template_content_is_equal_node_id(
+            &self.dom,
+            fragment_id,
+            other_id,
+        ))
+    }
+
+    fn document_has_child_nodes(&mut self) -> bt_script::Result<bool> {
+        Ok(Self::node_has_child_nodes_id(
+            &self.dom,
+            self.dom.document_id(),
+        ))
+    }
+
+    fn node_has_child_nodes(&mut self, node: NodeHandle) -> bt_script::Result<bool> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        Ok(Self::node_has_child_nodes_id(&self.dom, node_id))
+    }
+
+    fn node_parent(&mut self, node: NodeHandle) -> bt_script::Result<Option<NodeHandle>> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let Some(record) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid node handle"));
+        };
+
+        Ok(record.parent.map(Self::node_id_to_node_handle))
+    }
+
+    fn node_text_content(&mut self, node: NodeHandle) -> bt_script::Result<String> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        Ok(self.dom.text_content_for_node(node_id))
+    }
+
+    fn node_type(&mut self, node: NodeHandle) -> bt_script::Result<u8> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let Some(record) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid node handle"));
+        };
+
+        let node_type = match &record.kind {
+            NodeKind::Document => 9,
+            NodeKind::Element(_) => 1,
+            NodeKind::Text(_) => 3,
+            NodeKind::Comment(_) => 8,
+        };
+        Ok(node_type)
+    }
+
+    fn node_name(&mut self, node: NodeHandle) -> bt_script::Result<String> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let Some(record) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid node handle"));
+        };
+
+        let node_name = match &record.kind {
+            NodeKind::Document => "#document".to_string(),
+            NodeKind::Element(element) => element.tag_name.clone(),
+            NodeKind::Text(_) => "#text".to_string(),
+            NodeKind::Comment(_) => "#comment".to_string(),
+        };
+        Ok(node_name)
+    }
+
+    fn node_namespace_uri(&mut self, node: NodeHandle) -> bt_script::Result<Option<String>> {
+        let node_id = self.node_id_for_node_handle(node)?;
+        let Some(record) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid node handle"));
+        };
+
+        let namespace_uri = match &record.kind {
+            NodeKind::Document => None,
+            NodeKind::Element(element) => Some(element.namespace_uri.clone()),
+            NodeKind::Text(_) | NodeKind::Comment(_) => None,
+        };
+        Ok(namespace_uri)
+    }
+
+    fn html_collection_tag_name_items(
+        &mut self,
+        collection: HtmlCollectionTarget,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        match collection {
+            HtmlCollectionTarget::Children(element) => self.element_children(element),
+            HtmlCollectionTarget::ByTagName { scope, tag_name } => {
+                self.elements_by_tag_name(&scope, &tag_name)
+            }
+            HtmlCollectionTarget::ByTagNameNs {
+                scope,
+                namespace_uri,
+                local_name,
+            } => self.elements_by_tag_name_ns(&scope, &namespace_uri, &local_name),
+            HtmlCollectionTarget::ByClassName { scope, class_names } => {
+                self.elements_by_class_name(&scope, &class_names)
+            }
+            HtmlCollectionTarget::FormElements(element) => self.form_elements(element),
+            HtmlCollectionTarget::SelectOptions(element) => self.select_options(element),
+            HtmlCollectionTarget::SelectSelectedOptions(element) => self.selected_options(element),
+            HtmlCollectionTarget::DocumentPlugins => {
+                self.elements_by_tag_name(&HtmlCollectionScope::Document, "embed")
+            }
+            HtmlCollectionTarget::DocumentLinks => self.document_links(),
+            HtmlCollectionTarget::DocumentAnchors => self.document_anchors(),
+            HtmlCollectionTarget::DocumentChildren => self.document_children(),
+            HtmlCollectionTarget::WindowFrames => self.window_frames(),
+            HtmlCollectionTarget::MapAreas(element) => self.map_areas(element),
+            HtmlCollectionTarget::TableTBodies(element) => self.table_bodies(element),
+            HtmlCollectionTarget::TableRows(element) => self.table_rows(element),
+            HtmlCollectionTarget::RowCells(element) => self.row_cells(element),
+        }
+    }
+
+    fn html_collection_tag_name_named_item(
+        &mut self,
+        collection: HtmlCollectionTarget,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        match collection {
+            HtmlCollectionTarget::Children(element) => {
+                self.html_collection_named_item(element, name)
+            }
+            HtmlCollectionTarget::ByTagName { scope, tag_name } => {
+                self.named_item_for_tag_name_collection(&scope, &tag_name, name)
+            }
+            HtmlCollectionTarget::ByTagNameNs {
+                scope,
+                namespace_uri,
+                local_name,
+            } => self.named_item_for_tag_name_ns_collection(
+                &scope,
+                &namespace_uri,
+                &local_name,
+                name,
+            ),
+            HtmlCollectionTarget::ByClassName { scope, class_names } => {
+                self.named_item_for_class_name_collection(&scope, &class_names, name)
+            }
+            HtmlCollectionTarget::FormElements(element) => {
+                self.form_elements_named_item(element, name)
+            }
+            HtmlCollectionTarget::SelectOptions(element) => {
+                self.select_options_named_item(element, name)
+            }
+            HtmlCollectionTarget::SelectSelectedOptions(element) => {
+                self.selected_options_named_item(element, name)
+            }
+            HtmlCollectionTarget::DocumentPlugins => self.named_item_for_tag_name_collection(
+                &HtmlCollectionScope::Document,
+                "embed",
+                name,
+            ),
+            HtmlCollectionTarget::DocumentLinks => self.document_links_named_item(name),
+            HtmlCollectionTarget::DocumentAnchors => self.document_anchors_named_item(name),
+            HtmlCollectionTarget::DocumentChildren => self.document_children_named_item(name),
+            HtmlCollectionTarget::WindowFrames => self.window_frames_named_item(name),
+            HtmlCollectionTarget::MapAreas(element) => self.map_areas_named_item(element, name),
+            HtmlCollectionTarget::TableTBodies(element) => {
+                self.table_bodies_named_item(element, name)
+            }
+            HtmlCollectionTarget::TableRows(element) => self.table_rows_named_item(element, name),
+            HtmlCollectionTarget::RowCells(element) => self.row_cells_named_item(element, name),
+        }
+    }
+
+    fn html_collection_class_name_items(
+        &mut self,
+        collection: HtmlCollectionTarget,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        match collection {
+            HtmlCollectionTarget::Children(element) => self.element_children(element),
+            HtmlCollectionTarget::ByTagName { scope, tag_name } => {
+                self.elements_by_tag_name(&scope, &tag_name)
+            }
+            HtmlCollectionTarget::ByTagNameNs {
+                scope,
+                namespace_uri,
+                local_name,
+            } => self.elements_by_tag_name_ns(&scope, &namespace_uri, &local_name),
+            HtmlCollectionTarget::ByClassName { scope, class_names } => {
+                self.elements_by_class_name(&scope, &class_names)
+            }
+            HtmlCollectionTarget::FormElements(element) => self.form_elements(element),
+            HtmlCollectionTarget::SelectOptions(element) => self.select_options(element),
+            HtmlCollectionTarget::SelectSelectedOptions(element) => self.selected_options(element),
+            HtmlCollectionTarget::DocumentPlugins => {
+                self.elements_by_tag_name(&HtmlCollectionScope::Document, "embed")
+            }
+            HtmlCollectionTarget::DocumentLinks => self.document_links(),
+            HtmlCollectionTarget::DocumentAnchors => self.document_anchors(),
+            HtmlCollectionTarget::DocumentChildren => self.document_children(),
+            HtmlCollectionTarget::WindowFrames => self.window_frames(),
+            HtmlCollectionTarget::MapAreas(element) => self.map_areas(element),
+            HtmlCollectionTarget::TableTBodies(element) => self.table_bodies(element),
+            HtmlCollectionTarget::TableRows(element) => self.table_rows(element),
+            HtmlCollectionTarget::RowCells(element) => self.row_cells(element),
+        }
+    }
+
+    fn html_collection_class_name_named_item(
+        &mut self,
+        collection: HtmlCollectionTarget,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        match collection {
+            HtmlCollectionTarget::Children(element) => {
+                self.html_collection_named_item(element, name)
+            }
+            HtmlCollectionTarget::ByTagName { scope, tag_name } => {
+                self.named_item_for_tag_name_collection(&scope, &tag_name, name)
+            }
+            HtmlCollectionTarget::ByTagNameNs {
+                scope,
+                namespace_uri,
+                local_name,
+            } => self.named_item_for_tag_name_ns_collection(
+                &scope,
+                &namespace_uri,
+                &local_name,
+                name,
+            ),
+            HtmlCollectionTarget::ByClassName { scope, class_names } => {
+                self.named_item_for_class_name_collection(&scope, &class_names, name)
+            }
+            HtmlCollectionTarget::FormElements(element) => {
+                self.form_elements_named_item(element, name)
+            }
+            HtmlCollectionTarget::SelectOptions(element) => {
+                self.select_options_named_item(element, name)
+            }
+            HtmlCollectionTarget::SelectSelectedOptions(element) => {
+                self.selected_options_named_item(element, name)
+            }
+            HtmlCollectionTarget::DocumentPlugins => self.named_item_for_tag_name_collection(
+                &HtmlCollectionScope::Document,
+                "embed",
+                name,
+            ),
+            HtmlCollectionTarget::DocumentLinks => self.document_links_named_item(name),
+            HtmlCollectionTarget::DocumentAnchors => self.document_anchors_named_item(name),
+            HtmlCollectionTarget::DocumentChildren => self.document_children_named_item(name),
+            HtmlCollectionTarget::WindowFrames => self.window_frames_named_item(name),
+            HtmlCollectionTarget::MapAreas(element) => self.map_areas_named_item(element, name),
+            HtmlCollectionTarget::TableTBodies(element) => {
+                self.table_bodies_named_item(element, name)
+            }
+            HtmlCollectionTarget::TableRows(element) => self.table_rows_named_item(element, name),
+            HtmlCollectionTarget::RowCells(element) => self.row_cells_named_item(element, name),
+        }
+    }
+
+    fn html_collection_form_elements_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        self.form_elements(element)
+    }
+
+    fn html_collection_tag_name_ns_items(
+        &mut self,
+        collection: HtmlCollectionTarget,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        match collection {
+            HtmlCollectionTarget::ByTagNameNs {
+                scope,
+                namespace_uri,
+                local_name,
+            } => self.elements_by_tag_name_ns(&scope, &namespace_uri, &local_name),
+            HtmlCollectionTarget::DocumentAnchors => self.document_anchors(),
+            other => self.html_collection_tag_name_items(other),
+        }
+    }
+
+    fn html_collection_tag_name_ns_named_item(
+        &mut self,
+        collection: HtmlCollectionTarget,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        match collection {
+            HtmlCollectionTarget::ByTagNameNs {
+                scope,
+                namespace_uri,
+                local_name,
+            } => self.named_item_for_tag_name_ns_collection(
+                &scope,
+                &namespace_uri,
+                &local_name,
+                name,
+            ),
+            HtmlCollectionTarget::DocumentAnchors => self.document_anchors_named_item(name),
+            other => self.html_collection_tag_name_named_item(other, name),
+        }
+    }
+
+    fn html_collection_form_elements_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        Session::form_elements_named_item(self, element, name)
+    }
+
+    fn html_collection_form_elements_named_items(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        Session::form_elements_named_items(self, element, name)
+    }
+
+    fn radio_node_list_set_value(
+        &mut self,
+        target: &RadioNodeListTarget,
+        value: &str,
+    ) -> bt_script::Result<()> {
+        let RadioNodeListTarget::FormElements { element, name } = target;
+        let items = self.html_collection_form_elements_named_items(*element, name)?;
+        let mut matched = false;
+
+        for item in items {
+            if self.element_tag_name(item)? != "input" {
+                continue;
+            }
+
+            let Some(input_type) = self.element_get_attribute(item, "type")? else {
+                continue;
+            };
+            if !input_type.eq_ignore_ascii_case("radio") {
+                continue;
+            }
+
+            let should_check = !matched && self.element_value(item)? == value;
+            if should_check {
+                matched = true;
+            }
+            self.element_set_checked(item, should_check)?;
+        }
+
+        Ok(())
+    }
+
+    fn html_collection_select_options_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        Session::select_options(self, element)
+    }
+
+    fn html_collection_select_options_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        Session::select_options_named_item(self, element, name)
+    }
+
+    fn html_collection_select_options_add(
+        &mut self,
+        element: ElementHandle,
+        option: ElementHandle,
+    ) -> bt_script::Result<()> {
+        Session::select_options_add(self, element, option)
+    }
+
+    fn html_collection_select_options_remove(
+        &mut self,
+        element: ElementHandle,
+        index: usize,
+    ) -> bt_script::Result<()> {
+        Session::select_options_remove(self, element, index)
+    }
+
+    fn html_collection_select_selected_options_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        Session::selected_options(self, element)
+    }
+
+    fn html_collection_select_selected_options_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        Session::selected_options_named_item(self, element, name)
+    }
+
+    fn html_collection_document_links_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
+        Session::document_links(self)
+    }
+
+    fn html_collection_document_links_named_item(
+        &mut self,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        Session::document_links_named_item(self, name)
+    }
+
+    fn html_collection_document_anchors_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
+        Session::document_anchors(self)
+    }
+
+    fn html_collection_document_anchors_named_item(
+        &mut self,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        Session::document_anchors_named_item(self, name)
+    }
+
+    fn html_collection_document_children_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
+        Session::document_children(self)
+    }
+
+    fn html_collection_document_children_named_item(
+        &mut self,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        Session::document_children_named_item(self, name)
+    }
+
+    fn html_collection_window_frames_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {
+        Session::window_frames(self)
+    }
+
+    fn html_collection_window_frames_named_item(
+        &mut self,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        Session::window_frames_named_item(self, name)
+    }
+
+    fn html_collection_map_areas_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        Session::map_areas(self, element)
+    }
+
+    fn html_collection_map_areas_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        Session::map_areas_named_item(self, element, name)
+    }
+
+    fn html_collection_table_bodies_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        Session::table_bodies(self, element)
+    }
+
+    fn html_collection_table_bodies_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        Session::table_bodies_named_item(self, element, name)
+    }
+
+    fn html_collection_table_rows_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        Session::table_rows(self, element)
+    }
+
+    fn html_collection_table_rows_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        Session::table_rows_named_item(self, element, name)
+    }
+
+    fn html_collection_row_cells_items(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        Session::row_cells(self, element)
+    }
+
+    fn html_collection_row_cells_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        Session::row_cells_named_item(self, element, name)
+    }
+
+    fn element_text_content(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+        let node_id = self.node_id_for_handle(element)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        match &node.kind {
+            NodeKind::Element(_)
+            | NodeKind::Document
+            | NodeKind::Text(_)
+            | NodeKind::Comment(_) => Ok(self.dom.text_content_for_node(node_id)),
+        }
+    }
+
+    fn element_set_text_content(
+        &mut self,
+        element: ElementHandle,
+        value: &str,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .set_text_content(node_id, value)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_inner_html(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .inner_html_for_node(node_id)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_set_inner_html(
+        &mut self,
+        element: ElementHandle,
+        value: &str,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .set_inner_html(node_id, value)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_outer_html(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .outer_html_for_node(node_id)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_set_outer_html(
+        &mut self,
+        element: ElementHandle,
+        value: &str,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .set_outer_html(node_id, value)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_insert_adjacent_html(
+        &mut self,
+        element: ElementHandle,
+        position: &str,
+        value: &str,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .insert_adjacent_html(node_id, position, value)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_value(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+        let node_id = self.node_id_for_handle(element)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+        match &node.kind {
+            NodeKind::Element(_)
+            | NodeKind::Document
+            | NodeKind::Text(_)
+            | NodeKind::Comment(_) => Ok(self.dom.value_for_node(node_id)),
+        }
+    }
+
+    fn element_children(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        let node_id = self.node_id_for_handle(element)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let children = node
+            .children
+            .iter()
+            .copied()
+            .filter(|child_id| {
+                matches!(
+                    self.dom
+                        .nodes()
+                        .get(child_id.index() as usize)
+                        .map(|node| &node.kind),
+                    Some(NodeKind::Element(_))
+                )
+            })
+            .map(Self::node_id_to_handle)
+            .collect();
+
+        Ok(children)
+    }
+
+    fn element_tag_name(&mut self, element: ElementHandle) -> bt_script::Result<String> {
+        let node_id = self.node_id_for_handle(element)?;
+        let Some(record) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        let NodeKind::Element(element) = &record.kind else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        Ok(element.tag_name.clone())
+    }
+
+    fn element_base_uri(&mut self, _element: ElementHandle) -> bt_script::Result<String> {
+        Ok(Session::document_base_uri(self))
+    }
+
+    fn element_origin(&mut self, _element: ElementHandle) -> bt_script::Result<String> {
+        Ok(Session::document_origin(self))
+    }
+
+    fn element_is_content_editable(&mut self, element: ElementHandle) -> bt_script::Result<bool> {
+        let node_id = self.node_id_for_handle(element)?;
+        Ok(self.dom.is_content_editable(node_id))
+    }
+
+    fn element_labels(&mut self, element: ElementHandle) -> bt_script::Result<Vec<ElementHandle>> {
+        Session::element_labels(self, element)
+    }
+
+    fn html_collection_named_item(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        let node_id = self.node_id_for_handle(element)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        for child_id in &node.children {
+            let Some(child) = self.dom.nodes().get(child_id.index() as usize) else {
+                continue;
+            };
+            let NodeKind::Element(element) = &child.kind else {
+                continue;
+            };
+            if element
+                .attributes
+                .get("id")
+                .is_some_and(|value| value == name)
+                || element
+                    .attributes
+                    .get("name")
+                    .is_some_and(|value| value == name)
+            {
+                return Ok(Some(Self::node_id_to_handle(*child_id)));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn element_set_value(&mut self, element: ElementHandle, value: &str) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        match &node.kind {
+            NodeKind::Element(element) if element.tag_name == "select" => self
+                .dom
+                .set_select_value(node_id, value)
+                .map_err(ScriptError::new),
+            NodeKind::Element(_) => self
+                .dom
+                .set_form_control_value(node_id, value)
+                .map_err(ScriptError::new),
+            _ => Err(ScriptError::new("invalid element handle")),
+        }
+    }
+
+    fn element_checked(&mut self, element: ElementHandle) -> bt_script::Result<bool> {
+        let node_id = self.node_id_for_handle(element)?;
+        Ok(self.dom.checked_for_node(node_id).unwrap_or(false))
+    }
+
+    fn element_set_checked(
+        &mut self,
+        element: ElementHandle,
+        checked: bool,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .set_form_control_checked(node_id, checked)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_indeterminate(&mut self, element: ElementHandle) -> bt_script::Result<bool> {
+        let node_id = self.node_id_for_handle(element)?;
+        Ok(self.dom.indeterminate_for_node(node_id).unwrap_or(false))
+    }
+
+    fn element_set_indeterminate(
+        &mut self,
+        element: ElementHandle,
+        indeterminate: bool,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .set_form_control_indeterminate(node_id, indeterminate)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_get_attribute(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<Option<String>> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .get_attribute(node_id, name)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_set_attribute(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+        value: &str,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .set_attribute(node_id, name, value)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_remove_attribute(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .remove_attribute(node_id, name)
+            .map_err(ScriptError::new)?;
+        Ok(())
+    }
+
+    fn element_has_attribute(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+    ) -> bt_script::Result<bool> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .has_attribute(node_id, name)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_attribute_names(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<String>> {
+        let node_id = self.node_id_for_handle(element)?;
+        let Some(node) = self.dom.nodes().get(node_id.index() as usize) else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+        let NodeKind::Element(element) = &node.kind else {
+            return Err(ScriptError::new("invalid element handle"));
+        };
+
+        Ok(element.attributes.keys().cloned().collect())
+    }
+
+    fn element_toggle_attribute(
+        &mut self,
+        element: ElementHandle,
+        name: &str,
+        force: Option<bool>,
+    ) -> bt_script::Result<bool> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom
+            .toggle_attribute(node_id, name, force)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_append_child(
+        &mut self,
+        parent: ElementHandle,
+        child: NodeHandle,
+    ) -> bt_script::Result<()> {
+        let parent_id = self.node_id_for_handle(parent)?;
+        let child_id = self.node_id_for_node_handle(child)?;
+        self.dom
+            .append_child(parent_id, child_id)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_insert_before(
+        &mut self,
+        parent: ElementHandle,
+        child: NodeHandle,
+        reference: Option<NodeHandle>,
+    ) -> bt_script::Result<()> {
+        let parent_id = self.node_id_for_handle(parent)?;
+        let child_id = self.node_id_for_node_handle(child)?;
+        match reference {
+            Some(reference) => {
+                let reference_id = self.node_id_for_node_handle(reference)?;
+                self.dom
+                    .insert_before(parent_id, child_id, reference_id)
+                    .map_err(ScriptError::new)
+            }
+            None => self
+                .dom
+                .append_child(parent_id, child_id)
+                .map_err(ScriptError::new),
+        }
+    }
+
+    fn element_replace_child(
+        &mut self,
+        parent: ElementHandle,
+        new_child: NodeHandle,
+        old_child: NodeHandle,
+    ) -> bt_script::Result<()> {
+        let parent_id = self.node_id_for_handle(parent)?;
+        let new_child_id = self.node_id_for_node_handle(new_child)?;
+        let old_child_id = self.node_id_for_node_handle(old_child)?;
+        self.dom
+            .replace_child(parent_id, new_child_id, old_child_id)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_replace_children(
+        &mut self,
+        parent: ElementHandle,
+        children: Vec<NodeHandle>,
+    ) -> bt_script::Result<()> {
+        let parent_id = self.node_id_for_handle(parent)?;
+        let children = children
+            .into_iter()
+            .map(|child| self.node_id_for_node_handle(child))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.dom
+            .replace_children(parent_id, children)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_append(
+        &mut self,
+        element: ElementHandle,
+        children: Vec<NodeHandle>,
+    ) -> bt_script::Result<()> {
+        let parent_id = self.node_id_for_handle(element)?;
+        let children = children
+            .into_iter()
+            .map(|child| self.node_id_for_node_handle(child))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.dom
+            .append_children(parent_id, children)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_prepend(
+        &mut self,
+        element: ElementHandle,
+        children: Vec<NodeHandle>,
+    ) -> bt_script::Result<()> {
+        let parent_id = self.node_id_for_handle(element)?;
+        let children = children
+            .into_iter()
+            .map(|child| self.node_id_for_node_handle(child))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.dom
+            .prepend_children(parent_id, children)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_before(
+        &mut self,
+        element: ElementHandle,
+        children: Vec<NodeHandle>,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        let Some(parent_id) = self
+            .dom
+            .nodes()
+            .get(node_id.index() as usize)
+            .and_then(|node| node.parent)
+        else {
+            return Ok(());
+        };
+        let children = children
+            .into_iter()
+            .map(|child| self.node_id_for_node_handle(child))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.dom
+            .insert_children_before(parent_id, node_id, children)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_after(
+        &mut self,
+        element: ElementHandle,
+        children: Vec<NodeHandle>,
+    ) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        let Some(parent_id) = self
+            .dom
+            .nodes()
+            .get(node_id.index() as usize)
+            .and_then(|node| node.parent)
+        else {
+            return Ok(());
+        };
+        let children = children
+            .into_iter()
+            .map(|child| self.node_id_for_node_handle(child))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.dom
+            .insert_children_after(parent_id, node_id, children)
+            .map_err(ScriptError::new)
+    }
+
+    fn element_remove(&mut self, element: ElementHandle) -> bt_script::Result<()> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.dom.remove_node(node_id).map_err(ScriptError::new)
+    }
+
+    fn element_query_selector(
+        &mut self,
+        element: ElementHandle,
+        selector: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.query_selector_handle(Some(node_id), selector)
+    }
+
+    fn element_query_selector_all(
+        &mut self,
+        element: ElementHandle,
+        selector: &str,
+    ) -> bt_script::Result<Vec<ElementHandle>> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.query_selector_handles(Some(node_id), selector)
+    }
+
+    fn element_matches(
+        &mut self,
+        element: ElementHandle,
+        selector: &str,
+    ) -> bt_script::Result<bool> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.element_matches_selector(node_id, selector)
+    }
+
+    fn element_closest(
+        &mut self,
+        element: ElementHandle,
+        selector: &str,
+    ) -> bt_script::Result<Option<ElementHandle>> {
+        let node_id = self.node_id_for_handle(element)?;
+        self.element_closest_selector(node_id, selector)
+    }
+
+    fn register_event_listener_with_capture(
+        &mut self,
+        target: ListenerTarget,
+        event_type: &str,
+        capture: bool,
+        handler: ScriptFunction,
+    ) -> bt_script::Result<()> {
+        let target = match target {
+            ListenerTarget::Window => SessionEventTarget::Window,
+            ListenerTarget::Document => SessionEventTarget::Document,
+            ListenerTarget::Element(handle) => {
+                let node_id = self.node_id_for_handle(handle)?;
+                if self.dom.nodes().get(node_id.index() as usize).is_none() {
+                    return Err(ScriptError::new("invalid element handle"));
+                }
+                SessionEventTarget::Element(node_id)
+            }
+        };
+
+        self.register_script_listener(target, event_type.to_string(), capture, handler);
+        Ok(())
+    }
+}
+
+fn is_checkable_input_type(input_type: Option<&str>) -> bool {
+    matches!(input_type.unwrap_or("text"), "checkbox" | "radio")
+}
+
+fn is_submit_control(tag_name: &str, input_type: Option<&str>) -> bool {
+    match tag_name {
+        "button" => !matches!(input_type, Some("button") | Some("reset")),
+        "input" => matches!(input_type.unwrap_or("text"), "submit" | "image"),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::Session;
+    use super::SessionConfig;
+    use super::SessionEventTarget;
+
+    #[test]
+    fn session_bootstraps_empty_dom_and_storage_seed() {
+        let mut local_storage = BTreeMap::new();
+        local_storage.insert("token".to_string(), "abc".to_string());
+        let config = SessionConfig {
+            url: "https://app.local/".to_string(),
+            html: Some("<main id='app'></main>".to_string()),
+            local_storage,
+        };
+
+        let session = Session::new(config).expect("session should parse HTML");
+        assert_eq!(session.dom().source_html(), Some("<main id='app'></main>"));
+        assert_eq!(session.dom().node_count(), 2);
+        assert_eq!(
+            session
+                .mocks()
+                .storage()
+                .local()
+                .get("token")
+                .map(String::as_str),
+            Some("abc")
+        );
+    }
+
+    #[test]
+    fn session_rejects_malformed_html() {
+        let config = SessionConfig {
+            url: "https://app.local/".to_string(),
+            html: Some("<main><span></main>".to_string()),
+            local_storage: BTreeMap::new(),
+        };
+
+        let error = Session::new(config).expect_err("malformed HTML should fail");
+        assert!(error.to_string().contains("mismatched closing tag"));
+    }
+
+    #[test]
+    fn session_bootstraps_inline_scripts_in_document_order() {
+        let config = SessionConfig {
+            url: "https://app.local/".to_string(),
+            html: Some(
+                "<main id='out'></main><script>document.getElementById('out').textContent = 'Hello';</script>"
+                    .to_string(),
+            ),
+            local_storage: BTreeMap::new(),
+        };
+
+        let session = Session::new(config).expect("session should execute inline scripts");
+        assert_eq!(
+            session.dom().dump_dom(),
+            "#document\n  <main id=\"out\">\n    \"Hello\"\n  </main>\n  <script>\n    \"document.getElementById('out').textContent = 'Hello';\"\n  </script>"
+        );
+    }
+
+    #[test]
+    fn session_registers_event_listeners_from_inline_scripts() {
+        let config = SessionConfig {
+            url: "https://app.local/".to_string(),
+            html: Some(
+                "<button id='run'></button><script>document.getElementById('run').addEventListener('click', () => { document.getElementById('run').textContent = 'clicked'; });</script>"
+                    .to_string(),
+            ),
+            local_storage: BTreeMap::new(),
+        };
+
+        let session = Session::new(config).expect("session should register listeners");
+        assert_eq!(session.script_event_listeners.len(), 1);
+        assert_eq!(session.script_event_listeners[0].event_type, "click");
+        assert!(!session.script_event_listeners[0].capture);
+        match &session.script_event_listeners[0].target {
+            SessionEventTarget::Element(node_id) => assert_eq!(node_id.index(), 1),
+            other => panic!("unexpected listener target: {:?}", other),
+        }
+        assert!(
+            session.script_event_listeners[0]
+                .handler
+                .body_source
+                .contains("textContent = 'clicked'")
+        );
+    }
+
+    #[test]
+    fn session_bubbles_click_events_beyond_target_phase() {
+        let config = SessionConfig {
+            url: "https://app.local/".to_string(),
+            html: Some(
+                "<div id='parent'><div id='child'></div></div><div id='out'></div><script>document.getElementById('child').addEventListener('click', () => { document.getElementById('out').textContent = 'target'; }); document.getElementById('parent').addEventListener('click', () => { document.getElementById('out').textContent += ':parent'; }); document.addEventListener('click', () => { document.getElementById('out').textContent += ':document'; }); window.addEventListener('click', () => { document.getElementById('out').textContent += ':window'; });</script>"
+                    .to_string(),
+            ),
+            local_storage: BTreeMap::new(),
+        };
+
+        let mut session = Session::new(config).expect("session should register listeners");
+        let child_id = session.dom().select("#child").unwrap()[0];
+        let out_id = session.dom().select("#out").unwrap()[0];
+
+        session.click_node(child_id).expect("click should bubble");
+
+        assert_eq!(
+            session.dom().text_content_for_node(out_id),
+            "target:parent:document:window"
+        );
+    }
+
+    #[test]
+    fn session_stop_propagation_blocks_ancestor_listeners() {
+        let config = SessionConfig {
+            url: "https://app.local/".to_string(),
+            html: Some(
+                "<div id='parent'><div id='child'></div></div><div id='out'></div><script>document.getElementById('child').addEventListener('click', (event) => { event.stopPropagation(); document.getElementById('out').textContent = 'target'; }); document.getElementById('parent').addEventListener('click', () => { document.getElementById('out').textContent += ':parent'; }); document.addEventListener('click', () => { document.getElementById('out').textContent += ':document'; });</script>"
+                    .to_string(),
+            ),
+            local_storage: BTreeMap::new(),
+        };
+
+        let mut session = Session::new(config).expect("session should register listeners");
+        let child_id = session.dom().select("#child").unwrap()[0];
+        let out_id = session.dom().select("#out").unwrap()[0];
+
+        session
+            .click_node(child_id)
+            .expect("click should still succeed");
+
+        assert_eq!(session.dom().text_content_for_node(out_id), "target");
+    }
+
+    #[test]
+    fn session_click_default_action_is_cancelable() {
+        let config = SessionConfig {
+            url: "https://app.local/".to_string(),
+            html: Some(
+                "<input id='agree' type='checkbox'><div id='out'></div><script>document.getElementById('agree').addEventListener('click', (event) => { event.preventDefault(); }); document.getElementById('agree').addEventListener('change', () => { document.getElementById('out').textContent = String(document.getElementById('agree').checked); });</script>"
+                    .to_string(),
+            ),
+            local_storage: BTreeMap::new(),
+        };
+
+        let mut session = Session::new(config).expect("session should register listeners");
+        let agree_id = session.dom().select("#agree").unwrap()[0];
+        let out_id = session.dom().select("#out").unwrap()[0];
+
+        session
+            .click_node(agree_id)
+            .expect("canceling click should still succeed");
+
+        assert_eq!(session.dom().checked_for_node(agree_id), Some(false));
+        assert_eq!(session.dom().text_content_for_node(out_id), "");
+    }
+
+    #[test]
+    fn session_focus_and_blur_dispatch_in_order() {
+        let config = SessionConfig {
+            url: "https://app.local/".to_string(),
+            html: Some(
+                "<input id='first'><input id='second'><div id='out'></div><script>document.getElementById('first').addEventListener('blur', () => { document.getElementById('second').textContent = 'after-blur'; }); document.getElementById('second').addEventListener('focus', () => { document.getElementById('out').textContent = document.getElementById('second').textContent; });</script>"
+                    .to_string(),
+            ),
+            local_storage: BTreeMap::new(),
+        };
+
+        let mut session = Session::new(config).expect("session should register listeners");
+        let first_id = session.dom().select("#first").unwrap()[0];
+        let second_id = session.dom().select("#second").unwrap()[0];
+        let out_id = session.dom().select("#out").unwrap()[0];
+
+        session.focus_node(first_id).expect("focus should work");
+        session
+            .focus_node(second_id)
+            .expect("focus should blur the previous element");
+
+        assert_eq!(session.dom().text_content_for_node(second_id), "after-blur");
+        assert_eq!(session.dom().text_content_for_node(out_id), "after-blur");
+    }
+
+    #[test]
+    fn session_set_select_value_updates_option_state_and_dispatches_change() {
+        let config = SessionConfig {
+            url: "https://app.local/".to_string(),
+            html: Some(
+                "<select id='mode'><option value='a'>A</option><option value='b'>B</option></select><div id='out'></div><script>document.getElementById('mode').addEventListener('change', () => { document.getElementById('out').textContent = document.getElementById('mode').value; });</script>"
+                    .to_string(),
+            ),
+            local_storage: BTreeMap::new(),
+        };
+
+        let mut session = Session::new(config).expect("session should register listeners");
+        let mode_id = session.dom().select("#mode").unwrap()[0];
+        let option_ids = session.dom().select("option").unwrap();
+        let out_id = session.dom().select("#out").unwrap()[0];
+
+        session
+            .set_select_value_node(mode_id, "b")
+            .expect("select should accept a matching value");
+
+        assert_eq!(session.dom().value_for_node(mode_id), "b");
+        assert_eq!(
+            session.dom().select("[selected]").unwrap(),
+            vec![option_ids[1]]
+        );
+        assert_eq!(session.dom().text_content_for_node(out_id), "b");
+    }
+
+    #[test]
+    fn session_bootstraps_form_control_state_through_script_bindings() {
+        let config = SessionConfig {
+            url: "https://app.local/".to_string(),
+            html: Some(
+                "<input id='name'><input id='agree' type='checkbox'><div id='out'></div><script>document.getElementById('name').value = 'Alice'; document.getElementById('agree').checked = true; document.getElementById('out').textContent = document.getElementById('name').value + ':' + String(document.getElementById('agree').checked);</script>"
+                    .to_string(),
+            ),
+            local_storage: BTreeMap::new(),
+        };
+
+        let session = Session::new(config).expect("session should execute form-control scripts");
+        let name_id = session.dom().select("#name").unwrap()[0];
+        let agree_id = session.dom().select("#agree").unwrap()[0];
+        let out_id = session.dom().select("#out").unwrap()[0];
+
+        assert_eq!(session.dom().value_for_node(name_id), "Alice");
+        assert_eq!(session.dom().checked_for_node(agree_id), Some(true));
+        assert_eq!(session.dom().text_content_for_node(out_id), "Alice:true");
+    }
+
+    #[test]
+    fn session_click_toggles_checkbox_and_dispatches_input_listener() {
+        let config = SessionConfig {
+            url: "https://app.local/".to_string(),
+            html: Some(
+                "<input id='agree' type='checkbox'><div id='out'></div><script>document.getElementById('agree').addEventListener('input', () => { document.getElementById('out').textContent = String(document.getElementById('agree').checked); });</script>"
+                    .to_string(),
+            ),
+            local_storage: BTreeMap::new(),
+        };
+
+        let mut session = Session::new(config).expect("session should register listeners");
+        let agree_id = session.dom().select("#agree").unwrap()[0];
+        let out_id = session.dom().select("#out").unwrap()[0];
+
+        session
+            .click_node(agree_id)
+            .expect("click should toggle checkbox");
+
+        assert_eq!(session.dom().checked_for_node(agree_id), Some(true));
+        assert_eq!(session.dom().text_content_for_node(out_id), "true");
+    }
+
+    #[test]
+    fn session_clicking_submit_button_dispatches_form_submit_listener() {
+        let config = SessionConfig {
+            url: "https://app.local/".to_string(),
+            html: Some(
+                "<form id='profile'><input id='name'><button id='submit' type='submit'>Save</button></form><div id='out'></div><script>document.getElementById('profile').addEventListener('submit', () => { document.getElementById('out').textContent = document.getElementById('name').value; });</script>"
+                    .to_string(),
+            ),
+            local_storage: BTreeMap::new(),
+        };
+
+        let mut session = Session::new(config).expect("session should register submit listener");
+        let name_id = session.dom().select("#name").unwrap()[0];
+        let submit_id = session.dom().select("#submit").unwrap()[0];
+        let out_id = session.dom().select("#out").unwrap()[0];
+
+        session
+            .type_text_node(name_id, "Alice")
+            .expect("typing should update the input");
+        session
+            .click_node(submit_id)
+            .expect("clicking submit should dispatch submit");
+
+        assert_eq!(session.dom().value_for_node(name_id), "Alice");
+        assert_eq!(session.dom().text_content_for_node(out_id), "Alice");
+    }
+}

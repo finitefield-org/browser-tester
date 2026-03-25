@@ -400,6 +400,103 @@ test "contract: Harness.mocksMut.resetAll clears every family" {
     try std.testing.expectError(error.MockError, subject.readClipboard());
 }
 
+test "contract: stable_core_actions_and_assertions_work_together" {
+    const allocator = std.testing.allocator;
+    const html =
+        "<button id='run' type='button'>run</button><input id='name' /><input id='agree' type='checkbox' /><p id='clicked'></p><script>document.getElementById('run').addEventListener('click', () => { document.getElementById('clicked').textContent = 'clicked'; });</script>";
+
+    var subject = try Harness.fromHtml(allocator, html);
+    defer subject.deinit();
+
+    try subject.typeText("#name", "Alice");
+    try subject.setChecked("#agree", true);
+    try subject.click("#run");
+
+    try subject.assertValue("#clicked", "clicked");
+    try subject.assertValue("#name", "Alice");
+    try subject.assertChecked("#agree", true);
+}
+
+test "contract: stable_core_constructors_and_time_controls_work" {
+    const allocator = std.testing.allocator;
+    const seeds = [_]StorageSeed{
+        .{
+            .key = "token",
+            .value = "seed",
+        },
+        .{
+            .key = "mode",
+            .value = "debug",
+        },
+    };
+
+    var subject = try Harness.fromHtmlWithUrlAndLocalStorage(
+        allocator,
+        "https://app.local/start",
+        "<p id='out'></p>",
+        &seeds,
+    );
+    defer subject.deinit();
+
+    try std.testing.expectEqualStrings("https://app.local/start", subject.url());
+    try std.testing.expectEqualStrings("seed", subject.mocksMut().storage().local().get("token").?);
+    try std.testing.expectEqualStrings("debug", subject.mocksMut().storage().local().get("mode").?);
+    try std.testing.expectEqual(@as(i64, 0), subject.nowMs());
+    try subject.advanceTime(24);
+    try std.testing.expectEqual(@as(i64, 24), subject.nowMs());
+    try subject.advanceTime(1);
+    try std.testing.expectEqual(@as(i64, 25), subject.nowMs());
+}
+
+test "contract: stable_test_mock_fetch_contract_is_direct" {
+    const allocator = std.testing.allocator;
+    var builder = Harness.builder(allocator);
+    defer builder.deinit();
+
+    var subject = try builder.build();
+    defer subject.deinit();
+
+    try subject.mocksMut().fetch().respondText("https://app.local/api/message", 200, "hello");
+
+    const response = try subject.fetch("https://app.local/api/message");
+    try std.testing.expectEqualStrings("https://app.local/api/message", response.url);
+    try std.testing.expectEqual(@as(u16, 200), response.status);
+    try std.testing.expectEqualStrings("hello", response.body);
+    try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().fetch().calls().len);
+    try std.testing.expectEqualStrings(
+        "https://app.local/api/message",
+        subject.mocksMut().fetch().calls()[0].url,
+    );
+}
+
+test "contract: stable_test_mock_clipboard_contract_is_direct" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(allocator, "<p id='out'></p>");
+    defer subject.deinit();
+
+    try subject.mocksMut().clipboard().seedText("seeded");
+    try std.testing.expectEqualStrings("seeded", try subject.readClipboard());
+    try subject.writeClipboard("copied");
+    try std.testing.expectEqualStrings("copied", try subject.readClipboard());
+    try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().clipboard().writes().len);
+    try std.testing.expectEqualStrings("copied", subject.mocksMut().clipboard().writes()[0]);
+}
+
+test "contract: stable_test_mock_file_input_contract_is_direct" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(allocator, "<input id='upload' type='file' multiple>");
+    defer subject.deinit();
+
+    try subject.setFiles("#upload", &.{ "first.txt", "second.txt" });
+
+    try subject.assertValue("#upload", "first.txt, second.txt");
+    try std.testing.expectEqual(@as(usize, 1), subject.mocksMut().fileInput().selections().len);
+    try std.testing.expectEqualStrings("#upload", subject.mocksMut().fileInput().selections()[0].selector);
+    try std.testing.expectEqual(@as(usize, 2), subject.mocksMut().fileInput().selections()[0].files.len);
+    try std.testing.expectEqualStrings("first.txt", subject.mocksMut().fileInput().selections()[0].files[0]);
+    try std.testing.expectEqualStrings("second.txt", subject.mocksMut().fileInput().selections()[0].files[1]);
+}
+
 test "contract: Harness.open, Harness.close, and Harness.print record calls through the registry" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(allocator, "<main></main>");
@@ -8759,7 +8856,7 @@ test "contract: Harness.fromHtmlWithUrl exposes window.navigator aliases" {
 
     try subject.assertValue(
         "#out",
-        "[object Navigator]:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:[]:false:unspecified:false:[object PluginArray]:2:unknown:en-US:true:true:false:8:0",
+        "[object Navigator]:browser_tester:browser_tester:browser_tester:browser_tester:browser_tester:browser_tester:browser_tester:[]:false:unspecified:false:[object PluginArray]:2:unknown:en-US:true:true:false:8:0",
     );
 }
 

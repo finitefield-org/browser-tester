@@ -1,291 +1,160 @@
-# browser-tester Architecture
+# Architecture
 
-## Overview
+## Intent
 
-`browser-tester` is a deterministic browser-like runtime for Rust tests.
-It is designed for cases where launching a real browser is too heavy, too slow, or too hard to control precisely.
+This repository is a clean-room rewrite workspace for the next generation of `browser-tester`.
 
-The crate runs HTML, DOM interaction, and script behavior inside a single Rust process and exposes a compact `Harness` API for tests.
+The design is derived from [`next.md`](../next.md) and keeps four constraints fixed from the start:
 
-The design goal is not full browser compatibility.
-The goal is to provide a stable, deterministic subset that is useful for browser-style testing.
+- deterministic execution is a product contract
+- the public surface stays centered on `Harness`
+- implementation ownership is enforced by workspace boundaries
+- mocks are first-class test APIs, not ad hoc escape hatches
 
 ## Goals
 
-- Execute HTML, DOM, and script tests within a single process.
-- Avoid depending on an external browser, WebDriver, or Node.js.
-- Keep time, randomness, navigation, and browser-like APIs deterministic.
-- Make test-only mocks first-class features instead of ad hoc stubs.
-- Keep the public testing surface centered on `Harness`.
+- Run browser-style tests in a single Rust process.
+- Keep time, randomness, and browser-like APIs deterministic.
+- Support form-heavy UI tests without launching a real browser.
+- Make subsystem ownership visible in code and docs before feature growth starts.
 
 ## Non-Goals
 
-- Full browser compatibility
-- Real rendering or layout
-- General-purpose network behavior
-- Full iframe or multi-process browsing semantics
-- Exhaustive implementation of every Web API
-
-## Public Entry Point
-
-The main public API is the `Harness` type.
-
-Typical flow:
-
-1. Build a harness from HTML.
-2. Perform user-like actions by selector.
-3. Assert DOM state or inspect deterministic artifacts.
-
-Main public categories:
-
-- constructors
-- user actions
-- assertions
-- timer and scheduler controls
-- mocks
-- trace and debug helpers
-
-The current public support levels are tracked separately in
-[capability-matrix.md](capability-matrix.md).
-
-## Current Crate Structure
-
-The project is currently implemented as a single crate with internal module layering.
-
-Top-level modules:
-
-- `src/lib.rs`
-- `src/harness_api.rs`
-- `src/core_dom_utils.rs`
-- `src/runtime_state.rs`
-- `src/runtime_values.rs`
-- `src/script_ast.rs`
-- `src/selector.rs`
-- `src/core_impl/`
-
-High-level internal areas:
-
-- `src/core_impl/dom`
-- `src/core_impl/parser`
-- `src/core_impl/runtime`
-- `src/core_impl/intl`
-
-This is still a single-crate architecture, but subsystem boundaries are visible in the module tree.
-
-## Runtime Lifecycle
-
-At a high level, a harness session works like this:
-
-1. Parse input HTML.
-2. Build the internal DOM.
-3. Initialize browser-like globals.
-4. Register and execute inline scripts in document order.
-5. Let tests drive the DOM through `Harness`.
-6. Dispatch events, run default actions, and drain microtasks or timers as needed.
-
-Important implications:
-
-- script execution order is deterministic
-- timers never wait on wall-clock time
-- mock-backed APIs stay under Rust-side control
-
-## DOM Model
-
-The crate uses an in-memory DOM model managed in Rust.
-
-Key characteristics:
-
-- arena-style node storage
-- stable internal node identifiers
-- DOM mutation handled in-repo
-- selector resolution handled in-repo
-
-The DOM layer is responsible for:
-
-- tree structure
-- tag and attribute access
-- form-control state
-- mutation helpers
-- serialization helpers used by assertions and debugging
-
-This design keeps DOM behavior under crate control, which is useful for deterministic tests but increases maintenance cost as the surface grows.
-
-## Selectors
-
-Selectors are implemented inside the crate rather than delegated to an external browser engine.
-
-Supported behavior includes:
-
-- id, class, tag, and attribute selectors
-- combinators such as descendant and child
-- a range of pseudo-class matching used by tests
-
-Unsupported selectors are expected to fail explicitly rather than degrade silently.
-
-This is important because silent partial selector support is hard to debug in tests.
-
-## Script Runtime
-
-The script layer is also self-implemented.
-
-Main pieces:
-
-- lexer
-- parser
-- AST definitions in `src/script_ast.rs`
-- evaluator and runtime value model
-- host bindings for DOM and browser-like APIs
-
-This gives the project strong control over determinism and exposed behavior, but it is also one of the biggest maintenance hotspots.
-
-In practice, the script runtime has to deal with:
-
-- lexical environments
-- closures
-- callback invocation
-- promise and microtask behavior
-- built-in object semantics
-- host-object integration
-
-That is why script-runtime changes often have wide effects.
-
-## Event System
-
-The event system is browser-like but deterministic.
-
-Core responsibilities:
-
-- capture phase
-- target phase
-- bubble phase
-- `preventDefault`
-- `stopPropagation`
-- `stopImmediatePropagation`
-- default-action handling for user-like events
-
-Representative default-action paths include:
-
-- checkbox and radio activation
-- form submission
-- anchor navigation
-- clipboard-related user actions
-- file input activation
-
-Tests use these paths through `Harness` methods such as `click`, `submit`, `copy`, and `paste`.
-
-## Determinism Model
-
-Determinism is a core design property.
-
-The crate currently provides:
-
-- fake clock for `Date.now()` and `performance.now()`
-- deterministic timer queue
-- explicit time advancement via `advance_time` and `flush`
-- deterministic `Math.random()`
-- mock-controlled browser-like APIs
-
-This allows tests to control execution order precisely, especially around:
-
-- timeouts and intervals
-- microtask completion
-- navigation-like transitions
-- clipboard or fetch side effects
-
-## Browser-Like Services and Mocks
-
-The crate exposes deterministic, test-oriented behavior for several browser-like surfaces.
-
-Important families:
-
-- `fetch`
-- `location` and history-backed mock pages
-- dialogs such as `confirm` and `prompt`
-- clipboard APIs
-- localStorage seed state
-- downloads and object URLs
-- file inputs
-- `matchMedia`
-
-These are not incidental helpers.
-They are a core part of the crate's value as a test runtime.
-
-Detailed examples live in [mock-guide.md](mock-guide.md).
-
-## Errors and Debugging
-
-The runtime uses crate-defined error types rather than delegating diagnostics to an external browser.
-
-Important error shapes include:
-
-- HTML parse errors
-- script parse errors
-- script runtime errors
-- selector errors
-- assertion failures with DOM snippets
-
-Debugging support includes:
-
-- event and timer tracing
-- log capture through `take_trace_logs`
-- DOM dumping through `dump_dom`
-- deterministic artifact inspection such as fetch calls, clipboard writes, and downloads
-
-## Test Strategy
-
-The repository currently relies on multiple layers of testing:
-
-- minimal public contract suite under `tests/contract_harness_core.rs`
-- unit-style DOM and runtime tests under `src/tests`
-- integration cases under `tests/integration_cases`
-- grouped integration entrypoint under `tests/integration_suite.rs`
-- property and fuzz tests for parser and runtime behavior
-
-See `doc/test-taxonomy.md` for the intended placement rules and role boundaries.
-See `doc/file-size-guard.md` for the current oversized-file guardrail and exception policy.
-See `doc/public-api-checklist.md` for the required steps when the public surface changes.
-See `doc/subsystem-map.md` for the current ownership-oriented placement guide.
-
-This provides strong coverage, but it also means test role separation needs active maintenance.
-
-The most important distinction going forward is:
-
-- public contract tests
-- subsystem tests
-- regression tests
-- property and fuzz tests
-
-Without that distinction, test volume alone can make maintenance harder.
-
-## Current Maintenance Hotspots
-
-Some files have grown very large and are natural candidates for responsibility-based splitting.
-
-Notable examples:
-
-- `src/core_impl/runtime/runtime_exec/member_calls_ops/value_object_helpers.rs`
-- `src/core_impl/runtime/runtime_platform/script_runtime/callable_execution.rs`
-- `src/core_impl/runtime/runtime_platform/script_runtime/statement_execution.rs`
-- `src/core_impl/runtime/runtime_platform/dom_actions/user_actions_forms.rs`
-- `src/script_ast.rs`
-
-These hotspots matter because the current architecture is still centered on a single public facade, but the internal implementation is broad.
-
-## Why This Document Exists
-
-The README is now intentionally short and user-facing.
-This file exists to keep architecture notes separate from:
-
-- quick-start usage
-- mock examples
-- release-facing guidance
-
-That separation lowers the maintenance cost of both the public README and the internal design record.
-
-## Related Documents
-
-- Capability classification: [capability-matrix.md](capability-matrix.md)
-- Mock APIs and examples: [mock-guide.md](mock-guide.md)
-- HTML conformance roadmap: [html-spec-conformance-roadmap.md](html-spec-conformance-roadmap.md)
-- WPT audit inventory: [p3-wpt-audit-inventory.md](p3-wpt-audit-inventory.md)
-- Public package README: [../README.md](../README.md)
+- real rendering or layout
+- general-purpose network I/O
+- service workers
+- full iframe semantics
+- full browser compatibility
+- broad Web API coverage without an explicit capability decision
+
+## Workspace Layout
+
+```text
+crates/
+  browser-tester/   # public facade crate
+  bt-dom/           # DOM store, HTML parser, selector subset
+  bt-runtime/       # session, scheduler, services, mocks, debug state
+  bt-script/        # lexer, parser, evaluator, host bindings
+doc/
+```
+
+Current implementation status:
+
+- `browser_tester` exposes `Harness`, `HarnessBuilder`, the planned error taxonomy, `assert_exists`, and the debug DOM dump view
+- `bt-dom` owns `DomStore`, generational `NodeId`, tree construction, selector subset support, indexes, and side-table skeletons
+- `bt-runtime` owns `Session`, scheduler, deterministic mock registry, and debug state
+- `bt-script` owns `ScriptRuntime`, the host-binding seam, and script-visible collection wrappers such as `NodeList`, minimal `HTMLCollection`, and `Storage`
+- `bt-script` also exposes detached `document.createElement()` / `document.createTextNode()` / `document.createComment()` construction through the same host-binding seam
+
+## High-Level Runtime Shape
+
+```mermaid
+flowchart LR
+  T["Rust test"] --> H["Harness facade"]
+  H --> S["Session"]
+  S --> D["bt-dom::DomStore"]
+  S --> Q["bt-runtime::Scheduler"]
+  S --> M["bt-runtime::MockRegistry"]
+  S --> J["bt-script::ScriptRuntime"]
+```
+
+`Harness` is intentionally thin.
+State lives in `Session`, and subsystem crates own their internal data.
+
+## Data Ownership Rules
+
+- DOM truth lives in `bt-dom`.
+- Scheduler truth lives in `bt-runtime`.
+- Script-runtime internals stay inside `bt-script`.
+- Browser-like service behavior is modeled in `bt-runtime` and consumed through bindings later.
+- Public `Harness` methods delegate inward and should not accumulate long-lived state.
+
+## Phase Plan
+
+### Phase 0
+
+- workspace skeleton
+- `HarnessBuilder`
+- `Session`
+- `DomStore`
+- scheduler and mock registry skeleton
+- error taxonomy
+- design docs
+
+### Phase 1
+
+- HTML parser and tree builder
+- selector subset
+- `assert_exists`
+- DOM dump helpers
+
+### Phase 2
+
+- script lexer, parser, evaluator
+- `window`, `document`, and `Element` bindings
+- inline script bootstrapping
+
+### Phase 3
+
+- event dispatch with ancestor bubbling and capture listeners
+- cancelable default actions
+- form controls, including select state
+- user-facing `Harness` actions
+
+### Phase 4
+
+- fake clock hardening
+- microtask semantics
+- fetch, clipboard, dialog, open, close, print, location, and file-input mocks
+- download capture
+
+### Phase 5
+
+- contract tests
+- regression suite
+- property tests
+- publication checklist
+
+### Phase 6
+
+- selector expansion
+- class selectors and compound simple selectors
+- descendant combinators
+- child combinators
+- selector hardening
+- quick and hardening test profiles
+
+### Phase 7
+
+- script DOM query expansion
+- `document.querySelector`
+- `element.querySelector`
+- `Element.matches`
+- `Element.closest`
+- `document.hasFocus()`
+- `querySelectorAll` and minimal `NodeList` support in a post-Phase-7 collection slice
+- `Element.children`, `getElementsByTagName`, `getElementsByTagNameNS`, `getElementsByClassName`, `getElementsByName`, `document.forms`, `form.elements`, `select.options`, `select.selectedOptions`, `fieldset.elements`, `datalist.options`, `map.areas`, `table.tBodies`, `document.images`, `document.links`, `document.styleSheets`, `document.all`, `template.content`, `template.content.textContent`, `template.content.getElementById()`, `template.content.querySelector(All)`, `window.frames`, and `window.length` collection support in post-Phase-7 collection slices; `select.options.add()` / `select.options.remove()` extend the select-scoped options collection
+- selector lists (`A, B`), bounded attribute selectors (`[attr=value]`, `[attr^=value]`, `[attr$=value]`, `[attr*=value]`, `[attr~=value]`, `[attr|=value]`) plus optional `i` / `s` flags, escaped punctuation handling in selector identifiers and attribute values, and bounded pseudo-classes, including `:not(...)`, `:is(...)`, `:focus`, `:focus-within`, `:target`, `:defined`, `:first-child`, `:last-child`, `:root`, `:empty`, `:only-child`, `:only-of-type`, `:first-of-type`, `:last-of-type`, `:nth-child(<positive integer>)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`, `:nth-last-child(<positive integer>)`, `:nth-last-child(odd)`, `:nth-last-child(even)`, `:nth-last-child(an+b)`, `:nth-of-type(<positive integer>)`, `:nth-of-type(odd)`, `:nth-of-type(even)`, `:nth-of-type(an+b)`, `:nth-last-of-type(<positive integer>)`, `:nth-last-of-type(odd)`, `:nth-last-of-type(even)`, and `:nth-last-of-type(an+b)`, through the same bounded selector engine
+
+### Phase 8
+
+- DOM mutation and reflection expansion
+- attribute reflection, `Attr` / `NamedNodeMap`, and class / dataset views
+- tree mutation primitives, including `replaceWith()` (delivered)
+- serialization surfaces (delivered)
+- mutation hardening and regression coverage (delivered)
+- selector and collection consistency after DOM mutation
+
+## Current Implementation Notes
+
+The workspace now includes Phase 1 DOM parsing, selector support, `assert_exists`, and debug DOM dumps, plus Phase 2 inline script bootstrapping with minimal host bindings and listener capture, and Phase 3 event dispatch with ancestor bubbling, cancelable default actions, form controls, and the `focus`/`blur`/`set_select_value` public actions.
+Phase 4 fake clock hardening, microtask semantics, and deterministic mock wiring are implemented in ``, including public download capture, popup/open/close capture, scroll capture, navigator metadata (`userAgent`, `appCodeName`, `appName`, `appVersion`, `product`, `productSub`, `vendor`, `vendorSub`, `pdfViewerEnabled`, `doNotTrack`, `javaEnabled()`, `plugins`, `mimeTypes`, `platform`, `language`, `userLanguage`, `browserLanguage`, `systemLanguage`, `oscpu`, `cookieEnabled`, `onLine`, `webdriver`, `hardwareConcurrency`, `maxTouchPoints`), `window.devicePixelRatio`, `window.innerWidth` / `window.innerHeight`, `window.outerWidth` / `window.outerHeight`, `window.screenX` / `window.screenY` / `window.screenLeft` / `window.screenTop` / `window.screen` (`availWidth`, `availHeight`, `availLeft`, `availTop`, `colorDepth`, `pixelDepth`, `orientation.type`, `orientation.angle`), `document.cookie`, `document.designMode`, and `window.self` / `window.window` / `window.parent` / `window.top` / `window.closed` / `window.opener` / `window.history.length` / `window.history.state` / `window.history.scrollRestoration` / `window.history.pushState()` / `window.history.replaceState()` / `window.history.back()` / `window.history.forward()` / `window.history.go()` / `document.visibilityState` / `document.hidden` / `document.scrollingElement` / `document.hasFocus()` / `document.activeElement` focus-state observation.
+`Node.isConnected` / `Element.isConnected` / `Document.isConnected` and `Node.contains()` / `Element.contains()` / `Document.contains()` / `Node.compareDocumentPosition()` / `Element.compareDocumentPosition()` / `Document.compareDocumentPosition()` / `Node.hasChildNodes()` / `Element.hasChildNodes()` / `Document.hasChildNodes()` / `Node.nextSibling` / `Element.nextSibling` / `Document.nextSibling` / `Node.previousSibling` / `Element.previousSibling` / `Document.previousSibling` / `Node.nextElementSibling` / `Element.nextElementSibling` / `Node.previousElementSibling` / `Element.previousElementSibling` / `Node.firstChild` / `Element.firstChild` / `Document.firstChild` / `Node.lastChild` / `Element.lastChild` / `Document.lastChild` are also part of that same reflection surface, and detached `template.content` remains disconnected.
+- That same reflection surface also includes `Node.isSameNode()` / `Element.isSameNode()` / `Document.isSameNode()` and `Node.isEqualNode()` / `Element.isEqualNode()` / `Document.isEqualNode()`.
+The same runtime seam also exposes `document.location.protocol` / `window.location.protocol`, `document.location.host` / `window.location.host`, `document.location.hostname` / `window.location.hostname`, and `document.location.port` / `window.location.port` alongside the existing location aliases, and the same seam resolves `toString()` / `valueOf()` to the current URL.
+`element.contentEditable` / `element.isContentEditable` are also part of the same bounded reflection surface.
+Phase 5 hardening adds contract coverage, subsystem coverage, regression tests, property tests, quick and hardening test profiles, and a publication checklist.
+Phase 6 selector expansion is complete; slices 1 through 4 for class selectors, compound simple selectors, descendant combinators, child combinators, and selector hardening are delivered. A backlog slice adds sibling combinators (`A + B`, `A ~ B`) through the same bounded selector engine, and any future selector work should follow the post-Phase-6 backlog-driven slice mode.
+Phase 7 script DOM query expansion is complete for slices 1 through 4; `document.querySelector`, `element.querySelector`, `Element.matches`, `Element.closest`, and selector hardening are implemented. Post-Phase-7 collection slices add `querySelectorAll` and minimal `NodeList` support plus `Element.children`, `getElementsByTagName`, `getElementsByTagNameNS`, `getElementsByClassName`, `getElementsByName`, `document.forms`, `form.elements`, `select.options`, `select.selectedOptions`, `fieldset.elements`, `datalist.options`, `map.areas`, `table.tBodies`, `document.images`, `document.links`, `document.styleSheets`, `document.all`, `template.content`, `template.content.textContent`, `template.content.getElementById()`, `template.content.querySelector(All)`, `window.frames`, and `window.length` collection support, including `namedItem()` where applicable; `select.options.add()` / `select.options.remove()` extend the select-scoped options collection; `form.length` / `select.length` are read-only aliases over those live collections; selector lists, bounded attribute selectors (`[attr=value]`, `[attr^=value]`, `[attr$=value]`, `[attr*=value]`, `[attr~=value]`, `[attr|=value]`) plus optional `i` / `s` flags, escaped punctuation handling in selector identifiers and attribute values, and the bounded pseudo-class subset, including `:not(...)`, `:is(...)`, `:nth-child(<positive integer>)`, `:nth-child(odd)`, `:nth-child(even)`, `:nth-child(an+b)`, `:nth-last-child(<positive integer>)`, `:nth-last-child(odd)`, `:nth-last-child(even)`, and `:nth-last-child(an+b)`, are also handled by the same bounded selector engine, including bounded selector lists and combinators inside `:not(...)` and `:is(...)`. `document.currentScript`, `document.readyState`, `document.visibilityState`, `document.hidden`, `document.scrollingElement`, `document.hasFocus()`, `window.localStorage`, `window.sessionStorage`, `document.cookie`, and `document.designMode` are available during inline script bootstrap through the same host-binding seam.
+Phase 8 is complete in this workspace and should stay focused on DOM mutation and reflection expansion rather than broad selector or collection growth; its five slices, attribute reflection, `Attr` / `NamedNodeMap`, class / dataset views, tree mutation primitives including `replaceWith()`, containment / child-presence / tree-order reflection helpers (`Node.contains()` / `Element.contains()` / `Document.contains()` / `Node.compareDocumentPosition()` / `Element.compareDocumentPosition()` / `Document.compareDocumentPosition()` / `Node.hasChildNodes()` / `Element.hasChildNodes()` / `Document.hasChildNodes()` / `Node.nextSibling` / `Element.nextSibling` / `Document.nextSibling` / `Node.previousSibling` / `Element.previousSibling` / `Document.previousSibling` / `Node.nextElementSibling` / `Element.nextElementSibling` / `Node.previousElementSibling` / `Element.previousElementSibling` / `Node.firstChild` / `Element.firstChild` / `Document.firstChild` / `Node.lastChild` / `Element.lastChild` / `Document.lastChild`), HTML serialization surfaces, and mutation hardening / regression coverage, are implemented in this workspace.
+HTML serialization broadening slices 1 `insertAdjacentHTML`, 2 `insertAdjacentElement()` / `insertAdjacentText()`, 3 `template.content.innerHTML`, and 4 namespace-aware serialization compatibility are implemented as the backlog-driven extension beyond the bounded `innerHTML` and `outerHTML` surfaces; later serialization work, if any, should be treated as a new narrow slice.

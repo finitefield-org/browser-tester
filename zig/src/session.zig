@@ -1135,37 +1135,37 @@ pub const Session = struct {
 
     pub fn windowNavigatorUserAgent(self: *const Session) []const u8 {
         _ = self;
-        return "browser-tester-next";
+        return "browser_tester";
     }
 
     pub fn windowNavigatorAppCodeName(self: *const Session) []const u8 {
         _ = self;
-        return "browser-tester-next";
+        return "browser_tester";
     }
 
     pub fn windowNavigatorAppName(self: *const Session) []const u8 {
         _ = self;
-        return "browser-tester-next";
+        return "browser_tester";
     }
 
     pub fn windowNavigatorAppVersion(self: *const Session) []const u8 {
         _ = self;
-        return "browser-tester-next";
+        return "browser_tester";
     }
 
     pub fn windowNavigatorProduct(self: *const Session) []const u8 {
         _ = self;
-        return "browser-tester-next";
+        return "browser_tester";
     }
 
     pub fn windowNavigatorProductSub(self: *const Session) []const u8 {
         _ = self;
-        return "browser-tester-next";
+        return "browser_tester";
     }
 
     pub fn windowNavigatorVendor(self: *const Session) []const u8 {
         _ = self;
-        return "browser-tester-next";
+        return "browser_tester";
     }
 
     pub fn windowNavigatorVendorSub(self: *const Session) []const u8 {
@@ -2635,37 +2635,37 @@ const BootstrapHost = struct {
 
     pub fn windowNavigatorUserAgent(self: *const BootstrapHost) []const u8 {
         _ = self;
-        return "browser-tester-next";
+        return "browser_tester";
     }
 
     pub fn windowNavigatorAppCodeName(self: *const BootstrapHost) []const u8 {
         _ = self;
-        return "browser-tester-next";
+        return "browser_tester";
     }
 
     pub fn windowNavigatorAppName(self: *const BootstrapHost) []const u8 {
         _ = self;
-        return "browser-tester-next";
+        return "browser_tester";
     }
 
     pub fn windowNavigatorAppVersion(self: *const BootstrapHost) []const u8 {
         _ = self;
-        return "browser-tester-next";
+        return "browser_tester";
     }
 
     pub fn windowNavigatorProduct(self: *const BootstrapHost) []const u8 {
         _ = self;
-        return "browser-tester-next";
+        return "browser_tester";
     }
 
     pub fn windowNavigatorProductSub(self: *const BootstrapHost) []const u8 {
         _ = self;
-        return "browser-tester-next";
+        return "browser_tester";
     }
 
     pub fn windowNavigatorVendor(self: *const BootstrapHost) []const u8 {
         _ = self;
-        return "browser-tester-next";
+        return "browser_tester";
     }
 
     pub fn windowNavigatorVendorSub(self: *const BootstrapHost) []const u8 {

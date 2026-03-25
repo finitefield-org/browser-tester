@@ -1,155 +1,89 @@
 # Subsystem Map
 
-This document gives a practical answer to one maintenance question:
+This map is the placement guide for this rewrite.
+Use it before adding code so ownership stays explicit.
 
-"Before adding code, which subsystem should own it?"
+## Public Facade
 
-It is intentionally operational, not exhaustive.
-Use it to choose an edit location before writing the implementation.
+Owns:
 
-## Core Subsystems
+- `Harness`
+- `HarnessBuilder`
+- public error taxonomy
+- thin public views such as `MockRegistryView` and `DebugView`
 
-### DOM
+Location:
 
-Use this subsystem for:
+- `crates/browser-tester/`
 
-- node tree state
-- attributes and element state
-- form control semantics
-- element relationships and tree mutation
+Choose this layer when the question is:
 
-Typical file areas:
+- "is this really part of the public API?"
+- "should this stay a thin facade or move into a subsystem?"
 
-- `src/core_impl/dom/`
-- `src/core_dom_utils.rs`
-- `src/core_impl/html.rs`
-- `src/core_impl/runtime/runtime_exec/member_calls_ops/`
+## DOM
 
-Choose DOM when the question is mostly:
+Owns:
 
-- "what does this element/node/property mean?"
-- "how should a DOM mutation update state?"
+- node identifiers
+- DOM tree storage
+- HTML parsing
+- selector matching
+- DOM indexes and side tables
 
-### Parser
+Location:
 
-Use this subsystem for:
+- `crates/bt-dom/`
 
-- JavaScript parsing
-- statement/expression grammar handling
-- parse-time normalization
-- syntax error behavior
+Choose this layer when the question is:
 
-Typical file areas:
+- "what nodes exist and how are they related?"
+- "how should a DOM mutation update indexes or side tables?"
 
-- `src/core_impl/parser/`
-- `src/script_ast.rs`
-- `src/script_ast_expr.rs`
-- `src/script_ast_expr_enums.rs`
-- `src/script_ast_stmt.rs`
-- `src/js_regex.rs`
+## Runtime
 
-Choose Parser when the question is mostly:
+Owns:
 
-- "can this source text be parsed?"
-- "what AST shape should this syntax produce?"
+- `Session`
+- scheduler and fake time
+- deterministic browser-like services
+- test-only mock implementations
+- trace and debug state
 
-### Script Runtime
+Location:
 
-Use this subsystem for:
+- `crates/bt-runtime/`
 
-- expression evaluation
-- statement execution
-- callable execution
-- runtime values and execution state
+Choose this layer when the question is:
 
-Typical file areas:
+- "when should a callback run?"
+- "how should a mock capture data?"
+- "where should shared browser-like session state live?"
 
-- `src/core_impl/runtime/runtime_exec/`
-- `src/core_impl/runtime/runtime_platform/script_runtime/`
-- `src/runtime_state.rs`
-- `src/runtime_values.rs`
+## Script
 
-Choose Script Runtime when the question is mostly:
+Owns:
 
-- "how should this script execute?"
-- "how should values, calls, or control flow behave?"
+- script lexer
+- parser
+- evaluator
+- host bindings
+- microtask execution hooks tied to script runtime semantics
 
-### Event / User Actions
+Location:
 
-Use this subsystem for:
+- `crates/bt-script/`
 
-- trusted user-like interactions
-- DOM action default behavior
-- event dispatch entrypoints tied to user actions
-- assertions that validate user-facing DOM outcomes
+Choose this layer when the question is:
 
-Typical file areas:
-
-- `src/core_impl/runtime/runtime_platform/dom_actions/`
-
-Choose Event / User Actions when the question is mostly:
-
-- "what should happen when a user clicks, types, pastes, submits, or dispatches an event?"
-
-### Timer / Scheduler
-
-Use this subsystem for:
-
-- fake time
-- queued timers and microtasks
-- scheduler safety limits
-- deterministic time advancement
-
-Typical file areas:
-
-- `src/core_impl/runtime/runtime_platform/dom_actions/timer_controls_execution.rs`
-- scheduler state in `src/runtime_state.rs`
-
-Choose Timer / Scheduler when the question is mostly:
-
-- "when should this callback run?"
-- "how should fake time move?"
-
-### Mocks / Trace
-
-Use this subsystem for:
-
-- deterministic browser-like mocks
-- artifact capture
-- call capture
-- trace and diagnostics controls
-
-Typical file areas:
-
-- `src/core_impl/runtime/runtime_platform/dom_actions/platform_mock_controls.rs`
-- `src/core_impl/runtime/runtime_platform/dom_actions/trace_determinism_controls.rs`
-
-Choose Mocks / Trace when the question is mostly:
-
-- "how can tests inject deterministic platform behavior?"
-- "how can tests inspect what happened?"
+- "how should this source text parse?"
+- "how should a script expression evaluate?"
+- "how does a host object bridge into script?"
 
 ## Placement Rules
 
-When a change appears to touch multiple subsystems:
-
-1. Put the main behavior where the state transition belongs.
-2. Keep public entrypoints thin and delegate inward.
-3. Add narrow helpers in the owning subsystem instead of growing unrelated files.
-4. If the answer is still unclear, prefer the subsystem that owns the long-term state, not the call site.
-
-## Common Decisions
-
-If you are adding:
-
-- a new stable `Harness` method: start from public API docs, then choose the owning subsystem before implementation
-- a new deterministic browser mock: put the public control under `Mocks / Trace`, then connect it to the runtime path that consumes it
-- a new DOM property or element behavior: start in `DOM`, then wire `Script Runtime` lookup/eval only as needed
-- a new parser form: start in `Parser`, not in runtime fallback code
-- a new timer-facing behavior: start in `Timer / Scheduler`, not in unrelated DOM action modules
-
-## Related Docs
-
-- support-level classification: `doc/capability-matrix.md`
-- test placement: `doc/test-taxonomy.md`
-- file-size guard: `doc/file-size-guard.md`
+1. Put long-lived state in the subsystem that owns that state.
+2. Keep `Harness` entry points thin and delegating.
+3. Do not let script-runtime types leak into DOM or runtime data models.
+4. Add a new public API only after deciding whether it belongs on `Harness`, a debug view, or a mock family.
+5. Add a new mock in `bt-runtime`, then wire it through the public facade without bypassing the registry.

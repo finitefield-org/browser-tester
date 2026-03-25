@@ -1,37 +1,14 @@
-[package]
-name = "browser_tester"
-version = "1.5.0"
+[workspace]
+members = [
+    "crates/browser-tester",
+    "crates/bt-dom",
+    "crates/bt-runtime",
+    "crates/bt-script",
+]
+resolver = "2"
+
+[workspace.package]
 edition = "2024"
 rust-version = "1.85"
-description = "Deterministic lightweight browser runtime for Rust tests"
 license = "MIT"
-readme = "README.md"
-homepage = "https://github.com/finitefield-org/browser-tester"
-repository = "https://github.com/finitefield-org/browser-tester"
-documentation = "https://docs.rs/browser_tester"
-keywords = ["browser", "testing", "dom", "javascript", "mock"]
-categories = ["development-tools::testing", "web-programming"]
-include = [
-    "Cargo.toml",
-    "Cargo.lock",
-    "README.md",
-    "LICENSE",
-    "src/**/*.rs",
-    "tests/**/*.rs",
-    "doc/**/*.md",
-    "doc/**/*.txt",
-    "scripts/*.sh",
-    "translations/ja/**/*.md",
-]
-
-[dependencies]
-chrono = { version = "0.4", default-features = false, features = ["std"] }
-chrono-tz = "0.10"
-idna = "1"
-num-bigint = "0.4"
-num-traits = "0.2"
-stacker = "0.1"
-unicode-normalization = "0.1"
-
-[dev-dependencies]
-proptest = "1.6"
+version = "2.0.0"

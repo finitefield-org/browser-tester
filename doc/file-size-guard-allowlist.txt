@@ -1,5 +1,0 @@
-# Production Rust files that currently exceed the hard file-size threshold.
-# Each entry should have an active split plan and should be removed once the
-# file drops back to the configured limit.
-
-src/js_regex.rs

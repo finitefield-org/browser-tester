@@ -6437,7 +6437,7 @@ test "regression: phase 32 window.navigator aliases resolve on the copied html s
 
     html_bytes[1] = 'Z';
 
-    try subject.assertValue("#out", "[object Navigator]:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:browser-tester-next:[]:false:unspecified:false:[object PluginArray]:2:unknown:en-US:true:true:false:8:0");
+    try subject.assertValue("#out", "[object Navigator]:browser_tester:browser_tester:browser_tester:browser_tester:browser_tester:browser_tester:browser_tester:[]:false:unspecified:false:[object PluginArray]:2:unknown:en-US:true:true:false:8:0");
     try std.testing.expectEqualStrings(original, subject.html().?);
 }
 

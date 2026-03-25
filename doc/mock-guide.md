@@ -1,458 +1,248 @@
-# browser-tester Mock Guide
+# Mock Guide
 
-## Overview
+Mocks are part of the intended core product surface for this workspace.
+Even in Phase 0, the workspace already reserves explicit families so runtime behavior can land without growing `Harness` into a giant bag of `set_*` methods.
 
-`browser-tester` treats test mocks as first-class runtime features.
-The goal is to let tests control browser-like behavior deterministically without relying on a real browser environment.
+## Current Mock Families
 
-This document groups the main mock families and shows representative usage.
+- `fetch`
+- `dialogs`
+- `clipboard`
+- `print`
+- `open`
+- `close`
+- `scroll`
+- `location`
+- `downloads`
+- `file_input`
+- `matchMedia`
+- `storage`
 
-## Mock Maintenance Rule
+They are exposed from the public facade through `Harness::mocks_mut()`. `matchMedia` is configured through the builder seed API and the registry, then consumed from scripts via `window.matchMedia(...)`. The dialogs family is consumed from scripts via `window.alert(...)`, `window.confirm(...)`, and `window.prompt(...)`, with alert/confirm/prompt message capture recorded in the registry. The clipboard family is consumed from scripts via `window.navigator.clipboard.writeText()` / `window.navigator.clipboard.readText()`, with write capture recorded in the same registry.
 
-When adding a new test-only mock capability, keep the mock public surface and its documentation in sync.
+## Public Mock Actions
 
-Required checklist:
+Phase 4 adds thin public actions on `Harness` for the mock families that need to behave like browser services:
 
-- add or update the public API
-- add a minimal usage example
-- add tests, including failure-path coverage when relevant
-- document any call capture or artifact capture behavior
-- update `README.md`
-- update this file
+- `fetch(url)`
+- `alert(message)`
+- `confirm(message)`
+- `prompt(message)`
+- `read_clipboard()`
+- `write_clipboard(text)`
+- `print()`
+- `open(url)`
+- `close()`
+- `scroll_to(x, y)`
+- `scroll_by(dx, dy)`
+- `navigate(url)`
+- `set_files(selector, files)`
+- `capture_download(file_name, bytes)`
 
-## Common Pattern
+The typed registry is still the source of truth for seeds and capture.
+Use `Harness::mocks_mut()` to configure the family, then call the matching action on `Harness`.
+Download capture records `DownloadCapture` artifacts in the registry and exposes them through `downloads().artifacts()`.
+`matchMedia` is registry-backed and builder-seeded rather than a standalone `Harness` action.
+The location family also captures script-side `window.location.assign()`, `window.location.replace()`, `window.location.reload()`, and `window.location.hash` / `document.location.hash` / `window.location.pathname` / `document.location.pathname` / `window.location.search` / `document.location.search` assignments through the same navigation log that `Harness::navigate()` uses.
+The same navigation log also covers `document.location.href`, `document.location.hash`, `document.location.pathname`, `document.location.search`, `document.location.origin`, `window.location.href`, `window.location.hash`, `window.location.pathname`, `window.location.search`, and `window.location.origin` assignments.
 
-Most mock-backed tests follow the same shape:
+## Deterministic Controls
 
-1. Build a `Harness`
-2. Seed deterministic mock state
-3. Trigger a user-like action
-4. Assert DOM state or inspect captured artifacts
+The runtime also exposes public `Harness` controls that are not tied to a single mock family:
 
-```rust
-use browser_tester::Harness;
-
-fn main() -> browser_tester::Result<()> {
-    let html = "<button id='run'>run</button>";
-    let mut h = Harness::from_html(html)?;
-    h.click("#run")?;
-    Ok(())
-}
-```
-
-## Fetch
-
-Main APIs:
-
-- `set_fetch_mock(url, body)`
-- `set_fetch_mock_response(url, status, body)`
-- `clear_fetch_mocks()`
-- `take_fetch_calls()`
-
-Example:
-
-```rust
-use browser_tester::Harness;
-
-fn main() -> browser_tester::Result<()> {
-    let html = r#"
-      <button id='run'>run</button>
-      <p id='out'></p>
-      <script>
-        document.getElementById('run').addEventListener('click', () => {
-          fetch('https://app.local/api/message')
-            .then((res) => res.text())
-            .then((text) => {
-              document.getElementById('out').textContent = text;
-            });
-        });
-      </script>
-    "#;
-
-    let mut h = Harness::from_html(html)?;
-    h.set_fetch_mock("https://app.local/api/message", "hello");
-    h.click("#run")?;
-    h.assert_text("#out", "hello")?;
-    assert_eq!(
-        h.take_fetch_calls(),
-        vec!["https://app.local/api/message".to_string()]
-    );
-    Ok(())
-}
-```
-
-Use `set_fetch_mock_response` when status code matters:
-
-```rust
-h.set_fetch_mock_response("https://app.local/api/message", 404, "missing");
-```
-
-## Dialogs and Print
-
-Main APIs:
-
-- `enqueue_confirm_response(bool)`
-- `set_default_confirm_response(bool)`
-- `enqueue_prompt_response(Option<&str>)`
-- `set_default_prompt_response(Option<&str>)`
-- `take_alert_messages()`
-- `take_print_call_count()`
-
-Example:
-
-```rust
-use browser_tester::Harness;
-
-fn main() -> browser_tester::Result<()> {
-    let html = r#"
-      <button id='run'>run</button>
-      <p id='out'></p>
-      <script>
-        document.getElementById('run').addEventListener('click', () => {
-          const accepted = confirm('continue?');
-          const answer = prompt('name?');
-          document.getElementById('out').textContent =
-            `${accepted}:${answer ?? 'null'}`;
-          alert('done');
-          window.print();
-        });
-      </script>
-    "#;
-
-    let mut h = Harness::from_html(html)?;
-    h.enqueue_confirm_response(true);
-    h.enqueue_prompt_response(Some("Alice"));
-    h.click("#run")?;
-    h.assert_text("#out", "true:Alice")?;
-    assert_eq!(h.take_alert_messages(), vec!["done".to_string()]);
-    assert_eq!(h.take_print_call_count(), 1);
-    Ok(())
-}
-```
-
-## Location and History-Backed Mock Pages
-
-Main APIs:
-
-- `set_location_mock_page(url, html)`
-- `clear_location_mock_pages()`
-- `take_location_navigations()`
-- `location_reload_count()`
-
-Example:
-
-```rust
-use browser_tester::{Harness, LocationNavigation, LocationNavigationKind};
-
-fn main() -> browser_tester::Result<()> {
-    let html = r#"
-      <button id='go'>go</button>
-      <script>
-        document.getElementById('go').addEventListener('click', () => {
-          location.assign('https://app.local/next');
-        });
-      </script>
-    "#;
-
-    let mut h = Harness::from_html(html)?;
-    h.set_location_mock_page("https://app.local/next", "<p id='msg'>next page</p>");
-    h.click("#go")?;
-    h.assert_text("#msg", "next page")?;
-
-    assert_eq!(
-        h.take_location_navigations(),
-        vec![LocationNavigation {
-            kind: LocationNavigationKind::Assign,
-            from: "about:blank".to_string(),
-            to: "https://app.local/next".to_string(),
-        }]
-    );
-    Ok(())
-}
-```
-
-For `history.go(0)`, `history.back()`, or `history.forward()`, provide deterministic pages for the URLs that may be visited:
-
-```rust
-let mut h = Harness::from_html(html)?;
-h.set_location_mock_page("about:blank", "<p id='marker'>reloaded</p>");
-h.click("#run")?;
-h.assert_text("#marker", "reloaded")?;
-```
-
-## Clipboard
-
-Main APIs:
-
+- `set_random_seed(seed)`
+- `enable_trace(enabled)`
+- `set_trace_stderr(enabled)`
+- `set_trace_events(enabled)`
+- `set_trace_timers(enabled)`
+- `set_trace_log_limit(max_entries)`
+- `take_trace_logs()`
+- `set_timer_step_limit(max_steps)`
 - `set_clipboard_text(text)`
-- `clipboard_text()`
-- `set_clipboard_read_error(Some(name))`
-- `set_clipboard_write_error(Some(name))`
+- `set_clipboard_read_error(error)`
+- `set_clipboard_write_error(error)`
 - `clear_clipboard_errors()`
-- `take_clipboard_writes()`
-- `copy(selector)`
-- `paste(selector)`
-- script-side override via `navigator.clipboard = { ... }`
 
-Read example:
+`set_random_seed()` makes `Math.random()` reproducible in script tests.
+Trace capture records `[event] ...` and `[timer] ...` lines while tracing is enabled; `take_trace_logs()` drains the buffered lines so assertions can inspect them after a step.
+Clipboard seed and error helpers let tests cover both successful clipboard reads and failure paths without reaching into the registry directly.
 
-```rust
-use browser_tester::Harness;
-
-fn main() -> browser_tester::Result<()> {
-    let html = r#"
-      <button id='run'>run</button>
-      <p id='out'></p>
-      <script>
-        document.getElementById('run').addEventListener('click', () => {
-          navigator.clipboard.readText().then((text) => {
-            document.getElementById('out').textContent = text;
-          });
-        });
-      </script>
-    "#;
-
-    let mut h = Harness::from_html(html)?;
-    h.set_clipboard_text("seeded");
-    h.click("#run")?;
-    h.assert_text("#out", "seeded")?;
-    Ok(())
-}
-```
-
-Binary write capture example:
-
-```rust
-use browser_tester::{ClipboardPayloadArtifact, ClipboardWriteArtifact, Harness};
-
-fn main() -> browser_tester::Result<()> {
-    let html = r#"
-      <button id='run'>run</button>
-      <script>
-        document.getElementById('run').addEventListener('click', async () => {
-          const pngBlob = new Blob([new Uint8Array([137, 80, 78, 71, 1, 2, 3])], {
-            type: 'image/png'
-          });
-          await navigator.clipboard.write([
-            new ClipboardItem({ 'image/png': pngBlob })
-          ]);
-        });
-      </script>
-    "#;
-
-    let mut h = Harness::from_html(html)?;
-    h.click("#run")?;
-    assert_eq!(
-        h.take_clipboard_writes(),
-        vec![ClipboardWriteArtifact {
-            payloads: vec![ClipboardPayloadArtifact {
-                mime_type: "image/png".to_string(),
-                bytes: vec![137, 80, 78, 71, 1, 2, 3],
-            }],
-        }]
-    );
-    Ok(())
-}
-```
-
-Script-side override example:
+## Minimal Example
 
 ```rust
 use browser_tester::Harness;
 
 fn main() -> browser_tester::Result<()> {
-    let html = r#"
-      <button id='run'>run</button>
-      <p id='out'></p>
-      <script>
-        navigator.clipboard = {
-          readText: () => Promise.resolve('stubbed-read'),
-          writeText: () => Promise.resolve('stubbed-write'),
-        };
-        document.getElementById('run').addEventListener('click', () => {
-          navigator.clipboard.writeText('x')
-            .then(() => navigator.clipboard.readText())
-            .then((text) => {
-              document.getElementById('out').textContent = text;
-            });
-        });
-      </script>
-    "#;
+    let mut harness = Harness::from_html("<input id='upload' type='file'>")?;
 
-    let mut h = Harness::from_html(html)?;
-    h.click("#run")?;
-    h.assert_text("#out", "stubbed-read")?;
+    harness
+        .mocks_mut()
+        .fetch()
+        .respond_text("https://app.local/api/message", 200, "ok");
+    harness.mocks_mut().dialogs().push_confirm(true);
+    harness.mocks_mut().clipboard().seed_text("copied text");
+
+    let response = harness.fetch("https://app.local/api/message")?;
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body, "ok");
+    harness.alert("Notice")?;
+    assert!(harness.confirm("Continue?")?);
+    assert_eq!(harness.read_clipboard()?, "copied text");
+    harness.write_clipboard("copied text")?;
+    harness.print()?;
+    harness.open("https://app.local/popup")?;
+    harness.close()?;
+    harness.scroll_to(0, 120)?;
+    harness.set_files("#upload", ["report.csv"])?;
+    harness.capture_download("report.csv", b"downloaded bytes".to_vec())?;
+    harness.navigate("https://app.local/next")?;
+
+    assert_eq!(harness.mocks_mut().fetch().calls().len(), 1);
+    assert_eq!(harness.mocks_mut().dialogs().alert_messages().len(), 1);
+    assert_eq!(harness.mocks_mut().dialogs().confirm_messages().len(), 1);
+    assert_eq!(harness.mocks_mut().clipboard().writes().len(), 1);
+    assert_eq!(harness.mocks_mut().print().calls().len(), 1);
+    assert_eq!(harness.mocks_mut().open().calls().len(), 1);
+    assert_eq!(harness.mocks_mut().close().calls().len(), 1);
+    assert_eq!(harness.mocks_mut().scroll().calls().len(), 1);
+    assert_eq!(harness.mocks_mut().location().navigations().len(), 1);
+    assert_eq!(harness.mocks_mut().file_input().selections().len(), 1);
+    {
+        let downloads = harness.mocks_mut().downloads();
+        assert_eq!(downloads.artifacts().len(), 1);
+        assert_eq!(downloads.artifacts()[0].bytes, b"downloaded bytes".to_vec());
+    }
     Ok(())
 }
 ```
 
-## localStorage Seed State
-
-Main APIs:
-
-- `Harness::from_html_with_local_storage(...)`
-- `Harness::from_html_with_url_and_local_storage(...)`
-
-Example:
+`matchMedia` is configured through the builder seed API and inspected through the registry. The returned `MediaQueryList` exposes `matches`, `media`, and deterministic `addListener()` / `removeListener()` hooks that accept callback functions, do not fire asynchronously in this workspace, and are recorded through `listener_calls()`:
 
 ```rust
 use browser_tester::Harness;
 
 fn main() -> browser_tester::Result<()> {
-    let html = r#"
-      <p id='out'></p>
-      <script>
-        document.getElementById('out').textContent =
-          localStorage.getItem('token') || 'missing';
-      </script>
-    "#;
+    let harness = Harness::builder()
+        .html("<main id='out'></main><script>const list = window.matchMedia('(prefers-color-scheme: dark)'); document.getElementById('out').textContent = String(list.matches) + ':' + list.media;</script>")
+        .match_media([("(prefers-color-scheme: dark)", true)])
+        .build()?;
 
-    let h = Harness::from_html_with_local_storage(html, &[("token", "seeded-token")])?;
-    h.assert_text("#out", "seeded-token")?;
+    assert_eq!(harness.mocks_mut().match_media().calls().len(), 1);
+    assert!(harness.mocks_mut().match_media().listener_calls().is_empty());
+    harness.assert_text("#out", "true:(prefers-color-scheme: dark)")?;
     Ok(())
 }
 ```
 
-`window.localStorage` is also assignable inside script when a local stub is more convenient than Rust-side seeding.
-
-## Download Capture
-
-Main APIs:
-
-- `take_downloads()`
-
-Download capture works for deterministic flows such as `Blob` + `URL.createObjectURL()` + `<a download>.click()`.
-
-Example:
-
-```rust
-use browser_tester::{DownloadArtifact, Harness};
-
-fn main() -> browser_tester::Result<()> {
-    let html = r#"
-      <button id='run'>run</button>
-      <script>
-        document.getElementById('run').addEventListener('click', () => {
-          const blob = new Blob(['a,b\n1,2\n'], { type: 'text/csv;charset=utf-8;' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = 'report.csv';
-          a.click();
-          URL.revokeObjectURL(url);
-        });
-      </script>
-    "#;
-
-    let mut h = Harness::from_html(html)?;
-    h.click("#run")?;
-    assert_eq!(
-        h.take_downloads(),
-        vec![DownloadArtifact {
-            filename: Some("report.csv".to_string()),
-            mime_type: Some("text/csv;charset=utf-8;".to_string()),
-            bytes: b"a,b\n1,2\n".to_vec(),
-        }]
-    );
-    Ok(())
-}
-```
-
-## File Inputs
-
-Main APIs:
-
-- `set_input_files(selector, &[MockFile { ... }, ...])`
-- `MockFile::new(name)`
-
-Behavior:
-
-- when selection changes: dispatch `input` then `change`
-- when selection does not change: dispatch `cancel`
-- for non-`multiple` inputs, only the first mock file is selected
-- mocked files expose `arrayBuffer()` / `text()` / `bytes()` / `stream()`
-- mocked image files can be consumed by `createImageBitmap(file)`
-
-Example:
-
-```rust
-use browser_tester::{Harness, MockFile};
-
-fn main() -> browser_tester::Result<()> {
-    let html = r#"
-      <input id='upload' type='file' multiple required>
-      <button id='run'>run</button>
-      <p id='out'></p>
-      <script>
-        const input = document.getElementById('upload');
-        document.getElementById('run').addEventListener('click', () => {
-          const files = input.files;
-          document.getElementById('out').textContent =
-            input.value + ':' + files.length + ':' + files.map((f) => f.name).join(',');
-        });
-      </script>
-    "#;
-
-    let mut h = Harness::from_html(html)?;
-    h.set_input_files(
-        "#upload",
-        &[
-            MockFile::new("first.txt").with_text("hello"),
-            MockFile {
-                name: "nested/second.txt".to_string(),
-                size: 7,
-                mime_type: "text/plain".to_string(),
-                last_modified: 99,
-                webkit_relative_path: "nested/second.txt".to_string(),
-                bytes: b"second!".to_vec(),
-            },
-        ],
-    )?;
-    h.click("#run")?;
-    h.assert_text("#out", "C:\\fakepath\\first.txt:2:first.txt,second.txt")?;
-    Ok(())
-}
-```
-
-## matchMedia
-
-Main APIs:
-
-- `set_match_media_mock(query, matches)`
-- `set_default_match_media_matches(matches)`
-- `clear_match_media_mocks()`
-- `take_match_media_calls()`
-
-Example:
+## Failure Example
 
 ```rust
 use browser_tester::Harness;
 
 fn main() -> browser_tester::Result<()> {
-    let html = r#"
-      <button id='run'>run</button>
-      <p id='out'></p>
-      <script>
-        document.getElementById('run').addEventListener('click', () => {
-          const result = window.matchMedia('(prefers-reduced-motion: reduce)');
-          document.getElementById('out').textContent = String(result.matches);
-        });
-      </script>
-    "#;
+    let mut harness = Harness::builder().build()?;
 
-    let mut h = Harness::from_html(html)?;
-    h.set_match_media_mock("(prefers-reduced-motion: reduce)", true);
-    h.click("#run")?;
-    h.assert_text("#out", "true")?;
-    assert_eq!(
-        h.take_match_media_calls(),
-        vec!["(prefers-reduced-motion: reduce)".to_string()]
-    );
+    let fetch_error = harness
+        .fetch("https://app.local/api/missing")
+        .expect_err("missing fetch mock should fail");
+    assert!(fetch_error.to_string().contains("no fetch mock configured"));
+
+    let confirm_error = harness
+        .confirm("Continue?")
+        .expect_err("confirm should require a queued response");
+    assert!(confirm_error
+        .to_string()
+        .contains("confirm() requires a queued response"));
+
+    let clipboard_error = harness
+        .read_clipboard()
+        .expect_err("clipboard reads should require a seed");
+    assert!(clipboard_error
+        .to_string()
+        .contains("clipboard text has not been seeded"));
+
+    let download_error = harness
+        .capture_download(" ", b"downloaded bytes".to_vec())
+        .expect_err("blank download names should fail");
+    assert!(download_error
+        .to_string()
+        .contains("capture_download() requires a non-empty file name"));
+
+    let print_error = Harness::builder()
+        .print_failure("print blocked")
+        .html("<script>window.print();</script>")
+        .build()
+        .expect_err("print failure should fail bootstrap when window.print runs");
+    assert!(print_error.to_string().contains("print blocked"));
+
+    let open_error = Harness::builder()
+        .open_failure("popup blocked")
+        .html("<script>window.open('https://app.local/popup');</script>")
+        .build()
+        .expect_err("open failure should fail bootstrap when window.open runs");
+    assert!(open_error.to_string().contains("popup blocked"));
+
+    let scroll_error = Harness::builder()
+        .scroll_failure("scroll blocked")
+        .html("<script>window.scrollTo(0, 120);</script>")
+        .build()
+        .expect_err("scroll failure should fail bootstrap when window.scrollTo runs");
+    assert!(scroll_error.to_string().contains("scroll blocked"));
+
+    let close_error = Harness::builder()
+        .close_failure("window closed")
+        .html("<script>window.close();</script>")
+        .build()
+        .expect_err("close failure should fail bootstrap when window.close runs");
+    assert!(close_error.to_string().contains("window closed"));
+
+    let match_media_error = Harness::builder()
+        .html("<script>window.matchMedia('(prefers-color-scheme: dark)').matches;</script>")
+        .build()
+        .expect_err("unseeded matchMedia should fail");
+    assert!(match_media_error
+        .to_string()
+        .contains("no matchMedia mock configured for `(prefers-color-scheme: dark)`"));
+
     Ok(())
 }
 ```
 
-## Related Documents
+## Design Rules Per Mock Family
 
-- Architecture overview: [architecture.md](architecture.md)
-- Public package README: [../README.md](../README.md)
+Each family is expected to support:
+
+- response injection or seed state
+- failure injection where applicable
+- call capture or artifact capture
+- reset semantics
+
+Examples:
+
+- `fetch`: response rules, error rules, request call capture
+- `dialogs`: queued confirm/prompt answers, alert capture, and call-message capture
+- `clipboard`: seeded read state and write capture
+- `location`: current URL seed and navigation capture, including `window.location.href`, `document.location.href`, `window.location.hash`, `document.location.hash`, `window.location.pathname`, `document.location.pathname`, `window.location.search`, `document.location.search`, `window.location.origin`, `document.location.origin`, `window.location.assign()`, `window.location.replace()`, and `window.location.reload()`
+- `downloads`: artifact capture through the registry and `Harness::capture_download(...)`
+- `file_input`: file selection seed and capture
+- `print`: call capture through the registry and `Harness::print(...)`, plus optional builder-seeded bootstrap failure
+- `open`: call capture through the registry and `Harness::open(...)`, plus optional builder-seeded bootstrap failure for `window.open(...)`; the mock returns `undefined` rather than a popup `WindowProxy`
+- `close`: call capture through the registry and `Harness::close(...)`, plus optional builder-seeded bootstrap failure for `window.close(...)`
+- `scroll`: call capture through the registry and `Harness::scroll_to(...)` / `Harness::scroll_by(...)`, plus optional builder-seeded bootstrap failure for `window.scrollTo(...)` / `window.scrollBy(...)`
+- `matchMedia`: query seed state and call capture for `window.matchMedia(...)`, plus deterministic `MediaQueryList.addListener()` / `removeListener()` hooks and listener call capture
+
+## Why the Registry Shape Matters
+
+The rewrite intentionally avoids letting `Harness` grow into hundreds of one-off mock methods.
+A typed registry keeps the public facade small while still making deterministic hooks discoverable.
+
+## Planned Documentation Bar
+
+Whenever a new test-only mock becomes public, its docs should ship with:
+
+- the public API shape
+- a minimal success example
+- a failure-path example
+- an explanation of call capture or artifact capture
+- README updates
+- this guide updated in the same change

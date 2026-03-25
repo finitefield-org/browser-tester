@@ -1,0 +1,18 @@
+[package]
+name = "browser_tester"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "browser_tester"
+path = "src/lib.rs"
+
+[dependencies]
+bt-dom = { path = "../bt-dom" }
+bt-runtime = { path = "../bt-runtime" }
+bt-script = { path = "../bt-script" }
+
+[dev-dependencies]
+proptest = "1.6"

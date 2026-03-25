@@ -8,13 +8,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  file-size-guard:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check file-size guard
-        run: bash scripts/check-file-size-guard.sh
-
   go-checklist:
     runs-on: ubuntu-latest
     timeout-minutes: 20

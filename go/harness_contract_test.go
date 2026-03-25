@@ -2049,6 +2049,52 @@ func TestDebugViewReportsDocumentCookie(t *testing.T) {
 	}
 }
 
+func TestHarnessBuilderCopiesConfigurationContract(t *testing.T) {
+	localStorage := map[string]string{"token": "abc"}
+	sessionStorage := map[string]string{"tab": "main"}
+	matchMedia := map[string]bool{"(prefers-reduced-motion: reduce)": true}
+
+	harness, err := NewHarnessBuilder().
+		URL("https://example.test/").
+		HTML("<main>ok</main>").
+		LocalStorage(localStorage).
+		SessionStorage(sessionStorage).
+		MatchMedia(matchMedia).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	localStorage["token"] = "mutated"
+	sessionStorage["tab"] = "mutated"
+	matchMedia["(prefers-reduced-motion: reduce)"] = false
+
+	if got, want := harness.URL(), "https://example.test/"; got != want {
+		t.Fatalf("URL() = %q, want %q", got, want)
+	}
+	if got, want := harness.HTML(), "<main>ok</main>"; got != want {
+		t.Fatalf("HTML() = %q, want %q", got, want)
+	}
+	if got, want := harness.Debug().InitialHTML(), "<main>ok</main>"; got != want {
+		t.Fatalf("Debug().InitialHTML() = %q, want %q", got, want)
+	}
+	if got, want := harness.Debug().URL(), "https://example.test/"; got != want {
+		t.Fatalf("Debug().URL() = %q, want %q", got, want)
+	}
+	if got := harness.Debug().MatchMediaRules(); len(got) != 1 || !got["(prefers-reduced-motion: reduce)"] {
+		t.Fatalf("Debug().MatchMediaRules() = %#v, want seeded rule", got)
+	}
+	if got, want := harness.Mocks().Storage().Local()["token"], "abc"; got != want {
+		t.Fatalf("Storage().Local()[\"token\"] = %q, want %q", got, want)
+	}
+	if got, want := harness.Mocks().Storage().Session()["tab"], "main"; got != want {
+		t.Fatalf("Storage().Session()[\"tab\"] = %q, want %q", got, want)
+	}
+	if got := harness.Mocks().MatchMedia().Rules(); len(got) != 1 || got[0].Query != "(prefers-reduced-motion: reduce)" || !got[0].Matches {
+		t.Fatalf("MatchMedia().Rules() = %#v, want seeded rule", got)
+	}
+}
+
 func TestDebugViewReportsClipboard(t *testing.T) {
 	harness, err := NewHarnessBuilder().Build()
 	if err != nil {
@@ -4364,6 +4410,33 @@ func TestInlineScriptsCanSetLocationPropertiesThroughPublicActions(t *testing.T)
 		"https://example.test/start?old=1#step1",
 		"https://example.test/next?old=1#step1",
 		"https://example.test/next?mode=full#step1",
+	}; len(got) != len(want) {
+		t.Fatalf("Mocks().Location().Navigations() = %#v, want %#v", got, want)
+	} else {
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("Mocks().Location().Navigations()[%d] = %q, want %q", i, got[i], want[i])
+			}
+		}
+	}
+}
+
+func TestInlineScriptsCanSetLocationUsernameAndPasswordThroughPublicActions(t *testing.T) {
+	markup := `<main><script>host:locationSet("username", "alice"); host:locationSet("password", "secret")</script></main>`
+	harness, err := FromHTMLWithURL("https://example.test/start", markup)
+	if err != nil {
+		t.Fatalf("FromHTMLWithURL() error = %v", err)
+	}
+
+	if got, want := harness.Debug().DumpDOM(), markup; got != want {
+		t.Fatalf("Debug().DumpDOM() after location credential updates = %q, want %q", got, want)
+	}
+	if got, want := harness.URL(), "https://alice:secret@example.test/start"; got != want {
+		t.Fatalf("URL() after location credential updates = %q, want %q", got, want)
+	}
+	if got, want := harness.Mocks().Location().Navigations(), []string{
+		"https://alice@example.test/start",
+		"https://alice:secret@example.test/start",
 	}; len(got) != len(want) {
 		t.Fatalf("Mocks().Location().Navigations() = %#v, want %#v", got, want)
 	} else {
