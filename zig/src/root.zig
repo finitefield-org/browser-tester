@@ -1509,6 +1509,17 @@ test "contract: Harness.fromHtml runs HTMLDetailsElement open and name reflectio
     try subject.assertValue("#out", "false:accordion|true:accordion");
 }
 
+test "failure: Harness.fromHtml rejects HTMLDetailsElement open and name reflection on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='host'></div><script>const host = document.getElementById('host'); host.open = true; host.name = 'accordion';</script></main>",
+        ),
+    );
+}
+
 test "contract: Harness.fromHtml exposes form owner reflection during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -1685,6 +1696,140 @@ test "contract: Harness.fromHtml runs HTMLTableElement section access and mutati
     try subject.assertValue("#out", "null:null:null|caption:head:foot|null:null:null");
 }
 
+test "contract: Harness.fromHtml runs HTMLTableElement createTBody during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><table id='table'><caption id='caption'></caption><colgroup id='group'></colgroup><tbody id='body-1'></tbody></table><div id='out'></div><script>const table = document.getElementById('table'); const before = String(table.children.length) + ':' + String(table.children.item(0).getAttribute('id')) + ':' + String(table.children.item(1).getAttribute('id')) + ':' + String(table.children.item(2).getAttribute('id')) + ':' + String(table.tBodies.length); const head = table.createTHead(); head.id = 'head'; const body2 = table.createTBody(); body2.id = 'body-2'; const foot = table.createTFoot(); foot.id = 'foot'; document.getElementById('out').textContent = before + '|' + String(table.children.length) + ':' + String(table.children.item(0).getAttribute('id')) + ':' + String(table.children.item(1).getAttribute('id')) + ':' + String(table.children.item(2).getAttribute('id')) + ':' + String(table.children.item(3).getAttribute('id')) + ':' + String(table.children.item(4).getAttribute('id')) + ':' + String(table.children.item(5).getAttribute('id')) + ':' + String(table.tBodies.length) + ':' + String(table.tHead.getAttribute('id')) + ':' + String(table.tFoot.getAttribute('id'));</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "3:caption:group:body-1:1|6:caption:group:head:body-1:body-2:foot:2:head:foot",
+    );
+}
+
+test "contract: Harness.fromHtml runs HTMLTableSectionElement rows and mutation during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><table id='table'><thead id='head'></thead><tbody id='body'></tbody><tfoot id='foot'></tfoot></table><div id='out'></div><script>const table = document.getElementById('table'); const head = document.getElementById('head'); const body = document.getElementById('body'); const foot = document.getElementById('foot'); const before = String(head.rows.length) + ':' + String(body.rows.length) + ':' + String(foot.rows.length) + ':' + String(table.rows.length); const headRow = head.insertRow(); headRow.id = 'head-row'; const bodyRow = body.insertRow(); bodyRow.id = 'body-row'; const footRow = foot.insertRow(); footRow.id = 'foot-row'; const middle = String(head.rows.length) + ':' + String(body.rows.length) + ':' + String(foot.rows.length) + ':' + String(table.rows.length) + ':' + String(head.rows.item(0).getAttribute('id')) + ':' + String(body.rows.item(0).getAttribute('id')) + ':' + String(foot.rows.item(0).getAttribute('id')); head.deleteRow(0); body.deleteRow(0); foot.deleteRow(0); document.getElementById('out').textContent = before + '|' + middle + '|' + String(head.rows.length) + ':' + String(body.rows.length) + ':' + String(foot.rows.length) + ':' + String(table.rows.length);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "0:0:0:0|1:1:1:3:head-row:body-row:foot-row|0:0:0:0");
+}
+
+test "contract: Harness.fromHtml runs HTMLTableColElement span and width during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><div id='out'></div><script>const col = document.createElement('col'); const group = document.createElement('colgroup'); const before = String(col.span) + ':' + String(group.span) + ':' + String(col.width) + ':' + String(group.width); col.span = 4; group.span = 5; col.width = '100px'; group.width = '200px'; document.getElementById('out').textContent = before + '|' + String(col.span) + ':' + col.getAttribute('span') + ':' + String(col.width) + ':' + col.getAttribute('width') + ':' + String(group.span) + ':' + group.getAttribute('span') + ':' + String(group.width) + ':' + group.getAttribute('width');</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "1:1::|4:4:100px:100px:5:5:200px:200px",
+    );
+}
+
+test "contract: Harness.fromHtml runs HTMLTableColElement align ch chOff vAlign and bgColor during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><table id='table'><colgroup id='group' span='2' width='240px'><col id='col' span='3' width='120px'></colgroup><tbody><tr><td>A</td></tr></tbody></table><div id='out'></div><script>const col = document.getElementById('col'); const group = document.getElementById('group'); const detached = document.createElement('colgroup'); const before = 'col[span=' + col.span + ';width=' + col.width + ';align=' + col.align + ';ch=' + col.ch + ';chOff=' + col.chOff + ';vAlign=' + col.vAlign + ';bgColor=' + col.bgColor + ']|group[span=' + group.span + ';width=' + group.width + ';align=' + group.align + ';ch=' + group.ch + ';chOff=' + group.chOff + ';vAlign=' + group.vAlign + ';bgColor=' + group.bgColor + ']|detached[span=' + detached.span + ';width=' + detached.width + ';align=' + detached.align + ';ch=' + detached.ch + ';chOff=' + detached.chOff + ';vAlign=' + detached.vAlign + ';bgColor=' + detached.bgColor + ']'; col.span = 4; col.width = '100px'; col.align = 'left'; col.ch = '.'; col.chOff = '1'; col.vAlign = 'top'; col.bgColor = 'pink'; group.span = 5; group.width = '200px'; group.align = 'center'; group.ch = ':'; group.chOff = '2'; group.vAlign = 'middle'; group.bgColor = 'cyan'; detached.span = 6; detached.width = '300px'; detached.align = 'right'; detached.ch = '|'; detached.chOff = '3'; detached.vAlign = 'bottom'; detached.bgColor = 'orange'; document.getElementById('out').textContent = before + '|' + 'col[span=' + col.span + ';width=' + col.width + ';align=' + col.align + ';ch=' + col.ch + ';chOff=' + col.chOff + ';vAlign=' + col.vAlign + ';bgColor=' + col.bgColor + ';attrSpan=' + col.getAttribute('span') + ';attrWidth=' + col.getAttribute('width') + ';attrAlign=' + col.getAttribute('align') + ';attrChar=' + col.getAttribute('char') + ';attrCharOff=' + col.getAttribute('charoff') + ';attrVAlign=' + col.getAttribute('valign') + ';attrBgColor=' + col.getAttribute('bgcolor') + ']|group[span=' + group.span + ';width=' + group.width + ';align=' + group.align + ';ch=' + group.ch + ';chOff=' + group.chOff + ';vAlign=' + group.vAlign + ';bgColor=' + group.bgColor + ';attrSpan=' + group.getAttribute('span') + ';attrWidth=' + group.getAttribute('width') + ';attrAlign=' + group.getAttribute('align') + ';attrChar=' + group.getAttribute('char') + ';attrCharOff=' + group.getAttribute('charoff') + ';attrVAlign=' + group.getAttribute('valign') + ';attrBgColor=' + group.getAttribute('bgcolor') + ']|detached[span=' + detached.span + ';width=' + detached.width + ';align=' + detached.align + ';ch=' + detached.ch + ';chOff=' + detached.chOff + ';vAlign=' + detached.vAlign + ';bgColor=' + detached.bgColor + ';attrSpan=' + detached.getAttribute('span') + ';attrWidth=' + detached.getAttribute('width') + ';attrAlign=' + detached.getAttribute('align') + ';attrChar=' + detached.getAttribute('char') + ';attrCharOff=' + detached.getAttribute('charoff') + ';attrVAlign=' + detached.getAttribute('valign') + ';attrBgColor=' + detached.getAttribute('bgcolor') + ']';</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "col[span=3;width=120px;align=;ch=;chOff=;vAlign=;bgColor=]|group[span=2;width=240px;align=;ch=;chOff=;vAlign=;bgColor=]|detached[span=1;width=;align=;ch=;chOff=;vAlign=;bgColor=]|col[span=4;width=100px;align=left;ch=.;chOff=1;vAlign=top;bgColor=pink;attrSpan=4;attrWidth=100px;attrAlign=left;attrChar=.;attrCharOff=1;attrVAlign=top;attrBgColor=pink]|group[span=5;width=200px;align=center;ch=:;chOff=2;vAlign=middle;bgColor=cyan;attrSpan=5;attrWidth=200px;attrAlign=center;attrChar=:;attrCharOff=2;attrVAlign=middle;attrBgColor=cyan]|detached[span=6;width=300px;align=right;ch=|;chOff=3;vAlign=bottom;bgColor=orange;attrSpan=6;attrWidth=300px;attrAlign=right;attrChar=|;attrCharOff=3;attrVAlign=bottom;attrBgColor=orange]",
+    );
+}
+
+test "contract: Harness.fromHtml runs HTMLTableHeaderCellElement headers scope and abbr during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><table id='table'><tr><th id='head' headers='left right' scope='col' abbr='Heading'>A</th></tr></table><div id='out'></div><script>const table = document.getElementById('table'); const cell = table.rows.item(0).cells.item(0); const detached = document.createElement('th'); const before = cell.headers + ':' + cell.scope + ':' + cell.abbr + ':' + detached.headers + ':' + detached.scope + ':' + detached.abbr; cell.headers = 'left center'; cell.scope = 'row'; cell.abbr = 'Row Heading'; detached.headers = 'top bottom'; detached.scope = 'colgroup'; detached.abbr = 'Detached'; document.getElementById('out').textContent = before + '|' + cell.headers + ':' + cell.scope + ':' + cell.abbr + ':' + cell.getAttribute('headers') + ':' + cell.getAttribute('scope') + ':' + cell.getAttribute('abbr') + ':' + detached.headers + ':' + detached.scope + ':' + detached.abbr + ':' + detached.getAttribute('headers') + ':' + detached.getAttribute('scope') + ':' + detached.getAttribute('abbr');</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "left right:col:Heading:::|left center:row:Row Heading:left center:row:Row Heading:top bottom:colgroup:Detached:top bottom:colgroup:Detached",
+    );
+}
+
+test "contract: Harness.fromHtml runs HTMLTableRowElement rowIndex, sectionRowIndex, and HTMLTableCellElement cellIndex during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><table id='table'><thead><tr><th>H</th></tr></thead><tbody><tr><td>B</td></tr></tbody><tfoot><tr><td>F</td></tr></tfoot></table><div id='out'></div><script>const table = document.getElementById('table'); const out = document.getElementById('out'); const headRow = table.rows.item(0); const bodyRow = table.rows.item(1); const footRow = table.rows.item(2); const bodyCell = bodyRow.cells.item(0); const detachedRow = document.createElement('tr'); const detachedCell = document.createElement('td'); detachedRow.append(detachedCell); out.textContent = String(headRow.rowIndex) + ':' + String(headRow.sectionRowIndex) + ':' + String(bodyRow.rowIndex) + ':' + String(bodyRow.sectionRowIndex) + ':' + String(footRow.rowIndex) + ':' + String(footRow.sectionRowIndex) + ':' + String(bodyCell.cellIndex) + ':' + String(detachedRow.rowIndex) + ':' + String(detachedRow.sectionRowIndex) + ':' + String(detachedCell.cellIndex);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "0:0:1:0:2:0:0:-1:-1:0");
+}
+
+test "contract: Harness.fromHtml runs HTMLTableElement rows and HTMLTableRowElement cells during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><table id='table'><thead id='head'><tr id='head-row'><th id='head-cell'>H</th></tr></thead><tbody id='body'><tr id='first-row'><td id='first-cell'>A</td></tr></tbody><tfoot id='foot'><tr id='foot-row'><td id='foot-cell'>F</td></tr></tfoot></table><div id='out'></div><script>const table = document.getElementById('table'); const body = document.getElementById('body'); const row = document.getElementById('first-row'); const rows = table.rows; const bodyRows = body.rows; const cells = row.cells; const before = String(rows.length) + ':' + String(bodyRows.length) + ':' + String(cells.length) + ':' + String(rows.namedItem('first-row')) + ':' + String(cells.namedItem('first-cell')); body.innerHTML = body.innerHTML + '<tr id=\"second-row\"><td id=\"second-cell\">B</td><td id=\"third-cell\">C</td></tr>'; row.append(document.getElementById('third-cell')); document.getElementById('out').textContent = before + '|' + String(rows.length) + ':' + String(bodyRows.length) + ':' + String(cells.length) + ':' + String(rows.namedItem('second-row')) + ':' + String(bodyRows.namedItem('second-row')) + ':' + String(cells.namedItem('third-cell'));</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "3:1:1:[object Element]:[object Element]|4:2:2:[object Element]:[object Element]:[object Element]",
+    );
+}
+
+test "contract: Harness.fromHtml runs HTMLTableElement rows and HTMLTableRowElement cells live collections during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><table id='table'><thead id='head'><tr id='head-row'><th id='head-cell'>H</th></tr></thead><tbody id='body'><tr id='first-row'><td id='first-cell'>A</td></tr></tbody><tfoot id='foot'><tr id='foot-row'><td id='foot-cell'>F</td></tr></tfoot></table><div id='out'></div><script>const table = document.getElementById('table'); const body = document.getElementById('body'); const row = document.getElementById('first-row'); const rows = table.rows; const bodyRows = body.rows; const cells = row.cells; const before = String(rows.length) + ':' + String(bodyRows.length) + ':' + String(cells.length) + ':' + String(rows.namedItem('first-row')) + ':' + String(cells.namedItem('first-cell')); body.innerHTML = body.innerHTML + '<tr id=\"second-row\"><td id=\"second-cell\">B</td><td id=\"third-cell\">C</td></tr>'; row.append(document.getElementById('third-cell')); document.getElementById('out').textContent = before + '|' + String(rows.length) + ':' + String(bodyRows.length) + ':' + String(cells.length) + ':' + String(rows.namedItem('second-row')) + ':' + String(bodyRows.namedItem('second-row')) + ':' + String(cells.namedItem('third-cell'));</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "3:1:1:[object Element]:[object Element]|4:2:2:[object Element]:[object Element]:[object Element]",
+    );
+}
+
+test "contract: Harness.fromHtml runs HTMLTableSectionElement HTMLTableRowElement and HTMLTableCellElement legacy reflection during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><table id='table' align='center' border='1' frame='box' rules='all' summary='Summary' width='100px' bgcolor='pink' cellpadding='2' cellspacing='3'><thead id='head' align='center' char='.' charoff='1' valign='top'><tr id='row' align='right' char=':' charoff='2' valign='middle' bgcolor='cyan'><td id='cell' align='left' axis='axis' height='10' width='20px' char='|' charoff='3' nowrap valign='bottom' bgcolor='pink'>A</td></tr></thead></table><div id='out'></div><script>const head = document.getElementById('head'); const row = document.getElementById('row'); const cell = document.getElementById('cell'); const detachedHead = document.createElement('thead'); const detachedRow = document.createElement('tr'); const detachedCell = document.createElement('td'); const before = 'head[align=' + head.align + ';ch=' + head.ch + ';chOff=' + head.chOff + ';vAlign=' + head.vAlign + ']|row[align=' + row.align + ';ch=' + row.ch + ';chOff=' + row.chOff + ';vAlign=' + row.vAlign + ';bgColor=' + row.bgColor + ']|cell[align=' + cell.align + ';axis=' + cell.axis + ';height=' + cell.height + ';width=' + cell.width + ';ch=' + cell.ch + ';chOff=' + cell.chOff + ';noWrap=' + String(cell.noWrap) + ';vAlign=' + cell.vAlign + ';bgColor=' + cell.bgColor + ']|detachedHead[align=' + detachedHead.align + ';ch=' + detachedHead.ch + ';chOff=' + detachedHead.chOff + ';vAlign=' + detachedHead.vAlign + ']|detachedRow[align=' + detachedRow.align + ';ch=' + detachedRow.ch + ';chOff=' + detachedRow.chOff + ';vAlign=' + detachedRow.vAlign + ';bgColor=' + detachedRow.bgColor + ']|detachedCell[align=' + detachedCell.align + ';axis=' + detachedCell.axis + ';height=' + detachedCell.height + ';width=' + detachedCell.width + ';ch=' + detachedCell.ch + ';chOff=' + detachedCell.chOff + ';noWrap=' + String(detachedCell.noWrap) + ';vAlign=' + detachedCell.vAlign + ';bgColor=' + detachedCell.bgColor + ']'; head.align = 'left'; head.ch = '*'; head.chOff = '4'; head.vAlign = 'bottom'; row.align = 'center'; row.ch = ';'; row.chOff = '5'; row.vAlign = 'top'; row.bgColor = null; cell.align = 'right'; cell.axis = 'y'; cell.height = '11'; cell.width = '30px'; cell.ch = '='; cell.chOff = '6'; cell.noWrap = false; cell.vAlign = 'middle'; cell.bgColor = null; detachedHead.align = 'justify'; detachedHead.ch = '!'; detachedHead.chOff = '7'; detachedHead.vAlign = 'baseline'; detachedRow.align = 'start'; detachedRow.ch = ','; detachedRow.chOff = '8'; detachedRow.vAlign = 'sub'; detachedRow.bgColor = null; detachedCell.align = 'end'; detachedCell.axis = 'z'; detachedCell.height = '12'; detachedCell.width = '40px'; detachedCell.ch = '~'; detachedCell.chOff = '9'; detachedCell.noWrap = true; detachedCell.vAlign = 'super'; detachedCell.bgColor = null; document.getElementById('out').textContent = before + '|head[align=' + head.align + ';ch=' + head.ch + ';chOff=' + head.chOff + ';vAlign=' + head.vAlign + ']|row[align=' + row.align + ';ch=' + row.ch + ';chOff=' + row.chOff + ';vAlign=' + row.vAlign + ';bgColor=' + row.bgColor + ';attrBgColor=' + row.getAttribute('bgcolor') + ']|cell[align=' + cell.align + ';axis=' + cell.axis + ';height=' + cell.height + ';width=' + cell.width + ';ch=' + cell.ch + ';chOff=' + cell.chOff + ';noWrap=' + String(cell.noWrap) + ';vAlign=' + cell.vAlign + ';bgColor=' + cell.bgColor + ';attrBgColor=' + cell.getAttribute('bgcolor') + ';attrNoWrap=' + String(cell.hasAttribute('nowrap')) + ']|detachedHead[align=' + detachedHead.align + ';ch=' + detachedHead.ch + ';chOff=' + detachedHead.chOff + ';vAlign=' + detachedHead.vAlign + ']|detachedRow[align=' + detachedRow.align + ';ch=' + detachedRow.ch + ';chOff=' + detachedRow.chOff + ';vAlign=' + detachedRow.vAlign + ';bgColor=' + detachedRow.bgColor + ';attrBgColor=' + detachedRow.getAttribute('bgcolor') + ']|detachedCell[align=' + detachedCell.align + ';axis=' + detachedCell.axis + ';height=' + detachedCell.height + ';width=' + detachedCell.width + ';ch=' + detachedCell.ch + ';chOff=' + detachedCell.chOff + ';noWrap=' + String(detachedCell.noWrap) + ';vAlign=' + detachedCell.vAlign + ';bgColor=' + detachedCell.bgColor + ';attrBgColor=' + detachedCell.getAttribute('bgcolor') + ';attrNoWrap=' + String(detachedCell.hasAttribute('nowrap')) + ']';</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "head[align=center;ch=.;chOff=1;vAlign=top]|row[align=right;ch=:;chOff=2;vAlign=middle;bgColor=cyan]|cell[align=left;axis=axis;height=10;width=20px;ch=|;chOff=3;noWrap=true;vAlign=bottom;bgColor=pink]|detachedHead[align=;ch=;chOff=;vAlign=]|detachedRow[align=;ch=;chOff=;vAlign=;bgColor=]|detachedCell[align=;axis=;height=;width=;ch=;chOff=;noWrap=false;vAlign=;bgColor=]|head[align=left;ch=*;chOff=4;vAlign=bottom]|row[align=center;ch=;;chOff=5;vAlign=top;bgColor=;attrBgColor=]|cell[align=right;axis=y;height=11;width=30px;ch==;chOff=6;noWrap=false;vAlign=middle;bgColor=;attrBgColor=;attrNoWrap=false]|detachedHead[align=justify;ch=!;chOff=7;vAlign=baseline]|detachedRow[align=start;ch=,;chOff=8;vAlign=sub;bgColor=;attrBgColor=]|detachedCell[align=end;axis=z;height=12;width=40px;ch=~;chOff=9;noWrap=true;vAlign=super;bgColor=;attrBgColor=;attrNoWrap=true]",
+    );
+}
+
+test "contract: Harness.fromHtml runs HTMLTableElement legacy reflection during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><table id='table' align='center' border='1' frame='box' rules='all' summary='Summary' width='100px' bgcolor='pink' cellpadding='2' cellspacing='3'></table><div id='out'></div><script>const table = document.getElementById('table'); const detached = document.createElement('table'); const before = 'table[align=' + table.align + ';border=' + table.border + ';frame=' + table.frame + ';rules=' + table.rules + ';summary=' + table.summary + ';width=' + table.width + ';bgColor=' + table.bgColor + ';cellPadding=' + table.cellPadding + ';cellSpacing=' + table.cellSpacing + ']|detached[align=' + detached.align + ';border=' + detached.border + ';frame=' + detached.frame + ';rules=' + detached.rules + ';summary=' + detached.summary + ';width=' + detached.width + ';bgColor=' + detached.bgColor + ';cellPadding=' + detached.cellPadding + ';cellSpacing=' + detached.cellSpacing + ']'; table.align = 'left'; table.border = '2'; table.frame = 'void'; table.rules = 'rows'; table.summary = 'Updated'; table.width = '200px'; table.bgColor = null; table.cellPadding = null; table.cellSpacing = null; detached.align = 'right'; detached.border = '3'; detached.frame = 'above'; detached.rules = 'cols'; detached.summary = 'Detached'; detached.width = '300px'; detached.bgColor = null; detached.cellPadding = null; detached.cellSpacing = null; document.getElementById('out').textContent = before + '|table[align=' + table.align + ';border=' + table.border + ';frame=' + table.frame + ';rules=' + table.rules + ';summary=' + table.summary + ';width=' + table.width + ';bgColor=' + table.bgColor + ';cellPadding=' + table.cellPadding + ';cellSpacing=' + table.cellSpacing + ';attrBgColor=' + String(table.getAttribute('bgcolor')) + ';attrCellPadding=' + String(table.getAttribute('cellpadding')) + ';attrCellSpacing=' + String(table.getAttribute('cellspacing')) + ']|detached[align=' + detached.align + ';border=' + detached.border + ';frame=' + detached.frame + ';rules=' + detached.rules + ';summary=' + detached.summary + ';width=' + detached.width + ';bgColor=' + detached.bgColor + ';cellPadding=' + detached.cellPadding + ';cellSpacing=' + detached.cellSpacing + ';attrBgColor=' + String(detached.getAttribute('bgcolor')) + ';attrCellPadding=' + String(detached.getAttribute('cellpadding')) + ';attrCellSpacing=' + String(detached.getAttribute('cellspacing')) + ']';</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue(
+        "#out",
+        "table[align=center;border=1;frame=box;rules=all;summary=Summary;width=100px;bgColor=pink;cellPadding=2;cellSpacing=3]|detached[align=;border=;frame=;rules=;summary=;width=;bgColor=;cellPadding=;cellSpacing=]|table[align=left;border=2;frame=void;rules=rows;summary=Updated;width=200px;bgColor=;cellPadding=;cellSpacing=;attrBgColor=;attrCellPadding=;attrCellSpacing=]|detached[align=right;border=3;frame=above;rules=cols;summary=Detached;width=300px;bgColor=;cellPadding=;cellSpacing=;attrBgColor=;attrCellPadding=;attrCellSpacing=]",
+    );
+}
+
 test "contract: Harness.fromHtml runs HTMLFieldSetElement.elements and disabled during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -1725,6 +1870,61 @@ test "failure: Harness.fromHtml rejects HTMLTableElement.createTHead on unsuppor
         Harness.fromHtml(
             allocator,
             "<main id='root'><div id='host'></div><script>document.getElementById('host').createTHead();</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLTableSectionElement insertRow and deleteRow on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='host'></div><script>const host = document.getElementById('host'); host.insertRow(); host.deleteRow();</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLTableColElement span and width on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='host'></div><script>const host = document.getElementById('host'); host.span = 4; host.width = '100px';</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLTableColElement align ch chOff vAlign and bgColor on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='host'></div><script>const host = document.getElementById('host'); host.align = 'left'; host.ch = '.'; host.chOff = '1'; host.vAlign = 'top'; host.bgColor = 'pink';</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLTableHeaderCellElement headers scope and abbr on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='host'></div><script>const host = document.getElementById('host'); host.headers = 'left right'; host.scope = 'col'; host.abbr = 'Heading';</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLTableElement legacy reflection on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='host'></div><script>const host = document.getElementById('host'); host.align = 'left'; host.border = '1'; host.frame = 'box'; host.rules = 'all'; host.summary = 'Summary'; host.width = '100px'; host.bgColor = 'pink'; host.cellPadding = '2'; host.cellSpacing = '3';</script></main>",
         ),
     );
 }
@@ -1857,6 +2057,39 @@ test "failure: Harness.fromHtml rejects HTMLObjectElement linkage on unsupported
         Harness.fromHtml(
             allocator,
             "<main id='root'><div id='host'></div><script>document.getElementById('host').contentDocument;</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLObjectElement form on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>document.createElement('div').form;</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLObjectElement validity on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>const host = document.createElement('div'); host.willValidate; host.validity; host.validationMessage; host.checkValidity(); host.reportValidity();</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLObjectElement type name width height and useMap on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='host'></div><script>const host = document.getElementById('host'); host.type = 'image/svg+xml'; host.name = 'viewer'; host.width = '640'; host.height = '480'; host.useMap = '#map';</script></main>",
         ),
     );
 }
@@ -2073,6 +2306,28 @@ test "failure: Harness.fromHtml rejects HTMLOutputElement defaultValue on unsupp
     );
 }
 
+test "failure: Harness.fromHtml rejects HTMLOutputElement value on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='host'></div><script>document.getElementById('host').value = 'Computed';</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLOutputElement form labels and htmlFor on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='host'></div><script>const host = document.getElementById('host'); host.form; host.labels; host.htmlFor;</script></main>",
+        ),
+    );
+}
+
 test "contract: Harness.fromHtml runs HTMLProgressElement and HTMLMeterElement reflection during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -2266,6 +2521,50 @@ test "failure: Harness.fromHtml rejects HTMLScriptElement metadata reflection on
     );
 }
 
+test "failure: Harness.fromHtml rejects HTMLScriptElement crossOrigin integrity referrerPolicy and fetchPriority on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>const script = document.createElement('div'); script.crossOrigin = 'anonymous'; script.integrity = 'sha384-abc'; script.referrerPolicy = 'no-referrer'; script.fetchPriority = 'high';</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLScriptElement src on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>document.createElement('div').src = 'https://example.test/app.js';</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLScriptElement text on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>document.createElement('div').text = 'inline text';</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLScriptElement async defer noModule and charset on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>const script = document.createElement('div'); script.async = true; script.defer = true; script.noModule = true; script.charset = 'utf-8';</script>",
+        ),
+    );
+}
+
 test "contract: Harness.fromHtml runs HTMLLinkElement responsive image metadata during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -2330,6 +2629,17 @@ test "contract: Harness.fromHtml runs HTMLLinkElement as and charset during boot
     defer subject.deinit();
 
     try subject.assertValue("#out", "::[object CSSStyleSheet]|script:windows-1252:[object CSSStyleSheet]:a.css");
+}
+
+test "contract: Harness.fromHtml runs HTMLLinkElement disabled during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><div id='out'></div><script>const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = 'a.css'; link.disabled = true; const before = String(link.disabled) + ':' + String(link.sheet.disabled) + ':' + String(link.hasAttribute('disabled')); link.disabled = false; document.getElementById('out').textContent = before + '|' + String(link.disabled) + ':' + String(link.sheet.disabled) + ':' + String(link.hasAttribute('disabled'));</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "true:true:true|false:false:false");
 }
 
 test "contract: Harness.fromHtml runs stylesheet owner media reflection during bootstrap" {
@@ -5886,6 +6196,28 @@ test "failure: Harness.fromHtml rejects HTMLLinkElement as and charset on unsupp
     );
 }
 
+test "failure: Harness.fromHtml rejects HTMLLinkElement.disabled on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>document.createElement('div').disabled = true;</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLLinkElement href on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>document.createElement('div').href = 'a.css';</script>",
+        ),
+    );
+}
+
 test "failure: Harness.fromHtml rejects HTMLLinkElement relList replace on unsupported elements" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -6150,6 +6482,28 @@ test "failure: Harness.fromHtml rejects HTMLCanvasElement toBlob on unsupported 
     );
 }
 
+test "failure: Harness.fromHtml rejects HTMLIFrameElement contentDocument and contentWindow on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>const frame = document.createElement('div'); frame.contentDocument; frame.contentWindow;</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLIFrameElement name on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>document.createElement('div').name = 'preview';</script>",
+        ),
+    );
+}
+
 test "failure: Harness.fromHtml rejects HTMLIFrameElement sandbox reflection on unsupported elements" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -6157,6 +6511,17 @@ test "failure: Harness.fromHtml rejects HTMLIFrameElement sandbox reflection on 
         Harness.fromHtml(
             allocator,
             "<main id='root'></main><script>document.createElement('div').sandbox;</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLCanvasElement width and height on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>const canvas = document.createElement('div'); canvas.width = 320; canvas.height = 240;</script>",
         ),
     );
 }
@@ -6370,6 +6735,17 @@ test "failure: Harness.fromHtml rejects HTMLMediaElement preload on unsupported 
     );
 }
 
+test "failure: Harness.fromHtml rejects HTMLMediaElement autoplay loop and controls on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>const clip = document.createElement('div'); clip.autoplay = true; clip.loop = true; clip.controls = true;</script>",
+        ),
+    );
+}
+
 test "failure: Harness.fromHtml rejects HTMLMediaElement TimeRanges on unsupported elements" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -6576,6 +6952,39 @@ test "contract: Harness.fromHtml runs template.content surfaces during bootstrap
         "#out",
         "[object DocumentFragment]|<span id=\"first\">First</span><em id=\"middle\">Middle</em>text<b id=\"last\">Last</b>|first:last:3|[object DocumentFragment]|<span id=\"second\">Second</span>text<b id=\"third\">Third</b>|second:third:2",
     );
+}
+
+test "contract: Harness.fromHtml runs template.content.children during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<template id='tpl'><span id='first'>First</span></template><div id='out'></div><script>const content = document.getElementById('tpl').content; const children = content.children; const before = children.length; const first = children.item(0); const namedBefore = children.namedItem('second'); const second = document.createElement('span'); second.id = 'second'; second.textContent = 'Second'; content.appendChild(second); document.getElementById('out').textContent = String(before) + ':' + String(children.length) + ':' + first.id + ':' + children.item(1).id + ':' + String(namedBefore) + ':' + children.namedItem('second').id;</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "1:2:first:second:null:second");
+}
+
+test "contract: Harness.fromHtml runs template.content.childNodes during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<template id='tpl'><span id='first'>First</span></template><div id='out'></div><script>const content = document.getElementById('tpl').content; const nodes = content.childNodes; const before = nodes.length; const first = nodes.item(0); const text = document.createTextNode('Second'); content.appendChild(text); document.getElementById('out').textContent = String(before) + ':' + String(nodes.length) + ':' + first.nodeName + ':' + nodes.item(1).nodeName + ':' + nodes.item(1).data;</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "1:2:span:#text:Second");
+}
+
+test "contract: Harness.fromHtml runs template.content fragment traversal during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<template id='tpl'><span id='first'>First</span>text<b id='last'>Last</b></template><div id='out'></div><script>const content = document.getElementById('tpl').content; const first = content.firstChild; const last = content.lastChild; const firstElement = content.firstElementChild; const lastElement = content.lastElementChild; const text = first.nextSibling; document.getElementById('out').textContent = String(content.isConnected) + ':' + String(content.hasChildNodes()) + ':' + first.nodeName + ':' + last.nodeName + ':' + text.nodeName + ':' + text.data + ':' + String(first.previousSibling) + ':' + String(firstElement) + ':' + String(lastElement) + ':' + firstElement.nextElementSibling.nodeName + ':' + lastElement.previousElementSibling.nodeName;</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "false:true:span:b:#text:text:null:[object Element]:[object Element]:b:span");
 }
 
 test "contract: Harness.fromHtml runs template.content query methods during bootstrap" {
@@ -7430,6 +7839,28 @@ test "failure: Harness.fromHtml rejects HTMLMeterElement position access" {
     );
 }
 
+test "failure: Harness.fromHtml rejects HTMLProgressElement and HTMLMeterElement reflection on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>const progress = document.createElement('div'); progress.value = 3; progress.max = 4; const meter = document.createElement('div'); meter.value = 5; meter.min = 1; meter.max = 10; meter.low = 2; meter.high = 8; meter.optimum = 6;</script>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLTableElement.createTBody on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='host'></div><script>document.getElementById('host').createTBody();</script></main>",
+        ),
+    );
+}
+
 test "failure: Harness.fromHtml rejects HTMLTableElement.createTFoot on unsupported elements" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -7602,6 +8033,17 @@ test "failure: Harness.fromHtml rejects HTMLTableCellElement colSpan and rowSpan
         Harness.fromHtml(
             allocator,
             "<main id='root'><div id='host'></div><script>const host = document.getElementById('host'); host.colSpan; host.rowSpan;</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLTableSectionElement HTMLTableRowElement and HTMLTableCellElement legacy reflection on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='host'></div><script>const host = document.getElementById('host'); host.align = 'center'; host.ch = '.'; host.chOff = '1'; host.vAlign = 'top'; host.bgColor = 'pink'; host.axis = 'axis'; host.height = '10'; host.width = '20px'; host.noWrap = true; host.headers = 'left right'; host.scope = 'col'; host.abbr = 'Heading';</script></main>",
         ),
     );
 }
@@ -8447,6 +8889,17 @@ test "contract: Harness.fromHtmlWithUrl exposes document.children and window.chi
     defer subject.deinit();
 
     try subject.assertValue("#out", "1:1:html:html");
+}
+
+test "contract: Harness.fromHtml exposes Element.children live collection during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><span id='first'>First</span></main><div id='out'></div><script>const root = document.getElementById('root'); const children = root.children; const before = children.length; const first = children.item(0); const namedBefore = children.namedItem('second'); const second = document.createElement('span'); second.id = 'second'; second.textContent = 'Second'; root.appendChild(second); document.getElementById('out').textContent = String(before) + ':' + String(children.length) + ':' + first.getAttribute('id') + ':' + children.item(1).getAttribute('id') + ':' + String(namedBefore) + ':' + children.namedItem('second').getAttribute('id');</script>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "1:2:first:second:null:second");
 }
 
 test "contract: Harness.fromHtmlWithUrl exposes viewport and visibility aliases" {
