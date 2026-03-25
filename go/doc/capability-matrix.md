@@ -32,6 +32,28 @@ The current Go workspace already contains scaffolded slices, so the `Status` col
 | Picture count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.PictureCount()` exposes the current picture count as read-only inspection data. |
 | Source count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.SourceCount()` exposes the current source count as read-only inspection data. |
 | Dialog count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.DialogCount()` exposes the current dialog count as read-only inspection data. |
+| Details count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.DetailsCount()` exposes the current details count as read-only inspection data. |
+| Summary count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.SummaryCount()` exposes the current summary count as read-only inspection data. |
+| Section count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.SectionCount()` exposes the current section count as read-only inspection data. |
+| Main count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.MainCount()` exposes the current main count as read-only inspection data. |
+| Article count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.ArticleCount()` exposes the current article count as read-only inspection data. |
+| Nav count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.NavCount()` exposes the current nav count as read-only inspection data. |
+| Aside count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.AsideCount()` exposes the current aside count as read-only inspection data. |
+| Figure count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.FigureCount()` exposes the current figure count as read-only inspection data. |
+| Figcaption count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.FigcaptionCount()` exposes the current figcaption count as read-only inspection data. |
+| Header count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.HeaderCount()` exposes the current header count as read-only inspection data. |
+| Footer count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.FooterCount()` exposes the current footer count as read-only inspection data. |
+| Address count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.AddressCount()` exposes the current address count as read-only inspection data. |
+| Blockquote count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.BlockquoteCount()` exposes the current blockquote count as read-only inspection data. |
+| Paragraph count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.ParagraphCount()` exposes the current paragraph count as read-only inspection data. |
+| Pre count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.PreCount()` exposes the current pre count as read-only inspection data. |
+| Mark count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.MarkCount()` exposes the current mark count as read-only inspection data. |
+| Q count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.QCount()` exposes the current q count as read-only inspection data. |
+| Cite count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.CiteCount()` exposes the current cite count as read-only inspection data. |
+| Abbr count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.AbbrCount()` exposes the current abbr count as read-only inspection data. |
+| Code count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.CodeCount()` exposes the current code count as read-only inspection data. |
+| Small count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.SmallCount()` exposes the current small count as read-only inspection data. |
+| Time count snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.TimeCount()` exposes the current time count as read-only inspection data. |
 | Option label snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.OptionLabels()` exposes the current option label snapshot as read-only inspection data. |
 | Selected option label snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.SelectedOptionLabels()` exposes the current selected option label snapshot as read-only inspection data. |
 | Option value snapshot | Experimental Browser Facades | 1 | Scaffolded | `DebugView.OptionValues()` exposes the current option value snapshot as read-only inspection data. |

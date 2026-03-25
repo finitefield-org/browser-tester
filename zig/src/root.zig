@@ -791,6 +791,50 @@ test "contract: Harness.fromHtml runs element.labels during bootstrap" {
     try subject.assertExists("#group-second");
 }
 
+test "contract: Harness.fromHtml runs HTMLInputElement.labels during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><label id='first-label' for='name'>Name</label><input id='name' value='Ada'><div id='wrapper'></div><div id='out'></div><script>const input = document.getElementById('name'); const labels = input.labels; const before = String(labels.length) + ':' + labels.item(0).getAttribute('id'); document.getElementById('wrapper').innerHTML = '<label id=\"second-label\" for=\"name\">Second</label>'; document.getElementById('out').textContent = before + '|' + String(labels.length) + ':' + labels.item(0).getAttribute('id') + ':' + labels.item(1).getAttribute('id') + '|' + input.labels.item(0).getAttribute('id');</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "1:first-label|2:first-label:second-label|first-label");
+}
+
+test "contract: Harness.fromHtml runs HTMLTextAreaElement.labels during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><label id='first-label' for='bio'>Bio</label><textarea id='bio'>Hello</textarea><div id='wrapper'></div><div id='out'></div><script>const area = document.getElementById('bio'); const labels = area.labels; const before = String(labels.length) + ':' + labels.item(0).getAttribute('id'); document.getElementById('wrapper').innerHTML = '<label id=\"second-label\" for=\"bio\">Second</label>'; document.getElementById('out').textContent = before + '|' + String(labels.length) + ':' + labels.item(0).getAttribute('id') + ':' + labels.item(1).getAttribute('id') + '|' + area.labels.item(0).getAttribute('id');</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "1:first-label|2:first-label:second-label|first-label");
+}
+
+test "contract: Harness.fromHtml runs HTMLButtonElement.labels during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><label id='first-label' for='action'>Action</label><button id='action'>Run</button><div id='wrapper'></div><div id='out'></div><script>const button = document.getElementById('action'); const labels = button.labels; const before = String(labels.length) + ':' + labels.item(0).getAttribute('id'); document.getElementById('wrapper').innerHTML = '<label id=\"second-label\" for=\"action\">Second</label>'; document.getElementById('out').textContent = before + '|' + String(labels.length) + ':' + labels.item(0).getAttribute('id') + ':' + labels.item(1).getAttribute('id') + '|' + button.labels.item(0).getAttribute('id');</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "1:first-label|2:first-label:second-label|first-label");
+}
+
+test "contract: Harness.fromHtml runs HTMLSelectElement.labels during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><label id='first-label' for='mode'>Mode</label><select id='mode'><option value='a'>A</option></select><div id='wrapper'></div><div id='out'></div><script>const select = document.getElementById('mode'); const labels = select.labels; const before = String(labels.length) + ':' + labels.item(0).getAttribute('id'); document.getElementById('wrapper').innerHTML = '<label id=\"second-label\" for=\"mode\">Second</label>'; document.getElementById('out').textContent = before + '|' + String(labels.length) + ':' + labels.item(0).getAttribute('id') + ':' + labels.item(1).getAttribute('id') + '|' + select.labels.item(0).getAttribute('id');</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "1:first-label|2:first-label:second-label|first-label");
+}
+
 test "contract: Harness.fromHtml runs label.control and htmlFor during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -1268,6 +1312,94 @@ test "failure: Harness.fromHtml rejects form owner reflection on unsupported ele
     );
 }
 
+test "contract: Harness.fromHtml runs HTMLSelectElement.form during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><form id='owner'></form><select id='select' form='owner'><option id='option' value='a'>A</option></select><div id='out'></div><script>const select = document.getElementById('select'); const before = select.form.id + ':' + select.getAttribute('form') + ':' + String(select.options.length); select.setAttribute('form', 'owner'); document.getElementById('out').textContent = before + '|' + select.form.id + ':' + select.getAttribute('form') + ':' + String(select.options.length);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "owner:owner:1|owner:owner:1");
+}
+
+test "failure: Harness.fromHtml rejects HTMLSelectElement.form on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='host'></div><script>document.getElementById('host').form;</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLSelectElement.labels on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='host'></div><script>document.getElementById('host').labels;</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLInputElement.labels on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='host'></div><script>document.getElementById('host').labels;</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLTextAreaElement.labels on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='host'></div><script>document.getElementById('host').labels;</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLButtonElement.labels on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='host'></div><script>document.getElementById('host').labels;</script></main>",
+        ),
+    );
+}
+
+test "contract: Harness.fromHtml runs HTMLSelectElement.name during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><div id='out'></div><script>const root = document.getElementById('root'); const select = document.createElement('select'); const first = document.createElement('option'); first.value = 'a'; select.appendChild(first); root.appendChild(select); const before = select.name + ':' + select.getAttribute('name') + ':' + String(document.getElementsByName('mode').length); select.name = 'mode'; const during = select.name + ':' + select.getAttribute('name') + ':' + String(document.getElementsByName('mode').length); select.name = ''; document.getElementById('out').textContent = before + '|' + during + '|' + select.name + ':' + select.getAttribute('name') + ':' + String(document.getElementsByName('mode').length);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", ":null:0|mode:mode:1|::0");
+}
+
+test "failure: Harness.fromHtml rejects HTMLSelectElement.name on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='host'></div><script>document.getElementById('host').name = 'mode';</script></main>",
+        ),
+    );
+}
+
 test "contract: Harness.fromHtml runs HTMLTableElement section access and mutation during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -1583,6 +1715,28 @@ test "failure: Harness.fromHtml rejects HTMLSelectElement.selectedOptions on uns
         Harness.fromHtml(
             allocator,
             "<main id='root'><div id='host'></div><script>document.getElementById('host').selectedOptions;</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLSelectElement.options on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='host'></div><script>document.getElementById('host').options;</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLInputElement.files on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><div id='host'></div><script>document.getElementById('host').files;</script></main>",
         ),
     );
 }
@@ -2090,6 +2244,61 @@ test "contract: Harness.fromHtml runs Element.autocomplete during bootstrap" {
     try subject.assertValue("#out", ":|email:off:email:off");
 }
 
+test "contract: Harness.fromHtml runs HTMLInputElement.autocomplete during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><div id='out'></div><script>const input = document.createElement('input'); const before = input.autocomplete; input.autocomplete = 'email'; document.getElementById('out').textContent = before + '|' + input.autocomplete + ':' + input.getAttribute('autocomplete');</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "|email:email");
+}
+
+test "contract: Harness.fromHtml runs HTMLInputElement.form during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><form id='owner'></form><div id='out'></div><script>const input = document.createElement('input'); const before = String(input.form); input.setAttribute('form', 'owner'); const during = input.form.id; input.removeAttribute('form'); document.getElementById('out').textContent = before + '|' + during + '|' + String(input.form);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "null|owner|null");
+}
+
+test "contract: Harness.fromHtml runs HTMLButtonElement.form during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><form id='owner'></form><div id='out'></div><script>const button = document.createElement('button'); const before = String(button.form); button.setAttribute('form', 'owner'); const during = button.form.id; button.removeAttribute('form'); document.getElementById('out').textContent = before + '|' + during + '|' + String(button.form);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "null|owner|null");
+}
+
+test "contract: Harness.fromHtml runs HTMLTextAreaElement.form during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><form id='owner'></form><div id='out'></div><script>const area = document.createElement('textarea'); const before = String(area.form); area.setAttribute('form', 'owner'); const during = area.form.id; area.removeAttribute('form'); document.getElementById('out').textContent = before + '|' + during + '|' + String(area.form);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "null|owner|null");
+}
+
+test "contract: Harness.fromHtml runs HTMLTextAreaElement.autocomplete during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><div id='out'></div><script>const area = document.createElement('textarea'); const before = area.autocomplete; area.autocomplete = 'off'; document.getElementById('out').textContent = before + '|' + area.autocomplete + ':' + area.getAttribute('autocomplete');</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "|off:off");
+}
+
 test "contract: Harness.fromHtml runs HTMLSelectElement.autocomplete during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -2113,6 +2322,56 @@ test "contract: Harness.fromHtml runs HTMLFormElement.autocomplete during bootst
 }
 
 test "failure: Harness.fromHtml rejects HTMLFormElement.autocomplete on unsupported elements" {
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            std.testing.allocator,
+            "<main id='root'><script>document.createElement('div').autocomplete;</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLInputElement.autocomplete on unsupported elements" {
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            std.testing.allocator,
+            "<main id='root'><script>document.createElement('div').autocomplete;</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLInputElement.form on unsupported elements" {
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            std.testing.allocator,
+            "<main id='root'><script>document.createElement('div').form;</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLButtonElement.form on unsupported elements" {
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            std.testing.allocator,
+            "<main id='root'><script>document.createElement('div').form;</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLTextAreaElement.form on unsupported elements" {
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            std.testing.allocator,
+            "<main id='root'><script>document.createElement('div').form;</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLTextAreaElement.autocomplete on unsupported elements" {
     try std.testing.expectError(
         error.ScriptRuntime,
         Harness.fromHtml(
@@ -2221,6 +2480,17 @@ test "contract: Harness.fromHtml runs option.selected and select.value during bo
     try subject.assertValue("#out", "b:a:b:false:true:1|z:z:b:true:false:1");
 }
 
+test "contract: Harness.fromHtml runs HTMLOptionElement.selected during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><select id='select'><option id='first' value='a'>A</option><option id='second' value='b' selected>B</option></select><div id='out'></div><script>const select = document.getElementById('select'); const first = document.getElementById('first'); const second = document.getElementById('second'); const before = String(first.selected) + ':' + String(second.selected) + ':' + String(select.selectedIndex) + ':' + select.value; first.selected = true; second.selected = false; document.getElementById('out').textContent = before + '|' + String(first.selected) + ':' + String(second.selected) + ':' + String(select.selectedIndex) + ':' + select.value + ':' + String(first.hasAttribute('selected')) + ':' + String(second.hasAttribute('selected'));</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "false:true:1:b|true:false:0:a:true:false");
+}
+
 test "contract: Harness.fromHtml runs option label defaultSelected text and index during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -2252,6 +2522,17 @@ test "contract: Harness.fromHtml runs HTMLSelectElement.selectedOptions during b
     defer subject.deinit();
 
     try subject.assertValue("#out", "1:A:[object Element]|2:C:D:[object Element]:null");
+}
+
+test "contract: Harness.fromHtml runs HTMLSelectElement.options during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><div id='out'></div><script>const select = document.createElement('select'); select.innerHTML = '<option id=\"first\" value=\"a\">A</option>'; document.getElementById('root').appendChild(select); const options = select.options; const before = String(options.length) + ':' + options.item(0).getAttribute('id'); select.innerHTML += '<option id=\"second\" value=\"b\">B</option>'; document.getElementById('out').textContent = before + '|' + String(options.length) + ':' + options.item(0).getAttribute('id') + ':' + options.item(1).getAttribute('id');</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "1:first|2:first:second");
 }
 
 test "contract: Harness.fromHtml runs option and optgroup reflection during bootstrap" {
@@ -3771,6 +4052,28 @@ test "contract: Harness.fromHtml runs HTMLInputElement multiple reflection durin
     try subject.assertValue("#out", "false:false|true:|false:false");
 }
 
+test "contract: Harness.fromHtml runs HTMLSelectElement.multiple during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><select id='select'><option id='first' value='a'>A</option><option id='second' value='b' selected>B</option></select><div id='out'></div><script>const select = document.getElementById('select'); const before = String(select.multiple) + ':' + select.type + ':' + String(select.hasAttribute('multiple')) + ':' + String(select.selectedOptions.length); select.multiple = true; const during = String(select.multiple) + ':' + select.type + ':' + String(select.hasAttribute('multiple')) + ':' + String(select.selectedOptions.length); select.multiple = false; document.getElementById('out').textContent = before + '|' + during + '|' + String(select.multiple) + ':' + select.type + ':' + String(select.hasAttribute('multiple')) + ':' + String(select.selectedOptions.length);</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "false:select-one:false:1|true:select-multiple:true:1|false:select-one:false:1");
+}
+
+test "contract: Harness.fromHtml runs HTMLSelectElement.multiple exact reflection during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><select id='select'><option id='first' value='a'>A</option><option id='second' value='b' selected>B</option></select><div id='out'></div><script>const select = document.getElementById('select'); const before = String(select.multiple) + ':' + select.type + ':' + String(select.selectedOptions.length) + ':' + String(select.hasAttribute('multiple')); select.multiple = true; const during = String(select.multiple) + ':' + select.type + ':' + String(select.selectedOptions.length) + ':' + String(select.hasAttribute('multiple')); select.multiple = false; document.getElementById('out').textContent = before + '|' + during + '|' + String(select.multiple) + ':' + select.type + ':' + String(select.selectedOptions.length) + ':' + String(select.hasAttribute('multiple'));</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "false:select-one:1:false|true:select-multiple:1:true|false:select-one:1:false");
+}
+
 test "contract: Harness.fromHtml runs input.files iterator helpers during bootstrap" {
     const allocator = std.testing.allocator;
     var subject = try Harness.fromHtml(
@@ -3780,6 +4083,17 @@ test "contract: Harness.fromHtml runs input.files iterator helpers during bootst
     defer subject.deinit();
 
     try subject.assertValue("#out", "0:true:true:true:null|");
+}
+
+test "contract: Harness.fromHtml runs HTMLInputElement.files during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='upload' type='file'><div id='out'></div><script>const upload = document.getElementById('upload'); const before = String(upload.files.length) + ':' + String(upload.files); document.getElementById('out').textContent = before + '|' + String(upload.files.length) + ':' + String(upload.files.item(0));</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "0:[object FileList]|0:null");
 }
 
 test "contract: Harness.fromHtml exposes HTMLInputElement image reflection" {
@@ -4480,6 +4794,17 @@ test "failure: Harness.fromHtml rejects HTMLInputElement multiple reflection on 
     );
 }
 
+test "failure: Harness.fromHtml rejects HTMLSelectElement multiple reflection on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'></main><script>document.createElement('div').multiple = true;</script>",
+        ),
+    );
+}
+
 test "failure: Harness.fromHtml rejects HTMLInputElement capture reflection on unsupported elements" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -4513,6 +4838,17 @@ test "contract: Harness.fromHtml runs HTMLInputElement defaultChecked reflection
     try subject.assertValue("#out", "true:true:true|false:false:false|true:true:true");
 }
 
+test "contract: Harness.fromHtml runs HTMLInputElement and HTMLTextAreaElement value reflection during bootstrap" {
+    const allocator = std.testing.allocator;
+    var subject = try Harness.fromHtml(
+        allocator,
+        "<main id='root'><input id='name' value='Ada'><textarea id='bio'>Hello</textarea><div id='out'></div><script>const name = document.getElementById('name'); const bio = document.getElementById('bio'); const before = name.value + ':' + bio.value + ':' + name.defaultValue + ':' + bio.defaultValue; name.value = 'Bea'; bio.value = 'World'; document.getElementById('out').textContent = before + '|' + name.value + ':' + name.defaultValue + ':' + name.getAttribute('value') + ':' + bio.value + ':' + bio.defaultValue + ':' + bio.textContent;</script></main>",
+    );
+    defer subject.deinit();
+
+    try subject.assertValue("#out", "Ada:Hello:Ada:Hello|Bea:Bea:Bea:World:World:World");
+}
+
 test "failure: Harness.fromHtml rejects HTMLInputElement defaultChecked reflection on unsupported elements" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
@@ -4520,6 +4856,28 @@ test "failure: Harness.fromHtml rejects HTMLInputElement defaultChecked reflecti
         Harness.fromHtml(
             allocator,
             "<main id='root'><script>document.createElement('div').defaultChecked = true;</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLOptionElement.selected on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><script>document.createElement('div').selected = true;</script></main>",
+        ),
+    );
+}
+
+test "failure: Harness.fromHtml rejects HTMLInputElement and HTMLTextAreaElement value reflection on unsupported elements" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.ScriptRuntime,
+        Harness.fromHtml(
+            allocator,
+            "<main id='root'><script>document.createElement('div').value = 'go';</script></main>",
         ),
     );
 }

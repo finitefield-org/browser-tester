@@ -91,6 +91,28 @@ It is intentionally conservative: a thin public facade, explicit builder config,
 - `DebugView.PictureCount()` exposes the current picture element count as a read-only inspection integer.
 - `DebugView.SourceCount()` exposes the current source element count as a read-only inspection integer.
 - `DebugView.DialogCount()` exposes the current dialog element count as a read-only inspection integer.
+- `DebugView.DetailsCount()` exposes the current details element count as a read-only inspection integer.
+- `DebugView.SummaryCount()` exposes the current summary element count as a read-only inspection integer.
+- `DebugView.SectionCount()` exposes the current section element count as a read-only inspection integer.
+- `DebugView.MainCount()` exposes the current main element count as a read-only inspection integer.
+- `DebugView.ArticleCount()` exposes the current article element count as a read-only inspection integer.
+- `DebugView.NavCount()` exposes the current nav element count as a read-only inspection integer.
+- `DebugView.AsideCount()` exposes the current aside element count as a read-only inspection integer.
+- `DebugView.FigureCount()` exposes the current figure element count as a read-only inspection integer.
+- `DebugView.FigcaptionCount()` exposes the current figcaption element count as a read-only inspection integer.
+- `DebugView.HeaderCount()` exposes the current header element count as a read-only inspection integer.
+- `DebugView.FooterCount()` exposes the current footer element count as a read-only inspection integer.
+- `DebugView.AddressCount()` exposes the current address element count as a read-only inspection integer.
+- `DebugView.BlockquoteCount()` exposes the current blockquote element count as a read-only inspection integer.
+- `DebugView.ParagraphCount()` exposes the current paragraph element count as a read-only inspection integer.
+- `DebugView.PreCount()` exposes the current pre element count as a read-only inspection integer.
+- `DebugView.MarkCount()` exposes the current mark element count as a read-only inspection integer.
+- `DebugView.QCount()` exposes the current q element count as a read-only inspection integer.
+- `DebugView.CiteCount()` exposes the current cite element count as a read-only inspection integer.
+- `DebugView.AbbrCount()` exposes the current abbr element count as a read-only inspection integer.
+- `DebugView.CodeCount()` exposes the current code element count as a read-only inspection integer.
+- `DebugView.SmallCount()` exposes the current small element count as a read-only inspection integer.
+- `DebugView.TimeCount()` exposes the current time element count as a read-only inspection integer.
 - `DebugView.OptionCount()` exposes the current option count as a read-only inspection integer, and `DebugView.SelectedOptionCount()` does the same for the selected option count.
 - `DebugView.OptgroupCount()` exposes the current optgroup count as a read-only inspection integer.
 - `DebugView.LinkCount()` exposes the current link count as a read-only inspection integer, and `DebugView.AnchorCount()` does the same for the current anchor count.

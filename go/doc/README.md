@@ -38,6 +38,28 @@ The design follows the lessons captured in [`../next.md`](../../next.md) and [`.
 - `DebugView.PictureCount()` exposes the current picture element count as read-only inspection data.
 - `DebugView.SourceCount()` exposes the current source element count as read-only inspection data.
 - `DebugView.DialogCount()` exposes the current dialog element count as read-only inspection data.
+- `DebugView.DetailsCount()` exposes the current details element count as read-only inspection data.
+- `DebugView.SummaryCount()` exposes the current summary element count as read-only inspection data.
+- `DebugView.SectionCount()` exposes the current section element count as read-only inspection data.
+- `DebugView.MainCount()` exposes the current main element count as read-only inspection data.
+- `DebugView.ArticleCount()` exposes the current article element count as read-only inspection data.
+- `DebugView.NavCount()` exposes the current nav element count as read-only inspection data.
+- `DebugView.AsideCount()` exposes the current aside element count as read-only inspection data.
+- `DebugView.FigureCount()` exposes the current figure element count as read-only inspection data.
+- `DebugView.FigcaptionCount()` exposes the current figcaption element count as read-only inspection data.
+- `DebugView.HeaderCount()` exposes the current header element count as read-only inspection data.
+- `DebugView.FooterCount()` exposes the current footer element count as read-only inspection data.
+- `DebugView.AddressCount()` exposes the current address element count as read-only inspection data.
+- `DebugView.BlockquoteCount()` exposes the current blockquote element count as read-only inspection data.
+- `DebugView.ParagraphCount()` exposes the current paragraph element count as read-only inspection data.
+- `DebugView.PreCount()` exposes the current pre element count as read-only inspection data.
+- `DebugView.MarkCount()` exposes the current mark element count as read-only inspection data.
+- `DebugView.QCount()` exposes the current q element count as read-only inspection data.
+- `DebugView.CiteCount()` exposes the current cite element count as read-only inspection data.
+- `DebugView.AbbrCount()` exposes the current abbr element count as read-only inspection data.
+- `DebugView.CodeCount()` exposes the current code element count as read-only inspection data.
+- `DebugView.SmallCount()` exposes the current small element count as read-only inspection data.
+- `DebugView.TimeCount()` exposes the current time element count as read-only inspection data.
 - `DebugView.DOMReady()` and `DOMError()` expose DOM initialization readiness and the most recent DOM parse/runtime failure text as read-only inspection data.
 - `DebugView.LastInlineScriptHTML()` exposes the most recently executed classic inline script outerHTML as read-only inspection data.
 - `DebugView.HistoryEntries()` exposes the current history stack as a read-only inspection slice.

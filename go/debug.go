@@ -292,6 +292,160 @@ func (v DebugView) DialogCount() int {
 	return v.session.DialogCount()
 }
 
+func (v DebugView) DetailsCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.DetailsCount()
+}
+
+func (v DebugView) SummaryCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.SummaryCount()
+}
+
+func (v DebugView) SectionCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.SectionCount()
+}
+
+func (v DebugView) MainCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.MainCount()
+}
+
+func (v DebugView) ArticleCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.ArticleCount()
+}
+
+func (v DebugView) NavCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.NavCount()
+}
+
+func (v DebugView) AsideCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.AsideCount()
+}
+
+func (v DebugView) FigureCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.FigureCount()
+}
+
+func (v DebugView) FigcaptionCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.FigcaptionCount()
+}
+
+func (v DebugView) HeaderCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.HeaderCount()
+}
+
+func (v DebugView) FooterCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.FooterCount()
+}
+
+func (v DebugView) AddressCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.AddressCount()
+}
+
+func (v DebugView) BlockquoteCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.BlockquoteCount()
+}
+
+func (v DebugView) ParagraphCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.ParagraphCount()
+}
+
+func (v DebugView) PreCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.PreCount()
+}
+
+func (v DebugView) MarkCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.MarkCount()
+}
+
+func (v DebugView) QCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.QCount()
+}
+
+func (v DebugView) CiteCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.CiteCount()
+}
+
+func (v DebugView) AbbrCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.AbbrCount()
+}
+
+func (v DebugView) CodeCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.CodeCount()
+}
+
+func (v DebugView) SmallCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.SmallCount()
+}
+
+func (v DebugView) TimeCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.TimeCount()
+}
+
 func (v DebugView) OptionCount() int {
 	if v.session == nil {
 		return 0

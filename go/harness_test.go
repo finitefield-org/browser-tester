@@ -109,6 +109,72 @@ func TestHarnessBuilderBuildsWithDefaults(t *testing.T) {
 	if got := harness.Debug().DialogCount(); got != 0 {
 		t.Fatalf("Debug().DialogCount() = %d, want zero", got)
 	}
+	if got := harness.Debug().DetailsCount(); got != 0 {
+		t.Fatalf("Debug().DetailsCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().SummaryCount(); got != 0 {
+		t.Fatalf("Debug().SummaryCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().SectionCount(); got != 0 {
+		t.Fatalf("Debug().SectionCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().MainCount(); got != 0 {
+		t.Fatalf("Debug().MainCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().ArticleCount(); got != 0 {
+		t.Fatalf("Debug().ArticleCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().NavCount(); got != 0 {
+		t.Fatalf("Debug().NavCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().AsideCount(); got != 0 {
+		t.Fatalf("Debug().AsideCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().FigureCount(); got != 0 {
+		t.Fatalf("Debug().FigureCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().FigcaptionCount(); got != 0 {
+		t.Fatalf("Debug().FigcaptionCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().HeaderCount(); got != 0 {
+		t.Fatalf("Debug().HeaderCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().FooterCount(); got != 0 {
+		t.Fatalf("Debug().FooterCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().AddressCount(); got != 0 {
+		t.Fatalf("Debug().AddressCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().BlockquoteCount(); got != 0 {
+		t.Fatalf("Debug().BlockquoteCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().ParagraphCount(); got != 0 {
+		t.Fatalf("Debug().ParagraphCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().PreCount(); got != 0 {
+		t.Fatalf("Debug().PreCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().MarkCount(); got != 0 {
+		t.Fatalf("Debug().MarkCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().QCount(); got != 0 {
+		t.Fatalf("Debug().QCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().CiteCount(); got != 0 {
+		t.Fatalf("Debug().CiteCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().AbbrCount(); got != 0 {
+		t.Fatalf("Debug().AbbrCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().CodeCount(); got != 0 {
+		t.Fatalf("Debug().CodeCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().SmallCount(); got != 0 {
+		t.Fatalf("Debug().SmallCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().TimeCount(); got != 0 {
+		t.Fatalf("Debug().TimeCount() = %d, want zero", got)
+	}
 	if got := harness.Debug().OptionCount(); got != 0 {
 		t.Fatalf("Debug().OptionCount() = %d, want zero", got)
 	}

@@ -173,6 +173,72 @@ func TestDebugViewReportsBuilderFailures(t *testing.T) {
 	if got := nilHarness.Debug().DialogCount(); got != 0 {
 		t.Fatalf("nil Debug().DialogCount() = %d, want 0", got)
 	}
+	if got := nilHarness.Debug().DetailsCount(); got != 0 {
+		t.Fatalf("nil Debug().DetailsCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().SummaryCount(); got != 0 {
+		t.Fatalf("nil Debug().SummaryCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().SectionCount(); got != 0 {
+		t.Fatalf("nil Debug().SectionCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().MainCount(); got != 0 {
+		t.Fatalf("nil Debug().MainCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().ArticleCount(); got != 0 {
+		t.Fatalf("nil Debug().ArticleCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().NavCount(); got != 0 {
+		t.Fatalf("nil Debug().NavCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().AsideCount(); got != 0 {
+		t.Fatalf("nil Debug().AsideCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().FigureCount(); got != 0 {
+		t.Fatalf("nil Debug().FigureCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().FigcaptionCount(); got != 0 {
+		t.Fatalf("nil Debug().FigcaptionCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().HeaderCount(); got != 0 {
+		t.Fatalf("nil Debug().HeaderCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().FooterCount(); got != 0 {
+		t.Fatalf("nil Debug().FooterCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().AddressCount(); got != 0 {
+		t.Fatalf("nil Debug().AddressCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().BlockquoteCount(); got != 0 {
+		t.Fatalf("nil Debug().BlockquoteCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().ParagraphCount(); got != 0 {
+		t.Fatalf("nil Debug().ParagraphCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().PreCount(); got != 0 {
+		t.Fatalf("nil Debug().PreCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().MarkCount(); got != 0 {
+		t.Fatalf("nil Debug().MarkCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().QCount(); got != 0 {
+		t.Fatalf("nil Debug().QCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().CiteCount(); got != 0 {
+		t.Fatalf("nil Debug().CiteCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().AbbrCount(); got != 0 {
+		t.Fatalf("nil Debug().AbbrCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().CodeCount(); got != 0 {
+		t.Fatalf("nil Debug().CodeCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().SmallCount(); got != 0 {
+		t.Fatalf("nil Debug().SmallCount() = %d, want 0", got)
+	}
+	if got := nilHarness.Debug().TimeCount(); got != 0 {
+		t.Fatalf("nil Debug().TimeCount() = %d, want 0", got)
+	}
 	if got := nilHarness.Debug().OptionCount(); got != 0 {
 		t.Fatalf("nil Debug().OptionCount() = %d, want 0", got)
 	}
@@ -1054,6 +1120,512 @@ func TestDebugViewReportsDialogCount(t *testing.T) {
 	var nilHarness *Harness
 	if got := nilHarness.Debug().DialogCount(); got != 0 {
 		t.Fatalf("nil Debug().DialogCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsDetailsCount(t *testing.T) {
+	harness, err := FromHTML(`<main><details id="first"></details><div id="host"></div><section><details id="second"></details></section></main>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().DetailsCount(); got != 2 {
+		t.Fatalf("Debug().DetailsCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<details id="third"></details>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().DetailsCount(); got != 3 {
+		t.Fatalf("Debug().DetailsCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().DetailsCount(); got != 0 {
+		t.Fatalf("nil Debug().DetailsCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsSummaryCount(t *testing.T) {
+	harness, err := FromHTML(`<main><details id="first"><summary id="one">One</summary></details><div id="host"></div><section><details id="second"><summary id="two">Two</summary></details></section></main>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().SummaryCount(); got != 2 {
+		t.Fatalf("Debug().SummaryCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<details id="third"><summary id="three">Three</summary></details>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().SummaryCount(); got != 3 {
+		t.Fatalf("Debug().SummaryCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().SummaryCount(); got != 0 {
+		t.Fatalf("nil Debug().SummaryCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsSectionCount(t *testing.T) {
+	harness, err := FromHTML(`<main><section id="first"></section><div id="host"></div><article><section id="second"></section></article></main>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().SectionCount(); got != 2 {
+		t.Fatalf("Debug().SectionCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<section id="third"></section>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().SectionCount(); got != 3 {
+		t.Fatalf("Debug().SectionCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().SectionCount(); got != 0 {
+		t.Fatalf("nil Debug().SectionCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsMainCount(t *testing.T) {
+	harness, err := FromHTML(`<div id="root"><main id="first"></main><div id="host"></div><section><main id="second"></main></section></div>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().MainCount(); got != 2 {
+		t.Fatalf("Debug().MainCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<main id="third"></main>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().MainCount(); got != 3 {
+		t.Fatalf("Debug().MainCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().MainCount(); got != 0 {
+		t.Fatalf("nil Debug().MainCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsArticleCount(t *testing.T) {
+	harness, err := FromHTML(`<div id="root"><article id="first"></article><div id="host"></div><section><article id="second"></article></section></div>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().ArticleCount(); got != 2 {
+		t.Fatalf("Debug().ArticleCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<article id="third"></article>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().ArticleCount(); got != 3 {
+		t.Fatalf("Debug().ArticleCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().ArticleCount(); got != 0 {
+		t.Fatalf("nil Debug().ArticleCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsNavCount(t *testing.T) {
+	harness, err := FromHTML(`<div id="root"><nav id="first"></nav><div id="host"></div><section><nav id="second"></nav></section></div>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().NavCount(); got != 2 {
+		t.Fatalf("Debug().NavCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<nav id="third"></nav>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().NavCount(); got != 3 {
+		t.Fatalf("Debug().NavCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().NavCount(); got != 0 {
+		t.Fatalf("nil Debug().NavCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsAsideCount(t *testing.T) {
+	harness, err := FromHTML(`<div id="root"><aside id="first"></aside><div id="host"></div><section><aside id="second"></aside></section></div>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().AsideCount(); got != 2 {
+		t.Fatalf("Debug().AsideCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<aside id="third"></aside>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().AsideCount(); got != 3 {
+		t.Fatalf("Debug().AsideCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().AsideCount(); got != 0 {
+		t.Fatalf("nil Debug().AsideCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsFigureCount(t *testing.T) {
+	harness, err := FromHTML(`<div id="root"><figure id="first"></figure><div id="host"></div><section><figure id="second"></figure></section></div>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().FigureCount(); got != 2 {
+		t.Fatalf("Debug().FigureCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<figure id="third"></figure>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().FigureCount(); got != 3 {
+		t.Fatalf("Debug().FigureCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().FigureCount(); got != 0 {
+		t.Fatalf("nil Debug().FigureCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsFigcaptionCount(t *testing.T) {
+	harness, err := FromHTML(`<div id="root"><figure id="first"><figcaption id="caption-one">One</figcaption></figure><div id="host"></div><section><figure id="second"><figcaption id="caption-two">Two</figcaption></figure></section></div>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().FigcaptionCount(); got != 2 {
+		t.Fatalf("Debug().FigcaptionCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<figure id="third"><figcaption id="caption-three">Three</figcaption></figure>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().FigcaptionCount(); got != 3 {
+		t.Fatalf("Debug().FigcaptionCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().FigcaptionCount(); got != 0 {
+		t.Fatalf("nil Debug().FigcaptionCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsHeaderCount(t *testing.T) {
+	harness, err := FromHTML(`<div id="root"><header id="first"></header><div id="host"></div><section><header id="second"></header></section></div>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().HeaderCount(); got != 2 {
+		t.Fatalf("Debug().HeaderCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<header id="third"></header>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().HeaderCount(); got != 3 {
+		t.Fatalf("Debug().HeaderCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().HeaderCount(); got != 0 {
+		t.Fatalf("nil Debug().HeaderCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsFooterCount(t *testing.T) {
+	harness, err := FromHTML(`<div id="root"><footer id="first"></footer><div id="host"></div><section><footer id="second"></footer></section></div>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().FooterCount(); got != 2 {
+		t.Fatalf("Debug().FooterCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<footer id="third"></footer>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().FooterCount(); got != 3 {
+		t.Fatalf("Debug().FooterCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().FooterCount(); got != 0 {
+		t.Fatalf("nil Debug().FooterCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsAddressCount(t *testing.T) {
+	harness, err := FromHTML(`<div id="root"><address id="first"></address><div id="host"></div><section><address id="second"></address></section></div>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().AddressCount(); got != 2 {
+		t.Fatalf("Debug().AddressCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<address id="third"></address>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().AddressCount(); got != 3 {
+		t.Fatalf("Debug().AddressCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().AddressCount(); got != 0 {
+		t.Fatalf("nil Debug().AddressCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsBlockquoteCount(t *testing.T) {
+	harness, err := FromHTML(`<div id="root"><blockquote id="first"></blockquote><div id="host"></div><section><blockquote id="second"></blockquote></section></div>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().BlockquoteCount(); got != 2 {
+		t.Fatalf("Debug().BlockquoteCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<blockquote id="third"></blockquote>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().BlockquoteCount(); got != 3 {
+		t.Fatalf("Debug().BlockquoteCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().BlockquoteCount(); got != 0 {
+		t.Fatalf("nil Debug().BlockquoteCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsParagraphCount(t *testing.T) {
+	harness, err := FromHTML(`<div id="root"><p id="first"></p><div id="host"></div><section><p id="second"></p></section></div>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().ParagraphCount(); got != 2 {
+		t.Fatalf("Debug().ParagraphCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<p id="third"></p>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().ParagraphCount(); got != 3 {
+		t.Fatalf("Debug().ParagraphCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().ParagraphCount(); got != 0 {
+		t.Fatalf("nil Debug().ParagraphCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsPreCount(t *testing.T) {
+	harness, err := FromHTML(`<div id="root"><pre id="first"></pre><div id="host"></div><section><pre id="second"></pre></section></div>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().PreCount(); got != 2 {
+		t.Fatalf("Debug().PreCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<pre id="third"></pre>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().PreCount(); got != 3 {
+		t.Fatalf("Debug().PreCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().PreCount(); got != 0 {
+		t.Fatalf("nil Debug().PreCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsMarkCount(t *testing.T) {
+	harness, err := FromHTML(`<div id="root"><mark id="first"></mark><div id="host"></div><section><mark id="second"></mark></section></div>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().MarkCount(); got != 2 {
+		t.Fatalf("Debug().MarkCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<mark id="third"></mark>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().MarkCount(); got != 3 {
+		t.Fatalf("Debug().MarkCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().MarkCount(); got != 0 {
+		t.Fatalf("nil Debug().MarkCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsQCount(t *testing.T) {
+	harness, err := FromHTML(`<div id="root"><q id="first"></q><div id="host"></div><section><q id="second"></q></section></div>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().QCount(); got != 2 {
+		t.Fatalf("Debug().QCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<q id="third"></q>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().QCount(); got != 3 {
+		t.Fatalf("Debug().QCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().QCount(); got != 0 {
+		t.Fatalf("nil Debug().QCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsCiteCount(t *testing.T) {
+	harness, err := FromHTML(`<div id="root"><cite id="first"></cite><div id="host"></div><section><cite id="second"></cite></section></div>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().CiteCount(); got != 2 {
+		t.Fatalf("Debug().CiteCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<cite id="third"></cite>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().CiteCount(); got != 3 {
+		t.Fatalf("Debug().CiteCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().CiteCount(); got != 0 {
+		t.Fatalf("nil Debug().CiteCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsAbbrCount(t *testing.T) {
+	harness, err := FromHTML(`<div id="root"><abbr id="first"></abbr><div id="host"></div><section><abbr id="second"></abbr></section></div>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().AbbrCount(); got != 2 {
+		t.Fatalf("Debug().AbbrCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<abbr id="third"></abbr>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().AbbrCount(); got != 3 {
+		t.Fatalf("Debug().AbbrCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().AbbrCount(); got != 0 {
+		t.Fatalf("nil Debug().AbbrCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsCodeCount(t *testing.T) {
+	harness, err := FromHTML(`<div id="root"><code id="first"></code><div id="host"></div><section><code id="second"></code></section></div>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().CodeCount(); got != 2 {
+		t.Fatalf("Debug().CodeCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<code id="third"></code>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().CodeCount(); got != 3 {
+		t.Fatalf("Debug().CodeCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().CodeCount(); got != 0 {
+		t.Fatalf("nil Debug().CodeCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsSmallCount(t *testing.T) {
+	harness, err := FromHTML(`<div id="root"><small id="first"></small><div id="host"></div><section><small id="second"></small></section></div>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().SmallCount(); got != 2 {
+		t.Fatalf("Debug().SmallCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<small id="third"></small>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().SmallCount(); got != 3 {
+		t.Fatalf("Debug().SmallCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().SmallCount(); got != 0 {
+		t.Fatalf("nil Debug().SmallCount() = %d, want 0", got)
+	}
+}
+
+func TestDebugViewReportsTimeCount(t *testing.T) {
+	harness, err := FromHTML(`<div id="root"><time id="first"></time><div id="host"></div><section><time id="second"></time></section></div>`)
+	if err != nil {
+		t.Fatalf("FromHTML() error = %v", err)
+	}
+
+	if got := harness.Debug().TimeCount(); got != 2 {
+		t.Fatalf("Debug().TimeCount() = %d, want 2", got)
+	}
+
+	if err := harness.SetInnerHTML("#host", `<time id="third"></time>`); err != nil {
+		t.Fatalf("SetInnerHTML(#host) error = %v", err)
+	}
+	if got := harness.Debug().TimeCount(); got != 3 {
+		t.Fatalf("Debug().TimeCount() after SetInnerHTML = %d, want 3", got)
+	}
+
+	var nilHarness *Harness
+	if got := nilHarness.Debug().TimeCount(); got != 0 {
+		t.Fatalf("nil Debug().TimeCount() = %d, want 0", got)
 	}
 }
 
