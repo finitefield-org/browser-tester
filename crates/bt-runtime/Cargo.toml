@@ -4,14 +4,16 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+description = "Runtime engine for browser_tester"
+repository = "https://github.com/finitefield-org/browser-tester"
 
 [lib]
 name = "bt_runtime"
 path = "src/lib.rs"
 
 [dependencies]
-bt-dom = { path = "../bt-dom" }
-bt-script = { path = "../bt-script" }
+bt-dom = { path = "../bt-dom", version = "2.0.0" }
+bt-script = { path = "../bt-script", version = "2.0.0" }
 
 [dev-dependencies]
 proptest = "1"

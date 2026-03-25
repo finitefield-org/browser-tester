@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+description = "DOM primitives for browser_tester"
+repository = "https://github.com/finitefield-org/browser-tester"
 
 [lib]
 name = "bt_dom"

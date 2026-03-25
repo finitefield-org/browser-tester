@@ -4,15 +4,17 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+description = "Public browser_tester harness"
+repository = "https://github.com/finitefield-org/browser-tester"
 
 [lib]
 name = "browser_tester"
 path = "src/lib.rs"
 
 [dependencies]
-bt-dom = { path = "../bt-dom" }
-bt-runtime = { path = "../bt-runtime" }
-bt-script = { path = "../bt-script" }
+bt-dom = { path = "../bt-dom", version = "2.0.0" }
+bt-runtime = { path = "../bt-runtime", version = "2.0.0" }
+bt-script = { path = "../bt-script", version = "2.0.0" }
 
 [dev-dependencies]
 proptest = "1.6"
