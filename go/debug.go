@@ -425,6 +425,69 @@ func (v DebugView) AbbrCount() int {
 	return v.session.AbbrCount()
 }
 
+func (v DebugView) StrongCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.StrongCount()
+}
+
+func (v DebugView) SpanCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.SpanCount()
+}
+
+func (v DebugView) DataCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.DataCount()
+}
+
+func (v DebugView) DfnCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.DfnCount()
+}
+
+func (v DebugView) KbdCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.KbdCount()
+}
+
+func (v DebugView) SampCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.SampCount()
+}
+
+func (v DebugView) RubyCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.RubyCount()
+}
+
+func (v DebugView) RtCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.RtCount()
+}
+
+func (v DebugView) VarCount() int {
+	if v.session == nil {
+		return 0
+	}
+	return v.session.VarCount()
+}
+
 func (v DebugView) CodeCount() int {
 	if v.session == nil {
 		return 0

@@ -110,6 +110,15 @@ It is intentionally conservative: a thin public facade, explicit builder config,
 - `DebugView.QCount()` exposes the current q element count as a read-only inspection integer.
 - `DebugView.CiteCount()` exposes the current cite element count as a read-only inspection integer.
 - `DebugView.AbbrCount()` exposes the current abbr element count as a read-only inspection integer.
+- `DebugView.StrongCount()` exposes the current strong element count as a read-only inspection integer.
+- `DebugView.SpanCount()` exposes the current span element count as a read-only inspection integer.
+- `DebugView.DataCount()` exposes the current data element count as a read-only inspection integer.
+- `DebugView.DfnCount()` exposes the current dfn element count as a read-only inspection integer.
+- `DebugView.KbdCount()` exposes the current kbd element count as a read-only inspection integer.
+- `DebugView.SampCount()` exposes the current samp element count as a read-only inspection integer.
+- `DebugView.RubyCount()` exposes the current ruby element count as a read-only inspection integer.
+- `DebugView.RtCount()` exposes the current rt element count as a read-only inspection integer.
+- `DebugView.VarCount()` exposes the current var element count as a read-only inspection integer.
 - `DebugView.CodeCount()` exposes the current code element count as a read-only inspection integer.
 - `DebugView.SmallCount()` exposes the current small element count as a read-only inspection integer.
 - `DebugView.TimeCount()` exposes the current time element count as a read-only inspection integer.

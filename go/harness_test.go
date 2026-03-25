@@ -166,6 +166,33 @@ func TestHarnessBuilderBuildsWithDefaults(t *testing.T) {
 	if got := harness.Debug().AbbrCount(); got != 0 {
 		t.Fatalf("Debug().AbbrCount() = %d, want zero", got)
 	}
+	if got := harness.Debug().StrongCount(); got != 0 {
+		t.Fatalf("Debug().StrongCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().SpanCount(); got != 0 {
+		t.Fatalf("Debug().SpanCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().DataCount(); got != 0 {
+		t.Fatalf("Debug().DataCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().DfnCount(); got != 0 {
+		t.Fatalf("Debug().DfnCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().KbdCount(); got != 0 {
+		t.Fatalf("Debug().KbdCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().SampCount(); got != 0 {
+		t.Fatalf("Debug().SampCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().RubyCount(); got != 0 {
+		t.Fatalf("Debug().RubyCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().RtCount(); got != 0 {
+		t.Fatalf("Debug().RtCount() = %d, want zero", got)
+	}
+	if got := harness.Debug().VarCount(); got != 0 {
+		t.Fatalf("Debug().VarCount() = %d, want zero", got)
+	}
 	if got := harness.Debug().CodeCount(); got != 0 {
 		t.Fatalf("Debug().CodeCount() = %d, want zero", got)
 	}

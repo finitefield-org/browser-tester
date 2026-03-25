@@ -57,6 +57,15 @@ The design follows the lessons captured in [`../next.md`](../../next.md) and [`.
 - `DebugView.QCount()` exposes the current q element count as read-only inspection data.
 - `DebugView.CiteCount()` exposes the current cite element count as read-only inspection data.
 - `DebugView.AbbrCount()` exposes the current abbr element count as read-only inspection data.
+- `DebugView.StrongCount()` exposes the current strong element count as read-only inspection data.
+- `DebugView.SpanCount()` exposes the current span element count as read-only inspection data.
+- `DebugView.DataCount()` exposes the current data element count as read-only inspection data.
+- `DebugView.DfnCount()` exposes the current dfn element count as read-only inspection data.
+- `DebugView.KbdCount()` exposes the current kbd element count as read-only inspection data.
+- `DebugView.SampCount()` exposes the current samp element count as read-only inspection data.
+- `DebugView.RubyCount()` exposes the current ruby element count as read-only inspection data.
+- `DebugView.RtCount()` exposes the current rt element count as read-only inspection data.
+- `DebugView.VarCount()` exposes the current var element count as read-only inspection data.
 - `DebugView.CodeCount()` exposes the current code element count as read-only inspection data.
 - `DebugView.SmallCount()` exposes the current small element count as read-only inspection data.
 - `DebugView.TimeCount()` exposes the current time element count as read-only inspection data.
