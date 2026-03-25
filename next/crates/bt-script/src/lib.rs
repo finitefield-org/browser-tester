@@ -1339,6 +1339,10 @@ pub trait HostBindings {
         ))
     }
 
+    fn random_f64(&mut self) -> Result<f64> {
+        Err(ScriptError::phase_not_ready("Math.random"))
+    }
+
     fn window_navigator_hardware_concurrency(&mut self) -> Result<i64> {
         Err(ScriptError::phase_not_ready(
             "window.navigator.hardwareConcurrency",

@@ -165,7 +165,7 @@ func TestSessionAssertionsReturnSelectorErrorForInvalidSelectors(t *testing.T) {
 
 func TestSessionAssertionsSupportAttributeSelectors(t *testing.T) {
 	cfg := DefaultSessionConfig()
-	cfg.HTML = `<main><div id="root" data-kind="panel"><a id="nav" href="/next" data-role="nav">Go</a><input id="name" type="text"><p id="flag" hidden></p></div></main>`
+	cfg.HTML = `<main><div id="root" data-kind="panel"><a id="nav" href="/next" data-role="nav">Go</a><input id="name" type="text"><p id="flag" hidden></p><span id="meta" data-tags="alpha beta gamma" data-locale="en-US" data-note="prefix-middle-suffix" data-code="abc123"></span></div></main>`
 	s := NewSession(cfg)
 
 	if err := s.AssertExists("div[data-kind]"); err != nil {
@@ -186,8 +186,35 @@ func TestSessionAssertionsSupportAttributeSelectors(t *testing.T) {
 	if err := s.AssertExists("p[hidden]"); err != nil {
 		t.Fatalf("AssertExists(p[hidden]) error = %v", err)
 	}
+	if err := s.AssertExists("span[data-tags~=beta]"); err != nil {
+		t.Fatalf("AssertExists(span[data-tags~=beta]) error = %v", err)
+	}
+	if err := s.AssertExists("span[data-locale|=en]"); err != nil {
+		t.Fatalf("AssertExists(span[data-locale|=en]) error = %v", err)
+	}
+	if err := s.AssertExists("span[data-note^=prefix]"); err != nil {
+		t.Fatalf("AssertExists(span[data-note^=prefix]) error = %v", err)
+	}
+	if err := s.AssertExists("span[data-note$=suffix]"); err != nil {
+		t.Fatalf("AssertExists(span[data-note$=suffix]) error = %v", err)
+	}
+	if err := s.AssertExists("span[data-note*=middle]"); err != nil {
+		t.Fatalf("AssertExists(span[data-note*=middle]) error = %v", err)
+	}
+	if err := s.AssertExists("span[data-tags~=BETA i]"); err != nil {
+		t.Fatalf("AssertExists(span[data-tags~=BETA i]) error = %v", err)
+	}
+	if err := s.AssertExists("input[type=TEXT i]"); err != nil {
+		t.Fatalf("AssertExists(input[type=TEXT i]) error = %v", err)
+	}
 	if err := s.AssertExists("a[data-role=missing]"); err == nil {
 		t.Fatalf("AssertExists(a[data-role=missing]) error = nil, want no match")
+	}
+	if err := s.AssertExists("span[data-tags~=BETA s]"); err == nil {
+		t.Fatalf("AssertExists(span[data-tags~=BETA s]) error = nil, want no match")
+	}
+	if err := s.AssertExists("span[data-tags~=delta]"); err == nil {
+		t.Fatalf("AssertExists(span[data-tags~=delta]) error = nil, want no match")
 	}
 }
 
@@ -300,34 +327,6 @@ func TestSessionAssertionsSupportVisitedPseudoClass(t *testing.T) {
 	}
 	if err := s.AssertExists("#other:visited"); err == nil {
 		t.Fatalf("AssertExists(#other:visited) error = nil, want no match")
-	}
-}
-
-func TestSessionAssertionsSupportAttributeSelectors(t *testing.T) {
-	cfg := DefaultSessionConfig()
-	cfg.HTML = `<main><div id="panel" data-kind="panel"><a id="nav" href="/next" data-role="nav">Go</a><input id="name" type="text"><p id="flag" hidden></p></div></main>`
-	s := NewSession(cfg)
-
-	if err := s.AssertExists("div[data-kind]"); err != nil {
-		t.Fatalf("AssertExists(div[data-kind]) error = %v", err)
-	}
-	if err := s.AssertExists("a[href]"); err != nil {
-		t.Fatalf("AssertExists(a[href]) error = %v", err)
-	}
-	if err := s.AssertExists("a[href=\"/next\"]"); err != nil {
-		t.Fatalf("AssertExists(a[href=\"/next\"]) error = %v", err)
-	}
-	if err := s.AssertExists("a[data-role=nav]"); err != nil {
-		t.Fatalf("AssertExists(a[data-role=nav]) error = %v", err)
-	}
-	if err := s.AssertExists("input[type=text]"); err != nil {
-		t.Fatalf("AssertExists(input[type=text]) error = %v", err)
-	}
-	if err := s.AssertExists("p[hidden]"); err != nil {
-		t.Fatalf("AssertExists(p[hidden]) error = %v", err)
-	}
-	if err := s.AssertExists("a[data-role=missing]"); err == nil {
-		t.Fatalf("AssertExists(a[data-role=missing]) error = nil, want no match")
 	}
 }
 

@@ -39,7 +39,7 @@ func (s *Store) Matches(nodeID NodeID, selector string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return parsed.matches(s, node), nil
+	return parsed.matchesWithScope(s, node, nodeID), nil
 }
 
 func (s *Store) Closest(nodeID NodeID, selector string) (NodeID, bool, error) {
@@ -57,7 +57,7 @@ func (s *Store) Closest(nodeID NodeID, selector string) (NodeID, bool, error) {
 		if node == nil {
 			return 0, false, fmt.Errorf("invalid node id: %d", nodeID)
 		}
-		if parsed.matches(s, node) {
+		if parsed.matchesWithScope(s, node, nodeID) {
 			return current, true, nil
 		}
 		current = node.Parent

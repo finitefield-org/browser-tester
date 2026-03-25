@@ -25,6 +25,15 @@ func (s *Session) discardMicrotasks() {
 	s.microtasks = nil
 }
 
+func (s *Session) PendingMicrotasks() []string {
+	if s == nil || len(s.microtasks) == 0 {
+		return nil
+	}
+	out := make([]string, len(s.microtasks))
+	copy(out, s.microtasks)
+	return out
+}
+
 func (s *Session) drainMicrotasks(store *dom.Store) error {
 	if s == nil {
 		return fmt.Errorf("session is unavailable")

@@ -161,3 +161,46 @@ func TestSessionAdvanceTimeDefersTimersCreatedDuringCallbacks(t *testing.T) {
 		t.Fatalf("DumpDOM() after second advance = %q, want %q", got, want)
 	}
 }
+
+func TestSessionPendingTimersAndFramesInspection(t *testing.T) {
+	s := NewSession(DefaultSessionConfig())
+	if err := s.WriteHTML(`<main><script>host:setTimeout('host:queueMicrotask("noop")', 5); host:setInterval('host:queueMicrotask("noop")', 9); host:requestAnimationFrame('host:queueMicrotask("noop")')</script></main>`); err != nil {
+		t.Fatalf("WriteHTML() error = %v", err)
+	}
+
+	timers := s.PendingTimers()
+	if len(timers) != 2 {
+		t.Fatalf("PendingTimers() = %#v, want 2 entries", timers)
+	}
+	if timers[0].DueAtMs != 5 || timers[0].IntervalMs != 5 || timers[0].Repeat {
+		t.Fatalf("PendingTimers()[0] = %#v, want one-shot timer due at 5", timers[0])
+	}
+	if timers[1].DueAtMs != 9 || timers[1].IntervalMs != 9 || !timers[1].Repeat {
+		t.Fatalf("PendingTimers()[1] = %#v, want repeating timer due at 9", timers[1])
+	}
+
+	timers[0].Source = "mutated"
+	if fresh := s.PendingTimers(); len(fresh) != 2 || fresh[0].Source == "mutated" {
+		t.Fatalf("PendingTimers() reread = %#v, want original timers", fresh)
+	}
+
+	frames := s.PendingAnimationFrames()
+	if len(frames) != 1 {
+		t.Fatalf("PendingAnimationFrames() = %#v, want 1 entry", frames)
+	}
+	if frames[0].Source != `host:queueMicrotask("noop")` {
+		t.Fatalf("PendingAnimationFrames()[0] = %#v, want queued frame source", frames[0])
+	}
+	frames[0].Source = "mutated"
+	if fresh := s.PendingAnimationFrames(); len(fresh) != 1 || fresh[0].Source != `host:queueMicrotask("noop")` {
+		t.Fatalf("PendingAnimationFrames() reread = %#v, want original frame", fresh)
+	}
+
+	var nilSession *Session
+	if got := nilSession.PendingTimers(); got != nil {
+		t.Fatalf("nil PendingTimers() = %#v, want nil", got)
+	}
+	if got := nilSession.PendingAnimationFrames(); got != nil {
+		t.Fatalf("nil PendingAnimationFrames() = %#v, want nil", got)
+	}
+}

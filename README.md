@@ -183,6 +183,12 @@ Run repository maintenance guardrails:
 scripts/check-file-size-guard.sh
 ```
 
+Run the Go workspace checklist:
+
+```bash
+bash scripts/run-go-checklist.sh
+```
+
 Regular integration tests are grouped under a single `integration_suite` target to reduce
 Cargo's per-file test crate and link overhead:
 

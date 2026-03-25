@@ -1159,7 +1159,7 @@ func TestSelectConstraintValidationPseudoClasses(t *testing.T) {
 
 func TestSelectBoundedAttributeSelectors(t *testing.T) {
 	store := NewStore()
-	if err := store.BootstrapHTML(`<main><div id="root" data-kind="panel"><a id="nav" href="/next" data-role="nav">Go</a><input id="name" type="text"><p id="flag" hidden></p></div></main>`); err != nil {
+	if err := store.BootstrapHTML(`<main><div id="root" data-kind="panel"><a id="nav" href="/next" data-role="nav">Go</a><input id="name" type="text"><p id="flag" hidden></p><span id="meta" data-tags="alpha beta gamma" data-locale="en-US" data-note="prefix-middle-suffix" data-code="abc123"></span></div></main>`); err != nil {
 		t.Fatalf("BootstrapHTML() error = %v", err)
 	}
 
@@ -1173,7 +1173,21 @@ func TestSelectBoundedAttributeSelectors(t *testing.T) {
 		{selector: "a[data-role=nav]", wantLen: 1},
 		{selector: "input[type=text]", wantLen: 1},
 		{selector: "p[hidden]", wantLen: 1},
+		{selector: "span[data-tags~=beta]", wantLen: 1},
+		{selector: "span[data-locale|=en]", wantLen: 1},
+		{selector: "span[data-note^=prefix]", wantLen: 1},
+		{selector: "span[data-note$=suffix]", wantLen: 1},
+		{selector: "span[data-note*=middle]", wantLen: 1},
+		{selector: "span[data-tags~=BETA i]", wantLen: 1},
+		{selector: "span[data-locale|=EN i]", wantLen: 1},
+		{selector: "span[data-note^=PREFIX i]", wantLen: 1},
+		{selector: "span[data-note$=SUFFIX i]", wantLen: 1},
+		{selector: "span[data-note*=MIDDLE i]", wantLen: 1},
+		{selector: "input[type=TEXT i]", wantLen: 1},
 		{selector: "a[data-role=missing]", wantLen: 0},
+		{selector: "span[data-tags~=delta]", wantLen: 0},
+		{selector: "span[data-tags~=BETA s]", wantLen: 0},
+		{selector: "input[type=TEXT s]", wantLen: 0},
 	}
 
 	for _, tc := range tests {

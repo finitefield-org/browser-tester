@@ -38,6 +38,31 @@ func TestInnerHTMLForNodeAndSetInnerHTML(t *testing.T) {
 	}
 }
 
+func TestTextContentForNodeAndSetTextContent(t *testing.T) {
+	store := NewStore()
+	if err := store.BootstrapHTML(`<section id="wrap"><div id="target"><p>Hello</p><span>world</span></div><p id="tail">tail</p></section>`); err != nil {
+		t.Fatalf("BootstrapHTML() error = %v", err)
+	}
+
+	targetID := mustSelectSingle(t, store, "#target")
+	if got, want := store.TextContentForNode(targetID), "Helloworld"; got != want {
+		t.Fatalf("TextContentForNode(#target) = %q, want %q", got, want)
+	}
+
+	if err := store.SetTextContent(targetID, `plain <text> & more`); err != nil {
+		t.Fatalf("SetTextContent(#target) error = %v", err)
+	}
+	if got, want := store.DumpDOM(), `<section id="wrap"><div id="target">plain &lt;text&gt; &amp; more</div><p id="tail">tail</p></section>`; got != want {
+		t.Fatalf("DumpDOM() after SetTextContent = %q, want %q", got, want)
+	}
+	if got, want := store.TextContentForNode(targetID), `plain <text> & more`; got != want {
+		t.Fatalf("TextContentForNode(#target) after SetTextContent = %q, want %q", got, want)
+	}
+	if ids, err := store.Select("span"); err != nil || len(ids) != 0 {
+		t.Fatalf("Select(span) after SetTextContent = (%v, %v), want no matches", ids, err)
+	}
+}
+
 func TestSetOuterHTMLReplacesNodeAndPreservesSiblings(t *testing.T) {
 	store := NewStore()
 	if err := store.BootstrapHTML(`<section id="wrap"><div id="target"><b>x</b></div><p id="tail">tail</p></section>`); err != nil {
@@ -153,6 +178,12 @@ func TestMutationHelpersUpdateFocusedNodeState(t *testing.T) {
 	if got := store.FocusedNodeID(); got != targetID {
 		t.Fatalf("FocusedNodeID() after SetInnerHTML on focused node = %d, want %d", got, targetID)
 	}
+	if err := store.SetTextContent(targetID, `plain & more`); err != nil {
+		t.Fatalf("SetTextContent(#target) preserve focus error = %v", err)
+	}
+	if got := store.FocusedNodeID(); got != targetID {
+		t.Fatalf("FocusedNodeID() after SetTextContent on focused node = %d, want %d", got, targetID)
+	}
 
 	if err := store.SetFocusedNode(targetID); err != nil {
 		t.Fatalf("SetFocusedNode(#target) before SetOuterHTML error = %v", err)
@@ -189,11 +220,25 @@ func TestMutationHelpersUpdateTargetNodeState(t *testing.T) {
 	if got := store.TargetNodeID(); got != childID {
 		t.Fatalf("TargetNodeID() after #child = %d, want %d", got, childID)
 	}
+	if err := store.SetTextContent(targetID, `plain & more`); err != nil {
+		t.Fatalf("SetTextContent(#target) error = %v", err)
+	}
+	if got := store.TargetNodeID(); got != 0 {
+		t.Fatalf("TargetNodeID() after SetTextContent = %d, want 0", got)
+	}
+	if got, want := store.TextContentForNode(targetID), `plain & more`; got != want {
+		t.Fatalf("TextContentForNode(#target) after SetTextContent = %q, want %q", got, want)
+	}
+
+	store.SyncTargetFromURL("https://example.test/page#target")
+	if got := store.TargetNodeID(); got != targetID {
+		t.Fatalf("TargetNodeID() after re-targeting #target = %d, want %d", got, targetID)
+	}
 	if err := store.SetInnerHTML(targetID, `<em id="next">updated</em>`); err != nil {
 		t.Fatalf("SetInnerHTML(#target) error = %v", err)
 	}
-	if got := store.TargetNodeID(); got != 0 {
-		t.Fatalf("TargetNodeID() after removing targeted descendant = %d, want 0", got)
+	if got := store.TargetNodeID(); got != targetID {
+		t.Fatalf("TargetNodeID() after SetInnerHTML on targeted node = %d, want %d", got, targetID)
 	}
 
 	store.SyncTargetFromURL("https://example.test/page#target")
@@ -288,6 +333,34 @@ func TestCloneNodePreservesUserValidity(t *testing.T) {
 	}
 }
 
+func TestCloneNodeAfterInsertsCloneAfterSource(t *testing.T) {
+	store := NewStore()
+	if err := store.BootstrapHTML(`<main><div id="source"><span id="child">text</span></div><p id="tail">tail</p></main>`); err != nil {
+		t.Fatalf("BootstrapHTML() error = %v", err)
+	}
+
+	sourceID := mustSelectSingle(t, store, "#source")
+	cloneID, err := store.CloneNodeAfter(sourceID, true)
+	if err != nil {
+		t.Fatalf("CloneNodeAfter(#source) error = %v", err)
+	}
+	if cloneID == sourceID {
+		t.Fatalf("CloneNodeAfter(#source) returned source node id")
+	}
+
+	if got, want := store.DumpDOM(), `<main><div id="source"><span id="child">text</span></div><div id="source"><span id="child">text</span></div><p id="tail">tail</p></main>`; got != want {
+		t.Fatalf("DumpDOM() after CloneNodeAfter = %q, want %q", got, want)
+	}
+	if got, err := store.OuterHTMLForNode(cloneID); err != nil {
+		t.Fatalf("OuterHTMLForNode(cloneID) error = %v", err)
+	} else if want := `<div id="source"><span id="child">text</span></div>`; got != want {
+		t.Fatalf("OuterHTMLForNode(cloneID) = %q, want %q", got, want)
+	}
+	if ids, err := store.Select("main > div + div"); err != nil || len(ids) != 1 || ids[0] != cloneID {
+		t.Fatalf("Select(main > div + div) = (%v, %v), want one clone match", ids, err)
+	}
+}
+
 func TestMutationHelpersRejectInvalidInputs(t *testing.T) {
 	var nilStore *Store
 	if _, err := nilStore.InnerHTMLForNode(1); err == nil {
@@ -295,6 +368,9 @@ func TestMutationHelpersRejectInvalidInputs(t *testing.T) {
 	}
 	if err := nilStore.SetInnerHTML(1, "<p>x</p>"); err == nil {
 		t.Fatalf("nil SetInnerHTML() error = nil, want dom store error")
+	}
+	if err := nilStore.SetTextContent(1, "x"); err == nil {
+		t.Fatalf("nil SetTextContent() error = nil, want dom store error")
 	}
 	if err := nilStore.SetOuterHTML(1, "<p>x</p>"); err == nil {
 		t.Fatalf("nil SetOuterHTML() error = nil, want dom store error")
@@ -308,6 +384,9 @@ func TestMutationHelpersRejectInvalidInputs(t *testing.T) {
 	if _, err := nilStore.CloneNode(1, true); err == nil {
 		t.Fatalf("nil CloneNode() error = nil, want dom store error")
 	}
+	if _, err := nilStore.CloneNodeAfter(1, true); err == nil {
+		t.Fatalf("nil CloneNodeAfter() error = nil, want dom store error")
+	}
 
 	store := NewStore()
 	if err := store.BootstrapHTML(`<div id="target">text</div><p id="sibling">tail</p>`); err != nil {
@@ -320,8 +399,14 @@ func TestMutationHelpersRejectInvalidInputs(t *testing.T) {
 	if _, err := store.InnerHTMLForNode(999); err == nil {
 		t.Fatalf("InnerHTMLForNode(invalid) error = nil, want invalid node error")
 	}
+	if got := store.TextContentForNode(999); got != "" {
+		t.Fatalf("TextContentForNode(invalid) = %q, want empty string", got)
+	}
 	if err := store.SetInnerHTML(999, "<p>x</p>"); err == nil {
 		t.Fatalf("SetInnerHTML(invalid) error = nil, want invalid node error")
+	}
+	if err := store.SetTextContent(999, "x"); err == nil {
+		t.Fatalf("SetTextContent(invalid) error = nil, want invalid node error")
 	}
 	if err := store.SetOuterHTML(999, "<p>x</p>"); err == nil {
 		t.Fatalf("SetOuterHTML(invalid) error = nil, want invalid node error")
@@ -338,9 +423,18 @@ func TestMutationHelpersRejectInvalidInputs(t *testing.T) {
 	if _, err := store.CloneNode(999, true); err == nil {
 		t.Fatalf("CloneNode(invalid) error = nil, want invalid node error")
 	}
+	if _, err := store.CloneNodeAfter(999, true); err == nil {
+		t.Fatalf("CloneNodeAfter(invalid) error = nil, want invalid node error")
+	}
 
 	if _, err := store.InnerHTMLForNode(textNode); err == nil {
 		t.Fatalf("InnerHTMLForNode(text) error = nil, want non-element error")
+	}
+	if err := store.SetTextContent(textNode, "x"); err != nil {
+		t.Fatalf("SetTextContent(text) error = %v", err)
+	}
+	if got, want := store.TextContentForNode(targetID), "x"; got != want {
+		t.Fatalf("TextContentForNode(#target) after SetTextContent(text) = %q, want %q", got, want)
 	}
 	if err := store.SetInnerHTML(textNode, "<p>x</p>"); err == nil {
 		t.Fatalf("SetInnerHTML(text) error = nil, want non-element error")
@@ -368,5 +462,8 @@ func TestMutationHelpersRejectInvalidInputs(t *testing.T) {
 	}
 	if err := store.InsertAdjacentHTML(targetID, "afterend", `<a id="ae"></a>`); err == nil {
 		t.Fatalf("InsertAdjacentHTML(afterend on document child) error = nil, want document-parent error")
+	}
+	if _, err := store.CloneNodeAfter(store.DocumentID(), true); err == nil {
+		t.Fatalf("CloneNodeAfter(document) error = nil, want document clone error")
 	}
 }

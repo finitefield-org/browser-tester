@@ -57,6 +57,204 @@ func TestSessionAppliesConfigSeedsDeterministically(t *testing.T) {
 	}
 }
 
+func TestSessionReportsMatchMediaRules(t *testing.T) {
+	s := NewSession(SessionConfig{
+		MatchMedia: map[string]bool{"(prefers-reduced-motion: reduce)": true},
+	})
+
+	rules := s.MatchMediaRules()
+	if got, want := rules["(prefers-reduced-motion: reduce)"], true; got != want {
+		t.Fatalf("MatchMediaRules()[prefers-reduced-motion] = %v, want %v", got, want)
+	}
+	rules["(prefers-reduced-motion: reduce)"] = false
+	if got, want := s.MatchMediaRules()["(prefers-reduced-motion: reduce)"], true; got != want {
+		t.Fatalf("MatchMediaRules() reread = %v, want %v", got, want)
+	}
+}
+
+func TestSessionReportsFetchCalls(t *testing.T) {
+	s := NewSession(DefaultSessionConfig())
+	s.Registry().Fetch().RespondText("https://example.test/api/message", 200, "ok")
+	s.Registry().Fetch().Fail("https://example.test/api/broken", "boom")
+
+	if _, _, _, err := s.Fetch("https://example.test/api/message"); err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if _, _, _, err := s.Fetch("https://example.test/api/broken"); err == nil {
+		t.Fatalf("Fetch() broken error = nil, want failure")
+	}
+
+	calls := s.FetchCalls()
+	if len(calls) != 2 || calls[0].URL != "https://example.test/api/message" || calls[1].URL != "https://example.test/api/broken" {
+		t.Fatalf("FetchCalls() = %#v, want two captured requests", calls)
+	}
+
+	calls[0].URL = "mutated"
+	if fresh := s.FetchCalls(); len(fresh) != 2 || fresh[0].URL != "https://example.test/api/message" || fresh[1].URL != "https://example.test/api/broken" {
+		t.Fatalf("FetchCalls() reread = %#v, want original request", fresh)
+	}
+
+	responses := s.FetchResponseRules()
+	if len(responses) != 1 || responses[0].URL != "https://example.test/api/message" || responses[0].Status != 200 || responses[0].Body != "ok" {
+		t.Fatalf("FetchResponseRules() = %#v, want one response rule", responses)
+	}
+	responses[0].URL = "mutated"
+	if fresh := s.FetchResponseRules(); len(fresh) != 1 || fresh[0].URL != "https://example.test/api/message" || fresh[0].Body != "ok" {
+		t.Fatalf("FetchResponseRules() reread = %#v, want original response rule", fresh)
+	}
+
+	errors := s.FetchErrorRules()
+	if len(errors) != 1 || errors[0].URL != "https://example.test/api/broken" || errors[0].Message != "boom" {
+		t.Fatalf("FetchErrorRules() = %#v, want one error rule", errors)
+	}
+	errors[0].URL = "mutated"
+	if fresh := s.FetchErrorRules(); len(fresh) != 1 || fresh[0].URL != "https://example.test/api/broken" || fresh[0].Message != "boom" {
+		t.Fatalf("FetchErrorRules() reread = %#v, want original error rule", fresh)
+	}
+}
+
+func TestSessionReportsActionCalls(t *testing.T) {
+	s := NewSession(SessionConfig{
+		HTML: `<main></main>`,
+		MatchMedia: map[string]bool{
+			"(prefers-reduced-motion: reduce)": true,
+		},
+	})
+
+	if err := s.Open("https://example.test/popup"); err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := s.Print(); err != nil {
+		t.Fatalf("Print() error = %v", err)
+	}
+	if err := s.ScrollTo(4, 5); err != nil {
+		t.Fatalf("ScrollTo() error = %v", err)
+	}
+	if err := s.ScrollBy(2, -1); err != nil {
+		t.Fatalf("ScrollBy() error = %v", err)
+	}
+	if _, err := s.MatchMedia("(prefers-reduced-motion: reduce)"); err != nil {
+		t.Fatalf("MatchMedia() error = %v", err)
+	}
+
+	openCalls := s.OpenCalls()
+	if len(openCalls) != 1 || openCalls[0].URL != "https://example.test/popup" {
+		t.Fatalf("OpenCalls() = %#v, want one open call", openCalls)
+	}
+	openCalls[0].URL = "mutated"
+	if fresh := s.OpenCalls(); len(fresh) != 1 || fresh[0].URL != "https://example.test/popup" {
+		t.Fatalf("OpenCalls() reread = %#v, want original open call", fresh)
+	}
+
+	if closeCalls := s.CloseCalls(); len(closeCalls) != 1 {
+		t.Fatalf("CloseCalls() = %#v, want one close call", closeCalls)
+	}
+	if printCalls := s.PrintCalls(); len(printCalls) != 1 {
+		t.Fatalf("PrintCalls() = %#v, want one print call", printCalls)
+	}
+	scrollCalls := s.ScrollCalls()
+	if len(scrollCalls) != 2 {
+		t.Fatalf("ScrollCalls() = %#v, want two scroll calls", scrollCalls)
+	}
+	scrollCalls[0].X = 99
+	if fresh := s.ScrollCalls(); len(fresh) != 2 || fresh[0].X != 4 || fresh[1].Method != "by" {
+		t.Fatalf("ScrollCalls() reread = %#v, want original scroll calls", fresh)
+	}
+	if matchMediaCalls := s.MatchMediaCalls(); len(matchMediaCalls) != 1 || matchMediaCalls[0].Query != "(prefers-reduced-motion: reduce)" {
+		t.Fatalf("MatchMediaCalls() = %#v, want one query call", matchMediaCalls)
+	}
+	if fresh := s.MatchMediaCalls(); len(fresh) != 1 || fresh[0].Query != "(prefers-reduced-motion: reduce)" {
+		t.Fatalf("MatchMediaCalls() reread = %#v, want original query call", fresh)
+	}
+
+	s.Registry().MatchMedia().RecordListenerCall("(prefers-reduced-motion: reduce)", "change")
+	listeners := s.MatchMediaListenerCalls()
+	if len(listeners) != 1 || listeners[0].Query != "(prefers-reduced-motion: reduce)" || listeners[0].Method != "change" {
+		t.Fatalf("MatchMediaListenerCalls() = %#v, want one listener call", listeners)
+	}
+	listeners[0].Method = "mutated"
+	if fresh := s.MatchMediaListenerCalls(); len(fresh) != 1 || fresh[0].Method != "change" {
+		t.Fatalf("MatchMediaListenerCalls() reread = %#v, want original listener call", fresh)
+	}
+}
+
+func TestSessionReportsDialogMessages(t *testing.T) {
+	s := NewSession(DefaultSessionConfig())
+	s.Registry().Dialogs().QueueConfirm(true)
+	s.Registry().Dialogs().QueuePromptText("Ada")
+
+	if err := s.Alert("hello"); err != nil {
+		t.Fatalf("Alert() error = %v", err)
+	}
+	if _, err := s.Confirm("Continue?"); err != nil {
+		t.Fatalf("Confirm() error = %v", err)
+	}
+	if _, _, err := s.Prompt("Your name?"); err != nil {
+		t.Fatalf("Prompt() error = %v", err)
+	}
+
+	alerts := s.DialogAlerts()
+	if len(alerts) != 1 || alerts[0] != "hello" {
+		t.Fatalf("DialogAlerts() = %#v, want one alert", alerts)
+	}
+	alerts[0] = "mutated"
+	if fresh := s.DialogAlerts(); len(fresh) != 1 || fresh[0] != "hello" {
+		t.Fatalf("DialogAlerts() reread = %#v, want original alert", fresh)
+	}
+
+	confirms := s.DialogConfirmMessages()
+	if len(confirms) != 1 || confirms[0] != "Continue?" {
+		t.Fatalf("DialogConfirmMessages() = %#v, want one confirm message", confirms)
+	}
+	confirms[0] = "mutated"
+	if fresh := s.DialogConfirmMessages(); len(fresh) != 1 || fresh[0] != "Continue?" {
+		t.Fatalf("DialogConfirmMessages() reread = %#v, want original confirm message", fresh)
+	}
+
+	prompts := s.DialogPromptMessages()
+	if len(prompts) != 1 || prompts[0] != "Your name?" {
+		t.Fatalf("DialogPromptMessages() = %#v, want one prompt message", prompts)
+	}
+	prompts[0] = "mutated"
+	if fresh := s.DialogPromptMessages(); len(fresh) != 1 || fresh[0] != "Your name?" {
+		t.Fatalf("DialogPromptMessages() reread = %#v, want original prompt message", fresh)
+	}
+}
+
+func TestSessionReportsDownloadAndFileInputCaptures(t *testing.T) {
+	s := NewSession(DefaultSessionConfig())
+
+	if err := s.CaptureDownload("report.csv", []byte("downloaded bytes")); err != nil {
+		t.Fatalf("CaptureDownload() error = %v", err)
+	}
+	if err := s.SetFiles("#upload", []string{"report.csv", "archive.zip"}); err != nil {
+		t.Fatalf("SetFiles() error = %v", err)
+	}
+
+	artifacts := s.DownloadArtifacts()
+	if len(artifacts) != 1 || artifacts[0].FileName != "report.csv" || string(artifacts[0].Bytes) != "downloaded bytes" {
+		t.Fatalf("DownloadArtifacts() = %#v, want one download capture", artifacts)
+	}
+	artifacts[0].FileName = "mutated"
+	artifacts[0].Bytes[0] = 'X'
+	if fresh := s.DownloadArtifacts(); len(fresh) != 1 || fresh[0].FileName != "report.csv" || string(fresh[0].Bytes) != "downloaded bytes" {
+		t.Fatalf("DownloadArtifacts() reread = %#v, want original capture", fresh)
+	}
+
+	selections := s.FileInputSelections()
+	if len(selections) != 1 || selections[0].Selector != "#upload" || len(selections[0].Files) != 2 {
+		t.Fatalf("FileInputSelections() = %#v, want one file-input selection", selections)
+	}
+	selections[0].Selector = "mutated"
+	selections[0].Files[0] = "mutated"
+	if fresh := s.FileInputSelections(); len(fresh) != 1 || fresh[0].Selector != "#upload" || fresh[0].Files[0] != "report.csv" {
+		t.Fatalf("FileInputSelections() reread = %#v, want original selection", fresh)
+	}
+}
+
 func TestSessionSchedulerBackedTime(t *testing.T) {
 	s := NewSession(DefaultSessionConfig())
 
@@ -522,6 +720,51 @@ func TestSessionInlineScriptsCanSetLocationProperties(t *testing.T) {
 	}
 }
 
+func TestSessionInlineScriptsCanReadLocationProperties(t *testing.T) {
+	s := NewSession(SessionConfig{
+		URL:  "https://example.test:8443/path/name?mode=full#step-1",
+		HTML: `<main><div id="href"></div><div id="origin"></div><div id="protocol"></div><div id="host"></div><div id="hostname"></div><div id="port"></div><div id="pathname"></div><div id="search"></div><div id="hash"></div><script>host:setTextContent("#href", expr(host:locationHref())); host:setTextContent("#origin", expr(host:locationOrigin())); host:setTextContent("#protocol", expr(host:locationProtocol())); host:setTextContent("#host", expr(host:locationHost())); host:setTextContent("#hostname", expr(host:locationHostname())); host:setTextContent("#port", expr(host:locationPort())); host:setTextContent("#pathname", expr(host:locationPathname())); host:setTextContent("#search", expr(host:locationSearch())); host:setTextContent("#hash", expr(host:locationHash()))</script></main>`,
+	})
+
+	tests := []struct {
+		selector string
+		want     string
+	}{
+		{selector: "#href", want: "https://example.test:8443/path/name?mode=full#step-1"},
+		{selector: "#origin", want: "https://example.test:8443"},
+		{selector: "#protocol", want: "https:"},
+		{selector: "#host", want: "example.test:8443"},
+		{selector: "#hostname", want: "example.test"},
+		{selector: "#port", want: "8443"},
+		{selector: "#pathname", want: "/path/name"},
+		{selector: "#search", want: "?mode=full"},
+		{selector: "#hash", want: "#step-1"},
+	}
+
+	for _, tc := range tests {
+		got, err := s.TextContent(tc.selector)
+		if err != nil {
+			t.Fatalf("TextContent(%s) error = %v", tc.selector, err)
+		}
+		if got != tc.want {
+			t.Fatalf("TextContent(%s) = %q, want %q", tc.selector, got, tc.want)
+		}
+	}
+}
+
+func TestSessionRejectsLocationGetterArgumentsFromInlineScript(t *testing.T) {
+	s := NewSession(SessionConfig{
+		HTML: `<main><div id="out">old</div><script>host:locationHref("extra")</script></main>`,
+	})
+
+	if _, err := s.ensureDOM(); err == nil {
+		t.Fatalf("ensureDOM() error = nil, want location getter validation error")
+	}
+	if got := s.DumpDOM(); got != "" {
+		t.Fatalf("DumpDOM() after rejected location getter args = %q, want empty string", got)
+	}
+}
+
 func TestSessionInlineScriptsCanSetDocumentCookie(t *testing.T) {
 	s := NewSession(SessionConfig{
 		URL:  "https://example.test/start",
@@ -536,6 +779,30 @@ func TestSessionInlineScriptsCanSetDocumentCookie(t *testing.T) {
 	}
 	if got, want := s.navigatorCookieEnabled(), true; got != want {
 		t.Fatalf("navigatorCookieEnabled() = %v, want %v", got, want)
+	}
+}
+
+func TestSessionClipboardTracksSeedAndWrites(t *testing.T) {
+	s := NewSession(DefaultSessionConfig())
+
+	if got := s.Clipboard(); got != "" {
+		t.Fatalf("Clipboard() without seed = %q, want empty", got)
+	}
+
+	if err := s.WriteClipboard("copied text"); err != nil {
+		t.Fatalf("WriteClipboard() error = %v", err)
+	}
+	if got, want := s.Clipboard(), "copied text"; got != want {
+		t.Fatalf("Clipboard() after write = %q, want %q", got, want)
+	}
+
+	writes := s.ClipboardWrites()
+	if len(writes) != 1 || writes[0] != "copied text" {
+		t.Fatalf("ClipboardWrites() = %#v, want one write", writes)
+	}
+	writes[0] = "mutated"
+	if fresh := s.ClipboardWrites(); len(fresh) != 1 || fresh[0] != "copied text" {
+		t.Fatalf("ClipboardWrites() reread = %#v, want original write", fresh)
 	}
 }
 

@@ -514,7 +514,7 @@ func TestQueryHelpersSupportLocalLinkPseudoClass(t *testing.T) {
 
 func TestQueryHelpersSupportAttributeSelectors(t *testing.T) {
 	store := NewStore()
-	if err := store.BootstrapHTML(`<main id="root"><div id="panel" data-kind="panel"><a id="nav" href="/next" data-role="nav">Go</a><input id="name" type="text"><p id="flag" hidden></p></div></main>`); err != nil {
+	if err := store.BootstrapHTML(`<main id="root"><div id="panel" data-kind="panel"><a id="nav" href="/next" data-role="nav">Go</a><input id="name" type="text"><p id="flag" hidden></p><span id="meta" data-tags="alpha beta gamma" data-locale="en-US" data-note="prefix-middle-suffix" data-code="abc123"></span></div></main>`); err != nil {
 		t.Fatalf("BootstrapHTML() error = %v", err)
 	}
 
@@ -522,6 +522,7 @@ func TestQueryHelpersSupportAttributeSelectors(t *testing.T) {
 	navID := mustSelectSingle(t, store, "#nav")
 	nameID := mustSelectSingle(t, store, "#name")
 	flagID := mustSelectSingle(t, store, "#flag")
+	metaID := mustSelectSingle(t, store, "#meta")
 
 	if got, ok, err := store.QuerySelector("div[data-kind]"); err != nil || !ok || got != panelID {
 		t.Fatalf("QuerySelector(div[data-kind]) = (%d, %v, %v), want (%d, true, nil)", got, ok, err, panelID)
@@ -537,6 +538,18 @@ func TestQueryHelpersSupportAttributeSelectors(t *testing.T) {
 	}
 	if got, ok, err := store.QuerySelector("p[hidden]"); err != nil || !ok || got != flagID {
 		t.Fatalf("QuerySelector(p[hidden]) = (%d, %v, %v), want (%d, true, nil)", got, ok, err, flagID)
+	}
+	if got, ok, err := store.QuerySelector("span[data-tags~=beta]"); err != nil || !ok {
+		t.Fatalf("QuerySelector(span[data-tags~=beta]) = (%d, %v, %v), want match", got, ok, err)
+	}
+	if got, ok, err := store.QuerySelector("span[data-locale|=en]"); err != nil || !ok {
+		t.Fatalf("QuerySelector(span[data-locale|=en]) = (%d, %v, %v), want match", got, ok, err)
+	}
+	if got, ok, err := store.QuerySelector("span[data-tags~=BETA i]"); err != nil || !ok {
+		t.Fatalf("QuerySelector(span[data-tags~=BETA i]) = (%d, %v, %v), want match", got, ok, err)
+	}
+	if got, ok, err := store.QuerySelector("input[type=TEXT i]"); err != nil || !ok || got != nameID {
+		t.Fatalf("QuerySelector(input[type=TEXT i]) = (%d, %v, %v), want (%d, true, nil)", got, ok, err, nameID)
 	}
 	if got, ok, err := store.QuerySelector("a[data-role=missing]"); err != nil || ok {
 		t.Fatalf("QuerySelector(a[data-role=missing]) = (%d, %v, %v), want no match", got, ok, err)
@@ -558,6 +571,18 @@ func TestQueryHelpersSupportAttributeSelectors(t *testing.T) {
 	}
 	if matched, err := store.Matches(navID, "a[href=\"/next\"]"); err != nil || !matched {
 		t.Fatalf("Matches(a[href=\"/next\"]) = (%v, %v), want (true, nil)", matched, err)
+	}
+	if matched, err := store.Matches(metaID, "span[data-tags~=beta]"); err != nil || !matched {
+		t.Fatalf("Matches(span[data-tags~=beta]) = (%v, %v), want (true, nil)", matched, err)
+	}
+	if matched, err := store.Matches(metaID, "span[data-locale|=en]"); err != nil || !matched {
+		t.Fatalf("Matches(span[data-locale|=en]) = (%v, %v), want (true, nil)", matched, err)
+	}
+	if matched, err := store.Matches(metaID, "span[data-tags~=BETA i]"); err != nil || !matched {
+		t.Fatalf("Matches(span[data-tags~=BETA i]) = (%v, %v), want (true, nil)", matched, err)
+	}
+	if matched, err := store.Matches(nameID, "input[type=TEXT i]"); err != nil || !matched {
+		t.Fatalf("Matches(input[type=TEXT i]) = (%v, %v), want (true, nil)", matched, err)
 	}
 	if matched, err := store.Matches(navID, "a[data-role=missing]"); err != nil || matched {
 		t.Fatalf("Matches(a[data-role=missing]) = (%v, %v), want (false, nil)", matched, err)
@@ -899,11 +924,11 @@ func TestQueryHelpersSupportScopePseudoClass(t *testing.T) {
 	if matched, err := store.Matches(rootID, ":scope"); err != nil || !matched {
 		t.Fatalf("Matches(#root, :scope) = (%v, %v), want (true, nil)", matched, err)
 	}
-	if matched, err := store.Matches(panelID, ":scope"); err != nil || matched {
-		t.Fatalf("Matches(#panel, :scope) = (%v, %v), want (false, nil)", matched, err)
+	if matched, err := store.Matches(panelID, ":scope"); err != nil || !matched {
+		t.Fatalf("Matches(#panel, :scope) = (%v, %v), want (true, nil)", matched, err)
 	}
-	if closestID, ok, err := store.Closest(childID, ":scope"); err != nil || !ok || closestID != rootID {
-		t.Fatalf("Closest(#child, :scope) = (%d, %v, %v), want (%d, true, nil)", closestID, ok, err, rootID)
+	if closestID, ok, err := store.Closest(childID, ":scope"); err != nil || !ok || closestID != childID {
+		t.Fatalf("Closest(#child, :scope) = (%d, %v, %v), want (%d, true, nil)", closestID, ok, err, childID)
 	}
 }
 

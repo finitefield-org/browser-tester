@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::error::Error as StdError;
 use std::fmt;
 
@@ -267,6 +267,8 @@ impl DialogMocks {
 pub struct ClipboardMocks {
     seeded_text: Option<String>,
     writes: Vec<String>,
+    read_error: Option<String>,
+    write_error: Option<String>,
 }
 
 impl ClipboardMocks {
@@ -276,6 +278,27 @@ impl ClipboardMocks {
 
     pub fn seeded_text(&self) -> Option<&str> {
         self.seeded_text.as_deref()
+    }
+
+    pub fn set_read_error(&mut self, error: Option<&str>) {
+        self.read_error = error.map(std::string::ToString::to_string);
+    }
+
+    pub fn set_write_error(&mut self, error: Option<&str>) {
+        self.write_error = error.map(std::string::ToString::to_string);
+    }
+
+    pub fn clear_errors(&mut self) {
+        self.read_error = None;
+        self.write_error = None;
+    }
+
+    pub fn read_error(&self) -> Option<&str> {
+        self.read_error.as_deref()
+    }
+
+    pub fn write_error(&self) -> Option<&str> {
+        self.write_error.as_deref()
     }
 
     pub fn record_write(&mut self, value: impl Into<String>) {
@@ -289,6 +312,8 @@ impl ClipboardMocks {
     pub fn reset(&mut self) {
         self.seeded_text = None;
         self.writes.clear();
+        self.read_error = None;
+        self.write_error = None;
     }
 }
 
@@ -905,14 +930,22 @@ impl MockRegistry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DebugState {
     trace_enabled: bool,
+    trace_events: bool,
+    trace_timers: bool,
+    trace_logs: VecDeque<String>,
     trace_log_limit: usize,
+    trace_to_stderr: bool,
 }
 
 impl Default for DebugState {
     fn default() -> Self {
         Self {
             trace_enabled: false,
-            trace_log_limit: 1_000,
+            trace_events: true,
+            trace_timers: true,
+            trace_logs: VecDeque::new(),
+            trace_log_limit: 10_000,
+            trace_to_stderr: true,
         }
     }
 }
@@ -920,6 +953,39 @@ impl Default for DebugState {
 impl DebugState {
     pub fn enable_trace(&mut self) {
         self.trace_enabled = true;
+    }
+
+    pub fn set_trace_enabled(&mut self, enabled: bool) {
+        self.trace_enabled = enabled;
+    }
+
+    pub fn set_trace_stderr(&mut self, enabled: bool) {
+        self.trace_to_stderr = enabled;
+    }
+
+    pub fn set_trace_events(&mut self, enabled: bool) {
+        self.trace_events = enabled;
+    }
+
+    pub fn set_trace_timers(&mut self, enabled: bool) {
+        self.trace_timers = enabled;
+    }
+
+    pub fn set_trace_log_limit(&mut self, max_entries: usize) -> Result<(), ScriptError> {
+        if max_entries == 0 {
+            return Err(ScriptError::new(
+                "set_trace_log_limit requires at least 1 entry",
+            ));
+        }
+        self.trace_log_limit = max_entries;
+        while self.trace_logs.len() > self.trace_log_limit {
+            self.trace_logs.pop_front();
+        }
+        Ok(())
+    }
+
+    pub fn take_trace_logs(&mut self) -> Vec<String> {
+        self.trace_logs.drain(..).collect()
     }
 
     pub fn trace_enabled(&self) -> bool {
@@ -938,6 +1004,7 @@ pub struct Session {
     mocks: MockRegistry,
     script: ScriptRuntime,
     config: SessionConfig,
+    rng_state: u64,
     debug: DebugState,
     script_event_listeners: Vec<ScriptListenerRecord>,
     scheduled_script_timers: BTreeMap<u64, ScheduledScriptTimerRecord>,
@@ -997,6 +1064,7 @@ impl Session {
             mocks,
             script: ScriptRuntime::default(),
             config,
+            rng_state: 0x9E37_79B9_7F4A_7C15,
             debug: DebugState::default(),
             script_event_listeners: Vec::new(),
             scheduled_script_timers: BTreeMap::new(),
@@ -1093,6 +1161,50 @@ impl Session {
 
     pub fn debug_mut(&mut self) -> &mut DebugState {
         &mut self.debug
+    }
+
+    pub fn enable_trace(&mut self, enabled: bool) {
+        self.debug.set_trace_enabled(enabled);
+    }
+
+    pub fn set_trace_stderr(&mut self, enabled: bool) {
+        self.debug.set_trace_stderr(enabled);
+    }
+
+    pub fn set_trace_events(&mut self, enabled: bool) {
+        self.debug.set_trace_events(enabled);
+    }
+
+    pub fn set_trace_timers(&mut self, enabled: bool) {
+        self.debug.set_trace_timers(enabled);
+    }
+
+    pub fn set_trace_log_limit(&mut self, max_entries: usize) -> Result<(), SessionError> {
+        self.debug
+            .set_trace_log_limit(max_entries)
+            .map_err(SessionError::Script)
+    }
+
+    pub fn take_trace_logs(&mut self) -> Vec<String> {
+        self.debug.take_trace_logs()
+    }
+
+    pub fn set_random_seed(&mut self, seed: u64) {
+        self.rng_state = if seed == 0 {
+            0xA5A5_A5A5_A5A5_A5A5
+        } else {
+            seed
+        };
+    }
+
+    pub fn set_timer_step_limit(&mut self, max_steps: usize) -> Result<(), SessionError> {
+        if max_steps == 0 {
+            return Err(SessionError::Script(ScriptError::new(
+                "set_timer_step_limit requires at least 1 step",
+            )));
+        }
+        self.scheduler.step_limit = max_steps;
+        Ok(())
     }
 
     pub fn dispatch_node(&mut self, node_id: NodeId, event_type: &str) -> Result<(), SessionError> {
@@ -1263,6 +1375,9 @@ impl Session {
     }
 
     pub fn read_clipboard(&self) -> Result<String, SessionError> {
+        if let Some(reason) = self.mocks.clipboard().read_error() {
+            return Err(SessionError::Mock(reason.to_string()));
+        }
         self.mocks
             .clipboard()
             .seeded_text()
@@ -1270,10 +1385,14 @@ impl Session {
             .ok_or_else(|| SessionError::Mock("clipboard text has not been seeded".to_string()))
     }
 
-    pub fn write_clipboard(&mut self, text: &str) {
+    pub fn write_clipboard(&mut self, text: &str) -> Result<(), SessionError> {
+        if let Some(reason) = self.mocks.clipboard().write_error() {
+            return Err(SessionError::Mock(reason.to_string()));
+        }
         let clipboard = self.mocks.clipboard_mut();
         clipboard.record_write(text.to_string());
         clipboard.seed_text(text.to_string());
+        Ok(())
     }
 
     pub fn capture_download(
@@ -1595,9 +1714,11 @@ impl Session {
             if event.immediate_propagation_stopped() || event.propagation_stopped() {
                 event.set_current_target(None);
                 event.set_phase(EventPhase::None);
-                return Ok(DispatchOutcome {
+                let outcome = DispatchOutcome {
                     default_prevented: event.default_prevented(),
-                });
+                };
+                self.trace_event_line(format!("[event] {event_type} done {event_type}"));
+                return Ok(outcome);
             }
         }
 
@@ -1605,18 +1726,22 @@ impl Session {
         if event.immediate_propagation_stopped() {
             event.set_current_target(None);
             event.set_phase(EventPhase::None);
-            return Ok(DispatchOutcome {
+            let outcome = DispatchOutcome {
                 default_prevented: event.default_prevented(),
-            });
+            };
+            self.trace_event_line(format!("[event] {event_type} done {event_type}"));
+            return Ok(outcome);
         }
 
         self.run_event_listeners(target, event_type, false, EventPhase::AtTarget, &event)?;
         if event.immediate_propagation_stopped() || event.propagation_stopped() {
             event.set_current_target(None);
             event.set_phase(EventPhase::None);
-            return Ok(DispatchOutcome {
+            let outcome = DispatchOutcome {
                 default_prevented: event.default_prevented(),
-            });
+            };
+            self.trace_event_line(format!("[event] {event_type} done {event_type}"));
+            return Ok(outcome);
         }
 
         if bubbles {
@@ -1630,9 +1755,11 @@ impl Session {
 
         event.set_current_target(None);
         event.set_phase(EventPhase::None);
-        Ok(DispatchOutcome {
+        let outcome = DispatchOutcome {
             default_prevented: event.default_prevented(),
-        })
+        };
+        self.trace_event_line(format!("[event] {event_type} done {event_type}"));
+        Ok(outcome)
     }
 
     fn run_event_listeners(
@@ -3779,8 +3906,14 @@ impl Session {
     ) -> u64 {
         let due_at = self.scheduler.now_ms.saturating_add(delay_ms.max(0));
         let id = self.scheduler.queue_timer(due_at);
+        let trace_kind = match &kind {
+            ScheduledScriptTimerKind::AnimationFrame => "animationFrame",
+            ScheduledScriptTimerKind::Timeout => "timeout",
+            ScheduledScriptTimerKind::Interval { .. } => "interval",
+        };
         self.scheduled_script_timers
             .insert(id, ScheduledScriptTimerRecord { kind, handler });
+        self.trace_timer_line(format!("[timer] schedule {trace_kind}"));
         id
     }
 
@@ -3860,6 +3993,46 @@ impl Session {
         }
 
         Ok(executed)
+    }
+
+    fn trace_line(&mut self, line: String) {
+        if !self.debug.trace_enabled {
+            return;
+        }
+        if self.debug.trace_to_stderr {
+            eprintln!("{line}");
+        }
+        if self.debug.trace_logs.len() >= self.debug.trace_log_limit {
+            self.debug.trace_logs.pop_front();
+        }
+        self.debug.trace_logs.push_back(line);
+    }
+
+    fn trace_event_line(&mut self, line: String) {
+        if self.debug.trace_enabled && self.debug.trace_events {
+            self.trace_line(line);
+        }
+    }
+
+    fn trace_timer_line(&mut self, line: String) {
+        if self.debug.trace_enabled && self.debug.trace_timers {
+            self.trace_line(line);
+        }
+    }
+
+    fn next_random_f64(&mut self) -> f64 {
+        let mut x = self.rng_state;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.rng_state = if x == 0 {
+            0xA5A5_A5A5_A5A5_A5A5
+        } else {
+            x
+        };
+        let out = x.wrapping_mul(0x2545_F491_4F6C_DD1D);
+        let mantissa = out >> 11;
+        (mantissa as f64) * (1.0 / ((1u64 << 53) as f64))
     }
 }
 
@@ -4193,12 +4366,15 @@ impl HostBindings for Session {
     }
 
     fn clipboard_write_text(&mut self, text: &str) -> bt_script::Result<()> {
-        Session::write_clipboard(self, text);
-        Ok(())
+        Session::write_clipboard(self, text).map_err(|error| ScriptError::new(error.to_string()))
     }
 
     fn clipboard_read_text(&mut self) -> bt_script::Result<String> {
         Session::read_clipboard(self).map_err(|error| ScriptError::new(error.to_string()))
+    }
+
+    fn random_f64(&mut self) -> bt_script::Result<f64> {
+        Ok(self.next_random_f64())
     }
 
     fn window_navigator_cookie_enabled(&mut self) -> bt_script::Result<bool> {

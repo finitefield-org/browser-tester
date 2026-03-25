@@ -10,6 +10,12 @@ type historyEntry struct {
 	state *string
 }
 
+type HistoryEntry struct {
+	URL      string
+	State    string
+	HasState bool
+}
+
 func (s *Session) windowHistoryLength() int {
 	if s == nil {
 		return 0
@@ -42,6 +48,63 @@ func (s *Session) windowHistoryScrollRestoration() string {
 		return "auto"
 	}
 	return s.historyScrollRestoration
+}
+
+func (s *Session) HistoryEntries() []HistoryEntry {
+	if s == nil {
+		return nil
+	}
+	if _, err := s.ensureDOM(); err != nil {
+		return nil
+	}
+	if len(s.historyEntries) == 0 {
+		return nil
+	}
+	out := make([]HistoryEntry, len(s.historyEntries))
+	for i := range s.historyEntries {
+		out[i].URL = s.historyEntries[i].url
+		if s.historyEntries[i].state != nil {
+			out[i].State = *s.historyEntries[i].state
+			out[i].HasState = true
+		}
+	}
+	return out
+}
+
+func (s *Session) HistoryIndex() int {
+	if s == nil {
+		return 0
+	}
+	if _, err := s.ensureDOM(); err != nil {
+		return 0
+	}
+	s.ensureHistoryInitialized()
+	if s.historyIndex < 0 {
+		return 0
+	}
+	if s.historyIndex >= len(s.historyEntries) {
+		if len(s.historyEntries) == 0 {
+			return 0
+		}
+		return len(s.historyEntries) - 1
+	}
+	return s.historyIndex
+}
+
+func (s *Session) VisitedURLs() []string {
+	if s == nil {
+		return nil
+	}
+	if _, err := s.ensureDOM(); err != nil {
+		return nil
+	}
+	urls := s.visitedHistoryURLs(s.URL())
+	if len(urls) == 0 {
+		return nil
+	}
+	out := make([]string, len(urls))
+	copy(out, urls)
+	return out
 }
 
 func (s *Session) setWindowHistoryScrollRestoration(value string) error {
@@ -316,4 +379,19 @@ func (s *Session) ensureHistoryInitialized() {
 func cloneHistoryState(state string) *string {
 	seeded := state
 	return &seeded
+}
+
+func cloneHistoryEntries(entries []historyEntry) []historyEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]historyEntry, len(entries))
+	for i := range entries {
+		out[i].url = entries[i].url
+		if entries[i].state != nil {
+			seeded := *entries[i].state
+			out[i].state = &seeded
+		}
+	}
+	return out
 }

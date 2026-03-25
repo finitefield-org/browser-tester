@@ -67,6 +67,7 @@ func (s *Session) runInlineScriptOnStore(store *dom.Store, currentScript string,
 	}
 	prev := s.currentScriptHTML
 	s.currentScriptHTML = currentScript
+	s.lastInlineScriptHTML = currentScript
 	defer func() {
 		s.currentScriptHTML = prev
 	}()
@@ -183,6 +184,18 @@ func (h *inlineScriptHost) Call(method string, args []script.Value) (script.Valu
 		}
 		return script.StringValue(value), nil
 
+	case "textContent":
+		selector, err := scriptStringArg(method, args, 0)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		nodeID, err := inlineScriptResolveElement(store, selector)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		value := store.TextContentForNode(nodeID)
+		return script.StringValue(value), nil
+
 	case "setInnerHTML":
 		selector, err := scriptStringArg(method, args, 0)
 		if err != nil {
@@ -215,6 +228,42 @@ func (h *inlineScriptHost) Call(method string, args []script.Value) (script.Valu
 			return script.UndefinedValue(), err
 		}
 		if err := store.SetOuterHTML(nodeID, markup); err != nil {
+			return script.UndefinedValue(), err
+		}
+		return script.UndefinedValue(), nil
+
+	case "setTextContent":
+		selector, err := scriptStringArg(method, args, 0)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		text, err := scriptStringArg(method, args, 1)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		nodeID, err := inlineScriptResolveElement(store, selector)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		if err := store.SetTextContent(nodeID, text); err != nil {
+			return script.UndefinedValue(), err
+		}
+		return script.UndefinedValue(), nil
+
+	case "replaceChildren":
+		selector, err := scriptStringArg(method, args, 0)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		markup, err := scriptStringArg(method, args, 1)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		nodeID, err := inlineScriptResolveElement(store, selector)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		if err := store.ReplaceChildren(nodeID, markup); err != nil {
 			return script.UndefinedValue(), err
 		}
 		return script.UndefinedValue(), nil
@@ -317,6 +366,33 @@ func (h *inlineScriptHost) Call(method string, args []script.Value) (script.Valu
 			return script.UndefinedValue(), err
 		}
 		return script.UndefinedValue(), nil
+
+	case "locationHref":
+		return h.locationString(method, args, (*Session).LocationHref)
+
+	case "locationOrigin":
+		return h.locationString(method, args, (*Session).LocationOrigin)
+
+	case "locationProtocol":
+		return h.locationString(method, args, (*Session).LocationProtocol)
+
+	case "locationHost":
+		return h.locationString(method, args, (*Session).LocationHost)
+
+	case "locationHostname":
+		return h.locationString(method, args, (*Session).LocationHostname)
+
+	case "locationPort":
+		return h.locationString(method, args, (*Session).LocationPort)
+
+	case "locationPathname":
+		return h.locationString(method, args, (*Session).LocationPathname)
+
+	case "locationSearch":
+		return h.locationString(method, args, (*Session).LocationSearch)
+
+	case "locationHash":
+		return h.locationString(method, args, (*Session).LocationHash)
 
 	case "historyLength":
 		if len(args) > 0 {
@@ -505,6 +581,188 @@ func (h *inlineScriptHost) Call(method string, args []script.Value) (script.Valu
 			return script.UndefinedValue(), fmt.Errorf("inline script session is unavailable")
 		}
 		return script.BoolValue(h.session.navigatorCookieEnabled()), nil
+
+	case "localStorageGetItem":
+		key, err := scriptStringArg(method, args, 0)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		if len(args) > 1 {
+			return script.UndefinedValue(), fmt.Errorf("localStorageGetItem accepts at most 1 argument")
+		}
+		if h.session == nil {
+			return script.UndefinedValue(), fmt.Errorf("inline script session is unavailable")
+		}
+		value, ok := h.session.localStorageGetItem(key)
+		if !ok {
+			return script.StringValue("null"), nil
+		}
+		return script.StringValue(value), nil
+
+	case "localStorageSetItem":
+		key, err := scriptStringArg(method, args, 0)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		value, err := scriptStringArg(method, args, 1)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		if len(args) > 2 {
+			return script.UndefinedValue(), fmt.Errorf("localStorageSetItem accepts at most 2 arguments")
+		}
+		if h.session == nil {
+			return script.UndefinedValue(), fmt.Errorf("inline script session is unavailable")
+		}
+		if err := h.session.localStorageSetItem(key, value); err != nil {
+			return script.UndefinedValue(), err
+		}
+		return script.UndefinedValue(), nil
+
+	case "localStorageRemoveItem":
+		key, err := scriptStringArg(method, args, 0)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		if len(args) > 1 {
+			return script.UndefinedValue(), fmt.Errorf("localStorageRemoveItem accepts at most 1 argument")
+		}
+		if h.session == nil {
+			return script.UndefinedValue(), fmt.Errorf("inline script session is unavailable")
+		}
+		if err := h.session.localStorageRemoveItem(key); err != nil {
+			return script.UndefinedValue(), err
+		}
+		return script.UndefinedValue(), nil
+
+	case "localStorageClear":
+		if len(args) > 0 {
+			return script.UndefinedValue(), fmt.Errorf("localStorageClear accepts no arguments")
+		}
+		if h.session == nil {
+			return script.UndefinedValue(), fmt.Errorf("inline script session is unavailable")
+		}
+		if err := h.session.localStorageClear(); err != nil {
+			return script.UndefinedValue(), err
+		}
+		return script.UndefinedValue(), nil
+
+	case "localStorageLength":
+		if len(args) > 0 {
+			return script.UndefinedValue(), fmt.Errorf("localStorageLength accepts no arguments")
+		}
+		if h.session == nil {
+			return script.UndefinedValue(), fmt.Errorf("inline script session is unavailable")
+		}
+		return script.NumberValue(float64(h.session.localStorageLength())), nil
+
+	case "localStorageKey":
+		index, err := scriptInt64Arg(method, args, 0)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		if len(args) > 1 {
+			return script.UndefinedValue(), fmt.Errorf("localStorageKey accepts at most 1 argument")
+		}
+		if h.session == nil {
+			return script.UndefinedValue(), fmt.Errorf("inline script session is unavailable")
+		}
+		key, ok := h.session.localStorageKey(int(index))
+		if !ok {
+			return script.StringValue("null"), nil
+		}
+		return script.StringValue(key), nil
+
+	case "sessionStorageGetItem":
+		key, err := scriptStringArg(method, args, 0)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		if len(args) > 1 {
+			return script.UndefinedValue(), fmt.Errorf("sessionStorageGetItem accepts at most 1 argument")
+		}
+		if h.session == nil {
+			return script.UndefinedValue(), fmt.Errorf("inline script session is unavailable")
+		}
+		value, ok := h.session.sessionStorageGetItem(key)
+		if !ok {
+			return script.StringValue("null"), nil
+		}
+		return script.StringValue(value), nil
+
+	case "sessionStorageSetItem":
+		key, err := scriptStringArg(method, args, 0)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		value, err := scriptStringArg(method, args, 1)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		if len(args) > 2 {
+			return script.UndefinedValue(), fmt.Errorf("sessionStorageSetItem accepts at most 2 arguments")
+		}
+		if h.session == nil {
+			return script.UndefinedValue(), fmt.Errorf("inline script session is unavailable")
+		}
+		if err := h.session.sessionStorageSetItem(key, value); err != nil {
+			return script.UndefinedValue(), err
+		}
+		return script.UndefinedValue(), nil
+
+	case "sessionStorageRemoveItem":
+		key, err := scriptStringArg(method, args, 0)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		if len(args) > 1 {
+			return script.UndefinedValue(), fmt.Errorf("sessionStorageRemoveItem accepts at most 1 argument")
+		}
+		if h.session == nil {
+			return script.UndefinedValue(), fmt.Errorf("inline script session is unavailable")
+		}
+		if err := h.session.sessionStorageRemoveItem(key); err != nil {
+			return script.UndefinedValue(), err
+		}
+		return script.UndefinedValue(), nil
+
+	case "sessionStorageClear":
+		if len(args) > 0 {
+			return script.UndefinedValue(), fmt.Errorf("sessionStorageClear accepts no arguments")
+		}
+		if h.session == nil {
+			return script.UndefinedValue(), fmt.Errorf("inline script session is unavailable")
+		}
+		if err := h.session.sessionStorageClear(); err != nil {
+			return script.UndefinedValue(), err
+		}
+		return script.UndefinedValue(), nil
+
+	case "sessionStorageLength":
+		if len(args) > 0 {
+			return script.UndefinedValue(), fmt.Errorf("sessionStorageLength accepts no arguments")
+		}
+		if h.session == nil {
+			return script.UndefinedValue(), fmt.Errorf("inline script session is unavailable")
+		}
+		return script.NumberValue(float64(h.session.sessionStorageLength())), nil
+
+	case "sessionStorageKey":
+		index, err := scriptInt64Arg(method, args, 0)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		if len(args) > 1 {
+			return script.UndefinedValue(), fmt.Errorf("sessionStorageKey accepts at most 1 argument")
+		}
+		if h.session == nil {
+			return script.UndefinedValue(), fmt.Errorf("inline script session is unavailable")
+		}
+		key, ok := h.session.sessionStorageKey(int(index))
+		if !ok {
+			return script.StringValue("null"), nil
+		}
+		return script.StringValue(key), nil
 
 	case "windowName":
 		if len(args) > 0 {
@@ -770,9 +1028,41 @@ func (h *inlineScriptHost) Call(method string, args []script.Value) (script.Valu
 		}
 		return script.UndefinedValue(), nil
 
+	case "cloneNode":
+		selector, err := scriptStringArg(method, args, 0)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		deep, err := scriptBoolArg(method, args, 1)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		nodeID, err := inlineScriptResolveElement(h.store, selector)
+		if err != nil {
+			return script.UndefinedValue(), err
+		}
+		if _, err := h.store.CloneNodeAfter(nodeID, deep); err != nil {
+			return script.UndefinedValue(), err
+		}
+		return script.UndefinedValue(), nil
+
 	default:
 		return script.UndefinedValue(), fmt.Errorf("unsupported host method %q", method)
 	}
+}
+
+func (h *inlineScriptHost) locationString(method string, args []script.Value, getter func(*Session) (string, error)) (script.Value, error) {
+	if len(args) > 0 {
+		return script.UndefinedValue(), fmt.Errorf("%s accepts no arguments", method)
+	}
+	if h.session == nil {
+		return script.UndefinedValue(), fmt.Errorf("inline script session is unavailable")
+	}
+	value, err := getter(h.session)
+	if err != nil {
+		return script.UndefinedValue(), err
+	}
+	return script.StringValue(value), nil
 }
 
 func inlineScriptResolveElement(store *dom.Store, selector string) (dom.NodeID, error) {

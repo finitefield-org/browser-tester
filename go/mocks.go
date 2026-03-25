@@ -44,6 +44,25 @@ type ScrollCall struct {
 	Y      int64
 }
 
+type HistoryEntry struct {
+	URL      string
+	State    string
+	HasState bool
+}
+
+type TimerSnapshot struct {
+	ID         int64
+	Source     string
+	DueAtMs    int64
+	Repeat     bool
+	IntervalMs int64
+}
+
+type AnimationFrameSnapshot struct {
+	ID     int64
+	Source string
+}
+
 type MatchMediaCall struct {
 	Query string
 }
@@ -51,6 +70,11 @@ type MatchMediaCall struct {
 type MatchMediaListenerCall struct {
 	Query  string
 	Method string
+}
+
+type MatchMediaRule struct {
+	Query   string
+	Matches bool
 }
 
 type DownloadCapture struct {
@@ -61,6 +85,13 @@ type DownloadCapture struct {
 type FileInputSelection struct {
 	Selector string
 	Files    []string
+}
+
+type StorageEvent struct {
+	Scope string
+	Op    string
+	Key   string
+	Value string
 }
 
 type MockRegistryView struct {
@@ -517,6 +548,28 @@ func (m *MatchMediaMocks) RespondMatches(query string, matches bool) {
 	m.family.RespondMatches(query, matches)
 }
 
+func (m *MatchMediaMocks) RecordListenerCall(query, method string) {
+	if m == nil || m.family == nil {
+		return
+	}
+	m.family.RecordListenerCall(query, method)
+}
+
+func (m *MatchMediaMocks) Rules() []MatchMediaRule {
+	if m == nil || m.family == nil {
+		return nil
+	}
+	rules := m.family.Rules()
+	out := make([]MatchMediaRule, len(rules))
+	for i := range rules {
+		out[i] = MatchMediaRule{
+			Query:   rules[i].Query,
+			Matches: rules[i].Matches,
+		}
+	}
+	return out
+}
+
 func (m *MatchMediaMocks) Calls() []MatchMediaCall {
 	if m == nil || m.family == nil {
 		return nil
@@ -668,6 +721,23 @@ func (m *StorageSeeds) Session() map[string]string {
 		return map[string]string{}
 	}
 	return m.family.Session()
+}
+
+func (m *StorageSeeds) Events() []StorageEvent {
+	if m == nil || m.family == nil {
+		return nil
+	}
+	events := m.family.Events()
+	out := make([]StorageEvent, len(events))
+	for i := range events {
+		out[i] = StorageEvent{
+			Scope: events[i].Scope,
+			Op:    events[i].Op,
+			Key:   events[i].Key,
+			Value: events[i].Value,
+		}
+	}
+	return out
 }
 
 func (m *StorageSeeds) Reset() {

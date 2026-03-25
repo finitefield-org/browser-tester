@@ -234,8 +234,46 @@ func TestMatchMediaResolveAndTakeCalls(t *testing.T) {
 		t.Fatalf("TakeListenerCalls() = %#v, want one listener call", got)
 	}
 
+	rules := f.Rules()
+	if len(rules) != 1 || rules[0].Query != "(prefers-reduced-motion: reduce)" || !rules[0].Matches {
+		t.Fatalf("Rules() = %#v, want one seeded rule", rules)
+	}
+	rules[0].Query = "mutated"
+	if got := f.Rules(); len(got) != 1 || got[0].Query != "(prefers-reduced-motion: reduce)" || !got[0].Matches {
+		t.Fatalf("Rules() reread = %#v, want original rule", got)
+	}
+
 	if _, err := f.Resolve("(prefers-color-scheme: dark)"); err == nil {
 		t.Fatalf("Resolve() for unknown query error = nil, want missing-rule error")
+	}
+}
+
+func TestMatchMediaListenerCallsReturnCopies(t *testing.T) {
+	var f MatchMediaFamily
+
+	f.RecordListenerCall("(prefers-reduced-motion: reduce)", "addListener")
+	f.RecordListenerCall("(prefers-reduced-motion: reduce)", "removeListener")
+
+	listeners := f.ListenerCalls()
+	if len(listeners) != 2 || listeners[0].Method != "addListener" || listeners[1].Method != "removeListener" {
+		t.Fatalf("ListenerCalls() = %#v, want both listener calls", listeners)
+	}
+
+	listeners[0].Method = "mutated"
+	listeners[1].Query = "mutated"
+
+	fresh := f.ListenerCalls()
+	if len(fresh) != 2 || fresh[0].Method != "addListener" || fresh[1].Method != "removeListener" || fresh[0].Query != "(prefers-reduced-motion: reduce)" || fresh[1].Query != "(prefers-reduced-motion: reduce)" {
+		t.Fatalf("ListenerCalls() reread = %#v, want original listener calls", fresh)
+	}
+
+	taken := f.TakeListenerCalls()
+	if len(taken) != 2 || taken[0].Method != "addListener" || taken[1].Method != "removeListener" {
+		t.Fatalf("TakeListenerCalls() = %#v, want both listener calls", taken)
+	}
+	taken[0].Method = "mutated"
+	if got := f.TakeListenerCalls(); len(got) != 0 {
+		t.Fatalf("TakeListenerCalls() second read = %#v, want empty", got)
 	}
 }
 
@@ -337,6 +375,7 @@ func TestStorageFamilyLocalAndSessionReturnCopies(t *testing.T) {
 
 	f.SeedLocal("token", "abc")
 	f.SeedSession("tab", "main")
+	f.SeedLocal("theme", "dark")
 
 	local := f.Local()
 	session := f.Session()
@@ -344,6 +383,15 @@ func TestStorageFamilyLocalAndSessionReturnCopies(t *testing.T) {
 	local["extra"] = "new"
 	session["tab"] = "mutated"
 	session["extra"] = "new"
+
+	events := f.Events()
+	if len(events) != 3 || events[0].Scope != "local" || events[0].Key != "token" || events[0].Value != "abc" || events[1].Scope != "session" || events[1].Key != "tab" || events[1].Value != "main" || events[2].Scope != "local" || events[2].Key != "theme" || events[2].Value != "dark" {
+		t.Fatalf("Events() = %#v, want three storage events", events)
+	}
+	events[0].Value = "mutated"
+	if got := f.Events(); len(got) != 3 || got[0].Value != "abc" || got[2].Value != "dark" {
+		t.Fatalf("Events() reread = %#v, want original events", got)
+	}
 
 	freshLocal := f.Local()
 	if got, want := freshLocal["token"], "abc"; got != want {
@@ -368,6 +416,66 @@ func TestStorageFamilyLocalAndSessionReturnCopies(t *testing.T) {
 	}
 	if got := f.Session(); len(got) != 0 {
 		t.Fatalf("Session() after Reset = %#v, want empty", got)
+	}
+}
+
+func TestStorageFamilySupportsWebStorageOperations(t *testing.T) {
+	var f StorageFamily
+
+	f.SeedLocal("theme", "dark")
+	f.SeedSession("tab", "main")
+
+	if got, ok := f.Get("local", "theme"); !ok || got != "dark" {
+		t.Fatalf("Get(local, theme) = (%q, %v), want (dark, true)", got, ok)
+	}
+	if got, ok := f.Get("session", "tab"); !ok || got != "main" {
+		t.Fatalf("Get(session, tab) = (%q, %v), want (main, true)", got, ok)
+	}
+	if got, ok := f.Length("local"); !ok || got != 1 {
+		t.Fatalf("Length(local) = (%d, %v), want (1, true)", got, ok)
+	}
+	if got, ok := f.Key("local", 0); !ok || got != "theme" {
+		t.Fatalf("Key(local, 0) = (%q, %v), want (theme, true)", got, ok)
+	}
+
+	if !f.Set("local", "theme", "dark") {
+		t.Fatalf("Set(local, theme, dark) = false, want true")
+	}
+	if !f.Set("local", "accent", "blue") {
+		t.Fatalf("Set(local, accent, blue) = false, want true")
+	}
+	if !f.Remove("session", "tab") {
+		t.Fatalf("Remove(session, tab) = false, want true")
+	}
+	if !f.Clear("local") {
+		t.Fatalf("Clear(local) = false, want true")
+	}
+
+	if got := f.Local(); len(got) != 0 {
+		t.Fatalf("Local() after clear = %#v, want empty", got)
+	}
+	if got := f.Session(); len(got) != 0 {
+		t.Fatalf("Session() after remove = %#v, want empty", got)
+	}
+
+	events := f.Events()
+	if len(events) != 5 {
+		t.Fatalf("Events() = %#v, want five storage events", events)
+	}
+	if events[0].Scope != "local" || events[0].Op != "seed" || events[0].Key != "theme" || events[0].Value != "dark" {
+		t.Fatalf("Events()[0] = %#v, want local seed event", events[0])
+	}
+	if events[1].Scope != "session" || events[1].Op != "seed" || events[1].Key != "tab" || events[1].Value != "main" {
+		t.Fatalf("Events()[1] = %#v, want session seed event", events[1])
+	}
+	if events[2].Op != "set" || events[2].Key != "accent" || events[2].Value != "blue" {
+		t.Fatalf("Events()[2] = %#v, want local set event", events[2])
+	}
+	if events[3].Op != "remove" || events[3].Scope != "session" || events[3].Key != "tab" {
+		t.Fatalf("Events()[3] = %#v, want session remove event", events[3])
+	}
+	if events[4].Op != "clear" || events[4].Scope != "local" {
+		t.Fatalf("Events()[4] = %#v, want local clear event", events[4])
 	}
 }
 

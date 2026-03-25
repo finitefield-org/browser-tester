@@ -28,10 +28,23 @@ type simpleSelector struct {
 }
 
 type selectorAttributeCondition struct {
-	name     string
-	value    string
-	hasValue bool
+	name            string
+	value           string
+	operator        selectorAttributeOperator
+	caseInsensitive bool
 }
+
+type selectorAttributeOperator uint8
+
+const (
+	selectorAttributeExists selectorAttributeOperator = iota
+	selectorAttributeEquals
+	selectorAttributeIncludes
+	selectorAttributeDashMatch
+	selectorAttributePrefix
+	selectorAttributeSuffix
+	selectorAttributeSubstring
+)
 
 type selectorHasGroup []selectorSequence
 
@@ -128,7 +141,7 @@ func (s *Store) Select(selector string) ([]NodeID, error) {
 	matches := make([]NodeID, 0, 4)
 	for _, rootID := range s.documentChildren() {
 		s.walkElementPreOrder(rootID, func(node *Node) {
-			if parsed.matches(s, node) {
+			if parsed.matchesWithScope(s, node, 0) {
 				matches = append(matches, node.ID)
 			}
 		})
@@ -218,6 +231,10 @@ func parseSelectorSequence(input string) (selectorSequence, error) {
 }
 
 func (s selectorSequence) matches(store *Store, node *Node) bool {
+	return s.matchesWithScope(store, node, 0)
+}
+
+func (s selectorSequence) matchesWithScope(store *Store, node *Node, scopeNodeID NodeID) bool {
 	if store == nil || node == nil || node.Kind != NodeKindElement {
 		return false
 	}
@@ -226,13 +243,13 @@ func (s selectorSequence) matches(store *Store, node *Node) bool {
 	}
 
 	last := len(s.parts) - 1
-	if !s.parts[last].compound.matches(store, node) {
+	if !s.parts[last].compound.matchesWithScope(store, node, scopeNodeID) {
 		return false
 	}
 
 	current := node
 	for i := last - 1; i >= 0; i-- {
-		matched, ok := s.parts[i].matchPredecessor(store, current)
+		matched, ok := s.parts[i].matchPredecessor(store, current, scopeNodeID)
 		if !ok {
 			return false
 		}
@@ -242,7 +259,7 @@ func (s selectorSequence) matches(store *Store, node *Node) bool {
 	return true
 }
 
-func (p selectorSequencePart) matchPredecessor(store *Store, current *Node) (*Node, bool) {
+func (p selectorSequencePart) matchPredecessor(store *Store, current *Node, scopeNodeID NodeID) (*Node, bool) {
 	if store == nil || current == nil {
 		return nil, false
 	}
@@ -254,7 +271,7 @@ func (p selectorSequencePart) matchPredecessor(store *Store, current *Node) (*No
 			return nil, false
 		}
 		parent := store.Node(parentID)
-		if parent == nil || !p.compound.matches(store, parent) {
+		if parent == nil || !p.compound.matchesWithScope(store, parent, scopeNodeID) {
 			return nil, false
 		}
 		return parent, true
@@ -265,7 +282,7 @@ func (p selectorSequencePart) matchPredecessor(store *Store, current *Node) (*No
 			if parent == nil {
 				return nil, false
 			}
-			if p.compound.matches(store, parent) {
+			if p.compound.matchesWithScope(store, parent, scopeNodeID) {
 				return parent, true
 			}
 			parentID = parent.Parent
@@ -273,12 +290,12 @@ func (p selectorSequencePart) matchPredecessor(store *Store, current *Node) (*No
 		return nil, false
 	case selectorCombinatorAdjacentSibling:
 		sibling := previousElementSibling(store, current)
-		if sibling == nil || !p.compound.matches(store, sibling) {
+		if sibling == nil || !p.compound.matchesWithScope(store, sibling, scopeNodeID) {
 			return nil, false
 		}
 		return sibling, true
 	case selectorCombinatorGeneralSibling:
-		sibling := previousMatchingSibling(store, current, p.compound)
+		sibling := previousMatchingSibling(store, current, p.compound, scopeNodeID)
 		if sibling == nil {
 			return nil, false
 		}
@@ -495,6 +512,10 @@ func parseSimpleSelector(input string) (simpleSelector, error) {
 }
 
 func (s simpleSelector) matches(store *Store, node *Node) bool {
+	return s.matchesWithScope(store, node, 0)
+}
+
+func (s simpleSelector) matchesWithScope(store *Store, node *Node, scopeNodeID NodeID) bool {
 	if store == nil || node == nil || node.Kind != NodeKindElement {
 		return false
 	}
@@ -520,19 +541,13 @@ func (s simpleSelector) matches(store *Store, node *Node) bool {
 		}
 	}
 	for _, expected := range s.attrs {
-		if expected.hasValue {
-			value, ok := attributeValue(node.Attrs, expected.name)
-			if !ok || value != expected.value {
-				return false
-			}
-			continue
-		}
-		if !hasAttribute(node.Attrs, expected.name) {
+		value, ok := attributeValue(node.Attrs, expected.name)
+		if !matchesSelectorAttributeCondition(ok, value, expected) {
 			return false
 		}
 	}
 	for _, pseudo := range s.pseudos {
-		if !pseudo.matches(store, node) {
+		if !pseudo.matchesWithScope(store, node, scopeNodeID) {
 			return false
 		}
 	}
@@ -548,17 +563,17 @@ func (s simpleSelector) matches(store *Store, node *Node) bool {
 		}
 	}
 	for _, group := range s.hasGroups {
-		if !pseudoClassHas(store, node, group) {
+		if !pseudoClassHas(store, node, group, scopeNodeID) {
 			return false
 		}
 	}
 	for _, group := range s.matchGroups {
-		if !pseudoClassSelectorListMatchesNode(store, node, group) {
+		if !pseudoClassSelectorListMatchesNode(store, node, group, scopeNodeID) {
 			return false
 		}
 	}
 	for _, group := range s.notGroups {
-		if pseudoClassSelectorListMatchesNode(store, node, group) {
+		if pseudoClassSelectorListMatchesNode(store, node, group, scopeNodeID) {
 			return false
 		}
 	}
@@ -706,21 +721,48 @@ func parseSelectorAttributeSelector(input, text string, index int) (selectorAttr
 	name := strings.ToLower(text[nameStart:i])
 	i = skipSpaces(text, i)
 
-	attr := selectorAttributeCondition{name: name}
-	if i < len(text) && text[i] == '=' {
-		attr.hasValue = true
-		i++
-		i = skipSpaces(text, i)
-		if i >= len(text) {
-			return selectorAttributeCondition{}, 0, fmt.Errorf("unterminated attribute selector `%s`", input)
+	attr := selectorAttributeCondition{name: name, operator: selectorAttributeExists}
+	if i < len(text) {
+		switch text[i] {
+		case '=':
+			attr.operator = selectorAttributeEquals
+			i++
+		case '~', '|', '^', '$', '*':
+			if i+1 >= len(text) || text[i+1] != '=' {
+				return selectorAttributeCondition{}, 0, fmt.Errorf("invalid attribute selector `%s`", input)
+			}
+			switch text[i] {
+			case '~':
+				attr.operator = selectorAttributeIncludes
+			case '|':
+				attr.operator = selectorAttributeDashMatch
+			case '^':
+				attr.operator = selectorAttributePrefix
+			case '$':
+				attr.operator = selectorAttributeSuffix
+			case '*':
+				attr.operator = selectorAttributeSubstring
+			}
+			i += 2
 		}
-		value, next, err := parseSelectorAttributeValue(input, text, i)
-		if err != nil {
-			return selectorAttributeCondition{}, 0, err
+		if attr.operator != selectorAttributeExists {
+			i = skipSpaces(text, i)
+			if i >= len(text) {
+				return selectorAttributeCondition{}, 0, fmt.Errorf("unterminated attribute selector `%s`", input)
+			}
+			value, next, err := parseSelectorAttributeValue(input, text, i)
+			if err != nil {
+				return selectorAttributeCondition{}, 0, err
+			}
+			attr.value = value
+			i = next
+			i = skipSpaces(text, i)
+			if i < len(text) && (text[i] == 'i' || text[i] == 'I' || text[i] == 's' || text[i] == 'S') {
+				attr.caseInsensitive = text[i] == 'i' || text[i] == 'I'
+				i++
+				i = skipSpaces(text, i)
+			}
 		}
-		attr.value = value
-		i = next
-		i = skipSpaces(text, i)
 	}
 
 	if i >= len(text) || text[i] != ']' {
@@ -1013,6 +1055,10 @@ func parseSelectorPseudoClass(name string) (selectorPseudoClass, bool) {
 }
 
 func (p selectorPseudoClass) matches(store *Store, node *Node) bool {
+	return p.matchesWithScope(store, node, 0)
+}
+
+func (p selectorPseudoClass) matchesWithScope(store *Store, node *Node, scopeNodeID NodeID) bool {
 	if store == nil || node == nil || node.Kind != NodeKindElement {
 		return false
 	}
@@ -1021,6 +1067,9 @@ func (p selectorPseudoClass) matches(store *Store, node *Node) bool {
 	case selectorPseudoRoot:
 		return node.Parent == store.documentID
 	case selectorPseudoScope:
+		if scopeNodeID != 0 {
+			return node.ID == scopeNodeID
+		}
 		return node.Parent == store.documentID
 	case selectorPseudoDefined:
 		return pseudoClassDefined(node)
@@ -1709,7 +1758,7 @@ func pseudoClassTargetWithin(store *Store, node *Node) bool {
 	return subtreeContainsNode(store, node.ID, targetNodeID)
 }
 
-func pseudoClassHas(store *Store, node *Node, group selectorHasGroup) bool {
+func pseudoClassHas(store *Store, node *Node, group selectorHasGroup, scopeNodeID NodeID) bool {
 	if store == nil || node == nil || node.Kind != NodeKindElement || len(group) == 0 {
 		return false
 	}
@@ -1720,7 +1769,7 @@ func pseudoClassHas(store *Store, node *Node, group selectorHasGroup) bool {
 			return
 		}
 		for _, selector := range group {
-			if selector.matches(store, current) {
+			if selector.matchesWithScope(store, current, node.ID) {
 				found = true
 				return
 			}
@@ -1729,12 +1778,12 @@ func pseudoClassHas(store *Store, node *Node, group selectorHasGroup) bool {
 	return found
 }
 
-func pseudoClassSelectorListMatchesNode(store *Store, node *Node, group selectorHasGroup) bool {
+func pseudoClassSelectorListMatchesNode(store *Store, node *Node, group selectorHasGroup, scopeNodeID NodeID) bool {
 	if store == nil || node == nil || node.Kind != NodeKindElement || len(group) == 0 {
 		return false
 	}
 	for _, selector := range group {
-		if selector.matches(store, node) {
+		if selector.matchesWithScope(store, node, scopeNodeID) {
 			return true
 		}
 	}
@@ -2648,6 +2697,125 @@ func hasAttribute(attrs []Attribute, name string) bool {
 	return ok
 }
 
+func matchesSelectorAttributeCondition(has bool, value string, expected selectorAttributeCondition) bool {
+	switch expected.operator {
+	case selectorAttributeExists:
+		return has
+	case selectorAttributeEquals:
+		if !has {
+			return false
+		}
+		return selectorAttributeValueEquals(value, expected.value, expected.caseInsensitive)
+	case selectorAttributeIncludes:
+		if !has {
+			return false
+		}
+		return selectorAttributeValueIncludes(value, expected.value, expected.caseInsensitive)
+	case selectorAttributeDashMatch:
+		if !has {
+			return false
+		}
+		return selectorAttributeValueDashMatch(value, expected.value, expected.caseInsensitive)
+	case selectorAttributePrefix:
+		if !has {
+			return false
+		}
+		return selectorAttributeValuePrefix(value, expected.value, expected.caseInsensitive)
+	case selectorAttributeSuffix:
+		if !has {
+			return false
+		}
+		return selectorAttributeValueSuffix(value, expected.value, expected.caseInsensitive)
+	case selectorAttributeSubstring:
+		if !has {
+			return false
+		}
+		return selectorAttributeValueSubstring(value, expected.value, expected.caseInsensitive)
+	default:
+		return false
+	}
+}
+
+func selectorAttributeValueEquals(value, expected string, caseInsensitive bool) bool {
+	if caseInsensitive {
+		return equalASCIIInsensitive(value, expected)
+	}
+	return value == expected
+}
+
+func selectorAttributeValueIncludes(value, expected string, caseInsensitive bool) bool {
+	for _, token := range strings.Fields(value) {
+		if selectorAttributeValueEquals(token, expected, caseInsensitive) {
+			return true
+		}
+	}
+	return false
+}
+
+func selectorAttributeValueDashMatch(value, expected string, caseInsensitive bool) bool {
+	if selectorAttributeValueEquals(value, expected, caseInsensitive) {
+		return true
+	}
+	if len(value) < len(expected)+1 {
+		return false
+	}
+	prefix := value[:len(expected)]
+	if !selectorAttributeValueEquals(prefix, expected, caseInsensitive) {
+		return false
+	}
+	return value[len(expected)] == '-'
+}
+
+func selectorAttributeValuePrefix(value, expected string, caseInsensitive bool) bool {
+	if len(value) < len(expected) {
+		return false
+	}
+	return selectorAttributeValueEquals(value[:len(expected)], expected, caseInsensitive)
+}
+
+func selectorAttributeValueSuffix(value, expected string, caseInsensitive bool) bool {
+	if len(value) < len(expected) {
+		return false
+	}
+	return selectorAttributeValueEquals(value[len(value)-len(expected):], expected, caseInsensitive)
+}
+
+func selectorAttributeValueSubstring(value, expected string, caseInsensitive bool) bool {
+	if !caseInsensitive {
+		return strings.Contains(value, expected)
+	}
+	if expected == "" {
+		return true
+	}
+	needle := len(expected)
+	for start := 0; start+needle <= len(value); start++ {
+		if equalASCIIInsensitive(value[start:start+needle], expected) {
+			return true
+		}
+	}
+	return false
+}
+
+func equalASCIIInsensitive(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		ca := a[i]
+		cb := b[i]
+		if 'A' <= ca && ca <= 'Z' {
+			ca += 'a' - 'A'
+		}
+		if 'A' <= cb && cb <= 'Z' {
+			cb += 'a' - 'A'
+		}
+		if ca != cb {
+			return false
+		}
+	}
+	return true
+}
+
 func containsToken(tokens []string, token string) bool {
 	for _, current := range tokens {
 		if current == token {
@@ -2757,7 +2925,7 @@ func previousElementSibling(store *Store, node *Node) *Node {
 	return nil
 }
 
-func previousMatchingSibling(store *Store, node *Node, compound simpleSelector) *Node {
+func previousMatchingSibling(store *Store, node *Node, compound simpleSelector, scopeNodeID NodeID) *Node {
 	if store == nil || node == nil || node.Parent == 0 {
 		return nil
 	}
@@ -2773,7 +2941,7 @@ func previousMatchingSibling(store *Store, node *Node, compound simpleSelector) 
 				if sibling == nil || sibling.Kind != NodeKindElement {
 					continue
 				}
-				if compound.matches(store, sibling) {
+				if compound.matchesWithScope(store, sibling, scopeNodeID) {
 					return sibling
 				}
 			}

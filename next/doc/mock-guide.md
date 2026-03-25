@@ -18,7 +18,7 @@ Even in Phase 0, the workspace already reserves explicit families so runtime beh
 - `matchMedia`
 - `storage`
 
-They are exposed from the public facade through `Harness::mocks_mut()`. `matchMedia` is configured through the builder seed API and the registry, then consumed from scripts via `window.matchMedia(...)`. The dialogs family is consumed from scripts via `window.alert(...)`, `window.confirm(...)`, and `window.prompt(...)`, with alert/confirm/prompt message capture recorded in the registry.
+They are exposed from the public facade through `Harness::mocks_mut()`. `matchMedia` is configured through the builder seed API and the registry, then consumed from scripts via `window.matchMedia(...)`. The dialogs family is consumed from scripts via `window.alert(...)`, `window.confirm(...)`, and `window.prompt(...)`, with alert/confirm/prompt message capture recorded in the registry. The clipboard family is consumed from scripts via `window.navigator.clipboard.writeText()` / `window.navigator.clipboard.readText()`, with write capture recorded in the same registry.
 
 ## Public Mock Actions
 
@@ -45,6 +45,27 @@ Download capture records `DownloadCapture` artifacts in the registry and exposes
 `matchMedia` is registry-backed and builder-seeded rather than a standalone `Harness` action.
 The location family also captures script-side `window.location.assign()`, `window.location.replace()`, `window.location.reload()`, and `window.location.hash` / `document.location.hash` / `window.location.pathname` / `document.location.pathname` / `window.location.search` / `document.location.search` assignments through the same navigation log that `Harness::navigate()` uses.
 The same navigation log also covers `document.location.href`, `document.location.hash`, `document.location.pathname`, `document.location.search`, `document.location.origin`, `window.location.href`, `window.location.hash`, `window.location.pathname`, `window.location.search`, and `window.location.origin` assignments.
+
+## Deterministic Controls
+
+The runtime also exposes public `Harness` controls that are not tied to a single mock family:
+
+- `set_random_seed(seed)`
+- `enable_trace(enabled)`
+- `set_trace_stderr(enabled)`
+- `set_trace_events(enabled)`
+- `set_trace_timers(enabled)`
+- `set_trace_log_limit(max_entries)`
+- `take_trace_logs()`
+- `set_timer_step_limit(max_steps)`
+- `set_clipboard_text(text)`
+- `set_clipboard_read_error(error)`
+- `set_clipboard_write_error(error)`
+- `clear_clipboard_errors()`
+
+`set_random_seed()` makes `Math.random()` reproducible in script tests.
+Trace capture records `[event] ...` and `[timer] ...` lines while tracing is enabled; `take_trace_logs()` drains the buffered lines so assertions can inspect them after a step.
+Clipboard seed and error helpers let tests cover both successful clipboard reads and failure paths without reaching into the registry directly.
 
 ## Minimal Example
 

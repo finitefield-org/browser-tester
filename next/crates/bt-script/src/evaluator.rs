@@ -3663,6 +3663,7 @@ fn eval_member<H: HostBindings>(
                     | "Collator"
                     | "min"
                     | "max"
+                    | "random"
                     | "abs"
                     | "floor"
                     | "ceil"
@@ -6177,6 +6178,7 @@ fn eval_method_call<H: HostBindings>(
             )),
             "min" => math_namespace_min(args, env, host),
             "max" => math_namespace_max(args, env, host),
+            "random" => math_namespace_random(args, env, host),
             "abs" => math_namespace_abs(args, env, host),
             "floor" => math_namespace_floor(args, env, host),
             "ceil" => math_namespace_ceil(args, env, host),
@@ -11237,6 +11239,17 @@ fn math_namespace_max<H: HostBindings>(
         result = result.max(number_from_value(&value)?);
     }
     Ok(Value::Number(result))
+}
+
+fn math_namespace_random<H: HostBindings>(
+    args: &[Expr],
+    _env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new("Math.random() expects no arguments"));
+    }
+    Ok(Value::Number(host.random_f64()?))
 }
 
 fn math_namespace_unary<H: HostBindings, F: FnOnce(f64) -> f64>(

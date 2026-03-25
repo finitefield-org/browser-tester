@@ -94,6 +94,140 @@ func TestSessionHistoryNavigationAndState(t *testing.T) {
 	}
 }
 
+func TestSessionHistoryInspectionHelpers(t *testing.T) {
+	s := NewSession(SessionConfig{
+		URL:  "https://example.test/app",
+		HTML: `<main><script>host:historyPushState("step-1", "", "#step-1")</script></main>`,
+	})
+
+	if got := s.HistoryLength(); got != 2 {
+		t.Fatalf("HistoryLength() = %d, want 2", got)
+	}
+	if got, ok := s.HistoryState(); !ok || got != "step-1" {
+		t.Fatalf("HistoryState() = (%q, %v), want (\"step-1\", true)", got, ok)
+	}
+
+	var nilSession *Session
+	if got := nilSession.HistoryLength(); got != 0 {
+		t.Fatalf("nil HistoryLength() = %d, want 0", got)
+	}
+	if got, ok := nilSession.HistoryState(); ok || got != "null" {
+		t.Fatalf("nil HistoryState() = (%q, %v), want (\"null\", false)", got, ok)
+	}
+	if got := s.HistoryScrollRestoration(); got != "auto" {
+		t.Fatalf("HistoryScrollRestoration() = %q, want %q", got, "auto")
+	}
+	if got := nilSession.HistoryScrollRestoration(); got != "auto" {
+		t.Fatalf("nil HistoryScrollRestoration() = %q, want %q", got, "auto")
+	}
+}
+
+func TestSessionHistoryEntriesInspectionHelpers(t *testing.T) {
+	s := NewSession(SessionConfig{
+		URL:  "https://example.test/app",
+		HTML: `<main><script>host:historyPushState("step-1", "", "#step-1"); host:historyReplaceState("step-2", "", "#step-2")</script></main>`,
+	})
+
+	entries := s.HistoryEntries()
+	if len(entries) != 2 {
+		t.Fatalf("HistoryEntries() = %#v, want 2 entries", entries)
+	}
+	if entries[0].URL != "https://example.test/app" || entries[0].HasState {
+		t.Fatalf("HistoryEntries()[0] = %#v, want initial entry without state", entries[0])
+	}
+	if entries[1].URL != "https://example.test/app#step-2" || !entries[1].HasState || entries[1].State != "step-2" {
+		t.Fatalf("HistoryEntries()[1] = %#v, want current entry with step-2 state", entries[1])
+	}
+
+	entries[0].URL = "mutated"
+	entries[1].State = "mutated"
+	if fresh := s.HistoryEntries(); len(fresh) != 2 || fresh[0].URL != "https://example.test/app" || fresh[1].State != "step-2" {
+		t.Fatalf("HistoryEntries() reread = %#v, want original history entries", fresh)
+	}
+
+	var nilSession *Session
+	if got := nilSession.HistoryEntries(); got != nil {
+		t.Fatalf("nil HistoryEntries() = %#v, want nil", got)
+	}
+}
+
+func TestSessionHistoryIndexInspectionHelpers(t *testing.T) {
+	s := NewSession(SessionConfig{
+		URL:  "https://example.test/app",
+		HTML: `<main><script>host:historyPushState("step-1", "", "#step-1")</script></main>`,
+	})
+
+	if got := s.HistoryIndex(); got != 1 {
+		t.Fatalf("HistoryIndex() = %d, want 1", got)
+	}
+	if err := s.windowHistoryBack(); err != nil {
+		t.Fatalf("windowHistoryBack() error = %v", err)
+	}
+	if got := s.HistoryIndex(); got != 0 {
+		t.Fatalf("HistoryIndex() after back = %d, want 0", got)
+	}
+
+	var nilSession *Session
+	if got := nilSession.HistoryIndex(); got != 0 {
+		t.Fatalf("nil HistoryIndex() = %d, want 0", got)
+	}
+}
+
+func TestSessionVisitedURLsInspectionHelpers(t *testing.T) {
+	s := NewSession(SessionConfig{
+		URL: "https://example.test/app",
+	})
+
+	visited := s.VisitedURLs()
+	if len(visited) != 1 || visited[0] != "https://example.test/app" {
+		t.Fatalf("VisitedURLs() = %#v, want current URL snapshot", visited)
+	}
+
+	if err := s.windowHistoryPushState("step-1", "", "#step-1"); err != nil {
+		t.Fatalf("windowHistoryPushState() error = %v", err)
+	}
+	visited = s.VisitedURLs()
+	if len(visited) != 2 || visited[0] != "https://example.test/app" || visited[1] != "https://example.test/app#step-1" {
+		t.Fatalf("VisitedURLs() after pushState = %#v, want history-derived snapshot", visited)
+	}
+
+	visited[0] = "mutated"
+	visited[1] = "mutated"
+	if fresh := s.VisitedURLs(); len(fresh) != 2 || fresh[0] != "https://example.test/app" || fresh[1] != "https://example.test/app#step-1" {
+		t.Fatalf("VisitedURLs() reread = %#v, want original visited URLs", fresh)
+	}
+
+	var nilSession *Session
+	if got := nilSession.VisitedURLs(); got != nil {
+		t.Fatalf("nil VisitedURLs() = %#v, want nil", got)
+	}
+}
+
+func TestSessionNavigationLogInspection(t *testing.T) {
+	s := NewSession(SessionConfig{
+		URL:  "https://example.test/start",
+		HTML: `<main><script>host:locationAssign("/next"); host:locationReplace("/replace")</script></main>`,
+	})
+
+	if got, want := s.NavigationLog(), []string{
+		"https://example.test/next",
+		"https://example.test/replace",
+	}; len(got) != len(want) {
+		t.Fatalf("NavigationLog() = %#v, want %#v", got, want)
+	} else {
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("NavigationLog()[%d] = %q, want %q", i, got[i], want[i])
+			}
+		}
+	}
+
+	var nilSession *Session
+	if got := nilSession.NavigationLog(); got != nil {
+		t.Fatalf("nil NavigationLog() = %#v, want nil", got)
+	}
+}
+
 func TestSessionHistoryNavigationSyncsTargetState(t *testing.T) {
 	s := NewSession(SessionConfig{
 		URL:  "https://example.test/app#legacy",

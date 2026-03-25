@@ -176,7 +176,7 @@ func TestHarnessAssertionHelpersClassifyFailures(t *testing.T) {
 }
 
 func TestHarnessAssertionHelpersSupportAttributeSelectors(t *testing.T) {
-	harness, err := FromHTML(`<main><div id="root" data-kind="panel"><a id="nav" href="/next" data-role="nav">Go</a><input id="name" type="text"><p id="flag" hidden></p></div></main>`)
+	harness, err := FromHTML(`<main><div id="root" data-kind="panel"><a id="nav" href="/next" data-role="nav">Go</a><input id="name" type="text"><p id="flag" hidden></p><span id="meta" data-tags="alpha beta gamma" data-locale="en-US" data-note="prefix-middle-suffix" data-code="abc123"></span></div></main>`)
 	if err != nil {
 		t.Fatalf("FromHTML() error = %v", err)
 	}
@@ -199,8 +199,35 @@ func TestHarnessAssertionHelpersSupportAttributeSelectors(t *testing.T) {
 	if err := harness.AssertExists("p[hidden]"); err != nil {
 		t.Fatalf("AssertExists(p[hidden]) error = %v", err)
 	}
+	if err := harness.AssertExists("span[data-tags~=beta]"); err != nil {
+		t.Fatalf("AssertExists(span[data-tags~=beta]) error = %v", err)
+	}
+	if err := harness.AssertExists("span[data-locale|=en]"); err != nil {
+		t.Fatalf("AssertExists(span[data-locale|=en]) error = %v", err)
+	}
+	if err := harness.AssertExists("span[data-note^=prefix]"); err != nil {
+		t.Fatalf("AssertExists(span[data-note^=prefix]) error = %v", err)
+	}
+	if err := harness.AssertExists("span[data-note$=suffix]"); err != nil {
+		t.Fatalf("AssertExists(span[data-note$=suffix]) error = %v", err)
+	}
+	if err := harness.AssertExists("span[data-note*=middle]"); err != nil {
+		t.Fatalf("AssertExists(span[data-note*=middle]) error = %v", err)
+	}
+	if err := harness.AssertExists("span[data-tags~=BETA i]"); err != nil {
+		t.Fatalf("AssertExists(span[data-tags~=BETA i]) error = %v", err)
+	}
+	if err := harness.AssertExists("input[type=TEXT i]"); err != nil {
+		t.Fatalf("AssertExists(input[type=TEXT i]) error = %v", err)
+	}
 	if err := harness.AssertExists("a[data-role=missing]"); err == nil {
 		t.Fatalf("AssertExists(a[data-role=missing]) error = nil, want no match")
+	}
+	if err := harness.AssertExists("span[data-tags~=delta]"); err == nil {
+		t.Fatalf("AssertExists(span[data-tags~=delta]) error = nil, want no match")
+	}
+	if err := harness.AssertExists("span[data-tags~=BETA s]"); err == nil {
+		t.Fatalf("AssertExists(span[data-tags~=BETA s]) error = nil, want no match")
 	}
 }
 

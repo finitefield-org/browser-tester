@@ -29,6 +29,14 @@ type eventDispatchContext struct {
 	propagationStopped bool
 }
 
+type EventListenerRegistration struct {
+	NodeID int64
+	Event  string
+	Phase  string
+	Source string
+	Once   bool
+}
+
 func normalizeEventType(event string) string {
 	return strings.ToLower(strings.TrimSpace(event))
 }
@@ -75,6 +83,29 @@ func (s *Session) registerEventListener(nodeID dom.NodeID, event, source, phase 
 		once:   once,
 	})
 	return nil
+}
+
+func (s *Session) EventListeners() []EventListenerRegistration {
+	if s == nil {
+		return nil
+	}
+	if _, err := s.ensureDOM(); err != nil {
+		return nil
+	}
+	if len(s.eventListeners) == 0 {
+		return nil
+	}
+	out := make([]EventListenerRegistration, len(s.eventListeners))
+	for i := range s.eventListeners {
+		out[i] = EventListenerRegistration{
+			NodeID: int64(s.eventListeners[i].nodeID),
+			Event:  s.eventListeners[i].event,
+			Phase:  string(s.eventListeners[i].phase),
+			Source: s.eventListeners[i].source,
+			Once:   s.eventListeners[i].once,
+		}
+	}
+	return out
 }
 
 func (s *Session) dispatchEventListeners(store *dom.Store, nodeID dom.NodeID, event string) (bool, error) {

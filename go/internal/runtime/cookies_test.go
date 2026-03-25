@@ -8,6 +8,9 @@ func TestSessionDocumentCookieGetterAndSetter(t *testing.T) {
 	if got := s.documentCookie(); got != "" {
 		t.Fatalf("documentCookie() = %q, want empty string", got)
 	}
+	if got := s.DocumentCookie(); got != "" {
+		t.Fatalf("DocumentCookie() = %q, want empty string", got)
+	}
 
 	if err := s.setDocumentCookie("theme=dark"); err != nil {
 		t.Fatalf("setDocumentCookie(theme=dark) error = %v", err)
@@ -21,6 +24,9 @@ func TestSessionDocumentCookieGetterAndSetter(t *testing.T) {
 
 	if got, want := s.documentCookie(), "lang=en; theme=light"; got != want {
 		t.Fatalf("documentCookie() = %q, want %q", got, want)
+	}
+	if got, want := s.DocumentCookie(), "lang=en; theme=light"; got != want {
+		t.Fatalf("DocumentCookie() = %q, want %q", got, want)
 	}
 }
 

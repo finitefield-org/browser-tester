@@ -25,6 +25,112 @@ func (s *Session) SetLocationProperty(property, value string) error {
 	return s.recordNavigation(resolved)
 }
 
+func (s *Session) LocationHref() (string, error) {
+	if s == nil {
+		return "", fmt.Errorf("session is unavailable")
+	}
+	return s.URL(), nil
+}
+
+func (s *Session) LocationOrigin() (string, error) {
+	parsed, err := s.currentLocationURL()
+	if err != nil {
+		return "", err
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return "null", nil
+	}
+	return parsed.Scheme + "://" + parsed.Host, nil
+}
+
+func (s *Session) LocationProtocol() (string, error) {
+	parsed, err := s.currentLocationURL()
+	if err != nil {
+		return "", err
+	}
+	if parsed.Scheme == "" {
+		return "", nil
+	}
+	return parsed.Scheme + ":", nil
+}
+
+func (s *Session) LocationHost() (string, error) {
+	parsed, err := s.currentLocationURL()
+	if err != nil {
+		return "", err
+	}
+	return parsed.Host, nil
+}
+
+func (s *Session) LocationHostname() (string, error) {
+	parsed, err := s.currentLocationURL()
+	if err != nil {
+		return "", err
+	}
+	return parsed.Hostname(), nil
+}
+
+func (s *Session) LocationPort() (string, error) {
+	parsed, err := s.currentLocationURL()
+	if err != nil {
+		return "", err
+	}
+	return parsed.Port(), nil
+}
+
+func (s *Session) LocationPathname() (string, error) {
+	parsed, err := s.currentLocationURL()
+	if err != nil {
+		return "", err
+	}
+	pathname := parsed.EscapedPath()
+	if pathname == "" {
+		pathname = "/"
+	}
+	return pathname, nil
+}
+
+func (s *Session) LocationSearch() (string, error) {
+	parsed, err := s.currentLocationURL()
+	if err != nil {
+		return "", err
+	}
+	if parsed.RawQuery == "" {
+		if parsed.ForceQuery {
+			return "?", nil
+		}
+		return "", nil
+	}
+	return "?" + parsed.RawQuery, nil
+}
+
+func (s *Session) LocationHash() (string, error) {
+	parsed, err := s.currentLocationURL()
+	if err != nil {
+		return "", err
+	}
+	hash := parsed.EscapedFragment()
+	if hash == "" {
+		return "", nil
+	}
+	return "#" + hash, nil
+}
+
+func (s *Session) currentLocationURL() (*url.URL, error) {
+	if s == nil {
+		return nil, fmt.Errorf("session is unavailable")
+	}
+	raw := strings.TrimSpace(s.URL())
+	if raw == "" {
+		return nil, fmt.Errorf("location is unavailable")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	return parsed, nil
+}
+
 func resolveLocationPropertyURL(baseURL, property, value string) (string, error) {
 	switch property {
 	case "href":

@@ -48,6 +48,7 @@ type Session struct {
 	eventDispatch            *eventDispatchContext
 	microtasks               []string
 	currentScriptHTML        string
+	lastInlineScriptHTML     string
 	historyEntries           []historyEntry
 	historyIndex             int
 	historyScrollRestoration string
@@ -229,6 +230,252 @@ func (s *Session) ReadClipboard() (string, error) {
 		return text, nil
 	}
 	return "", fmt.Errorf("clipboard text has not been seeded")
+}
+
+func (s *Session) Clipboard() string {
+	if s == nil {
+		return ""
+	}
+	if text, ok := s.Registry().Clipboard().SeededText(); ok {
+		return text
+	}
+	return ""
+}
+
+func (s *Session) ClipboardWrites() []string {
+	if s == nil {
+		return nil
+	}
+	registry := s.Registry()
+	if registry == nil {
+		return nil
+	}
+	return registry.Clipboard().Writes()
+}
+
+func (s *Session) FetchCalls() []mocks.FetchCall {
+	if s == nil {
+		return nil
+	}
+	registry := s.Registry()
+	if registry == nil {
+		return nil
+	}
+	calls := registry.Fetch().Calls()
+	out := make([]mocks.FetchCall, len(calls))
+	copy(out, calls)
+	return out
+}
+
+func (s *Session) FetchResponseRules() []mocks.FetchResponseRule {
+	if s == nil {
+		return nil
+	}
+	registry := s.Registry()
+	if registry == nil {
+		return nil
+	}
+	rules := registry.Fetch().ResponseRules()
+	out := make([]mocks.FetchResponseRule, len(rules))
+	copy(out, rules)
+	return out
+}
+
+func (s *Session) FetchErrorRules() []mocks.FetchErrorRule {
+	if s == nil {
+		return nil
+	}
+	registry := s.Registry()
+	if registry == nil {
+		return nil
+	}
+	rules := registry.Fetch().ErrorRules()
+	out := make([]mocks.FetchErrorRule, len(rules))
+	copy(out, rules)
+	return out
+}
+
+func (s *Session) OpenCalls() []mocks.OpenCall {
+	if s == nil {
+		return nil
+	}
+	registry := s.Registry()
+	if registry == nil {
+		return nil
+	}
+	calls := registry.Open().Calls()
+	out := make([]mocks.OpenCall, len(calls))
+	copy(out, calls)
+	return out
+}
+
+func (s *Session) CloseCalls() []mocks.CloseCall {
+	if s == nil {
+		return nil
+	}
+	registry := s.Registry()
+	if registry == nil {
+		return nil
+	}
+	calls := registry.Close().Calls()
+	out := make([]mocks.CloseCall, len(calls))
+	copy(out, calls)
+	return out
+}
+
+func (s *Session) PrintCalls() []mocks.PrintCall {
+	if s == nil {
+		return nil
+	}
+	registry := s.Registry()
+	if registry == nil {
+		return nil
+	}
+	calls := registry.Print().Calls()
+	out := make([]mocks.PrintCall, len(calls))
+	copy(out, calls)
+	return out
+}
+
+func (s *Session) ScrollCalls() []mocks.ScrollCall {
+	if s == nil {
+		return nil
+	}
+	registry := s.Registry()
+	if registry == nil {
+		return nil
+	}
+	calls := registry.Scroll().Calls()
+	out := make([]mocks.ScrollCall, len(calls))
+	copy(out, calls)
+	return out
+}
+
+func (s *Session) MatchMediaCalls() []mocks.MatchMediaCall {
+	if s == nil {
+		return nil
+	}
+	registry := s.Registry()
+	if registry == nil {
+		return nil
+	}
+	calls := registry.MatchMedia().Calls()
+	out := make([]mocks.MatchMediaCall, len(calls))
+	copy(out, calls)
+	return out
+}
+
+func (s *Session) MatchMediaListenerCalls() []mocks.MatchMediaListenerCall {
+	if s == nil {
+		return nil
+	}
+	registry := s.Registry()
+	if registry == nil {
+		return nil
+	}
+	calls := registry.MatchMedia().ListenerCalls()
+	out := make([]mocks.MatchMediaListenerCall, len(calls))
+	copy(out, calls)
+	return out
+}
+
+func (s *Session) DownloadArtifacts() []mocks.DownloadCapture {
+	if s == nil {
+		return nil
+	}
+	registry := s.Registry()
+	if registry == nil {
+		return nil
+	}
+	return registry.Downloads().Artifacts()
+}
+
+func (s *Session) FileInputSelections() []mocks.FileInputSelection {
+	if s == nil {
+		return nil
+	}
+	registry := s.Registry()
+	if registry == nil {
+		return nil
+	}
+	return registry.FileInput().Selections()
+}
+
+func (s *Session) DialogAlerts() []string {
+	if s == nil {
+		return nil
+	}
+	registry := s.Registry()
+	if registry == nil {
+		return nil
+	}
+	return registry.Dialogs().Alerts()
+}
+
+func (s *Session) DialogConfirmMessages() []string {
+	if s == nil {
+		return nil
+	}
+	registry := s.Registry()
+	if registry == nil {
+		return nil
+	}
+	return registry.Dialogs().ConfirmMessages()
+}
+
+func (s *Session) DialogPromptMessages() []string {
+	if s == nil {
+		return nil
+	}
+	registry := s.Registry()
+	if registry == nil {
+		return nil
+	}
+	return registry.Dialogs().PromptMessages()
+}
+
+func (s *Session) MatchMediaRules() map[string]bool {
+	if s == nil {
+		return nil
+	}
+	registry := s.Registry()
+	if registry == nil {
+		return nil
+	}
+	rules := registry.MatchMedia().Rules()
+	out := make(map[string]bool, len(rules))
+	for i := range rules {
+		out[rules[i].Query] = rules[i].Matches
+	}
+	return out
+}
+
+func (s *Session) OpenFailure() string {
+	if s == nil {
+		return ""
+	}
+	return s.config.OpenFailure
+}
+
+func (s *Session) CloseFailure() string {
+	if s == nil {
+		return ""
+	}
+	return s.config.CloseFailure
+}
+
+func (s *Session) PrintFailure() string {
+	if s == nil {
+		return ""
+	}
+	return s.config.PrintFailure
+}
+
+func (s *Session) ScrollFailure() string {
+	if s == nil {
+		return ""
+	}
+	return s.config.ScrollFailure
 }
 
 func (s *Session) WriteClipboard(text string) error {

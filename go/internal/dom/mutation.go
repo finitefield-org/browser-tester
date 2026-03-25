@@ -45,7 +45,12 @@ func (s *Store) SetInnerHTML(nodeID NodeID, markup string) error {
 	for _, childID := range fragmentIDs {
 		s.appendChild(nodeID, childID)
 	}
+	s.syncTextareaDefaultsForSubtree(nodeID)
 	return nil
+}
+
+func (s *Store) ReplaceChildren(nodeID NodeID, markup string) error {
+	return s.SetInnerHTML(nodeID, markup)
 }
 
 func (s *Store) SetOuterHTML(nodeID NodeID, markup string) error {
@@ -90,6 +95,7 @@ func (s *Store) SetOuterHTML(nodeID NodeID, markup string) error {
 	}
 
 	s.deleteSubtree(nodeID)
+	s.syncTextareaDefaultsForSubtree(parentID)
 	return nil
 }
 
@@ -130,6 +136,7 @@ func (s *Store) InsertAdjacentHTML(nodeID NodeID, position, markup string) error
 				child.Parent = parentID
 			}
 		}
+		s.syncTextareaDefaultsForSubtree(parentID)
 	case "afterbegin":
 		fragmentIDs, err := s.parseFragmentNodes(markup)
 		if err != nil {
@@ -141,6 +148,7 @@ func (s *Store) InsertAdjacentHTML(nodeID NodeID, position, markup string) error
 				child.Parent = nodeID
 			}
 		}
+		s.syncTextareaDefaultsForSubtree(nodeID)
 	case "beforeend":
 		fragmentIDs, err := s.parseFragmentNodes(markup)
 		if err != nil {
@@ -152,6 +160,7 @@ func (s *Store) InsertAdjacentHTML(nodeID NodeID, position, markup string) error
 				child.Parent = nodeID
 			}
 		}
+		s.syncTextareaDefaultsForSubtree(nodeID)
 	case "afterend":
 		parentID := node.Parent
 		if parentID == 0 {
@@ -178,6 +187,7 @@ func (s *Store) InsertAdjacentHTML(nodeID NodeID, position, markup string) error
 				child.Parent = parentID
 			}
 		}
+		s.syncTextareaDefaultsForSubtree(parentID)
 	default:
 		return fmt.Errorf("invalid insertAdjacentHTML position %q", position)
 	}
@@ -207,6 +217,7 @@ func (s *Store) RemoveNode(nodeID NodeID) error {
 		parent.Children = removeNodeID(parent.Children, nodeID)
 	}
 	s.deleteSubtree(nodeID)
+	s.syncTextareaDefaultsForSubtree(node.Parent)
 	return nil
 }
 
@@ -218,6 +229,43 @@ func (s *Store) CloneNode(nodeID NodeID, deep bool) (NodeID, error) {
 		return 0, fmt.Errorf("invalid node id: %d", nodeID)
 	}
 	return s.cloneNodeRecursive(nodeID, deep), nil
+}
+
+func (s *Store) CloneNodeAfter(nodeID NodeID, deep bool) (NodeID, error) {
+	if s == nil {
+		return 0, fmt.Errorf("dom store is nil")
+	}
+	node, err := s.elementNode(nodeID)
+	if err != nil {
+		return 0, err
+	}
+	if node.Kind == NodeKindDocument {
+		return 0, fmt.Errorf("document node cannot be cloned")
+	}
+	parentID := node.Parent
+	if parentID == 0 {
+		return 0, fmt.Errorf("node %d has no parent for clone", nodeID)
+	}
+	parent := s.Node(parentID)
+	if parent == nil {
+		return 0, fmt.Errorf("invalid parent node id: %d", parentID)
+	}
+	index := indexOfNodeID(parent.Children, nodeID)
+	if index < 0 {
+		return 0, fmt.Errorf("node %d is not attached to its parent", nodeID)
+	}
+
+	cloneID, err := s.CloneNode(nodeID, deep)
+	if err != nil {
+		return 0, err
+	}
+
+	parent.Children = spliceNodeIDs(parent.Children, index+1, 0, []NodeID{cloneID})
+	if cloned := s.Node(cloneID); cloned != nil {
+		cloned.Parent = parentID
+	}
+	s.syncTextareaDefaultsForSubtree(parentID)
+	return cloneID, nil
 }
 
 func (s *Store) parseFragmentNodes(markup string) ([]NodeID, error) {

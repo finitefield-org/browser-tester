@@ -81,6 +81,37 @@ fn stable_test_mock_clipboard_contract_is_direct() -> Result<()> {
 }
 
 #[test]
+fn stable_test_mock_clipboard_error_controls_are_direct() -> Result<()> {
+    let html = r#"
+      <button id='run'>run</button>
+      <p id='out'></p>
+      <script>
+        document.getElementById('run').addEventListener('click', () => {
+          try {
+            window.navigator.clipboard.writeText('saved');
+            document.getElementById('out').textContent =
+              'ok:' + window.navigator.clipboard.readText();
+          } catch (reason) {
+            document.getElementById('out').textContent =
+              'err:' + String(reason && reason.message ? reason.message : reason);
+          }
+        });
+      </script>
+    "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_clipboard_write_error(Some("WriteBlocked"));
+    h.click("#run")?;
+    h.assert_text("#out", "err:Mock error: WriteBlocked")?;
+
+    h.clear_clipboard_errors();
+    h.click("#run")?;
+    h.assert_text("#out", "ok:saved")?;
+    assert_eq!(h.clipboard_text(), "saved");
+    Ok(())
+}
+
+#[test]
 fn stable_test_mock_location_contract_is_direct() -> Result<()> {
     let mut h = Harness::from_html_with_url(
         "https://app.local/start",
@@ -123,6 +154,87 @@ fn stable_core_scheduler_controls_are_direct() -> Result<()> {
     h.advance_time(0)?;
     h.flush()?;
     h.assert_text("#out", "")?;
+    Ok(())
+}
+
+#[test]
+fn stable_core_trace_and_determinism_controls_are_direct() -> Result<()> {
+    let html = r#"
+      <button id='run'>run</button>
+      <p id='out'></p>
+      <script>
+        document.getElementById('run').addEventListener('click', () => {
+          document.getElementById('out').textContent =
+            Math.random() + ':' + Math.random();
+          setTimeout(() => {}, 0);
+        });
+      </script>
+    "#;
+
+    let mut h = Harness::from_html(html)?;
+    h.set_random_seed(7);
+    h.click("#run")?;
+    let first = h.dump_dom("#out")?;
+
+    h.set_random_seed(7);
+    h.click("#run")?;
+    let second = h.dump_dom("#out")?;
+    assert_eq!(first, second);
+
+    h.enable_trace(true);
+    h.set_trace_stderr(false);
+    h.set_trace_timers(false);
+    h.click("#run")?;
+    let logs = h.take_trace_logs();
+    assert!(logs.iter().any(|line| line.contains("[event] click")));
+    assert!(logs.iter().all(|line| !line.contains("[timer]")));
+
+    h.set_trace_events(false);
+    h.set_trace_timers(true);
+    h.click("#run")?;
+    let logs = h.take_trace_logs();
+    assert!(
+        logs.iter()
+            .any(|line| line.contains("[timer] schedule timeout"))
+    );
+    assert!(logs.iter().all(|line| !line.contains("[event]")));
+
+    h.set_trace_events(true);
+    h.set_trace_log_limit(2)?;
+    h.dispatch("#run", "alpha")?;
+    h.dispatch("#run", "beta")?;
+    h.dispatch("#run", "gamma")?;
+    let logs = h.take_trace_logs();
+    assert_eq!(logs.len(), 2);
+    assert!(logs.iter().any(|line| line.contains("done beta")));
+    assert!(logs.iter().any(|line| line.contains("done gamma")));
+    Ok(())
+}
+
+#[test]
+fn stable_core_limit_validation_errors_are_direct() -> Result<()> {
+    let mut h = Harness::from_html("<p id='out'>ok</p>")?;
+
+    let trace_limit_err = h
+        .set_trace_log_limit(0)
+        .expect_err("zero trace log limit should be rejected");
+    match trace_limit_err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("set_trace_log_limit requires at least 1 entry"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let timer_limit_err = h
+        .set_timer_step_limit(0)
+        .expect_err("zero timer step limit should be rejected");
+    match timer_limit_err {
+        Error::ScriptRuntime(msg) => {
+            assert!(msg.contains("set_timer_step_limit requires at least 1 step"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
     Ok(())
 }
 

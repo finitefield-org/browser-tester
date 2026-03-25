@@ -24,6 +24,26 @@ func (s *Session) documentCookie() string {
 	return strings.Join(parts, "; ")
 }
 
+func (s *Session) DocumentCookie() string {
+	if s == nil {
+		return ""
+	}
+	if _, err := s.ensureDOM(); err != nil {
+		return ""
+	}
+	return s.documentCookie()
+}
+
+func (s *Session) CookieJar() map[string]string {
+	if s == nil {
+		return nil
+	}
+	if _, err := s.ensureDOM(); err != nil {
+		return nil
+	}
+	return cloneStringMap(s.cookieJar)
+}
+
 func (s *Session) setDocumentCookie(value string) error {
 	if s == nil {
 		return fmt.Errorf("session is unavailable")

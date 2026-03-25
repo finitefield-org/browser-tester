@@ -152,3 +152,33 @@ func (s *Store) documentChildren() []NodeID {
 	}
 	return document.Children
 }
+
+func (s *Store) descendantElementIDs(rootID NodeID, predicate func(*Node) bool) []NodeID {
+	if s == nil {
+		return []NodeID{}
+	}
+	root := s.Node(rootID)
+	if root == nil {
+		return []NodeID{}
+	}
+	out := make([]NodeID, 0)
+	var visit func(NodeID)
+	visit = func(parentID NodeID) {
+		parent := s.Node(parentID)
+		if parent == nil {
+			return
+		}
+		for _, childID := range parent.Children {
+			child := s.Node(childID)
+			if child == nil {
+				continue
+			}
+			if child.Kind == NodeKindElement && predicate != nil && predicate(child) {
+				out = append(out, childID)
+			}
+			visit(childID)
+		}
+	}
+	visit(rootID)
+	return out
+}

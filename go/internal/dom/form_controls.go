@@ -13,7 +13,7 @@ func (s *Store) SetFormControlValue(nodeID NodeID, value string) error {
 
 	switch node.TagName {
 	case "textarea":
-		return s.SetTextContent(nodeID, value)
+		return s.setTextContent(nodeID, value, false)
 	case "input":
 		if !isTextInputType(inputType(node)) {
 			return fmt.Errorf(
@@ -130,7 +130,7 @@ func (s *Store) ResetFormControls(nodeID NodeID) error {
 			current.UserValidity = false
 		case "textarea":
 			current.UserValidity = false
-			_ = s.SetTextContent(current.ID, current.DefaultText)
+			_ = s.setTextContent(current.ID, current.DefaultText, false)
 		case "option":
 			if defaultHasAttribute(current, "selected") {
 				current.Attrs = setAttribute(current.Attrs, "selected", "", false)
@@ -142,7 +142,29 @@ func (s *Store) ResetFormControls(nodeID NodeID) error {
 	return nil
 }
 
+func (s *Store) syncTextareaDefaultsForSubtree(nodeID NodeID) {
+	if s == nil || nodeID == 0 {
+		return
+	}
+
+	current := nodeID
+	for current != 0 {
+		node := s.Node(current)
+		if node == nil {
+			return
+		}
+		if node.Kind == NodeKindElement && node.TagName == "textarea" {
+			node.DefaultText = s.TextContentForNode(node.ID)
+		}
+		current = node.Parent
+	}
+}
+
 func (s *Store) SetTextContent(nodeID NodeID, text string) error {
+	return s.setTextContent(nodeID, text, true)
+}
+
+func (s *Store) setTextContent(nodeID NodeID, text string, updateTextareaDefault bool) error {
 	node := s.Node(nodeID)
 	if node == nil {
 		return fmt.Errorf("invalid node id: %d", nodeID)
@@ -151,10 +173,22 @@ func (s *Store) SetTextContent(nodeID NodeID, text string) error {
 	switch node.Kind {
 	case NodeKindText:
 		node.Text = text
+		if updateTextareaDefault {
+			s.syncTextareaDefaultsForSubtree(nodeID)
+		}
 		return nil
 	case NodeKindElement:
-		node.Children = nil
+		s.clearFocusedNodeIfSubtreeContains(nodeID, false)
+		s.clearTargetNodeIfSubtreeContains(nodeID, false)
+		oldChildren := append([]NodeID(nil), node.Children...)
+		node.Children = node.Children[:0]
+		for _, childID := range oldChildren {
+			s.deleteSubtree(childID)
+		}
 		if text == "" {
+			if updateTextareaDefault && node.TagName == "textarea" {
+				node.DefaultText = text
+			}
 			return nil
 		}
 		textID := s.newNode(Node{
@@ -162,6 +196,12 @@ func (s *Store) SetTextContent(nodeID NodeID, text string) error {
 			Text: text,
 		})
 		s.appendChild(nodeID, textID)
+		if updateTextareaDefault && node.TagName == "textarea" {
+			node.DefaultText = text
+		}
+		if updateTextareaDefault {
+			s.syncTextareaDefaultsForSubtree(nodeID)
+		}
 		return nil
 	default:
 		return fmt.Errorf("node %d does not support text content", nodeID)
@@ -174,6 +214,19 @@ func inputType(node *Node) string {
 	}
 	value, _ := attributeValue(node.Attrs, "type")
 	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func isFormListedElement(node *Node) bool {
+	if node == nil || node.Kind != NodeKindElement {
+		return false
+	}
+
+	switch node.TagName {
+	case "button", "fieldset", "input", "select", "textarea", "output":
+		return true
+	default:
+		return false
+	}
 }
 
 func isTextInputType(typeName string) bool {

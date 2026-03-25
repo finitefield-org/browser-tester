@@ -2,6 +2,7 @@ package mocks
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -798,6 +799,15 @@ func (f *MatchMediaFamily) RecordListenerCall(query, method string) {
 	})
 }
 
+func (f *MatchMediaFamily) Rules() []MatchMediaRule {
+	if f == nil {
+		return nil
+	}
+	out := make([]MatchMediaRule, len(f.rules))
+	copy(out, f.rules)
+	return out
+}
+
 func (f *MatchMediaFamily) Resolve(query string) (bool, error) {
 	if f == nil {
 		return false, fmt.Errorf("matchMedia mock registry is unavailable")
@@ -975,6 +985,44 @@ func (f *FileInputFamily) Reset() {
 type StorageFamily struct {
 	local   map[string]string
 	session map[string]string
+	events  []StorageEvent
+}
+
+type StorageEvent struct {
+	Scope string
+	Op    string
+	Key   string
+	Value string
+}
+
+func (f *StorageFamily) storageMap(scope string, create bool) (map[string]string, bool) {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "local":
+		if create {
+			f.ensureLocal()
+		}
+		return f.local, true
+	case "session":
+		if create {
+			f.ensureSession()
+		}
+		return f.session, true
+	default:
+		return nil, false
+	}
+}
+
+func (f *StorageFamily) storageKeys(scope string) ([]string, bool) {
+	m, ok := f.storageMap(scope, false)
+	if !ok || len(m) == 0 {
+		return nil, ok
+	}
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys, true
 }
 
 func (f *StorageFamily) ensureLocal() {
@@ -995,6 +1043,7 @@ func (f *StorageFamily) SeedLocal(key, value string) {
 	}
 	f.ensureLocal()
 	f.local[key] = value
+	f.events = append(f.events, StorageEvent{Scope: "local", Op: "seed", Key: key, Value: value})
 }
 
 func (f *StorageFamily) SeedSession(key, value string) {
@@ -1003,6 +1052,72 @@ func (f *StorageFamily) SeedSession(key, value string) {
 	}
 	f.ensureSession()
 	f.session[key] = value
+	f.events = append(f.events, StorageEvent{Scope: "session", Op: "seed", Key: key, Value: value})
+}
+
+func (f *StorageFamily) Get(scope, key string) (string, bool) {
+	if f == nil {
+		return "", false
+	}
+	m, ok := f.storageMap(scope, false)
+	if !ok {
+		return "", false
+	}
+	value, exists := m[key]
+	return value, exists
+}
+
+func (f *StorageFamily) Set(scope, key, value string) bool {
+	if f == nil {
+		return false
+	}
+	normalized := strings.ToLower(strings.TrimSpace(scope))
+	m, ok := f.storageMap(normalized, true)
+	if !ok {
+		return false
+	}
+	if current, exists := m[key]; exists && current == value {
+		return true
+	}
+	m[key] = value
+	f.events = append(f.events, StorageEvent{Scope: normalized, Op: "set", Key: key, Value: value})
+	return true
+}
+
+func (f *StorageFamily) Remove(scope, key string) bool {
+	if f == nil {
+		return false
+	}
+	normalized := strings.ToLower(strings.TrimSpace(scope))
+	m, ok := f.storageMap(normalized, false)
+	if !ok {
+		return false
+	}
+	if _, exists := m[key]; !exists {
+		return true
+	}
+	delete(m, key)
+	f.events = append(f.events, StorageEvent{Scope: normalized, Op: "remove", Key: key})
+	return true
+}
+
+func (f *StorageFamily) Clear(scope string) bool {
+	if f == nil {
+		return false
+	}
+	normalized := strings.ToLower(strings.TrimSpace(scope))
+	m, ok := f.storageMap(normalized, false)
+	if !ok {
+		return false
+	}
+	if len(m) == 0 {
+		return true
+	}
+	for key := range m {
+		delete(m, key)
+	}
+	f.events = append(f.events, StorageEvent{Scope: normalized, Op: "clear"})
+	return true
 }
 
 func (f *StorageFamily) Local() map[string]string {
@@ -1027,10 +1142,71 @@ func (f *StorageFamily) Session() map[string]string {
 	return out
 }
 
+func (f *StorageFamily) Length(scope string) (int, bool) {
+	if f == nil {
+		return 0, false
+	}
+	m, ok := f.storageMap(scope, false)
+	if !ok {
+		return 0, false
+	}
+	return len(m), true
+}
+
+func (f *StorageFamily) Key(scope string, index int) (string, bool) {
+	if f == nil || index < 0 {
+		return "", false
+	}
+	keys, ok := f.storageKeys(scope)
+	if !ok || index >= len(keys) {
+		return "", false
+	}
+	return keys[index], true
+}
+
+func (f *StorageFamily) Events() []StorageEvent {
+	if f == nil {
+		return nil
+	}
+	out := make([]StorageEvent, len(f.events))
+	copy(out, f.events)
+	return out
+}
+
+func cloneStorageMap(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(input))
+	for key, value := range input {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneStorageEvents(input []StorageEvent) []StorageEvent {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make([]StorageEvent, len(input))
+	copy(out, input)
+	return out
+}
+
+func (f *StorageFamily) Restore(local, session map[string]string, events []StorageEvent) {
+	if f == nil {
+		return
+	}
+	f.local = cloneStorageMap(local)
+	f.session = cloneStorageMap(session)
+	f.events = cloneStorageEvents(events)
+}
+
 func (f *StorageFamily) Reset() {
 	if f == nil {
 		return
 	}
 	f.local = nil
 	f.session = nil
+	f.events = nil
 }

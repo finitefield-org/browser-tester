@@ -22,6 +22,19 @@ type animationFrameRecord struct {
 	source string
 }
 
+type TimerSnapshot struct {
+	ID         int64
+	Source     string
+	DueAtMs    int64
+	Repeat     bool
+	IntervalMs int64
+}
+
+type AnimationFrameSnapshot struct {
+	ID     int64
+	Source string
+}
+
 func (s *Session) scheduleTimeout(source string, timeoutMs int64) (int64, error) {
 	return s.scheduleTimer(source, timeoutMs, false)
 }
@@ -147,6 +160,64 @@ func cloneAnimationFrameMap(frames map[int64]animationFrameRecord) map[int64]ani
 	for id, frame := range frames {
 		out[id] = frame
 	}
+	return out
+}
+
+func (s *Session) PendingTimers() []TimerSnapshot {
+	if s == nil {
+		return nil
+	}
+	if _, err := s.ensureDOM(); err != nil {
+		return nil
+	}
+	if len(s.timers) == 0 {
+		return nil
+	}
+	out := make([]TimerSnapshot, 0, len(s.timers))
+	for _, timer := range s.timers {
+		out = append(out, TimerSnapshot{
+			ID:         timer.id,
+			Source:     timer.source,
+			DueAtMs:    timer.dueAt,
+			Repeat:     timer.repeat,
+			IntervalMs: timer.intervalMs,
+		})
+	}
+	if len(out) < 2 {
+		return out
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].DueAtMs != out[j].DueAtMs {
+			return out[i].DueAtMs < out[j].DueAtMs
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+func (s *Session) PendingAnimationFrames() []AnimationFrameSnapshot {
+	if s == nil {
+		return nil
+	}
+	if _, err := s.ensureDOM(); err != nil {
+		return nil
+	}
+	if len(s.animationFrames) == 0 {
+		return nil
+	}
+	out := make([]AnimationFrameSnapshot, 0, len(s.animationFrames))
+	for _, frame := range s.animationFrames {
+		out = append(out, AnimationFrameSnapshot{
+			ID:     frame.id,
+			Source: frame.source,
+		})
+	}
+	if len(out) < 2 {
+		return out
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ID < out[j].ID
+	})
 	return out
 }
 

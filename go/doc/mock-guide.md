@@ -40,7 +40,8 @@ The public `Harness` surface should stay thin and expose only the user-like acti
 - `CaptureDownload`
 
 `MatchMedia` is configured through the builder or registry and consumed from scripts via `window.matchMedia(...)`.
-It is intentionally not a separate `Harness` action.
+It is intentionally not a separate `Harness` action, but its listener capture can be injected directly through the mock registry for tests with `RecordListenerCall(query, method)`.
+The family also exposes the seeded rule snapshot through `Rules()`, which returns a copy of the configured query/match pairs.
 
 ## Design Rules Per Family
 
@@ -63,14 +64,15 @@ Examples:
 - `Close`: call capture and optional bootstrap failure
 - `Print`: call capture and optional bootstrap failure
 - `Scroll`: call capture and optional bootstrap failure
-- `MatchMedia`: query seed state, failure injection, call capture, and listener call capture
-- `Storage`: explicit local/session seeds plus deterministic `storage` event dispatch
+- `MatchMedia`: query seed state, failure injection, call capture, listener call capture, listener capture injection through `RecordListenerCall(query, method)`, and a read-only `Rules()` snapshot of the configured seed queries
+- `Storage`: explicit local/session seeds plus deterministic change capture through `Events()`
 
 ## Capture Rules
 
 - Call capture should be append-only.
 - Artifact capture should preserve the order in which it was produced.
 - Listener capture should be separate from query capture.
+- Storage change capture should be append-only and preserve operation order.
 - Returned slices are read-only views. Callers should not mutate them.
 
 ## Minimal Example
@@ -78,7 +80,11 @@ Examples:
 ```go
 package main
 
-import "browsertester"
+import (
+	"fmt"
+
+	"browsertester"
+)
 
 func main() error {
 	h, err := browsertester.FromHTML("<input id='upload' type='file'>")
@@ -90,6 +96,9 @@ func main() error {
 	mocks.Fetch().RespondText("https://app.local/api/message", 200, "ok")
 	mocks.Dialogs().QueueConfirm(true)
 	mocks.Clipboard().SeedText("copied text")
+	mocks.Storage().SeedLocal("theme", "dark")
+	mocks.MatchMedia().RespondMatches("(prefers-reduced-motion: reduce)", true)
+	mocks.MatchMedia().RecordListenerCall("(prefers-reduced-motion: reduce)", "change")
 
 	resp, err := h.Fetch("https://app.local/api/message")
 	if err != nil {
@@ -103,11 +112,23 @@ func main() error {
 	if _, err := h.ReadClipboard(); err != nil {
 		return err
 	}
+	if got, err := h.MatchMedia("(prefers-reduced-motion: reduce)"); err != nil || !got {
+		return fmt.Errorf("expected matchMedia to return true, got (%v, %v)", got, err)
+	}
+	if rules := mocks.MatchMedia().Rules(); len(rules) != 1 || rules[0].Query != "(prefers-reduced-motion: reduce)" || !rules[0].Matches {
+		return fmt.Errorf("expected one seeded matchMedia rule, got %#v", rules)
+	}
+	if events := mocks.Storage().Events(); len(events) != 1 || events[0].Op != "seed" || events[0].Scope != "local" || events[0].Key != "theme" || events[0].Value != "dark" {
+		return fmt.Errorf("expected one storage change capture, got %#v", events)
+	}
 	if err := h.SetFiles("#upload", []string{"report.csv"}); err != nil {
 		return err
 	}
 	if err := h.CaptureDownload("report.csv", []byte("downloaded bytes")); err != nil {
 		return err
+	}
+	if got := mocks.MatchMedia().ListenerCalls(); len(got) != 1 || got[0].Method != "change" {
+		return fmt.Errorf("expected one change listener capture, got %#v", got)
 	}
 	return nil
 }

@@ -11,6 +11,9 @@ It is intentionally conservative: a thin public facade, explicit builder config,
 - `DebugView`
 - `Interaction` and `InteractionKind`
 - `MockRegistryView`
+- `OptionLabel`
+- `OptionValue`
+- `OptgroupLabel`
 - user-like actions that delegate into runtime or mock families:
   - `Fetch`
   - `Alert`
@@ -25,7 +28,7 @@ It is intentionally conservative: a thin public facade, explicit builder config,
   - `Submit`
   - `ReadClipboard`
   - `WriteClipboard`
-  - `MatchMedia`
+  - `MatchMedia` (including listener capture injection through the mock registry)
   - `Open`
   - `Close`
   - `Print`
@@ -45,10 +48,33 @@ It is intentionally conservative: a thin public facade, explicit builder config,
   - `historyState`
   - `historyScrollRestoration`
   - `historySetScrollRestoration`
+- bounded location read helpers for inline scripts:
+  - `locationHref`
+  - `locationOrigin`
+  - `locationProtocol`
+  - `locationHost`
+  - `locationHostname`
+  - `locationPort`
+  - `locationPathname`
+  - `locationSearch`
+  - `locationHash`
 - bounded cookie helpers for inline scripts:
   - `documentCookie`
   - `setDocumentCookie`
   - `navigatorCookieEnabled`
+- bounded web-storage helpers for inline scripts:
+  - `localStorageGetItem`
+  - `localStorageSetItem`
+  - `localStorageRemoveItem`
+  - `localStorageClear`
+  - `localStorageLength`
+  - `localStorageKey`
+  - `sessionStorageGetItem`
+  - `sessionStorageSetItem`
+  - `sessionStorageRemoveItem`
+  - `sessionStorageClear`
+  - `sessionStorageLength`
+  - `sessionStorageKey`
 - bounded current-script helper for inline scripts:
   - `documentCurrentScript`
 - nested expression wrapper for inline scripts:
@@ -57,7 +83,40 @@ It is intentionally conservative: a thin public facade, explicit builder config,
   - `windowName`
   - `setWindowName`
 - `Prompt` returns the submitted text plus a boolean that is `false` when the prompt is canceled.
-- `DebugView` is read-only and exposes inspection state such as `URL`, `HTML`, `NowMs`, `DumpDOM`, `FocusedSelector`, `ScrollPosition`, `WindowName`, `Interactions`, and the configured `RandomSeed` when one was set on the builder.
+- `DebugView` is read-only and exposes inspection state such as `URL`, location parts (`LocationOrigin`, `LocationProtocol`, `LocationHost`, `LocationHostname`, `LocationPort`, `LocationPathname`, `LocationSearch`, `LocationHash`), `HTML`, `InitialHTML`, `DOMReady`, `DOMError`, `NowMs`, `DumpDOM`, `NodeCount`, `ScriptCount`, `ImageCount`, `FormCount`, `FocusedSelector`, `FocusedNodeID`, `TargetNodeID`, `HistoryLength`, `HistoryState`, `HistoryIndex`, `HistoryEntries`, `VisitedURLs`, `HistoryScrollRestoration`, `PendingTimers`, `PendingAnimationFrames`, `PendingMicrotasks`, `ScrollPosition`, `WindowName`, `Clipboard`, `MatchMediaRules`, `EventListeners`, `LocalStorage`, `SessionStorage`, `DocumentCookie`, `CookieJar`, `NavigationLog`, `Interactions`, and the configured `RandomSeed` when one was set on the builder.
+- `DebugView` also exposes the configured failure seed readouts `OpenFailure`, `CloseFailure`, `PrintFailure`, and `ScrollFailure` when those builder fields are set.
+- `DebugView.NodeCount()` exposes the current DOM node count as a read-only inspection integer after the DOM has been bootstrapped.
+- `DebugView.ScriptCount()` exposes the current script element count as a read-only inspection integer after the DOM has been bootstrapped, `DebugView.ImageCount()` does the same for the current image element count, `DebugView.FormCount()` does the same for the current form element count, and `DebugView.SelectCount()` does the same for the current select element count.
+- `DebugView.TemplateCount()` exposes the current template element count as a read-only inspection integer, `DebugView.TableCount()` does the same for the current table element count, `DebugView.ButtonCount()` does the same for the current button element count, `DebugView.TextAreaCount()` does the same for the current textarea element count, `DebugView.InputCount()` does the same for the current input element count, `DebugView.FieldsetCount()` does the same for the current fieldset element count, `DebugView.LegendCount()` does the same for the current legend element count, `DebugView.OutputCount()` does the same for the current output element count, `DebugView.LabelCount()` does the same for the current label element count, `DebugView.ProgressCount()` does the same for the current progress element count, `DebugView.MeterCount()` does the same for the current meter element count, `DebugView.AudioCount()` / `DebugView.VideoCount()` do the same for the current audio and video element counts, `DebugView.IframeCount()` does the same for the current iframe element count, `DebugView.EmbedCount()` does the same for the current embed element count, and `DebugView.TrackCount()` does the same for the current track element count.
+- `DebugView.PictureCount()` exposes the current picture element count as a read-only inspection integer.
+- `DebugView.SourceCount()` exposes the current source element count as a read-only inspection integer.
+- `DebugView.DialogCount()` exposes the current dialog element count as a read-only inspection integer.
+- `DebugView.OptionCount()` exposes the current option count as a read-only inspection integer, and `DebugView.SelectedOptionCount()` does the same for the selected option count.
+- `DebugView.OptgroupCount()` exposes the current optgroup count as a read-only inspection integer.
+- `DebugView.LinkCount()` exposes the current link count as a read-only inspection integer, and `DebugView.AnchorCount()` does the same for the current anchor count.
+- `DebugView.OptionLabels()` exposes the current option labels as a read-only inspection slice.
+- `DebugView.SelectedOptionLabels()` exposes the current selected option labels as a read-only inspection slice.
+- `DebugView.OptionValues()` exposes the current option values as a read-only inspection slice.
+- `DebugView.SelectedOptionValues()` exposes the current selected option values as a read-only inspection slice.
+- `DebugView.OptgroupLabels()` exposes the current optgroup labels as a read-only inspection slice.
+- `DebugView.HistoryEntries()` exposes the current history stack as a read-only inspection slice.
+- `DebugView.HistoryIndex()` exposes the current history cursor as a read-only inspection integer.
+- `DebugView.VisitedURLs()` exposes the current visited URL snapshot as a read-only inspection slice derived from the session history.
+- `DebugView.DOMReady()` and `DOMError()` expose DOM initialization readiness and the latest DOM parse/runtime failure text as read-only inspection data.
+- `DebugView.LastInlineScriptHTML()` exposes the most recently executed classic inline script outerHTML as read-only inspection data.
+- `DebugView.InitialHTML()` exposes the original builder HTML input as read-only inspection data without bootstrapping the DOM.
+- `DebugView.PendingTimers()` and `PendingAnimationFrames()` expose scheduled timer and animation-frame snapshots as read-only inspection slices.
+- `DebugView.PendingMicrotasks()` exposes the current queued microtask sources as a read-only inspection slice.
+- `DebugView.FetchCalls()` exposes the captured fetch call trace as a read-only inspection slice.
+- `DebugView.CookieJar()` exposes the current cookie jar as a read-only inspection map.
+- `DebugView.DialogAlerts()`, `DialogConfirmMessages()`, and `DialogPromptMessages()` expose captured dialog messages as read-only inspection slices.
+- `DebugView.DownloadArtifacts()` and `FileInputSelections()` expose captured download and file-input traces as read-only inspection slices.
+- `DebugView.StorageEvents()` exposes the captured storage change trace as a read-only inspection slice.
+- `DebugView.OpenCalls()`, `CloseCalls()`, `PrintCalls()`, `ScrollCalls()`, and `MatchMediaCalls()` expose browser-action and matchMedia call traces as read-only inspection slices.
+- `DebugView.MatchMediaListenerCalls()` exposes the captured matchMedia listener trace as a read-only inspection slice.
+- `DebugView.ClipboardWrites()` exposes the captured clipboard write trace as a read-only inspection slice.
+- `DebugView.EventListeners()` exposes the captured DOM event listener registrations as a read-only inspection slice.
+- `DebugView.FetchResponseRules()` and `FetchErrorRules()` expose configured fetch response/error rules as read-only inspection slices.
 - assertion helpers:
   - `AssertText`
   - `AssertValue`
@@ -73,8 +132,12 @@ It is intentionally conservative: a thin public facade, explicit builder config,
   - `Dataset`
 - tree mutation helpers:
   - `InnerHTML`
+  - `TextContent`
   - `OuterHTML`
   - `SetInnerHTML`
+  - `ReplaceChildren`
+  - `CloneNode`
+  - `SetTextContent`
   - `SetOuterHTML`
   - `InsertAdjacentHTML`
   - `RemoveNode`
@@ -88,20 +151,27 @@ It is intentionally conservative: a thin public facade, explicit builder config,
   - `Close`
   - `Print`
   - `Scroll`
-  - `MatchMedia`
+  - `MatchMedia` (including listener capture injection through the mock registry)
   - `Downloads`
   - `FileInput`
-  - `Storage`
+  - `Storage` (including change capture through `Events()`)
 
 ## Current Scope
 
-- Phase 0 scaffold is in place, internal DOM/runtime/script scaffolds now exist, the initial interaction slice (`Click`/`Focus`/`Blur`) is wired through the facade, the initial form-control slice (`TypeText`/`SetChecked`/`SetSelectValue`/`Submit`) updates the live DOM, and the initial assertion slice (`AssertText`/`AssertValue`/`AssertChecked`/`AssertExists`) is wired through the same selector engine. `Click` also follows bounded hyperlink default actions for `a` / `area` elements and reset-button form reset through the location, open, download, and DOM form-control helpers. Inline `<script>` listeners can register capture/target/bubble handlers through the host bridge for the bounded event slice, can call `host:preventDefault()` to suppress click/reset default actions, can call `host:stopPropagation()` to stop later propagation, can opt into one-shot handling with a boolean `once` flag, can remove a previously registered handler with `host:removeEventListener()`, can queue bounded microtasks with `host:queueMicrotask()`, can schedule bounded timers with `host:setTimeout()` / `host:setInterval()` and `host:clearTimeout()` / `host:clearInterval()`, can schedule bounded animation-frame callbacks with `host:requestAnimationFrame()` / `host:cancelAnimationFrame()`, can drive the location mock through `host:locationAssign()` / `host:locationReplace()` / `host:locationReload()` / `host:locationSet()`, and location URLs are resolved against the current URL just like navigation links. It can also trigger bounded synthetic event helpers such as `Dispatch` and `DispatchKeyboard` for custom and keyboard event sequences, and it can query bounded `matchMedia` state through `MatchMedia()`.
-- The selector engine also supports a bounded descendant/child/sibling combinator slice on top of the simple tag/id/class forms, plus a bounded pseudo-class slice (`:root`, `:scope`, `:defined`, `:state(identifier)`, `:active`, `:hover`, `:empty`, `:checked`, `:indeterminate`, `:autofill`, `:-webkit-autofill`, `:default`, `:enabled`, `:disabled`, `:required`, `:optional`, `:read-only`, `:read-write`, `:valid`, `:invalid`, `:user-valid`, `:user-invalid`, `:in-range`, `:out-of-range`, `:first-child`, `:last-child`, `:first-of-type`, `:last-of-type`, `:only-child`, `:only-of-type`, `:nth-child()`, `:nth-of-type()`, `:nth-last-child()`, `:nth-last-of-type()`, `:link`, `:any-link`, `:visited`, `:local-link`, `:lang()`, `:dir()`, `:placeholder-shown`, `:blank`, `:heading`, `:heading(integer#)`, `:playing`, `:paused`, `:seeking`, `:buffering`, `:stalled`, `:muted`, `:volume-locked`, `:modal`, `:popover-open`, `:open`, `:focus`, `:focus-visible`, `:focus-within`, `:target`, `:target-within`, `:is()`, `:where()`, `:not()`, and `:has()`). In the current document-context API, `:scope` is approximated as the document root element, `:blank` is approximated for text-like inputs and textareas with empty or whitespace-only values, `:local-link` is approximated as a same-document link against the current session URL, and `:visited` is approximated against the current session history URLs. Custom element states are approximated through a tokenized `state` attribute on custom elements.
-- Script DOM query helpers are available through host bindings for `querySelector` / `querySelectorAll` / `matches` / `closest`, `querySelectorAll` returns a minimal snapshot `NodeList`, and a minimal live `HTMLCollection` covers `children`.
+- Phase 0 scaffold is in place, internal DOM/runtime/script scaffolds now exist, the initial interaction slice (`Click`/`Focus`/`Blur`) is wired through the facade, the initial form-control slice (`TypeText`/`SetChecked`/`SetSelectValue`/`Submit`) updates the live DOM, and the initial assertion slice (`AssertText`/`AssertValue`/`AssertChecked`/`AssertExists`) is wired through the same selector engine. `Click` also follows bounded hyperlink default actions for `a` / `area` elements and reset-button form reset through the location, open, download, and DOM form-control helpers. Inline `<script>` listeners can register capture/target/bubble handlers through the host bridge for the bounded event slice, can call `host:preventDefault()` to suppress click/reset default actions, can call `host:stopPropagation()` to stop later propagation, can opt into one-shot handling with a boolean `once` flag, can remove a previously registered handler with `host:removeEventListener()`, can queue bounded microtasks with `host:queueMicrotask()`, can schedule bounded timers with `host:setTimeout()` / `host:setInterval()` and `host:clearTimeout()` / `host:clearInterval()`, can schedule bounded animation-frame callbacks with `host:requestAnimationFrame()` / `host:cancelAnimationFrame()`, can drive the location mock through `host:locationAssign()` / `host:locationReplace()` / `host:locationReload()` / `host:locationSet()`, and can read location parts through `host:locationHref()` / `host:locationOrigin()` / `host:locationProtocol()` / `host:locationHost()` / `host:locationHostname()` / `host:locationPort()` / `host:locationPathname()` / `host:locationSearch()` / `host:locationHash()`, can read and write bounded `localStorage` / `sessionStorage` state through `host:localStorageGetItem()` / `host:localStorageSetItem()` / `host:localStorageRemoveItem()` / `host:localStorageClear()` / `host:localStorageLength()` / `host:localStorageKey()` and `host:sessionStorageGetItem()` / `host:sessionStorageSetItem()` / `host:sessionStorageRemoveItem()` / `host:sessionStorageClear()` / `host:sessionStorageLength()` / `host:sessionStorageKey()`, can use bounded DOM mutation helpers such as `host:setTextContent()` / `host:replaceChildren()` / `host:cloneNode()` / `host:setInnerHTML()` / `host:setOuterHTML()` / `host:insertAdjacentHTML()` / `host:removeNode()`, and location URLs are resolved against the current URL just like navigation links. `DebugView` also exposes `NodeCount`, `ScriptCount`, `TargetNodeID`, `HistoryLength`, `HistoryState`, `VisitedURLs`, `LocalStorage`, `SessionStorage`, `DocumentCookie`, `Clipboard`, `MatchMediaRules`, and location parts (`LocationOrigin`, `LocationProtocol`, `LocationHost`, `LocationHostname`, `LocationPort`, `LocationPathname`, `LocationSearch`, `LocationHash`) for read-only inspection of the current fragment target, history snapshot, visited URL snapshot, clipboard text, web-storage snapshot, cookie string, and location decomposition. It can also trigger bounded synthetic event helpers such as `Dispatch` and `DispatchKeyboard` for custom and keyboard event sequences, and it can query bounded `matchMedia` state through `MatchMedia()`. The `MatchMedia` mock family also exposes listener capture injection through the registry for tests, and the `Storage` mock family exposes deterministic change capture through `Events()` with ordered `seed` / `set` / `remove` / `clear` operations.
+- The `DebugView` readouts also include the configured builder failure seed state via `OpenFailure`, `CloseFailure`, `PrintFailure`, and `ScrollFailure`.
+- `DebugView.HistoryEntries()` exposes the current history stack as a read-only inspection slice.
+- The selector engine also supports a bounded attribute selector slice (`[attr]`, `[attr=value]`, `[attr~=value]`, `[attr|=value]`, `[attr^=value]`, `[attr$=value]`, and `[attr*=value]`, plus bounded `i` / `s` flags on value operators) plus a bounded descendant/child/sibling combinator slice on top of the simple tag/id/class forms, plus a bounded pseudo-class slice (`:root`, `:scope`, `:defined`, `:state(identifier)`, `:active`, `:hover`, `:empty`, `:checked`, `:indeterminate`, `:autofill`, `:-webkit-autofill`, `:default`, `:enabled`, `:disabled`, `:required`, `:optional`, `:read-only`, `:read-write`, `:valid`, `:invalid`, `:user-valid`, `:user-invalid`, `:in-range`, `:out-of-range`, `:first-child`, `:last-child`, `:first-of-type`, `:last-of-type`, `:only-child`, `:only-of-type`, `:nth-child()`, `:nth-of-type()`, `:nth-last-child()`, `:nth-last-of-type()`, `:link`, `:any-link`, `:visited`, `:local-link`, `:lang()`, `:dir()`, `:placeholder-shown`, `:blank`, `:heading`, `:heading(integer#)`, `:playing`, `:paused`, `:seeking`, `:buffering`, `:stalled`, `:muted`, `:volume-locked`, `:modal`, `:popover-open`, `:open`, `:focus`, `:focus-visible`, `:focus-within`, `:target`, `:target-within`, `:is()`, `:where()`, `:not()`, and `:has()`). Document queries treat `:scope` as the document root scope, while element-level `Matches` and `Closest` use the element itself as scope; `:blank` is approximated for text-like inputs and textareas with empty or whitespace-only values, `:local-link` is approximated as a same-document link against the current session URL, and `:visited` is approximated against the current session history URLs. Custom element states are approximated through a tokenized `state` attribute on custom elements.
+- Script DOM query helpers are available through host bindings for `querySelector` / `querySelectorAll` / `matches` / `closest`, `querySelectorAll` returns a minimal snapshot `NodeList`, a minimal live `HTMLCollection` covers `children`, `document.images`, `document.forms`, `form.elements`, `fieldset.elements`, `select.options`, `select.selectedOptions`, `datalist.options`, `table.rows`, `table.tBodies`, `HTMLTableSectionElement.rows`, `tr.cells`, `document.scripts`, `document.links`, and `document.anchors`, and bounded live `NodeList` slices cover `childNodes` and `template.content.childNodes`.
 - Inline `<script>` blocks are preserved as raw text and execute during bootstrap through the bounded script host bridge, so HTML source can mutate the live DOM.
 - Bounded attribute reflection helpers are available through `GetAttribute` / `HasAttribute` / `SetAttribute` / `RemoveAttribute`, and public live `ClassList` / `Dataset` views expose the same DOM slice through the facade.
 - Internal bounded `classList` / `dataset` helpers still live in `internal/dom` and remain the source of truth for the live views.
-- The public tree-mutation slice (`InnerHTML`, `OuterHTML`, `SetInnerHTML`, `SetOuterHTML`, `InsertAdjacentHTML`, `RemoveNode`, `WriteHTML`) now delegates into `internal/dom`; `cloneNode` remains internal for now, and `WriteHTML()` provides the bounded document-write-style replay slice.
+- The public tree-mutation slice (`InnerHTML`, `TextContent`, `OuterHTML`, `SetInnerHTML`, `ReplaceChildren`, `CloneNode`, `SetTextContent`, `SetOuterHTML`, `InsertAdjacentHTML`, `RemoveNode`, `WriteHTML`) now delegates into `internal/dom`; on `textarea`, content mutations that change its contents keep the reset default value in sync, `CloneNode()` duplicates the selected node and inserts the clone after the source, and `WriteHTML()` provides the bounded document-write-style replay slice with rollback of DOM and session state on failure.
+- Bounded web-storage helpers for inline scripts are available through `host:localStorageGetItem()` / `host:localStorageSetItem()` / `host:localStorageRemoveItem()` / `host:localStorageClear()` / `host:localStorageLength()` / `host:localStorageKey()` and `host:sessionStorageGetItem()` / `host:sessionStorageSetItem()` / `host:sessionStorageRemoveItem()` / `host:sessionStorageClear()` / `host:sessionStorageLength()` / `host:sessionStorageKey()`, and storage mutations are captured as ordered `Events()` with explicit `seed` / `set` / `remove` / `clear` operations.
+- Phase 5 hardening already includes seeded fuzz/property coverage for the script, selector, timer/scheduler, and location/history boundaries.
+- Phase 5 hardening also includes seeded fuzz/property coverage for the cookie and `window.name` boundaries.
+- Phase 5 hardening also includes seeded fuzz/property coverage for the mock registry boundaries.
+- Phase 5 also has a repeatable release checklist in `doc/release-checklist.md`.
 - Legacy and deprecated spec branches are not implementation targets unless the capability matrix explicitly lists a compatibility exception.
 - Later DOM, script, and event/runtime slices will be added behind the same facade.
 

@@ -4975,7 +4975,7 @@ fn session_wires_dialog_clipboard_and_location_mocks() {
     assert_eq!(session.prompt("Name?").unwrap(), Some("Ada".to_string()));
     assert_eq!(session.read_clipboard().unwrap(), "seeded");
 
-    session.write_clipboard("copied");
+    session.write_clipboard("copied").unwrap();
     session.alert("Notice");
     session.navigate("https://example.test/next").unwrap();
 

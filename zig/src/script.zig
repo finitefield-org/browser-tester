@@ -765,6 +765,8 @@ const MediaListState = struct {
     }
 };
 
+const TimeRangesState = struct {};
+
 const DateState = struct {
     timestamp_ms: f64,
 };
@@ -1905,6 +1907,7 @@ const Value = union(enum) {
     part_list: dom.NodeId,
     rel_list: dom.NodeId,
     blocking_list: dom.NodeId,
+    sandbox_list: dom.NodeId,
     controls_list: dom.NodeId,
     output_html_for: dom.NodeId,
     dataset: dom.NodeId,
@@ -1914,7 +1917,9 @@ const Value = union(enum) {
     media_query_list: MediaQueryList,
     string_list: StringListState,
     media_list: MediaListState,
+    time_ranges: TimeRangesState,
     text_track: *TextTrackState,
+    text_track_list: dom.NodeId,
     date: *DateState,
     dom_rect: *DomRectState,
     dom_rect_list: *DomRectListState,
@@ -4151,6 +4156,20 @@ fn evalAssignment(
                 return;
             }
             if (std.mem.eql(u8, target.property, "autocomplete")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "form")) {
+                    const text = try asString(allocator, value);
+                    const normalized = try lowercaseDupe(allocator, std.mem.trim(u8, text, " \t\r\n\x0c"));
+                    defer allocator.free(normalized);
+                    try host.domStoreMut().setAttribute(element, "autocomplete", normalized);
+                    return;
+                }
+                if (!(std.ascii.eqlIgnoreCase(tag_name, "input") or
+                    std.mem.eql(u8, tag_name, "select") or
+                    std.mem.eql(u8, tag_name, "textarea")))
+                {
+                    return error.ScriptRuntime;
+                }
                 const text = try asString(allocator, value);
                 try host.domStoreMut().setAttribute(element, "autocomplete", text);
                 return;
@@ -5042,6 +5061,14 @@ fn evalAssignment(
                 host.domStoreMut().setMediaVolume(element, volume) catch return error.ScriptRuntime;
                 return;
             }
+            if (std.mem.eql(u8, target.property, "currentTime")) {
+                if (!try elementIsMediaElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const current_time = try numberFromValue(allocator, value);
+                host.domStoreMut().setMediaCurrentTime(element, current_time) catch return error.ScriptRuntime;
+                return;
+            }
             if (std.mem.eql(u8, target.property, "defaultPlaybackRate")) {
                 if (!try elementIsMediaElement(host, element)) {
                     return error.ScriptRuntime;
@@ -5210,6 +5237,14 @@ fn evalAssignment(
                 }
                 const text = try asString(allocator, value);
                 try host.domStoreMut().setAttribute(element, "allow", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "sandbox")) {
+                if (!try elementIsIFrameElement(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "sandbox", text);
                 return;
             }
             if (std.mem.eql(u8, target.property, "allowFullscreen")) {
@@ -5554,6 +5589,11 @@ fn evalAssignment(
                     try host.domStoreMut().setAttribute(element, "value", text);
                     return;
                 }
+                if (std.mem.eql(u8, tag_name, "button")) {
+                    const text = try asString(allocator, value);
+                    try host.domStoreMut().setAttribute(element, "value", text);
+                    return;
+                }
                 const text = try asString(allocator, value);
                 host.domStoreMut().setFormControlValue(element, text) catch return error.ScriptRuntime;
                 if (host.domStore().isSelectionControlNode(element)) {
@@ -5576,11 +5616,20 @@ fn evalAssignment(
                 return;
             }
             if (std.mem.eql(u8, target.property, "dateTime")) {
-                if (!try elementIsTimeElement(host, element)) {
+                const supported = try elementIsTimeElement(host, element) or try elementSupportsModDateTimeProperty(host, element);
+                if (!supported) {
                     return error.ScriptRuntime;
                 }
                 const text = try asString(allocator, value);
                 try host.domStoreMut().setAttribute(element, "datetime", text);
+                return;
+            }
+            if (std.mem.eql(u8, target.property, "cite")) {
+                if (!try elementSupportsQuoteCiteProperty(host, element)) {
+                    return error.ScriptRuntime;
+                }
+                const text = try asString(allocator, value);
+                try host.domStoreMut().setAttribute(element, "cite", text);
                 return;
             }
             if (std.mem.eql(u8, target.property, "defaultValue")) {
@@ -5615,6 +5664,14 @@ fn evalAssignment(
                     try host.domStoreMut().removeAttribute(element, "checked");
                 }
                 return;
+            }
+            if (std.mem.eql(u8, target.property, "value")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse return error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "button")) {
+                    const text = try asString(allocator, value);
+                    try host.domStoreMut().setAttribute(element, "value", text);
+                    return;
+                }
             }
             if (std.mem.eql(u8, target.property, "formNoValidate")) {
                 if (!try elementSupportsFormNoValidateProperty(host, element)) {
@@ -6808,6 +6865,17 @@ fn evalMember(
                 };
             }
             if (std.mem.eql(u8, member.property, "autocomplete")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "form")) {
+                    const autocomplete = try formAutocompleteValue(host, element);
+                    break :blk Value{ .string = autocomplete };
+                }
+                if (!(std.ascii.eqlIgnoreCase(tag_name, "input") or
+                    std.mem.eql(u8, tag_name, "select") or
+                    std.mem.eql(u8, tag_name, "textarea")))
+                {
+                    break :blk error.ScriptRuntime;
+                }
                 const autocomplete = (try host.domStore().getAttribute(element, "autocomplete")) orelse "";
                 break :blk Value{ .string = autocomplete };
             }
@@ -7097,8 +7165,9 @@ fn evalMember(
                 break :blk Value{ .boolean = default_attr };
             }
             if (std.mem.eql(u8, member.property, "readyState")) {
-                if (!try elementSupportsTrackProperty(host, element)) break :blk error.ScriptRuntime;
-                break :blk Value{ .number = 0 };
+                if (try elementSupportsTrackProperty(host, element)) {
+                    break :blk Value{ .number = 0 };
+                }
             }
             if (std.mem.eql(u8, member.property, "complete")) {
                 if (!try elementIsImageElement(host, element)) break :blk error.ScriptRuntime;
@@ -7172,6 +7241,57 @@ fn evalMember(
                 const volume = try host.domStore().mediaVolumeForNode(element);
                 break :blk Value{ .number = volume };
             }
+            if (std.mem.eql(u8, member.property, "currentTime")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                const current_time = try host.domStore().mediaCurrentTimeForNode(element);
+                break :blk Value{ .number = current_time };
+            }
+            if (std.mem.eql(u8, member.property, "buffered")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                break :blk Value{ .time_ranges = .{} };
+            }
+            if (std.mem.eql(u8, member.property, "seekable")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                break :blk Value{ .time_ranges = .{} };
+            }
+            if (std.mem.eql(u8, member.property, "played")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                break :blk Value{ .time_ranges = .{} };
+            }
+            if (std.mem.eql(u8, member.property, "textTracks")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                break :blk Value{ .text_track_list = element };
+            }
+            if (std.mem.eql(u8, member.property, "duration")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                const duration = try host.domStore().mediaDurationForNode(element);
+                break :blk Value{ .number = duration };
+            }
+            if (std.mem.eql(u8, member.property, "paused")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                const paused = try host.domStore().mediaPausedForNode(element);
+                break :blk Value{ .boolean = paused };
+            }
+            if (std.mem.eql(u8, member.property, "seeking")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                const seeking = try host.domStore().mediaSeekingForNode(element);
+                break :blk Value{ .boolean = seeking };
+            }
+            if (std.mem.eql(u8, member.property, "ended")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                const ended = try host.domStore().mediaEndedForNode(element);
+                break :blk Value{ .boolean = ended };
+            }
+            if (std.mem.eql(u8, member.property, "readyState")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                const ready_state = try host.domStore().mediaReadyStateForNode(element);
+                break :blk Value{ .number = @floatFromInt(ready_state) };
+            }
+            if (std.mem.eql(u8, member.property, "networkState")) {
+                if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
+                const network_state = try host.domStore().mediaNetworkStateForNode(element);
+                break :blk Value{ .number = @floatFromInt(network_state) };
+            }
             if (std.mem.eql(u8, member.property, "defaultPlaybackRate")) {
                 if (!try elementIsMediaElement(host, element)) break :blk error.ScriptRuntime;
                 const playback_rate = try host.domStore().mediaDefaultPlaybackRateForNode(element);
@@ -7205,6 +7325,10 @@ fn evalMember(
                 if (!try elementIsIFrameElement(host, element)) break :blk error.ScriptRuntime;
                 const allow_text = (try host.domStore().getAttribute(element, "allow")) orelse "";
                 break :blk Value{ .string = allow_text };
+            }
+            if (std.mem.eql(u8, member.property, "sandbox")) {
+                if (!try elementIsIFrameElement(host, element)) break :blk error.ScriptRuntime;
+                break :blk Value{ .sandbox_list = element };
             }
             if (std.mem.eql(u8, member.property, "poster")) {
                 if (!try elementIsVideoElement(host, element)) break :blk error.ScriptRuntime;
@@ -7467,9 +7591,18 @@ fn evalMember(
                 const value = try host.domStore().valueForNode(allocator, element);
                 break :blk Value{ .string = value };
             }
+            if (std.mem.eql(u8, member.property, "cite")) {
+                if (!try elementSupportsQuoteCiteProperty(host, element)) break :blk error.ScriptRuntime;
+                const cite = (try host.domStore().getAttribute(element, "cite")) orelse "";
+                break :blk Value{ .string = cite };
+            }
             if (std.mem.eql(u8, member.property, "dateTime")) {
-                if (!try elementIsTimeElement(host, element)) break :blk error.ScriptRuntime;
-                const date_time = (try host.domStore().getAttribute(element, "datetime")) orelse try host.domStore().textContent(allocator, element);
+                if (try elementIsTimeElement(host, element)) {
+                    const date_time = (try host.domStore().getAttribute(element, "datetime")) orelse try host.domStore().textContent(allocator, element);
+                    break :blk Value{ .string = date_time };
+                }
+                if (!try elementSupportsModDateTimeProperty(host, element)) break :blk error.ScriptRuntime;
+                const date_time = (try host.domStore().getAttribute(element, "datetime")) orelse "";
                 break :blk Value{ .string = date_time };
             }
             if (std.mem.eql(u8, member.property, "position")) {
@@ -7571,6 +7704,13 @@ fn evalMember(
                     break :blk Value{ .element = target_id };
                 }
                 break :blk Value{ .null_value = {} };
+            }
+            if (std.mem.eql(u8, member.property, "value")) {
+                const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
+                if (std.mem.eql(u8, tag_name, "button")) {
+                    const value_text = (try host.domStore().getAttribute(element, "value")) orelse "";
+                    break :blk Value{ .string = value_text };
+                }
             }
             if (std.mem.eql(u8, member.property, "size")) {
                 const tag_name = host.domStore().tagNameForNode(element) orelse break :blk error.ScriptRuntime;
@@ -8242,6 +8382,32 @@ fn evalMember(
             }
             if (std.mem.eql(u8, member.property, "value")) {
                 var tokens = try relListTokens(allocator, host, object.rel_list);
+                defer tokens.deinit(allocator);
+                break :blk Value{ .string = try tokenListValue(allocator, tokens.items) };
+            }
+            break :blk error.ScriptRuntime;
+        },
+        .sandbox_list => blk: {
+            if (std.mem.eql(u8, member.property, "length")) {
+                var tokens = try sandboxListTokens(allocator, host, object.sandbox_list);
+                defer tokens.deinit(allocator);
+                break :blk Value{ .number = @floatFromInt(tokens.items.len) };
+            }
+            if (std.mem.eql(u8, member.property, "value")) {
+                var tokens = try sandboxListTokens(allocator, host, object.sandbox_list);
+                defer tokens.deinit(allocator);
+                break :blk Value{ .string = try tokenListValue(allocator, tokens.items) };
+            }
+            break :blk error.ScriptRuntime;
+        },
+        .blocking_list => blk: {
+            if (std.mem.eql(u8, member.property, "length")) {
+                var tokens = try blockingListTokens(allocator, host, object.blocking_list);
+                defer tokens.deinit(allocator);
+                break :blk Value{ .number = @floatFromInt(tokens.items.len) };
+            }
+            if (std.mem.eql(u8, member.property, "value")) {
+                var tokens = try blockingListTokens(allocator, host, object.blocking_list);
                 defer tokens.deinit(allocator);
                 break :blk Value{ .string = try tokenListValue(allocator, tokens.items) };
             }
@@ -9030,6 +9196,20 @@ fn evalMember(
             if (std.mem.eql(u8, member.property, "length")) {
                 const media_text = try media.currentText(allocator);
                 break :blk Value{ .number = @floatFromInt(mediaListLength(media_text)) };
+            }
+            break :blk error.ScriptRuntime;
+        },
+        .time_ranges => blk: {
+            if (std.mem.eql(u8, member.property, "length")) {
+                break :blk Value{ .number = 0.0 };
+            }
+            break :blk error.ScriptRuntime;
+        },
+        .text_track_list => blk: {
+            if (std.mem.eql(u8, member.property, "length")) {
+                const track_nodes = try mediaTextTrackListTrackIds(allocator, host, object.text_track_list);
+                defer allocator.free(track_nodes);
+                break :blk Value{ .number = @floatFromInt(track_nodes.len) };
             }
             break :blk error.ScriptRuntime;
         },
@@ -10168,6 +10348,37 @@ fn evalMethodCall(
                 _ = try evalExpr(allocator, host, bindings, args[1]);
             }
             break :blk Value{ .null_value = {} };
+        } else if (std.mem.eql(u8, method, "toDataURL")) blk: {
+            if (args.len > 2) return error.ScriptRuntime;
+            if (!try elementIsCanvasElement(host, element)) break :blk error.ScriptRuntime;
+            if (args.len >= 1) {
+                _ = try asString(allocator, try evalExpr(allocator, host, bindings, args[0]));
+            }
+            if (args.len == 2) {
+                _ = try evalExpr(allocator, host, bindings, args[1]);
+            }
+            const width = try canvasDimensionValue(host, element, "width", 300);
+            const height = try canvasDimensionValue(host, element, "height", 150);
+            if (width == 0 or height == 0) {
+                break :blk Value{ .string = "data:," };
+            }
+            break :blk Value{ .string = "data:image/png;base64," };
+        } else if (std.mem.eql(u8, method, "toBlob")) blk: {
+            if (args.len < 1 or args.len > 3) return error.ScriptRuntime;
+            if (!try elementIsCanvasElement(host, element)) break :blk error.ScriptRuntime;
+            const callback_value = try evalExpr(allocator, host, bindings, args[0]);
+            if (args.len >= 2) {
+                _ = try evalExpr(allocator, host, bindings, args[1]);
+            }
+            if (args.len == 3) {
+                _ = try evalExpr(allocator, host, bindings, args[2]);
+            }
+            const callback = switch (callback_value) {
+                .function => |function| function,
+                else => return error.ScriptRuntime,
+            };
+            try canvasToBlobCallback(allocator, host, callback);
+            break :blk Value{ .undefined_value = {} };
         } else if (std.mem.eql(u8, method, "getClientRects")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             break :blk try makeDomRectListValue(allocator, host, element);
@@ -10473,6 +10684,31 @@ fn evalMethodCall(
                 break :blk Value{ .boolean = try host.reportValidityNode(element) };
             }
             break :blk error.ScriptRuntime;
+        } else if (std.mem.eql(u8, method, "load")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            if (!try elementIsMediaElement(host, element)) return error.ScriptRuntime;
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "pause")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            if (!try elementIsMediaElement(host, element)) return error.ScriptRuntime;
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "canPlayType")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            if (!try elementIsMediaElement(host, element)) return error.ScriptRuntime;
+            const type_value = try evalExpr(allocator, host, bindings, args[0]);
+            const type_text = try asString(allocator, type_value);
+            const trimmed = std.mem.trim(u8, type_text, " \t\r\n\x0c");
+            if (trimmed.len == 0) {
+                break :blk Value{ .string = "" };
+            }
+            const normalized = try lowercaseDupe(allocator, trimmed);
+            defer allocator.free(normalized);
+            if (std.mem.startsWith(u8, normalized, "audio/") or
+                std.mem.startsWith(u8, normalized, "video/"))
+            {
+                break :blk Value{ .string = "maybe" };
+            }
+            break :blk Value{ .string = "" };
         } else if (std.mem.eql(u8, method, "submit")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
             if (!try elementSupportsFormProperty(host, element)) return error.ScriptRuntime;
@@ -11548,6 +11784,187 @@ fn evalMethodCall(
         } else if (std.mem.eql(u8, method, "length")) blk: {
             break :blk error.ScriptRuntime;
         } else error.ScriptRuntime,
+        .sandbox_list => |element| if (std.mem.eql(u8, method, "contains")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const token_value = try evalExpr(allocator, host, bindings, args[0]);
+            const token = try validateClassListToken(allocator, token_value);
+            var tokens = try sandboxListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            break :blk Value{ .boolean = classListContains(tokens.items, token) };
+        } else if (std.mem.eql(u8, method, "supports")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const token_value = try evalExpr(allocator, host, bindings, args[0]);
+            const token = try validateClassListToken(allocator, token_value);
+            break :blk Value{ .boolean = sandboxListSupportsToken(token) };
+        } else if (std.mem.eql(u8, method, "item")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const index_value = try evalExpr(allocator, host, bindings, args[0]);
+            const index = try asNodeListIndex(index_value);
+            var tokens = try sandboxListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            if (index >= tokens.items.len) break :blk Value{ .null_value = {} };
+            break :blk Value{ .string = tokens.items[index] };
+        } else if (std.mem.eql(u8, method, "keys")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            var tokens = try sandboxListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            break :blk try tokenListKeys(allocator, tokens.items);
+        } else if (std.mem.eql(u8, method, "values")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            var tokens = try sandboxListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            break :blk try tokenListValues(allocator, tokens.items);
+        } else if (std.mem.eql(u8, method, "entries")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            var tokens = try sandboxListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            break :blk try tokenListEntries(allocator, tokens.items);
+        } else if (std.mem.eql(u8, method, "forEach")) blk: {
+            var tokens = try sandboxListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            break :blk try tokenListForEach(
+                allocator,
+                host,
+                bindings,
+                tokens.items,
+                Value{ .sandbox_list = element },
+                args,
+                "domtokenlist:forEach",
+            );
+        } else if (std.mem.eql(u8, method, "add")) blk: {
+            if (args.len == 0) return error.ScriptRuntime;
+            var tokens = try sandboxListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+
+            var changed = false;
+            for (args) |arg| {
+                const token_value = try evalExpr(allocator, host, bindings, arg);
+                const token = try validateClassListToken(allocator, token_value);
+                if (!classListContains(tokens.items, token)) {
+                    try tokens.append(allocator, token);
+                    changed = true;
+                }
+            }
+
+            if (changed) {
+                try writeSandboxListTokens(allocator, host, element, tokens.items);
+            }
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "remove")) blk: {
+            if (args.len == 0) return error.ScriptRuntime;
+            var tokens = try sandboxListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+
+            const original_len = tokens.items.len;
+            for (args) |arg| {
+                const token_value = try evalExpr(allocator, host, bindings, arg);
+                const token = try validateClassListToken(allocator, token_value);
+                var index: usize = 0;
+                while (index < tokens.items.len) : (index += 1) {
+                    if (std.mem.eql(u8, tokens.items[index], token)) {
+                        _ = tokens.orderedRemove(index);
+                        break;
+                    }
+                }
+            }
+
+            if (tokens.items.len != original_len) {
+                try writeSandboxListTokens(allocator, host, element, tokens.items);
+            }
+            break :blk Value{ .undefined_value = {} };
+        } else if (std.mem.eql(u8, method, "toggle")) blk: {
+            if (args.len != 1 and args.len != 2) return error.ScriptRuntime;
+            const token_value = try evalExpr(allocator, host, bindings, args[0]);
+            const token = try validateClassListToken(allocator, token_value);
+            const force: ?bool = if (args.len == 2) force_value_blk: {
+                const force_value = try evalExpr(allocator, host, bindings, args[1]);
+                break :force_value_blk isTruthy(force_value);
+            } else null;
+
+            var tokens = try sandboxListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+            const present = classListContains(tokens.items, token);
+            const now_present = if (force) |forced| present_blk: {
+                if (forced) {
+                    if (!present) {
+                        try tokens.append(allocator, token);
+                        try writeSandboxListTokens(allocator, host, element, tokens.items);
+                    }
+                    break :present_blk true;
+                }
+
+                if (present) {
+                    var index: usize = 0;
+                    while (index < tokens.items.len) : (index += 1) {
+                        if (std.mem.eql(u8, tokens.items[index], token)) {
+                            _ = tokens.orderedRemove(index);
+                            break;
+                        }
+                    }
+                    try writeSandboxListTokens(allocator, host, element, tokens.items);
+                }
+                break :present_blk false;
+            } else present_blk: {
+                if (present) {
+                    var index: usize = 0;
+                    while (index < tokens.items.len) : (index += 1) {
+                        if (std.mem.eql(u8, tokens.items[index], token)) {
+                            _ = tokens.orderedRemove(index);
+                            break;
+                        }
+                    }
+                    try writeSandboxListTokens(allocator, host, element, tokens.items);
+                    break :present_blk false;
+                }
+
+                try tokens.append(allocator, token);
+                try writeSandboxListTokens(allocator, host, element, tokens.items);
+                break :present_blk true;
+            };
+
+            break :blk Value{ .boolean = now_present };
+        } else if (std.mem.eql(u8, method, "replace")) blk: {
+            if (args.len != 2) return error.ScriptRuntime;
+            const old_value = try evalExpr(allocator, host, bindings, args[0]);
+            const old_token = try validateClassListToken(allocator, old_value);
+            const new_value = try evalExpr(allocator, host, bindings, args[1]);
+            const new_token = try validateClassListToken(allocator, new_value);
+
+            var tokens = try sandboxListTokens(allocator, host, element);
+            defer tokens.deinit(allocator);
+
+            var old_index: ?usize = null;
+            var index: usize = 0;
+            while (index < tokens.items.len) : (index += 1) {
+                if (std.mem.eql(u8, tokens.items[index], old_token)) {
+                    old_index = index;
+                    break;
+                }
+            }
+
+            if (old_index == null) break :blk Value{ .boolean = false };
+            if (std.mem.eql(u8, old_token, new_token)) break :blk Value{ .boolean = true };
+
+            var new_index: ?usize = null;
+            index = 0;
+            while (index < tokens.items.len) : (index += 1) {
+                if (std.mem.eql(u8, tokens.items[index], new_token)) {
+                    new_index = index;
+                    break;
+                }
+            }
+
+            if (new_index == null) {
+                tokens.items[old_index.?] = new_token;
+            } else {
+                _ = tokens.orderedRemove(old_index.?);
+            }
+
+            try writeSandboxListTokens(allocator, host, element, tokens.items);
+            break :blk Value{ .boolean = true };
+        } else if (std.mem.eql(u8, method, "length")) blk: {
+            break :blk error.ScriptRuntime;
+        } else error.ScriptRuntime,
         .blocking_list => |element| if (std.mem.eql(u8, method, "contains")) blk: {
             if (args.len != 1) return error.ScriptRuntime;
             const token_value = try evalExpr(allocator, host, bindings, args[0]);
@@ -12586,6 +13003,29 @@ fn evalMethodCall(
         } else if (std.mem.eql(u8, method, "toString")) media_to_string: {
             if (args.len != 0) return error.ScriptRuntime;
             break :media_to_string Value{ .string = try media.currentText(allocator) };
+        } else error.ScriptRuntime,
+        .time_ranges => if (std.mem.eql(u8, method, "toString")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk Value{ .string = "[object TimeRanges]" };
+        } else if (std.mem.eql(u8, method, "start") or std.mem.eql(u8, method, "end")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const index_value = try evalExpr(allocator, host, bindings, args[0]);
+            _ = try asNodeListIndex(index_value);
+            break :blk error.ScriptRuntime;
+        } else error.ScriptRuntime,
+        .text_track_list => if (std.mem.eql(u8, method, "item")) blk: {
+            if (args.len != 1) return error.ScriptRuntime;
+            const index_value = try evalExpr(allocator, host, bindings, args[0]);
+            const index = try asNodeListIndex(index_value);
+            const track_nodes = try mediaTextTrackListTrackIds(allocator, host, object.text_track_list);
+            defer allocator.free(track_nodes);
+            if (index >= track_nodes.len) {
+                break :blk Value{ .null_value = {} };
+            }
+            break :blk try makeTextTrackValue(host, track_nodes[index]);
+        } else if (std.mem.eql(u8, method, "toString")) blk: {
+            if (args.len != 0) return error.ScriptRuntime;
+            break :blk Value{ .string = "[object TextTrackList]" };
         } else error.ScriptRuntime,
         .text_track => |track| if (std.mem.eql(u8, method, "toString")) blk: {
             if (args.len != 0) return error.ScriptRuntime;
@@ -18274,6 +18714,24 @@ fn canvasDimensionValue(host: anytype, element_id: dom.NodeId, attribute_name: [
     return std.fmt.parseInt(usize, trimmed, 10) catch fallback;
 }
 
+fn canvasToBlobCallback(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    callback: ScriptFunction,
+) errors.Result(void) {
+    const positional = [_]Value{.{ .null_value = {} }};
+    var bindings_out = try functionBindings(allocator, callback, positional[0..]);
+    defer bindings_out.deinit(allocator);
+
+    try executeScriptSource(
+        allocator,
+        host,
+        callback.body_source,
+        "canvas:toBlob",
+        bindings_out.items,
+    );
+}
+
 fn textareaWrapValue(host: anytype, element_id: dom.NodeId) errors.Result([]const u8) {
     const attr = (try host.domStore().getAttribute(element_id, "wrap")) orelse return "soft";
     const trimmed = std.mem.trim(u8, attr, " \t\r\n\x0c");
@@ -18440,6 +18898,20 @@ fn elementIsDataElement(host: anytype, element_id: dom.NodeId) errors.Result(boo
 fn elementIsTimeElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
     const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
     return std.ascii.eqlIgnoreCase(tag_name, "time");
+}
+
+fn elementSupportsQuoteCiteProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.mem.eql(u8, tag_name, "blockquote") or
+        std.mem.eql(u8, tag_name, "q") or
+        std.mem.eql(u8, tag_name, "ins") or
+        std.mem.eql(u8, tag_name, "del");
+}
+
+fn elementSupportsModDateTimeProperty(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
+    const tag_name = host.domStore().tagNameForNode(element_id) orelse return false;
+    return std.mem.eql(u8, tag_name, "ins") or
+        std.mem.eql(u8, tag_name, "del");
 }
 
 fn elementIsTemplateElement(host: anytype, element_id: dom.NodeId) errors.Result(bool) {
@@ -18714,6 +19186,17 @@ fn formKeywordValue(
     }
 
     return default_value;
+}
+
+fn formAutocompleteValue(
+    host: anytype,
+    element_id: dom.NodeId,
+) errors.Result([]const u8) {
+    const value = (try host.domStore().getAttribute(element_id, "autocomplete")) orelse return "on";
+    const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+    if (trimmed.len == 0) return "on";
+    if (std.ascii.eqlIgnoreCase(trimmed, "off")) return "off";
+    return "on";
 }
 
 fn fileInputFilesValue(
@@ -20776,6 +21259,7 @@ fn asString(allocator: std.mem.Allocator, value: Value) errors.Result([]const u8
         .part_list => "[object DOMTokenList]",
         .rel_list => "[object DOMTokenList]",
         .blocking_list => "[object DOMTokenList]",
+        .sandbox_list => "[object DOMTokenList]",
         .controls_list => "[object DOMTokenList]",
         .output_html_for => "[object DOMTokenList]",
         .dataset => "[object DOMStringMap]",
@@ -20830,7 +21314,9 @@ fn asString(allocator: std.mem.Allocator, value: Value) errors.Result([]const u8
         .storage => "[object Storage]",
         .history => "[object History]",
         .media_list => |media| try media.currentText(allocator),
+        .time_ranges => "[object TimeRanges]",
         .text_track => "[object TextTrack]",
+        .text_track_list => "[object TextTrackList]",
         .dom_rect => "[object DOMRect]",
         .dom_rect_list => "[object DOMRectList]",
         .range => |range| range.selected_text,
@@ -20874,7 +21360,7 @@ fn isTruthy(value: Value) bool {
         .boolean => |flag| flag,
         .number => |number| number != 0,
         .string => |text| text.len != 0,
-        .element, .node, .template_content, .file_list, .form_data, .form_data_entry, .attribute, .named_node_map, .class_list, .part_list, .rel_list, .blocking_list, .controls_list, .output_html_for, .dataset, .node_list, .collection_iterator, .iterator_result, .collection_entry, .html_collection, .document_scripts, .document_anchors, .document_style_sheets, .css_rule_list, .css_rule, .style_sheet, .style_declaration, .radio_node_list, .media_query_list, .validity_state, .string_list, .media_list, .text_track, .date, .dom_rect, .dom_rect_list, .range, .selection, .math, .crypto, .navigator, .mime_type_array, .performance, .screen, .screen_orientation, .storage, .location, .history, .event, .document, .window, .function => true,
+        .element, .node, .template_content, .file_list, .form_data, .form_data_entry, .attribute, .named_node_map, .class_list, .part_list, .rel_list, .blocking_list, .sandbox_list, .controls_list, .output_html_for, .dataset, .node_list, .collection_iterator, .iterator_result, .collection_entry, .html_collection, .document_scripts, .document_anchors, .document_style_sheets, .css_rule_list, .css_rule, .style_sheet, .style_declaration, .radio_node_list, .media_query_list, .validity_state, .string_list, .media_list, .time_ranges, .text_track, .text_track_list, .date, .dom_rect, .dom_rect_list, .range, .selection, .math, .crypto, .navigator, .mime_type_array, .performance, .screen, .screen_orientation, .storage, .location, .history, .event, .document, .window, .function => true,
     };
 }
 
@@ -21311,6 +21797,14 @@ fn makeSelectionValue(allocator: std.mem.Allocator, host: anytype) errors.Result
 fn makeTextTrackValue(host: anytype, element: dom.NodeId) errors.Result(Value) {
     const state = try host.domStoreMut().ensureTextTrackState(element);
     return .{ .text_track = state };
+}
+
+fn mediaTextTrackListTrackIds(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    media: dom.NodeId,
+) errors.Result([]dom.NodeId) {
+    return try host.domStore().selectWithin(allocator, media, "track");
 }
 
 fn namespaceUriFromValue(allocator: std.mem.Allocator, value: Value) errors.Result(?[]const u8) {
@@ -22284,6 +22778,14 @@ fn controlsListTokens(
     return tokenListTokens(allocator, host, element, "controlslist");
 }
 
+fn sandboxListTokens(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    element: dom.NodeId,
+) errors.Result(std.ArrayList([]const u8)) {
+    return tokenListTokens(allocator, host, element, "sandbox");
+}
+
 fn outputHtmlForTokens(
     allocator: std.mem.Allocator,
     host: anytype,
@@ -22418,6 +22920,29 @@ fn controlsListSupportsToken(token: []const u8) bool {
     return false;
 }
 
+fn sandboxListSupportsToken(token: []const u8) bool {
+    const supported_tokens = [_][]const u8{
+        "allow-downloads",
+        "allow-forms",
+        "allow-modals",
+        "allow-orientation-lock",
+        "allow-pointer-lock",
+        "allow-popups",
+        "allow-popups-to-escape-sandbox",
+        "allow-presentation",
+        "allow-same-origin",
+        "allow-scripts",
+        "allow-storage-access-by-user-activation",
+        "allow-top-navigation",
+        "allow-top-navigation-by-user-activation",
+        "allow-top-navigation-to-custom-protocols",
+    };
+    for (supported_tokens) |candidate| {
+        if (std.ascii.eqlIgnoreCase(candidate, token)) return true;
+    }
+    return false;
+}
+
 fn validateClassListToken(
     allocator: std.mem.Allocator,
     value: Value,
@@ -22464,6 +22989,13 @@ fn writeBlockingListTokens(
     element: dom.NodeId,
     tokens: []const []const u8,
 ) errors.Result(void) {
+    if (tokens.len == 0) {
+        host.domStoreMut().removeAttribute(element, "blocking") catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.ScriptRuntime,
+        };
+        return;
+    }
     return writeTokenListTokens(allocator, host, element, tokens, "blocking");
 }
 
@@ -22474,6 +23006,15 @@ fn writeControlsListTokens(
     tokens: []const []const u8,
 ) errors.Result(void) {
     return writeTokenListTokens(allocator, host, element, tokens, "controlslist");
+}
+
+fn writeSandboxListTokens(
+    allocator: std.mem.Allocator,
+    host: anytype,
+    element: dom.NodeId,
+    tokens: []const []const u8,
+) errors.Result(void) {
+    return writeTokenListTokens(allocator, host, element, tokens, "sandbox");
 }
 
 fn writeOutputHtmlForTokens(

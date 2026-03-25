@@ -59,10 +59,17 @@ pub const PopoverState = enum {
 };
 
 pub const MediaPlaybackState = struct {
+    current_time: f64 = 0.0,
+    duration: f64 = std.math.nan(f64),
     volume: f64 = 1.0,
     default_playback_rate: f64 = 1.0,
     playback_rate: f64 = 1.0,
     preserves_pitch: bool = true,
+    paused: bool = true,
+    seeking: bool = false,
+    ended: bool = false,
+    ready_state: u8 = 0,
+    network_state: u8 = 0,
 };
 
 pub const TextTrackMode = enum {
@@ -426,6 +433,48 @@ pub const DomStore = struct {
     pub fn mediaVolumeForNode(self: *const DomStore, node_id: NodeId) errors.Result(f64) {
         const state = try self.mediaPlaybackStateForNode(node_id);
         return state.volume;
+    }
+
+    pub fn mediaCurrentTimeForNode(self: *const DomStore, node_id: NodeId) errors.Result(f64) {
+        const state = try self.mediaPlaybackStateForNode(node_id);
+        return state.current_time;
+    }
+
+    pub fn mediaDurationForNode(self: *const DomStore, node_id: NodeId) errors.Result(f64) {
+        const state = try self.mediaPlaybackStateForNode(node_id);
+        return state.duration;
+    }
+
+    pub fn mediaPausedForNode(self: *const DomStore, node_id: NodeId) errors.Result(bool) {
+        const state = try self.mediaPlaybackStateForNode(node_id);
+        return state.paused;
+    }
+
+    pub fn mediaSeekingForNode(self: *const DomStore, node_id: NodeId) errors.Result(bool) {
+        const state = try self.mediaPlaybackStateForNode(node_id);
+        return state.seeking;
+    }
+
+    pub fn mediaEndedForNode(self: *const DomStore, node_id: NodeId) errors.Result(bool) {
+        const state = try self.mediaPlaybackStateForNode(node_id);
+        return state.ended;
+    }
+
+    pub fn mediaReadyStateForNode(self: *const DomStore, node_id: NodeId) errors.Result(u8) {
+        const state = try self.mediaPlaybackStateForNode(node_id);
+        return state.ready_state;
+    }
+
+    pub fn mediaNetworkStateForNode(self: *const DomStore, node_id: NodeId) errors.Result(u8) {
+        const state = try self.mediaPlaybackStateForNode(node_id);
+        return state.network_state;
+    }
+
+    pub fn setMediaCurrentTime(self: *DomStore, node_id: NodeId, current_time: f64) errors.Result(void) {
+        if (!std.math.isFinite(current_time)) return error.DomError;
+        if (current_time < 0.0) return error.DomError;
+        const state = try self.ensureMediaPlaybackState(node_id);
+        state.current_time = current_time;
     }
 
     pub fn setMediaVolume(self: *DomStore, node_id: NodeId, volume: f64) errors.Result(void) {
@@ -1523,6 +1572,10 @@ pub const DomStore = struct {
                 }
                 if (std.mem.eql(u8, element.tag_name, "option")) {
                     break :blk self.optionValueForNode(allocator, node_id);
+                }
+                if (std.mem.eql(u8, element.tag_name, "button")) {
+                    const text = (try self.getAttribute(node_id, "value")) orelse "";
+                    break :blk allocator.dupe(u8, text);
                 }
                 if (std.mem.eql(u8, element.tag_name, "textarea")) {
                     break :blk self.textContent(allocator, node_id);

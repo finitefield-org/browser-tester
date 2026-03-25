@@ -138,6 +138,95 @@ func TestParseHostInvocationNestedArguments(t *testing.T) {
 	}
 }
 
+func TestDispatchParsesTextContentMutationInvocation(t *testing.T) {
+	host := &fakeHost{
+		values: map[string]Value{
+			"setTextContent": UndefinedValue(),
+		},
+		errs: map[string]error{},
+	}
+	runtime := NewRuntime(host)
+
+	_, err := runtime.Dispatch(DispatchRequest{Source: `host:setTextContent("#out", "clicked")`})
+	if err != nil {
+		t.Fatalf("Dispatch(setTextContent) error = %v", err)
+	}
+	if len(host.calls) != 1 {
+		t.Fatalf("host calls = %#v, want one call", host.calls)
+	}
+	call := host.calls[0]
+	if call.method != "setTextContent" {
+		t.Fatalf("host call method = %q, want setTextContent", call.method)
+	}
+	if len(call.args) != 2 {
+		t.Fatalf("host call args len = %d, want 2", len(call.args))
+	}
+	if call.args[0].Kind != ValueKindString || call.args[0].String != "#out" {
+		t.Fatalf("host call arg[0] = %#v, want selector string", call.args[0])
+	}
+	if call.args[1].Kind != ValueKindString || call.args[1].String != "clicked" {
+		t.Fatalf("host call arg[1] = %#v, want clicked", call.args[1])
+	}
+}
+
+func TestDispatchParsesTextContentGetterInvocation(t *testing.T) {
+	host := &fakeHost{
+		values: map[string]Value{
+			"textContent": StringValue("seed text"),
+		},
+		errs: map[string]error{},
+	}
+	runtime := NewRuntime(host)
+
+	result, err := runtime.Dispatch(DispatchRequest{Source: `host:textContent("#src")`})
+	if err != nil {
+		t.Fatalf("Dispatch(textContent) error = %v", err)
+	}
+	if result.Value.Kind != ValueKindString || result.Value.String != "seed text" {
+		t.Fatalf("Dispatch(textContent) value = %#v, want seed text", result.Value)
+	}
+	if len(host.calls) != 1 {
+		t.Fatalf("host calls = %#v, want one call", host.calls)
+	}
+	if host.calls[0].method != "textContent" {
+		t.Fatalf("host call method = %q, want textContent", host.calls[0].method)
+	}
+	if len(host.calls[0].args) != 1 || host.calls[0].args[0].Kind != ValueKindString || host.calls[0].args[0].String != "#src" {
+		t.Fatalf("host call args = %#v, want selector argument", host.calls[0].args)
+	}
+}
+
+func TestDispatchParsesTreeMutationInvocations(t *testing.T) {
+	host := &fakeHost{
+		values: map[string]Value{
+			"replaceChildren": UndefinedValue(),
+			"cloneNode":       UndefinedValue(),
+		},
+		errs: map[string]error{},
+	}
+	runtime := NewRuntime(host)
+
+	_, err := runtime.Dispatch(DispatchRequest{Source: `host:replaceChildren("#out", "<span>fresh</span>"); host:cloneNode("#src", true)`})
+	if err != nil {
+		t.Fatalf("Dispatch(tree mutations) error = %v", err)
+	}
+	if len(host.calls) != 2 {
+		t.Fatalf("host calls = %#v, want two calls", host.calls)
+	}
+	if host.calls[0].method != "replaceChildren" {
+		t.Fatalf("host call[0].method = %q, want replaceChildren", host.calls[0].method)
+	}
+	if len(host.calls[0].args) != 2 || host.calls[0].args[0].String != "#out" || host.calls[0].args[1].String != "<span>fresh</span>" {
+		t.Fatalf("host call[0].args = %#v, want selector + markup", host.calls[0].args)
+	}
+	if host.calls[1].method != "cloneNode" {
+		t.Fatalf("host call[1].method = %q, want cloneNode", host.calls[1].method)
+	}
+	if len(host.calls[1].args) != 2 || host.calls[1].args[0].String != "#src" || host.calls[1].args[1].Kind != ValueKindBool || !host.calls[1].args[1].Bool {
+		t.Fatalf("host call[1].args = %#v, want selector + true", host.calls[1].args)
+	}
+}
+
 func TestDispatchParsesQuotedEventListenerSource(t *testing.T) {
 	host := &fakeHost{
 		values: map[string]Value{
@@ -386,6 +475,100 @@ func TestDispatchParsesLocationNavigationInvocations(t *testing.T) {
 				if call.args[0].Kind != ValueKindString || call.args[0].String != tc.wantString {
 					t.Fatalf("host call arg[0] = %#v, want %q", call.args[0], tc.wantString)
 				}
+			}
+		})
+	}
+}
+
+func TestDispatchParsesLocationGetterInvocations(t *testing.T) {
+	tests := []struct {
+		name       string
+		source     string
+		method     string
+		wantString string
+	}{
+		{
+			name:       "href",
+			source:     `host:locationHref()`,
+			method:     "locationHref",
+			wantString: "https://example.test:8443/path/name?mode=full#step-1",
+		},
+		{
+			name:       "origin",
+			source:     `host:locationOrigin()`,
+			method:     "locationOrigin",
+			wantString: "https://example.test:8443",
+		},
+		{
+			name:       "protocol",
+			source:     `host:locationProtocol()`,
+			method:     "locationProtocol",
+			wantString: "https:",
+		},
+		{
+			name:       "host",
+			source:     `host:locationHost()`,
+			method:     "locationHost",
+			wantString: "example.test:8443",
+		},
+		{
+			name:       "hostname",
+			source:     `host:locationHostname()`,
+			method:     "locationHostname",
+			wantString: "example.test",
+		},
+		{
+			name:       "port",
+			source:     `host:locationPort()`,
+			method:     "locationPort",
+			wantString: "8443",
+		},
+		{
+			name:       "pathname",
+			source:     `host:locationPathname()`,
+			method:     "locationPathname",
+			wantString: "/path/name",
+		},
+		{
+			name:       "search",
+			source:     `host:locationSearch()`,
+			method:     "locationSearch",
+			wantString: "?mode=full",
+		},
+		{
+			name:       "hash",
+			source:     `host:locationHash()`,
+			method:     "locationHash",
+			wantString: "#step-1",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			host := &fakeHost{
+				values: map[string]Value{
+					tc.method: StringValue(tc.wantString),
+				},
+				errs: map[string]error{},
+			}
+			runtime := NewRuntime(host)
+
+			result, err := runtime.Dispatch(DispatchRequest{Source: tc.source})
+			if err != nil {
+				t.Fatalf("Dispatch(%s) error = %v", tc.method, err)
+			}
+			if len(host.calls) != 1 {
+				t.Fatalf("host calls = %#v, want one call", host.calls)
+			}
+			call := host.calls[0]
+			if call.method != tc.method {
+				t.Fatalf("host call method = %q, want %s", call.method, tc.method)
+			}
+			if len(call.args) != 0 {
+				t.Fatalf("host call args len = %d, want 0", len(call.args))
+			}
+			if result.Value.Kind != ValueKindString || result.Value.String != tc.wantString {
+				t.Fatalf("Dispatch(%s) value = %#v, want string %q", tc.method, result.Value, tc.wantString)
 			}
 		})
 	}
@@ -777,6 +960,124 @@ func TestDispatchParsesWindowNameInvocations(t *testing.T) {
 			}
 			if tc.check != nil {
 				tc.check(t, call, result.Value)
+			}
+		})
+	}
+}
+
+func TestDispatchParsesWebStorageInvocations(t *testing.T) {
+	tests := []struct {
+		name       string
+		source     string
+		method     string
+		wantArgs   int
+		wantKind   ValueKind
+		wantString string
+		wantNumber float64
+	}{
+		{
+			name:       "localStorageGetItem",
+			source:     `host:localStorageGetItem("theme")`,
+			method:     "localStorageGetItem",
+			wantArgs:   1,
+			wantKind:   ValueKindString,
+			wantString: "dark",
+		},
+		{
+			name:     "localStorageSetItem",
+			source:   `host:localStorageSetItem("theme", "light")`,
+			method:   "localStorageSetItem",
+			wantArgs: 2,
+			wantKind: ValueKindUndefined,
+		},
+		{
+			name:       "localStorageLength",
+			source:     `host:localStorageLength()`,
+			method:     "localStorageLength",
+			wantArgs:   0,
+			wantKind:   ValueKindNumber,
+			wantNumber: 2,
+		},
+		{
+			name:       "localStorageKey",
+			source:     `host:localStorageKey(0)`,
+			method:     "localStorageKey",
+			wantArgs:   1,
+			wantKind:   ValueKindString,
+			wantString: "theme",
+		},
+		{
+			name:       "sessionStorageGetItem",
+			source:     `host:sessionStorageGetItem("tab")`,
+			method:     "sessionStorageGetItem",
+			wantArgs:   1,
+			wantKind:   ValueKindString,
+			wantString: "main",
+		},
+		{
+			name:     "sessionStorageSetItem",
+			source:   `host:sessionStorageSetItem("tab", "main")`,
+			method:   "sessionStorageSetItem",
+			wantArgs: 2,
+			wantKind: ValueKindUndefined,
+		},
+		{
+			name:     "sessionStorageRemoveItem",
+			source:   `host:sessionStorageRemoveItem("tab")`,
+			method:   "sessionStorageRemoveItem",
+			wantArgs: 1,
+			wantKind: ValueKindUndefined,
+		},
+		{
+			name:     "sessionStorageClear",
+			source:   `host:sessionStorageClear()`,
+			method:   "sessionStorageClear",
+			wantArgs: 0,
+			wantKind: ValueKindUndefined,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			host := &fakeHost{
+				values: map[string]Value{
+					tc.method: func() Value {
+						switch tc.wantKind {
+						case ValueKindString:
+							return StringValue(tc.wantString)
+						case ValueKindNumber:
+							return NumberValue(tc.wantNumber)
+						default:
+							return UndefinedValue()
+						}
+					}(),
+				},
+				errs: map[string]error{},
+			}
+			runtime := NewRuntime(host)
+
+			result, err := runtime.Dispatch(DispatchRequest{Source: tc.source})
+			if err != nil {
+				t.Fatalf("Dispatch(%s) error = %v", tc.method, err)
+			}
+			if len(host.calls) != 1 {
+				t.Fatalf("host calls = %#v, want one call", host.calls)
+			}
+			call := host.calls[0]
+			if call.method != tc.method {
+				t.Fatalf("host call method = %q, want %s", call.method, tc.method)
+			}
+			if len(call.args) != tc.wantArgs {
+				t.Fatalf("host call args len = %d, want %d", len(call.args), tc.wantArgs)
+			}
+			if result.Value.Kind != tc.wantKind {
+				t.Fatalf("Dispatch(%s) kind = %q, want %q", tc.method, result.Value.Kind, tc.wantKind)
+			}
+			if tc.wantKind == ValueKindString && result.Value.String != tc.wantString {
+				t.Fatalf("Dispatch(%s) value = %q, want %q", tc.method, result.Value.String, tc.wantString)
+			}
+			if tc.wantKind == ValueKindNumber && result.Value.Number != tc.wantNumber {
+				t.Fatalf("Dispatch(%s) value = %v, want %v", tc.method, result.Value.Number, tc.wantNumber)
 			}
 		})
 	}

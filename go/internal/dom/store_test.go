@@ -222,6 +222,97 @@ func TestResetFormControlsRestoresInitialState(t *testing.T) {
 	}
 }
 
+func TestSetTextContentUpdatesTextareaDefaultValue(t *testing.T) {
+	store := NewStore()
+	if err := store.BootstrapHTML(`<form id="profile"><textarea id="bio">Base</textarea></form>`); err != nil {
+		t.Fatalf("BootstrapHTML() error = %v", err)
+	}
+
+	formID := mustSelectSingle(t, store, "#profile")
+	bioID := mustSelectSingle(t, store, "#bio")
+
+	if err := store.SetTextContent(bioID, "Draft"); err != nil {
+		t.Fatalf("SetTextContent(#bio) error = %v", err)
+	}
+	if got, want := store.DumpDOM(), `<form id="profile"><textarea id="bio">Draft</textarea></form>`; got != want {
+		t.Fatalf("DumpDOM() after SetTextContent = %q, want %q", got, want)
+	}
+
+	if err := store.ResetFormControls(formID); err != nil {
+		t.Fatalf("ResetFormControls(#profile) after SetTextContent error = %v", err)
+	}
+	if got, want := store.DumpDOM(), `<form id="profile"><textarea id="bio">Draft</textarea></form>`; got != want {
+		t.Fatalf("DumpDOM() after reset of SetTextContent textarea = %q, want %q", got, want)
+	}
+
+	if err := store.SetFormControlValue(bioID, "User"); err != nil {
+		t.Fatalf("SetFormControlValue(#bio) error = %v", err)
+	}
+	if got, want := store.DumpDOM(), `<form id="profile"><textarea id="bio">User</textarea></form>`; got != want {
+		t.Fatalf("DumpDOM() after SetFormControlValue = %q, want %q", got, want)
+	}
+
+	if err := store.ResetFormControls(formID); err != nil {
+		t.Fatalf("ResetFormControls(#profile) after SetFormControlValue error = %v", err)
+	}
+	if got, want := store.DumpDOM(), `<form id="profile"><textarea id="bio">Draft</textarea></form>`; got != want {
+		t.Fatalf("DumpDOM() after reset of SetFormControlValue textarea = %q, want %q", got, want)
+	}
+}
+
+func TestTextareaChildMutationsUpdateResetDefaultValue(t *testing.T) {
+	store := NewStore()
+	if err := store.BootstrapHTML(`<form id="profile"><textarea id="bio">Base</textarea><button id="reset" type="reset">Reset</button></form>`); err != nil {
+		t.Fatalf("BootstrapHTML() error = %v", err)
+	}
+
+	formID := mustSelectSingle(t, store, "#profile")
+	bioID := mustSelectSingle(t, store, "#bio")
+
+	if err := store.ReplaceChildren(bioID, "Draft"); err != nil {
+		t.Fatalf("ReplaceChildren(#bio) error = %v", err)
+	}
+	if err := store.ResetFormControls(formID); err != nil {
+		t.Fatalf("ResetFormControls(#profile) after ReplaceChildren error = %v", err)
+	}
+	if got, want := store.DumpDOM(), `<form id="profile"><textarea id="bio">Draft</textarea><button id="reset" type="reset">Reset</button></form>`; got != want {
+		t.Fatalf("DumpDOM() after reset of ReplaceChildren textarea = %q, want %q", got, want)
+	}
+
+	if err := store.SetInnerHTML(bioID, "Fresh"); err != nil {
+		t.Fatalf("SetInnerHTML(#bio) second update error = %v", err)
+	}
+	if err := store.InsertAdjacentHTML(bioID, "beforeend", `<span id="bang">!</span>`); err != nil {
+		t.Fatalf("InsertAdjacentHTML(#bio,beforeend) error = %v", err)
+	}
+	if err := store.ResetFormControls(formID); err != nil {
+		t.Fatalf("ResetFormControls(#profile) after InsertAdjacentHTML error = %v", err)
+	}
+	if got, want := store.DumpDOM(), `<form id="profile"><textarea id="bio">Fresh!</textarea><button id="reset" type="reset">Reset</button></form>`; got != want {
+		t.Fatalf("DumpDOM() after reset of InsertAdjacentHTML textarea = %q, want %q", got, want)
+	}
+
+	if err := store.SetInnerHTML(bioID, "Fresh"); err != nil {
+		t.Fatalf("SetInnerHTML(#bio) third update error = %v", err)
+	}
+	if err := store.InsertAdjacentHTML(bioID, "beforeend", `<span id="bang">!</span>`); err != nil {
+		t.Fatalf("InsertAdjacentHTML(#bio,beforeend) second error = %v", err)
+	}
+	bangID := mustSelectSingle(t, store, "#bang")
+	if err := store.RemoveNode(bangID); err != nil {
+		t.Fatalf("RemoveNode(#bang) error = %v", err)
+	}
+	if got, want := store.DumpDOM(), `<form id="profile"><textarea id="bio">Fresh</textarea><button id="reset" type="reset">Reset</button></form>`; got != want {
+		t.Fatalf("DumpDOM() after RemoveNode(#bang) = %q, want %q", got, want)
+	}
+	if err := store.ResetFormControls(formID); err != nil {
+		t.Fatalf("ResetFormControls(#profile) after RemoveNode error = %v", err)
+	}
+	if got, want := store.DumpDOM(), `<form id="profile"><textarea id="bio">Fresh</textarea><button id="reset" type="reset">Reset</button></form>`; got != want {
+		t.Fatalf("DumpDOM() after reset of RemoveNode textarea = %q, want %q", got, want)
+	}
+}
+
 func mustSelectSingle(t *testing.T, store *Store, selector string) NodeID {
 	t.Helper()
 	nodes, err := store.Select(selector)

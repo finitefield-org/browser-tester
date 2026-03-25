@@ -540,16 +540,26 @@ fn get_attribute_returns_null_for_missing_attribute_in_delegated_click_handler()
 }
 
 #[test]
-fn click_handler_observes_updated_let_capture_for_clipboard() -> browser_tester::Result<()> {
+fn async_click_handler_observes_updated_let_capture_for_clipboard(
+) -> browser_tester::Result<()> {
     let html = r#"
-    <div id="result"></div>
+    <button id="b">copy</button>
     <script>
-      document.getElementById("result").textContent = "hello";
+      let last = null;
+      function render() {
+        last = { ok: true, text: "hello" };
+      }
+      render();
+      document.getElementById("b").addEventListener("click", () => {
+        if (!last || !last.ok) return;
+        window.navigator.clipboard.writeText(last.text);
+      });
     </script>
     "#;
 
-    let harness = Harness::from_html(html)?;
-    harness.assert_text("#result", "hello")?;
+    let mut harness = Harness::from_html(html)?;
+    harness.click("#b")?;
+    assert_eq!(harness.clipboard_text(), "hello");
     Ok(())
 }
 

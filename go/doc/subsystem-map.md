@@ -11,7 +11,8 @@ Owns:
 - `Error` and its classification helpers
 - `DebugView`
 - `MockRegistryView`
-- public live view helper types such as `ClassListView` and `DatasetView`
+- public live view and snapshot helper types such as `ClassListView`, `DatasetView`, `OptionLabel`, `OptionValue`, and `OptgroupLabel`
+- public tree-mutation helpers such as `TextContent`, `SetTextContent`, `ReplaceChildren`, and `CloneNode`
 - public seed/value helper types that are part of constructors or mock APIs
 
 Location:
@@ -54,8 +55,8 @@ Owns:
 - scheduler and fake time
 - deterministic browser-like services
 - navigation and history state
+- cookie jar, web storage, and scroll state
 - event routing and dispatch
-- cookie jar and scroll state
 - test-only mock implementations
 - trace and debug state
 

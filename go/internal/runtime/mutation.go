@@ -17,6 +17,17 @@ func (s *Session) InnerHTML(selector string) (string, error) {
 	return store.InnerHTMLForNode(nodeID)
 }
 
+func (s *Session) TextContent(selector string) (string, error) {
+	if s == nil {
+		return "", fmt.Errorf("session is unavailable")
+	}
+	store, nodeID, _, _, err := s.resolveActionTarget(selector)
+	if err != nil {
+		return "", err
+	}
+	return store.TextContentForNode(nodeID), nil
+}
+
 func (s *Session) OuterHTML(selector string) (string, error) {
 	if s == nil {
 		return "", fmt.Errorf("session is unavailable")
@@ -37,6 +48,40 @@ func (s *Session) SetInnerHTML(selector, markup string) error {
 		return err
 	}
 	if err := store.SetInnerHTML(nodeID, markup); err != nil {
+		return err
+	}
+	if store.FocusedNodeID() == 0 {
+		s.focusedSelector = ""
+	}
+	return nil
+}
+
+func (s *Session) ReplaceChildren(selector, markup string) error {
+	if s == nil {
+		return fmt.Errorf("session is unavailable")
+	}
+	store, nodeID, _, _, err := s.resolveActionTarget(selector)
+	if err != nil {
+		return err
+	}
+	if err := store.ReplaceChildren(nodeID, markup); err != nil {
+		return err
+	}
+	if store.FocusedNodeID() == 0 {
+		s.focusedSelector = ""
+	}
+	return nil
+}
+
+func (s *Session) SetTextContent(selector, text string) error {
+	if s == nil {
+		return fmt.Errorf("session is unavailable")
+	}
+	store, nodeID, _, _, err := s.resolveActionTarget(selector)
+	if err != nil {
+		return err
+	}
+	if err := store.SetTextContent(nodeID, text); err != nil {
 		return err
 	}
 	if store.FocusedNodeID() == 0 {
@@ -90,6 +135,20 @@ func (s *Session) RemoveNode(selector string) error {
 	return nil
 }
 
+func (s *Session) CloneNode(selector string, deep bool) error {
+	if s == nil {
+		return fmt.Errorf("session is unavailable")
+	}
+	store, nodeID, _, _, err := s.resolveActionTarget(selector)
+	if err != nil {
+		return err
+	}
+	if _, err := store.CloneNodeAfter(nodeID, deep); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *Session) WriteHTML(markup string) (err error) {
 	if s == nil {
 		return fmt.Errorf("session is unavailable")
@@ -120,6 +179,25 @@ func (s *Session) WriteHTML(markup string) (err error) {
 	prevScrollX := s.scrollX
 	prevScrollY := s.scrollY
 	prevWindowName := s.windowName
+	prevLastInlineScriptHTML := s.lastInlineScriptHTML
+	prevCookieJar := cloneStringMap(s.cookieJar)
+	prevHistoryEntries := cloneHistoryEntries(s.historyEntries)
+	prevHistoryIndex := s.historyIndex
+	prevHistoryScrollRestoration := s.historyScrollRestoration
+	storage := s.Registry().Storage()
+	prevStorageLocal := storage.Local()
+	prevStorageSession := storage.Session()
+	prevStorageEvents := storage.Events()
+	location := s.Registry().Location()
+	prevLocationURL := ""
+	prevLocationHasURL := false
+	prevLocationNavigations := location.Navigations()
+	if location != nil {
+		if current, ok := location.CurrentURL(); ok {
+			prevLocationURL = current
+			prevLocationHasURL = true
+		}
+	}
 
 	s.writingHTML = true
 	defer func() {
@@ -144,6 +222,22 @@ func (s *Session) WriteHTML(markup string) (err error) {
 			s.scrollX = prevScrollX
 			s.scrollY = prevScrollY
 			s.windowName = prevWindowName
+			s.lastInlineScriptHTML = prevLastInlineScriptHTML
+			s.cookieJar = prevCookieJar
+			s.historyEntries = prevHistoryEntries
+			s.historyIndex = prevHistoryIndex
+			s.historyScrollRestoration = prevHistoryScrollRestoration
+			storage.Restore(prevStorageLocal, prevStorageSession, prevStorageEvents)
+			if location := s.Registry().Location(); location != nil {
+				location.Reset()
+				if len(prevLocationNavigations) > 0 {
+					for _, nav := range prevLocationNavigations {
+						location.RecordNavigation(nav)
+					}
+				} else if prevLocationHasURL {
+					location.SetCurrentURL(prevLocationURL)
+				}
+			}
 		}
 	}()
 

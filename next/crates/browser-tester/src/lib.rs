@@ -311,6 +311,44 @@ impl Harness {
         Ok(())
     }
 
+    pub fn set_random_seed(&mut self, seed: u64) {
+        self.session.set_random_seed(seed);
+    }
+
+    pub fn enable_trace(&mut self, enabled: bool) {
+        self.session.enable_trace(enabled);
+    }
+
+    pub fn set_trace_stderr(&mut self, enabled: bool) {
+        self.session.set_trace_stderr(enabled);
+    }
+
+    pub fn set_trace_events(&mut self, enabled: bool) {
+        self.session.set_trace_events(enabled);
+    }
+
+    pub fn set_trace_timers(&mut self, enabled: bool) {
+        self.session.set_trace_timers(enabled);
+    }
+
+    pub fn set_trace_log_limit(&mut self, max_entries: usize) -> Result<()> {
+        self.session
+            .set_trace_log_limit(max_entries)
+            .map_err(map_session_error)?;
+        Ok(())
+    }
+
+    pub fn take_trace_logs(&mut self) -> Vec<String> {
+        self.session.take_trace_logs()
+    }
+
+    pub fn set_timer_step_limit(&mut self, max_steps: usize) -> Result<()> {
+        self.session
+            .set_timer_step_limit(max_steps)
+            .map_err(map_session_error)?;
+        Ok(())
+    }
+
     pub fn click(&mut self, selector: &str) -> Result<()> {
         let node_id = self.resolve_action_target(selector)?;
         self.session.click_node(node_id).map_err(map_session_error)
@@ -410,8 +448,30 @@ impl Harness {
     }
 
     pub fn write_clipboard(&mut self, text: &str) -> Result<()> {
-        self.session.write_clipboard(text);
+        self.session.write_clipboard(text).map_err(map_session_error)?;
         Ok(())
+    }
+
+    pub fn set_clipboard_text(&mut self, text: &str) {
+        self.session.mocks_mut().clipboard_mut().seed_text(text);
+    }
+
+    pub fn set_clipboard_read_error(&mut self, error: Option<&str>) {
+        self.session
+            .mocks_mut()
+            .clipboard_mut()
+            .set_read_error(error);
+    }
+
+    pub fn set_clipboard_write_error(&mut self, error: Option<&str>) {
+        self.session
+            .mocks_mut()
+            .clipboard_mut()
+            .set_write_error(error);
+    }
+
+    pub fn clear_clipboard_errors(&mut self) {
+        self.session.mocks_mut().clipboard_mut().clear_errors();
     }
 
     pub fn capture_download(&mut self, file_name: &str, bytes: impl Into<Vec<u8>>) -> Result<()> {
@@ -446,7 +506,12 @@ impl Harness {
     }
 
     pub fn clipboard_text(&self) -> String {
-        self.session.read_clipboard().unwrap_or_default()
+        self.session
+            .mocks()
+            .clipboard()
+            .seeded_text()
+            .unwrap_or_default()
+            .to_string()
     }
 
     pub fn pending_timers(&self) -> &[ScheduledTimer] {
