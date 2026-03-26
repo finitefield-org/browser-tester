@@ -71,9 +71,58 @@ pub struct SelectionState {
     pub end: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileInputFile {
+    pub name: String,
+    pub mime_type: Option<String>,
+    pub bytes: Vec<u8>,
+    pub read_error: Option<String>,
+}
+
+impl FileInputFile {
+    pub fn from_bytes(name: impl Into<String>, bytes: impl Into<Vec<u8>>) -> Self {
+        Self {
+            name: name.into(),
+            mime_type: None,
+            bytes: bytes.into(),
+            read_error: None,
+        }
+    }
+
+    pub fn from_text(name: impl Into<String>, text: impl Into<String>) -> Self {
+        Self::from_bytes(name, text.into().into_bytes())
+    }
+
+    pub fn with_mime_type(mut self, mime_type: impl Into<String>) -> Self {
+        self.mime_type = Some(mime_type.into());
+        self
+    }
+
+    pub fn with_read_error(mut self, error: impl Into<String>) -> Self {
+        self.read_error = Some(error.into());
+        self
+    }
+
+    pub fn size(&self) -> usize {
+        self.bytes.len()
+    }
+}
+
+impl From<String> for FileInputFile {
+    fn from(value: String) -> Self {
+        Self::from_bytes(value, Vec::<u8>::new())
+    }
+}
+
+impl From<&str> for FileInputFile {
+    fn from(value: &str) -> Self {
+        Self::from_bytes(value, Vec::<u8>::new())
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FileInputState {
-    pub files: Vec<String>,
+    pub files: Vec<FileInputFile>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

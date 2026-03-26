@@ -24,7 +24,7 @@ What exists today:
 - listener registration through the script host seam
 - target-phase event dispatch and form-control state updates
 - `click`, `type_text`, `set_checked`, `submit`, `dispatch`, `assert_value`, and `assert_checked`
-- explicit mock families, debug hooks, and public mock actions for `fetch`, dialogs, clipboard, close, open, print, scroll, location, file input, and download capture
+- explicit mock families, debug hooks, and public mock actions for `fetch`, dialogs, clipboard, close, open, print, scroll, location, payload-aware file input / drop dispatch, and download capture
 - contract, regression, and property test suites
 - quick and hardening test profiles plus a publication checklist
 - script-side `document.querySelector` and `element.querySelector` are available
@@ -75,7 +75,7 @@ What does not exist yet:
 
 ## Important Consequence
 
-Public methods such as `focus`, `blur`, `set_select_value`, `fetch`, `confirm`, `prompt`, `read_clipboard`, `write_clipboard`, `print`, `open`, `close`, `scroll_to`, `scroll_by`, `navigate`, `set_files`, and `capture_download` are now supported and dispatch or capture through the same deterministic runtime. The script-visible `navigator.clipboard.writeText()` / `navigator.clipboard.readText()` surface is a synchronous compatibility shim over the same mock-backed clipboard family rather than a full permissioned Promise-based browser implementation.
+Public methods such as `focus`, `blur`, `set_select_value`, `fetch`, `confirm`, `prompt`, `read_clipboard`, `write_clipboard`, `print`, `open`, `close`, `scroll_to`, `scroll_by`, `navigate`, `set_files`, `dispatch_drop`, and `capture_download` are now supported and dispatch or capture through the same deterministic runtime. The script-visible `navigator.clipboard.writeText()` / `navigator.clipboard.readText()` surface is a synchronous compatibility shim over the same mock-backed clipboard family rather than a full permissioned Promise-based browser implementation. The script-visible `input.files` and `event.dataTransfer.files` surfaces are FileList-like collections over the seeded file payload bytes, so `input.files[0].text()`, `input.files.item(0).text()`, and `await file.text()` still resolve in async code. The script-visible `FileReader` shim is also synchronous over the seeded payload bytes, fires `load` / `error` / `loadend` in order, and uses `FileInputFile::with_read_error(...)` for deterministic failure injection.
 
 ## Still Out of Scope
 

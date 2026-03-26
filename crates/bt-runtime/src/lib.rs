@@ -4,11 +4,11 @@ use std::error::Error as StdError;
 use std::fmt;
 
 use bt_dom::{
-    DomStore, ElementData, HTML_NAMESPACE_URI, MATHML_NAMESPACE_URI, NodeId, NodeKind,
-    SVG_NAMESPACE_URI,
+    DomStore, ElementData, FileInputFile, HTML_NAMESPACE_URI, MATHML_NAMESPACE_URI, NodeId,
+    NodeKind, SVG_NAMESPACE_URI,
 };
 use bt_script::{
-    ElementHandle, EventPhase, HostBindings, HtmlCollectionScope, HtmlCollectionTarget,
+    ElementHandle, EventPhase, FileData, HostBindings, HtmlCollectionScope, HtmlCollectionTarget,
     KeyboardEventInit, ListenerTarget, MediaQueryListState, NodeHandle, RadioNodeListTarget,
     ScreenOrientationState, ScriptError, ScriptEventHandle, ScriptFunction, ScriptRuntime,
     ScriptValue, StorageTarget,
@@ -662,7 +662,7 @@ impl DownloadMocks {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FileInputSelection {
     pub selector: String,
-    pub files: Vec<String>,
+    pub files: Vec<FileInputFile>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -674,7 +674,7 @@ impl FileInputMocks {
     pub fn set_files(
         &mut self,
         selector: impl Into<String>,
-        files: impl IntoIterator<Item = impl Into<String>>,
+        files: impl IntoIterator<Item = impl Into<FileInputFile>>,
     ) {
         self.selections.push(FileInputSelection {
             selector: selector.into(),
@@ -1221,6 +1221,7 @@ impl Session {
             true,
             true,
             None,
+            None,
         )?;
         Ok(())
     }
@@ -1240,13 +1241,13 @@ impl Session {
 
         let target = self.resolve_keyboard_target(selector)?;
         let bubbles = matches!(target, SessionEventTarget::Element(_));
-        self.dispatch_dom_event_for_target(target, event_type, bubbles, false, Some(&init))?;
+        self.dispatch_dom_event_for_target(target, event_type, bubbles, false, Some(&init), None)?;
         Ok(())
     }
 
     pub fn click_node(&mut self, node_id: NodeId) -> Result<(), SessionError> {
         self.ensure_element_node(node_id)?;
-        let outcome = self.dispatch_dom_event(node_id, "click", true, true)?;
+        let outcome = self.dispatch_dom_event(node_id, "click", true, true, None)?;
         if !outcome.default_prevented {
             self.run_click_default_actions(node_id)?;
         }
@@ -1258,7 +1259,7 @@ impl Session {
         self.dom
             .set_form_control_value(node_id, text)
             .map_err(SessionError::Dom)?;
-        self.dispatch_dom_event(node_id, "input", true, false)?;
+        self.dispatch_dom_event(node_id, "input", true, false, None)?;
         Ok(())
     }
 
@@ -1267,8 +1268,8 @@ impl Session {
         self.dom
             .set_form_control_checked(node_id, checked)
             .map_err(SessionError::Dom)?;
-        self.dispatch_dom_event(node_id, "input", true, false)?;
-        self.dispatch_dom_event(node_id, "change", true, false)?;
+        self.dispatch_dom_event(node_id, "input", true, false, None)?;
+        self.dispatch_dom_event(node_id, "change", true, false, None)?;
         Ok(())
     }
 
@@ -1281,8 +1282,8 @@ impl Session {
         self.dom
             .set_select_value(node_id, value)
             .map_err(SessionError::Dom)?;
-        self.dispatch_dom_event(node_id, "input", true, false)?;
-        self.dispatch_dom_event(node_id, "change", true, false)?;
+        self.dispatch_dom_event(node_id, "input", true, false, None)?;
+        self.dispatch_dom_event(node_id, "change", true, false, None)?;
         Ok(())
     }
 
@@ -1294,12 +1295,12 @@ impl Session {
 
         if let Some(previous) = self.focused_node.take() {
             self.dom.set_focused_node(None);
-            self.dispatch_dom_event(previous, "blur", false, false)?;
+            self.dispatch_dom_event(previous, "blur", false, false, None)?;
         }
 
         self.focused_node = Some(node_id);
         self.dom.set_focused_node(Some(node_id));
-        self.dispatch_dom_event(node_id, "focus", false, false)?;
+        self.dispatch_dom_event(node_id, "focus", false, false, None)?;
         Ok(())
     }
 
@@ -1311,7 +1312,7 @@ impl Session {
 
         self.focused_node = None;
         self.dom.set_focused_node(None);
-        self.dispatch_dom_event(node_id, "blur", false, false)?;
+        self.dispatch_dom_event(node_id, "blur", false, false, None)?;
         Ok(())
     }
 
@@ -1321,7 +1322,7 @@ impl Session {
             return Err(SessionError::Dom(format!("invalid node id: {:?}", node_id)));
         };
         if matches!(&node.kind, NodeKind::Element(element) if element.tag_name == "form") {
-            self.dispatch_dom_event(node_id, "submit", true, true)?;
+            self.dispatch_dom_event(node_id, "submit", true, true, None)?;
             return Ok(());
         }
 
@@ -1332,7 +1333,7 @@ impl Session {
             )));
         };
 
-        self.dispatch_dom_event(form_id, "submit", true, true)?;
+        self.dispatch_dom_event(form_id, "submit", true, true, None)?;
         Ok(())
     }
 
@@ -1614,18 +1615,45 @@ impl Session {
         &mut self,
         node_id: NodeId,
         selector: &str,
-        files: impl IntoIterator<Item = impl Into<String>>,
+        files: impl IntoIterator<Item = impl Into<FileInputFile>>,
     ) -> Result<(), SessionError> {
         self.ensure_element_node(node_id)?;
-        let files: Vec<String> = files.into_iter().map(Into::into).collect();
+        let files: Vec<FileInputFile> = files.into_iter().map(Into::into).collect();
         self.dom
             .set_file_input_files(node_id, files.clone())
             .map_err(SessionError::Dom)?;
         self.mocks
             .file_input_mut()
             .set_files(selector.to_string(), files);
-        self.dispatch_dom_event(node_id, "input", true, false)?;
-        self.dispatch_dom_event(node_id, "change", true, false)?;
+        self.dispatch_dom_event(node_id, "input", true, false, None)?;
+        self.dispatch_dom_event(node_id, "change", true, false, None)?;
+        Ok(())
+    }
+
+    pub fn dispatch_drop_node(
+        &mut self,
+        node_id: NodeId,
+        files: impl IntoIterator<Item = impl Into<FileInputFile>>,
+    ) -> Result<(), SessionError> {
+        self.ensure_element_node(node_id)?;
+        let files: Vec<FileInputFile> = files.into_iter().map(Into::into).collect();
+        let data_transfer_files = files
+            .into_iter()
+            .map(|file| FileData {
+                name: file.name,
+                mime_type: file.mime_type,
+                bytes: file.bytes,
+                read_error: file.read_error,
+            })
+            .collect();
+        self.dispatch_dom_event_for_target(
+            SessionEventTarget::Element(node_id),
+            "drop",
+            true,
+            true,
+            None,
+            Some(data_transfer_files),
+        )?;
         Ok(())
     }
 
@@ -1674,6 +1702,7 @@ impl Session {
         event_type: &str,
         bubbles: bool,
         cancelable: bool,
+        data_transfer_files: Option<Vec<FileData>>,
     ) -> Result<DispatchOutcome, SessionError> {
         self.dispatch_dom_event_for_target(
             SessionEventTarget::Element(node_id),
@@ -1681,6 +1710,7 @@ impl Session {
             bubbles,
             cancelable,
             None,
+            data_transfer_files,
         )
     }
 
@@ -1691,6 +1721,7 @@ impl Session {
         bubbles: bool,
         cancelable: bool,
         keyboard_init: Option<&KeyboardEventInit>,
+        data_transfer_files: Option<Vec<FileData>>,
     ) -> Result<DispatchOutcome, SessionError> {
         let event = match keyboard_init {
             Some(init) => ScriptEventHandle::new_keyboard(
@@ -1707,6 +1738,7 @@ impl Session {
                 cancelable,
             ),
         };
+        event.set_data_transfer_files(data_transfer_files);
         let ancestors = self.event_ancestor_targets_for_target(target);
 
         for target in ancestors.iter().rev() {
@@ -1847,14 +1879,14 @@ impl Session {
                             .set_form_control_indeterminate(node_id, false)
                             .map_err(SessionError::Dom)?;
                     }
-                    self.dispatch_dom_event(node_id, "input", true, false)?;
-                    self.dispatch_dom_event(node_id, "change", true, false)?;
+                    self.dispatch_dom_event(node_id, "input", true, false, None)?;
+                    self.dispatch_dom_event(node_id, "change", true, false, None)?;
                 }
                 DefaultActionKind::SubmitButton
                     if is_submit_control(tag_name.as_str(), input_type.as_deref()) =>
                 {
                     if let Some(form_id) = self.find_associated_form(node_id) {
-                        self.dispatch_dom_event(form_id, "submit", true, true)?;
+                        self.dispatch_dom_event(form_id, "submit", true, true, None)?;
                     }
                 }
                 _ => {}
@@ -4025,11 +4057,7 @@ impl Session {
         x ^= x >> 12;
         x ^= x << 25;
         x ^= x >> 27;
-        self.rng_state = if x == 0 {
-            0xA5A5_A5A5_A5A5_A5A5
-        } else {
-            x
-        };
+        self.rng_state = if x == 0 { 0xA5A5_A5A5_A5A5_A5A5 } else { x };
         let out = x.wrapping_mul(0x2545_F491_4F6C_DD1D);
         let mantissa = out >> 11;
         (mantissa as f64) * (1.0 / ((1u64 << 53) as f64))
@@ -4665,6 +4693,32 @@ impl HostBindings for Session {
         name: &str,
     ) -> bt_script::Result<Vec<ElementHandle>> {
         self.elements_by_name(name)
+    }
+
+    fn element_file_input_files(
+        &mut self,
+        element: ElementHandle,
+    ) -> bt_script::Result<Vec<FileData>> {
+        let node_id = self.node_id_for_handle(element)?;
+        let files = self
+            .dom
+            .side_tables()
+            .file_inputs
+            .get(&node_id)
+            .map(|state| {
+                state
+                    .files
+                    .iter()
+                    .map(|file| FileData {
+                        name: file.name.clone(),
+                        mime_type: file.mime_type.clone(),
+                        bytes: file.bytes.clone(),
+                        read_error: file.read_error.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(files)
     }
 
     fn document_style_sheets_items(&mut self) -> bt_script::Result<Vec<ElementHandle>> {

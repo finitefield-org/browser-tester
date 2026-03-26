@@ -1,3 +1,4 @@
+use browser_tester::FileInputFile;
 use browser_tester::Harness;
 
 #[test]
@@ -185,8 +186,7 @@ fn navigator_clipboard_write_text_is_publicly_supported() -> browser_tester::Res
 }
 
 #[test]
-fn document_location_is_wired_through_script_and_location_mock() -> browser_tester::Result<()>
-{
+fn document_location_is_wired_through_script_and_location_mock() -> browser_tester::Result<()> {
     let mut harness = Harness::from_html(
         "<main id='out'></main><script>const beforeLocation = document.location; const beforeUrl = document.URL; document.location = 'https://example.test/next'; const afterDocumentUri = document.documentURI; const afterWindowLocation = window.location; document.getElementById('out').textContent = beforeLocation + ':' + beforeUrl + ':' + afterDocumentUri + ':' + afterWindowLocation;</script>",
     )?;
@@ -208,8 +208,7 @@ fn document_location_is_wired_through_script_and_location_mock() -> browser_test
 }
 
 #[test]
-fn location_assign_replace_and_reload_are_available_from_scripts() -> browser_tester::Result<()>
-{
+fn location_assign_replace_and_reload_are_available_from_scripts() -> browser_tester::Result<()> {
     let mut harness = Harness::from_html(
         "<main id='out'></main><script>const before = document.location; window.location.assign('https://example.test/assign'); document.location.replace('https://example.test/replace'); window.location.reload(); document.getElementById('out').textContent = before + ':' + document.location + ':' + String(window.history.length);</script>",
     )?;
@@ -262,8 +261,7 @@ fn location_href_is_available_from_scripts() -> browser_tester::Result<()> {
 }
 
 #[test]
-fn location_stringification_helpers_are_available_from_scripts() -> browser_tester::Result<()>
-{
+fn location_stringification_helpers_are_available_from_scripts() -> browser_tester::Result<()> {
     let mut harness = Harness::builder()
         .url("https://app.local:8443/start?x#old")
         .html("<main id='out'></main><script>document.getElementById('out').textContent = document.location.toString() + ':' + window.location.valueOf();</script>")
@@ -443,8 +441,7 @@ fn location_port_assignment_rejects_non_numeric_values() -> browser_tester::Resu
 }
 
 #[test]
-fn document_current_script_is_available_during_inline_bootstrap() -> browser_tester::Result<()>
-{
+fn document_current_script_is_available_during_inline_bootstrap() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<main id='out'></main><script id='first'>document.getElementById('out').textContent = document.currentScript.getAttribute('id');</script><script id='second'>document.getElementById('out').textContent += ':' + document.currentScript.getAttribute('id');</script>",
     )?;
@@ -635,8 +632,7 @@ fn window_frames_iterator_helpers_are_publicly_supported() -> browser_tester::Re
 }
 
 #[test]
-fn html_collection_named_property_access_is_publicly_supported() -> browser_tester::Result<()>
-{
+fn html_collection_named_property_access_is_publicly_supported() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<div id='root'><span id='first'>First</span><form id='signup'><input type='radio' name='mode' id='mode-a' value='a'><input type='radio' name='mode' id='mode-b' value='b'></form></div><div id='out'></div><script>const children = document.getElementById('root').children; const mode = document.getElementById('signup').elements.mode; document.getElementById('out').textContent = children.first.textContent + ':' + String(children.missing) + ':' + String(mode.length) + ':' + mode.item(0).value + ':' + mode.item(1).value + ':' + String(mode);</script>",
     )?;
@@ -853,8 +849,7 @@ fn element_content_editable_rejects_invalid_values() -> browser_tester::Result<(
 }
 
 #[test]
-fn document_visibility_state_and_hidden_are_publicly_supported() -> browser_tester::Result<()>
-{
+fn document_visibility_state_and_hidden_are_publicly_supported() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<main id='out'></main><script>document.getElementById('out').textContent = document.visibilityState + ':' + String(document.hidden);</script>",
     )?;
@@ -997,8 +992,7 @@ fn window_history_is_publicly_supported() -> browser_tester::Result<()> {
 }
 
 #[test]
-fn window_history_push_and_replace_state_are_publicly_supported() -> browser_tester::Result<()>
-{
+fn window_history_push_and_replace_state_are_publicly_supported() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<main id='out'></main><script>window.history.pushState('step-1', '', 'https://app.local/step-1'); window.history.replaceState('step-2', '', 'https://app.local/step-2'); document.getElementById('out').textContent = document.location + ':' + String(window.history.length) + ':' + String(window.history.state);</script>",
     )?;
@@ -1266,8 +1260,7 @@ fn navigator_metadata_is_publicly_supported() -> browser_tester::Result<()> {
 }
 
 #[test]
-fn navigator_languages_iterator_helpers_are_publicly_supported() -> browser_tester::Result<()>
-{
+fn navigator_languages_iterator_helpers_are_publicly_supported() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<div id='out'></div><script>const languages = window.navigator.languages; const keys = languages.keys(); const values = languages.values(); const entries = languages.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); const secondKey = keys.next(); const secondValue = values.next(); const secondEntry = entries.next(); document.getElementById('out').textContent = String(firstKey.value) + ':' + String(firstValue.value) + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value + ':' + String(secondKey.done) + ':' + String(secondValue.done) + ':' + String(secondEntry.done);</script>",
     )?;
@@ -1320,8 +1313,7 @@ fn navigator_mime_types_is_publicly_supported() -> browser_tester::Result<()> {
 }
 
 #[test]
-fn navigator_mime_types_iterator_helpers_are_publicly_supported() -> browser_tester::Result<()>
-{
+fn navigator_mime_types_iterator_helpers_are_publicly_supported() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<div id='out'></div><script>const mimeTypes = window.navigator.mimeTypes; document.getElementById('out').textContent = String(mimeTypes.keys().next().done) + ':' + String(mimeTypes.values().next().done) + ':' + String(mimeTypes.entries().next().done);</script>",
     )?;
@@ -1573,21 +1565,74 @@ fn capture_download_rejects_blank_file_names() -> browser_tester::Result<()> {
 #[test]
 fn file_input_selection_updates_dom_and_capture() -> browser_tester::Result<()> {
     let mut harness = Harness::from_html(
-        "<input id='upload' type='file'><div id='out'></div><script>document.getElementById('upload').addEventListener('change', () => { document.getElementById('out').textContent = document.getElementById('upload').value; });</script>",
+        "<input id='upload' type='file'><div id='out'></div><script>document.getElementById('upload').addEventListener('change', () => { const file = document.getElementById('upload').files[0]; document.getElementById('out').textContent = file.name + ':' + file.type + ':' + String(file.size) + ':' + file.text().split('\\n').join('|'); });</script>",
     )?;
 
-    harness.set_files("#upload", ["report.csv"])?;
+    harness.set_files(
+        "#upload",
+        [FileInputFile::from_text("report.csv", "name,age\nAda,42").with_mime_type("text/csv")],
+    )?;
 
     harness.assert_value("#upload", "report.csv")?;
-    harness.assert_text("#out", "report.csv")?;
+    harness.assert_text("#out", "report.csv:text/csv:15:name,age|Ada,42")?;
     assert_eq!(
         harness.mocks_mut().file_input().selections()[0].selector,
         "#upload"
     );
     assert_eq!(
         harness.mocks_mut().file_input().selections()[0].files,
-        vec!["report.csv".to_string()]
+        vec![
+            FileInputFile::from_text("report.csv", "name,age\nAda,42").with_mime_type("text/csv",)
+        ]
     );
+    Ok(())
+}
+
+#[test]
+fn file_reader_reads_seeded_text_payload_and_fires_callbacks() -> browser_tester::Result<()> {
+    let mut harness = Harness::from_html(
+        "<input id='upload' type='file'><div id='out'></div><script>document.getElementById('upload').addEventListener('change', () => { const input = document.getElementById('upload'); const file = input.files.item(0); const reader = new FileReader(); const out = document.getElementById('out'); reader.onload = function () { out.textContent = String(this.readyState) + ':' + this.result; }; reader.onloadend = function () { out.textContent += ':end'; }; reader.readAsText(file); });</script>",
+    )?;
+
+    harness.set_files(
+        "#upload",
+        [FileInputFile::from_text("report.txt", "hello").with_mime_type("text/plain")],
+    )?;
+
+    harness.assert_text("#out", "2:hello:end")?;
+    Ok(())
+}
+
+#[test]
+fn file_reader_rejects_missing_payload_explicitly() -> browser_tester::Result<()> {
+    let error = Harness::from_html(
+        "<script>const reader = new FileReader(); reader.readAsText();</script>",
+    )
+    .expect_err("readAsText should require a file");
+
+    assert!(
+        error
+            .to_string()
+            .contains("readAsText() expects a File argument")
+    );
+    Ok(())
+}
+
+#[test]
+fn drop_event_exposes_data_transfer_files() -> browser_tester::Result<()> {
+    let mut harness = Harness::from_html(
+        "<div id='dropzone'></div><div id='out'></div><script>document.getElementById('dropzone').addEventListener('drop', (event) => { const files = event.dataTransfer.files; const file = files[0]; const same = files.item(0); document.getElementById('out').textContent = files.length + ':' + file.name + ':' + same.name + ':' + file.type + ':' + String(file.size) + ':' + file.text().split('\\n').join('|'); });</script>",
+    )?;
+
+    harness.dispatch_drop(
+        "#dropzone",
+        [FileInputFile::from_text("report.csv", "name,age\nAda,42").with_mime_type("text/csv")],
+    )?;
+
+    harness.assert_text(
+        "#out",
+        "1:report.csv:report.csv:text/csv:15:name,age|Ada,42",
+    )?;
     Ok(())
 }
 

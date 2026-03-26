@@ -37,6 +37,7 @@ Phase 4 adds thin public actions on `Harness` for the mock families that need to
 - `scroll_by(dx, dy)`
 - `navigate(url)`
 - `set_files(selector, files)`
+- `dispatch_drop(selector, files)`
 - `capture_download(file_name, bytes)`
 
 The typed registry is still the source of truth for seeds and capture.
@@ -45,6 +46,7 @@ Download capture records `DownloadCapture` artifacts in the registry and exposes
 `matchMedia` is registry-backed and builder-seeded rather than a standalone `Harness` action.
 The location family also captures script-side `window.location.assign()`, `window.location.replace()`, `window.location.reload()`, and `window.location.hash` / `document.location.hash` / `window.location.pathname` / `document.location.pathname` / `window.location.search` / `document.location.search` assignments through the same navigation log that `Harness::navigate()` uses.
 The same navigation log also covers `document.location.href`, `document.location.hash`, `document.location.pathname`, `document.location.search`, `document.location.origin`, `window.location.href`, `window.location.hash`, `window.location.pathname`, `window.location.search`, and `window.location.origin` assignments.
+`set_files()` accepts either plain file names for compatibility or `FileInputFile` values when you need to seed bytes and MIME type for `input.files[0].text()`, `input.files.item(0).text()`, or `await input.files[0].text()` in async code. `input.files` and `event.dataTransfer.files` are exposed as deterministic FileList-like collections with indexed access and `item()`. `FileInputFile::with_read_error(...)` injects deterministic `FileReader` failures so you can cover `error` / `loadend` flows. `dispatch_drop()` uses the same payload type and forwards it to `event.dataTransfer.files` for drop handlers.
 
 ## Deterministic Controls
 
@@ -70,7 +72,7 @@ Clipboard seed and error helpers let tests cover both successful clipboard reads
 ## Minimal Example
 
 ```rust
-use browser_tester::Harness;
+use browser_tester::{FileInputFile, Harness};
 
 fn main() -> browser_tester::Result<()> {
     let mut harness = Harness::from_html("<input id='upload' type='file'>")?;
@@ -93,7 +95,10 @@ fn main() -> browser_tester::Result<()> {
     harness.open("https://app.local/popup")?;
     harness.close()?;
     harness.scroll_to(0, 120)?;
-    harness.set_files("#upload", ["report.csv"])?;
+    harness.set_files(
+        "#upload",
+        [FileInputFile::from_text("report.csv", "name,age\nAda,42").with_mime_type("text/csv")],
+    )?;
     harness.capture_download("report.csv", b"downloaded bytes".to_vec())?;
     harness.navigate("https://app.local/next")?;
 

@@ -240,6 +240,42 @@ impl MimeTypeArrayState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileData {
+    pub name: String,
+    pub mime_type: Option<String>,
+    pub bytes: Vec<u8>,
+    pub read_error: Option<String>,
+}
+
+impl FileData {
+    pub fn from_bytes(name: impl Into<String>, bytes: impl Into<Vec<u8>>) -> Self {
+        Self {
+            name: name.into(),
+            mime_type: None,
+            bytes: bytes.into(),
+            read_error: None,
+        }
+    }
+
+    pub fn from_text(name: impl Into<String>, text: impl Into<String>) -> Self {
+        Self::from_bytes(name, text.into().into_bytes())
+    }
+
+    pub fn with_mime_type(mut self, mime_type: impl Into<String>) -> Self {
+        self.mime_type = Some(mime_type.into());
+        self
+    }
+
+    pub fn size(&self) -> usize {
+        self.bytes.len()
+    }
+
+    pub fn text(&self) -> String {
+        String::from_utf8_lossy(&self.bytes).into_owned()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct AttributeState {
     namespace_uri: Option<String>,
     name: String,
@@ -634,6 +670,7 @@ struct ScriptEventState {
     event_type: String,
     target: ListenerTarget,
     current_target: Option<ListenerTarget>,
+    data_transfer_files: Option<Vec<FileData>>,
     bubbles: bool,
     cancelable: bool,
     default_prevented: bool,
@@ -665,6 +702,7 @@ impl ScriptEventHandle {
             event_type: event_type.into(),
             target,
             current_target: None,
+            data_transfer_files: None,
             bubbles,
             cancelable,
             default_prevented: false,
@@ -694,6 +732,7 @@ impl ScriptEventHandle {
             event_type: event_type.into(),
             target,
             current_target: None,
+            data_transfer_files: None,
             bubbles,
             cancelable,
             default_prevented: false,
@@ -726,6 +765,14 @@ impl ScriptEventHandle {
 
     pub fn set_current_target(&self, target: Option<ListenerTarget>) {
         self.0.borrow_mut().current_target = target;
+    }
+
+    pub fn data_transfer_files(&self) -> Option<Vec<FileData>> {
+        self.0.borrow().data_transfer_files.clone()
+    }
+
+    pub fn set_data_transfer_files(&self, files: Option<Vec<FileData>>) {
+        self.0.borrow_mut().data_transfer_files = files;
     }
 
     pub fn bubbles(&self) -> bool {
@@ -834,6 +881,8 @@ pub enum ScriptValue {
     MediaQueryList(MediaQueryListState),
     StringList(StringListState),
     MimeTypeArray(MimeTypeArrayState),
+    FileList(ArrayHandle),
+    File(FileData),
     Navigator,
     Clipboard,
     History,
@@ -1597,6 +1646,10 @@ pub trait HostBindings {
 
     fn document_get_elements_by_name(&mut self, _name: &str) -> Result<Vec<ElementHandle>> {
         Err(ScriptError::phase_not_ready("document.getElementsByName"))
+    }
+
+    fn element_file_input_files(&mut self, _element: ElementHandle) -> Result<Vec<FileData>> {
+        Err(ScriptError::phase_not_ready("input.files"))
     }
 
     fn document_style_sheets_items(&mut self) -> Result<Vec<ElementHandle>> {

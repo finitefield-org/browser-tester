@@ -1,8 +1,8 @@
 use browser_tester::Harness;
 
 #[test]
-fn attribute_reflection_updates_selectors_and_form_state_end_to_end()
--> browser_tester::Result<()> {
+fn attribute_reflection_updates_selectors_and_form_state_end_to_end() -> browser_tester::Result<()>
+{
     let harness = Harness::from_html(
         "<main id='root'><button id='button'>First</button><input id='name'><input id='agree' type='checkbox'><select id='mode'><option value='a'>A</option><option id='selected' value='b'>B</option></select><div id='out'></div><script>const button = document.getElementById('button'); button.setAttribute('class', 'primary'); button.setAttribute('data-label', 'Hello'); button.toggleAttribute('data-flag'); button.removeAttribute('data-label'); const name = document.getElementById('name'); name.setAttribute('value', 'Alice'); const agree = document.getElementById('agree'); agree.setAttribute('checked', ''); const selected = document.getElementById('selected'); selected.setAttribute('selected', ''); document.getElementById('out').textContent = String(document.querySelectorAll('.primary').length) + ':' + String(document.querySelectorAll('[data-flag]').length) + ':' + String(button.getAttribute('data-label')) + ':' + name.value + ':' + String(agree.checked) + ':' + document.querySelector('option:checked').value;</script></main>",
     )?;
@@ -615,8 +615,7 @@ fn input_pattern_is_available_end_to_end() -> browser_tester::Result<()> {
 }
 
 #[test]
-fn attribute_reflection_rejects_empty_attribute_names_end_to_end() -> browser_tester::Result<()>
-{
+fn attribute_reflection_rejects_empty_attribute_names_end_to_end() -> browser_tester::Result<()> {
     let error = Harness::from_html(
         "<div id='root'></div><script>document.getElementById('root').setAttribute('', 'x');</script>",
     )
@@ -696,8 +695,7 @@ fn collection_for_each_updates_live_script_views_end_to_end() -> browser_tester:
 }
 
 #[test]
-fn collection_iterator_helpers_update_live_script_views_end_to_end()
--> browser_tester::Result<()> {
+fn collection_iterator_helpers_update_live_script_views_end_to_end() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><span class='item'>First</span><span class='item'>Second</span></main><div id='out'></div><script>const nodes = document.querySelectorAll('.item'); const nodeValues = nodes.values(); const nodeKeys = nodes.keys(); const children = document.getElementById('root').children; const childValues = children.values(); const childKeys = children.keys(); document.getElementById('root').textContent = 'gone'; const firstNode = nodeValues.next(); const secondNode = nodeValues.next(); const thirdNode = nodeValues.next(); const firstKey = nodeKeys.next(); const secondKey = nodeKeys.next(); const thirdKey = nodeKeys.next(); const firstChild = childValues.next(); const secondChild = childValues.next(); const thirdChild = childValues.next(); const childFirstKey = childKeys.next(); const childSecondKey = childKeys.next(); const childThirdKey = childKeys.next(); document.getElementById('out').textContent = firstNode.value.textContent + ':' + String(firstNode.done) + ':' + secondNode.value.textContent + ':' + String(secondNode.done) + ':' + String(thirdNode.done) + ':' + String(firstKey.value) + ':' + String(secondKey.value) + ':' + String(thirdKey.done) + ':' + firstChild.value.textContent + ':' + String(firstChild.done) + ':' + secondChild.value.textContent + ':' + String(secondChild.done) + ':' + String(thirdChild.done) + ':' + String(childFirstKey.value) + ':' + String(childSecondKey.value) + ':' + String(childThirdKey.done);</script>",
     )?;
@@ -922,8 +920,7 @@ fn document_plugins_iterator_helpers_are_available_end_to_end() -> browser_teste
 }
 
 #[test]
-fn map_areas_and_table_bodies_iterator_helpers_are_live_end_to_end()
--> browser_tester::Result<()> {
+fn map_areas_and_table_bodies_iterator_helpers_are_live_end_to_end() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><map id='map'><area id='first-area' name='first' href='/first'><area id='second-area' name='second' href='/second'></map><table id='table'><tbody id='first-body'><tr><td>One</td></tr></tbody></table></main><div id='out'></div><script>const areas = document.getElementById('map').areas; const bodies = document.getElementById('table').tBodies; const areaKeys = areas.keys(); const areaValues = areas.values(); const areaEntries = areas.entries(); const bodyKeys = bodies.keys(); const bodyValues = bodies.values(); const bodyEntries = bodies.entries(); const firstAreaKey = areaKeys.next(); const firstAreaValue = areaValues.next(); const firstAreaEntry = areaEntries.next(); const firstBodyKey = bodyKeys.next(); const firstBodyValue = bodyValues.next(); const firstBodyEntry = bodyEntries.next(); let serial = ''; areas.forEach((element, index, list) => { serial += 'A' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); bodies.forEach((element, index, list) => { serial += 'B' + String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstAreaKey.value) + ':' + firstAreaValue.value.getAttribute('id') + ':' + String(firstAreaEntry.value.index) + ':' + firstAreaEntry.value.value.getAttribute('id') + ':' + String(firstBodyKey.value) + ':' + firstBodyValue.value.getAttribute('id') + ':' + String(firstBodyEntry.value.index) + ':' + firstBodyEntry.value.value.getAttribute('id') + ':' + serial;</script>",
     )?;
@@ -1216,8 +1213,7 @@ fn document_plugins_are_not_available_on_elements_end_to_end() -> browser_tester
 }
 
 #[test]
-fn document_style_sheets_are_not_available_on_elements_end_to_end()
--> browser_tester::Result<()> {
+fn document_style_sheets_are_not_available_on_elements_end_to_end() -> browser_tester::Result<()> {
     let error = Harness::from_html(
         "<div id='wrapper'><div id='not-doc'></div></div><script>document.getElementById('not-doc').styleSheets.length;</script>",
     )
@@ -1254,8 +1250,7 @@ fn tree_mutation_primitives_support_remove_child_end_to_end() -> browser_tester:
 }
 
 #[test]
-fn tree_mutation_primitives_support_insert_and_replace_end_to_end()
--> browser_tester::Result<()> {
+fn tree_mutation_primitives_support_insert_and_replace_end_to_end() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><section id='target'><span id='placeholder'>Placeholder</span></section><button id='first'>First</button><button id='second'>Second</button><button id='third'>Third</button><div id='out'></div><script>const target = document.getElementById('target'); const first = document.getElementById('first'); const second = document.getElementById('second'); const third = document.getElementById('third'); target.replaceChildren(first, second); target.replaceChild(third, second); document.getElementById('out').textContent = String(target.children.length) + ':' + target.children.item(0).textContent + ':' + target.children.item(1).textContent + ':' + String(document.querySelector('#placeholder'));</script></main>",
     )?;
@@ -1288,8 +1283,7 @@ fn tree_reflection_contains_support_end_to_end() -> browser_tester::Result<()> {
 }
 
 #[test]
-fn tree_reflection_compare_document_position_support_end_to_end() -> browser_tester::Result<()>
-{
+fn tree_reflection_compare_document_position_support_end_to_end() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><span id='a'><em id='c'>Child</em></span><span id='b'>Sibling</span></main><div id='out'></div><script>const a = document.getElementById('a'); const b = document.getElementById('b'); const c = document.getElementById('c'); const detached = document.createElement('p'); document.getElementById('out').textContent = String(document.compareDocumentPosition(a)) + ':' + String(a.compareDocumentPosition(document)) + ':' + String(a.compareDocumentPosition(b)) + ':' + String(b.compareDocumentPosition(a)) + ':' + String(a.compareDocumentPosition(c)) + ':' + String(c.compareDocumentPosition(a)) + ':' + String(a.compareDocumentPosition(detached)) + ':' + String(detached.compareDocumentPosition(a)) + ':' + String(document.compareDocumentPosition(document));</script>",
     )?;
@@ -1428,8 +1422,7 @@ fn html_serialization_surfaces_support_insert_adjacent_element_and_text_end_to_e
 }
 
 #[test]
-fn html_serialization_surfaces_support_document_write_end_to_end() -> browser_tester::Result<()>
-{
+fn html_serialization_surfaces_support_document_write_end_to_end() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><div id='out'></div><script>document.write('<span id=\"written\">Written</span>'); document.getElementById('out').textContent = document.getElementById('written').textContent + ':' + document.getElementById('root').lastElementChild.getAttribute('id');</script></main>",
     )?;
@@ -1440,8 +1433,7 @@ fn html_serialization_surfaces_support_document_write_end_to_end() -> browser_te
 }
 
 #[test]
-fn html_serialization_surfaces_support_document_writeln_end_to_end()
--> browser_tester::Result<()> {
+fn html_serialization_surfaces_support_document_writeln_end_to_end() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><div id='out'></div><script>document.writeln('<span id=\"written\">Written</span>'); document.getElementById('out').textContent = document.getElementById('written').textContent + ':' + document.getElementById('root').lastElementChild.getAttribute('id') + ':' + String(document.getElementById('root').lastChild.nodeType);</script></main>",
     )?;
@@ -1468,8 +1460,8 @@ fn html_serialization_surfaces_support_document_open_and_close_end_to_end()
 }
 
 #[test]
-fn html_serialization_surfaces_use_namespace_aware_names_end_to_end()
--> browser_tester::Result<()> {
+fn html_serialization_surfaces_use_namespace_aware_names_end_to_end() -> browser_tester::Result<()>
+{
     let harness = Harness::from_html(
         "<main id='root'><svg id='icon' viewbox='0 0 10 10'><foreignobject id='foreign'><div id='html'>Text</div></foreignobject></svg><math id='formula' definitionurl='https://example.com'><mi id='symbol'>x</mi></math><div id='out'></div><script>const icon = document.getElementById('icon'); const formula = document.getElementById('formula'); document.getElementById('out').textContent = icon.outerHTML + '|' + formula.outerHTML;</script></main>",
     )?;
@@ -1585,8 +1577,7 @@ fn select_options_iterator_helpers_are_live_end_to_end() -> browser_tester::Resu
 }
 
 #[test]
-fn select_selected_options_iterator_helpers_are_live_end_to_end() -> browser_tester::Result<()>
-{
+fn select_selected_options_iterator_helpers_are_live_end_to_end() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><select id='mode'><option id='first' value='a' selected>A</option><option id='second' value='b' selected>B</option></select><div id='out'></div><script>const selected = document.getElementById('mode').selectedOptions; const keys = selected.keys(); const values = selected.values(); const entries = selected.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; selected.forEach((element, index, list) => { out += String(index) + ':' + element.getAttribute('id') + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.getAttribute('id') + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.getAttribute('id') + ':' + out;</script></main>",
     )?;
@@ -1596,8 +1587,7 @@ fn select_selected_options_iterator_helpers_are_live_end_to_end() -> browser_tes
 }
 
 #[test]
-fn select_options_collection_add_and_remove_are_live_end_to_end() -> browser_tester::Result<()>
-{
+fn select_options_collection_add_and_remove_are_live_end_to_end() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><select id='mode'><option id='first' value='a'>A</option></select><option id='extra' value='b'>B</option><div id='out'></div><script>const select = document.getElementById('mode'); const extra = document.getElementById('extra'); const before = select.options.length; select.options.add(extra); const afterAdd = select.options.length; select.options.remove(0); document.getElementById('out').textContent = String(before) + ':' + String(afterAdd) + ':' + String(select.options.length) + ':' + select.options.item(0).getAttribute('id') + ':' + String(select.options.namedItem('first'));</script></main>",
     )?;
@@ -1696,8 +1686,7 @@ fn map_areas_and_table_t_bodies_are_live_end_to_end() -> browser_tester::Result<
 }
 
 #[test]
-fn select_selected_options_reject_non_select_elements_end_to_end() -> browser_tester::Result<()>
-{
+fn select_selected_options_reject_non_select_elements_end_to_end() -> browser_tester::Result<()> {
     let error = Harness::from_html(
         "<div id='wrapper'><div id='not-select'></div></div><script>document.getElementById('not-select').selectedOptions.length;</script>",
     )
@@ -1849,8 +1838,8 @@ fn html_serialization_surfaces_semicolonless_numeric_character_entities_in_docum
 }
 
 #[test]
-fn html_serialization_surfaces_reject_malformed_fragments_end_to_end()
--> browser_tester::Result<()> {
+fn html_serialization_surfaces_reject_malformed_fragments_end_to_end() -> browser_tester::Result<()>
+{
     let error = Harness::from_html(
         "<main id='root'><section id='target'></section><script>document.getElementById('target').innerHTML = '<span></main>';</script></main>",
     )
@@ -1861,8 +1850,7 @@ fn html_serialization_surfaces_reject_malformed_fragments_end_to_end()
 }
 
 #[test]
-fn attribute_nodes_and_named_node_map_are_available_end_to_end() -> browser_tester::Result<()>
-{
+fn attribute_nodes_and_named_node_map_are_available_end_to_end() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><div id='box' data-role='menu'></div><div id='out'></div><script>const box = document.getElementById('box'); const attrs = box.attributes; const named = attrs.getNamedItem('data-role'); const created = document.createAttribute('data-state'); created.value = 'open'; const before = attrs.length; const previous = attrs.setNamedItem(created); const during = attrs.length; const snapshot = box.getAttributeNode('data-state'); const keys = attrs.keys(); const values = attrs.values(); const entries = attrs.entries(); const firstEntry = entries.next().value; document.getElementById('out').textContent = String(attrs) + ':' + String(before) + ':' + String(previous) + ':' + String(during) + ':' + String(snapshot) + ':' + snapshot.name + ':' + snapshot.value + ':' + String(snapshot.ownerElement) + ':' + String(created.ownerElement) + ':' + String(attrs.removeNamedItem('data-state')) + ':' + String(attrs.length) + ':' + String(box.getAttributeNode('data-state')) + ':' + named.value + ':' + String(named.ownerElement) + ':' + String(keys.next().value) + ':' + values.next().value.name + ':' + String(firstEntry.index) + ':' + firstEntry.value.name;</script></main>",
     )?;
@@ -1940,8 +1928,7 @@ fn namespaced_attribute_nodes_are_available_end_to_end() -> browser_tester::Resu
 }
 
 #[test]
-fn create_attribute_rejects_invalid_qualified_names_end_to_end() -> browser_tester::Result<()>
-{
+fn create_attribute_rejects_invalid_qualified_names_end_to_end() -> browser_tester::Result<()> {
     let error = Harness::from_html(
         "<main id='root'><div id='out'></div><script>document.createAttributeNS(null, 'svg:stroke');</script></main>",
     )
@@ -1967,8 +1954,7 @@ fn optional_chaining_member_calls_are_available_end_to_end() -> browser_tester::
 }
 
 #[test]
-fn dom_constructors_and_instanceof_checks_are_available_end_to_end()
--> browser_tester::Result<()> {
+fn dom_constructors_and_instanceof_checks_are_available_end_to_end() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><button id='btn'>run</button><select id='sel'><option>One</option></select><p id='out'></p><script>const button = document.getElementById('btn'); const select = document.getElementById('sel'); document.getElementById('out').textContent = [typeof HTMLButtonElement, String(window.HTMLButtonElement === HTMLButtonElement), String(button instanceof HTMLButtonElement), String(button instanceof HTMLElement), String(button instanceof Element), String(document instanceof Node), String(select instanceof HTMLSelectElement), String(window.HTMLSelectElement === HTMLSelectElement)].join('|');</script></main>",
     )?;

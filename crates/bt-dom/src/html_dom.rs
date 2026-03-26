@@ -763,7 +763,7 @@ impl DomStore {
     pub fn set_file_input_files(
         &mut self,
         node_id: NodeId,
-        files: impl IntoIterator<Item = impl Into<String>>,
+        files: impl IntoIterator<Item = impl Into<super::FileInputFile>>,
     ) -> Result<(), String> {
         let node_index = node_id.index() as usize;
         let Some(node) = self.nodes.get(node_index) else {
@@ -1834,7 +1834,14 @@ impl DomStore {
         self.side_tables
             .file_inputs
             .get(&node_id)
-            .map(|state| state.files.join(", "))
+            .map(|state| {
+                state
+                    .files
+                    .iter()
+                    .map(|file| file.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
             .unwrap_or_default()
     }
 

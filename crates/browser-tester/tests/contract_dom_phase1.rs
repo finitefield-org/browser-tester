@@ -39,8 +39,7 @@ fn selector_lists_work_with_public_assert_exists() -> browser_tester::Result<()>
 }
 
 #[test]
-fn selector_escapes_and_selector_lists_handle_literal_punctuation()
--> browser_tester::Result<()> {
+fn selector_escapes_and_selector_lists_handle_literal_punctuation() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<main id='root' class='app'><button id='foo,bar' class='alpha:beta'>First</button><button id='second' class='secondary'>Second</button></main>",
     )?;
@@ -126,8 +125,7 @@ fn indeterminate_pseudo_class_works_with_public_assert_exists() -> browser_teste
 }
 
 #[test]
-fn root_and_empty_pseudo_classes_work_with_public_assert_exists() -> browser_tester::Result<()>
-{
+fn root_and_empty_pseudo_classes_work_with_public_assert_exists() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><section id='empty-comment'><!-- gap --></section><section id='empty'></section><section id='non-empty'>content</section></main>",
     )?;
@@ -263,8 +261,7 @@ fn dir_pseudo_class_works_with_public_assert_exists() -> browser_tester::Result<
 }
 
 #[test]
-fn placeholder_shown_pseudo_class_works_with_public_assert_exists()
--> browser_tester::Result<()> {
+fn placeholder_shown_pseudo_class_works_with_public_assert_exists() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><input id='name' placeholder='Name'><input id='filled' placeholder='Filled' value='Ada'><textarea id='bio' placeholder='Bio'></textarea></main>",
     )?;
@@ -308,8 +305,7 @@ fn read_only_and_read_write_pseudo_classes_work_with_public_assert_exists()
 }
 
 #[test]
-fn valid_and_invalid_pseudo_classes_work_with_public_assert_exists()
--> browser_tester::Result<()> {
+fn valid_and_invalid_pseudo_classes_work_with_public_assert_exists() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><input id='filled' type='text' required value='Ada'><input id='empty' type='text' required><input id='check' type='checkbox' required><input id='check-ok' type='checkbox' required checked><input id='low' type='number' min='2' max='6' value='1'><input id='high' type='number' min='2' max='6' value='7'><input id='in-range' type='number' min='2' max='6' value='4'><textarea id='bio' required></textarea><select id='mode' required><option value='a' selected>A</option><option value='b'>B</option></select><button id='button'>Button</button></main>",
     )?;
@@ -449,8 +445,8 @@ fn focus_pseudo_classes_work_with_public_assert_exists() -> browser_tester::Resu
 }
 
 #[test]
-fn target_pseudo_class_tracks_url_fragments_with_public_assert_exists()
--> browser_tester::Result<()> {
+fn target_pseudo_class_tracks_url_fragments_with_public_assert_exists() -> browser_tester::Result<()>
+{
     let mut harness = Harness::from_html_with_url(
         "https://example.test/app#target",
         "<main id='root'><section id='target'>Target</section><a id='fallback' name='fallback'>Fallback</a><span name='named'>Named</span></main>",
@@ -542,8 +538,7 @@ fn unsupported_not_argument_syntax_is_reported_explicitly() -> browser_tester::R
 }
 
 #[test]
-fn unsupported_hex_escape_selector_syntax_is_reported_explicitly() -> browser_tester::Result<()>
-{
+fn unsupported_hex_escape_selector_syntax_is_reported_explicitly() -> browser_tester::Result<()> {
     let harness = Harness::from_html("<main id='foo,bar' class='app'></main>")?;
     let error = harness
         .assert_exists("#foo\\110000 bar")
@@ -570,8 +565,7 @@ fn unsupported_control_character_hex_escape_selector_syntax_is_reported_explicit
 }
 
 #[test]
-fn unsupported_root_empty_selector_syntax_is_reported_explicitly() -> browser_tester::Result<()>
-{
+fn unsupported_root_empty_selector_syntax_is_reported_explicitly() -> browser_tester::Result<()> {
     let harness = Harness::from_html("<main id='root'><section id='empty'></section></main>")?;
     let error = harness
         .assert_exists("#empty:empty()")
@@ -584,8 +578,7 @@ fn unsupported_root_empty_selector_syntax_is_reported_explicitly() -> browser_te
 }
 
 #[test]
-fn unsupported_only_child_selector_syntax_is_reported_explicitly() -> browser_tester::Result<()>
-{
+fn unsupported_only_child_selector_syntax_is_reported_explicitly() -> browser_tester::Result<()> {
     let harness = Harness::from_html("<main id='root'><section id='child'>child</section></main>")?;
     let error = harness
         .assert_exists("#child:only-child()")
@@ -598,8 +591,8 @@ fn unsupported_only_child_selector_syntax_is_reported_explicitly() -> browser_te
 }
 
 #[test]
-fn unsupported_first_of_type_selector_syntax_is_reported_explicitly()
--> browser_tester::Result<()> {
+fn unsupported_first_of_type_selector_syntax_is_reported_explicitly() -> browser_tester::Result<()>
+{
     let harness = Harness::from_html("<main id='root'><section id='child'>child</section></main>")?;
     let error = harness
         .assert_exists("#child:first-of-type()")
@@ -612,8 +605,7 @@ fn unsupported_first_of_type_selector_syntax_is_reported_explicitly()
 }
 
 #[test]
-fn unsupported_nth_of_type_selector_syntax_is_reported_explicitly()
--> browser_tester::Result<()> {
+fn unsupported_nth_of_type_selector_syntax_is_reported_explicitly() -> browser_tester::Result<()> {
     let harness = Harness::from_html("<main id='root'><section id='child'>child</section></main>")?;
     let error = harness
         .assert_exists("#child:nth-of-type(1 of .child, )")

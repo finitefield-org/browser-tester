@@ -1,5 +1,6 @@
 use bt_dom::{
-    DomStore, HTML_NAMESPACE_URI, MATHML_NAMESPACE_URI, NodeId, NodeKind, SVG_NAMESPACE_URI,
+    DomStore, FileInputFile, HTML_NAMESPACE_URI, MATHML_NAMESPACE_URI, NodeId, NodeKind,
+    SVG_NAMESPACE_URI,
 };
 
 #[test]
@@ -1501,7 +1502,13 @@ fn file_input_selections_are_seeded_and_mutable() {
     assert_eq!(store.value_for_node(upload_id), "");
 
     store
-        .set_file_input_files(upload_id, ["report.csv"])
+        .set_file_input_files(
+            upload_id,
+            [
+                FileInputFile::from_text("report.csv", "name,age\nAda,42")
+                    .with_mime_type("text/csv"),
+            ],
+        )
         .expect("file input should accept file selections");
 
     assert_eq!(store.value_for_node(upload_id), "report.csv");
@@ -1512,7 +1519,44 @@ fn file_input_selections_are_seeded_and_mutable() {
             .get(&upload_id)
             .unwrap()
             .files,
-        vec!["report.csv".to_string()]
+        vec![
+            FileInputFile::from_text("report.csv", "name,age\nAda,42").with_mime_type("text/csv",)
+        ]
+    );
+}
+
+#[test]
+fn file_input_selections_accept_filename_only_compatibility_values() {
+    let mut store = DomStore::new_empty();
+    store
+        .bootstrap_html("<input id='upload' type='file'>")
+        .expect("HTML should parse");
+
+    let upload_id = store.select("#upload").unwrap()[0];
+    store
+        .set_file_input_files(upload_id, ["report.csv"])
+        .expect("file input should accept bare filenames");
+
+    assert_eq!(store.value_for_node(upload_id), "report.csv");
+    assert_eq!(
+        store
+            .side_tables()
+            .file_inputs
+            .get(&upload_id)
+            .unwrap()
+            .files[0]
+            .name,
+        "report.csv"
+    );
+    assert!(
+        store
+            .side_tables()
+            .file_inputs
+            .get(&upload_id)
+            .unwrap()
+            .files[0]
+            .bytes
+            .is_empty()
     );
 }
 

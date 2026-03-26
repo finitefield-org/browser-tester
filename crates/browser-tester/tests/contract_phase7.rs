@@ -209,8 +209,7 @@ fn script_document_applets_are_live_end_to_end() -> browser_tester::Result<()> {
 }
 
 #[test]
-fn script_document_applets_iterator_helpers_are_live_end_to_end() -> browser_tester::Result<()>
-{
+fn script_document_applets_iterator_helpers_are_live_end_to_end() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<div id='root'><applet id='first-applet' name='first-applet'>First</applet><applet id='second-applet' name='second-applet'>Second</applet></div><div id='out'></div><script>const applets = document.applets; const keys = applets.keys(); const values = applets.values(); const entries = applets.entries(); const firstKey = keys.next(); const firstValue = values.next(); const firstEntry = entries.next(); let out = ''; applets.forEach((element, index, list) => { out += String(index) + ':' + element.textContent + ':' + String(list.length) + ';'; }); document.getElementById('out').textContent = String(firstKey.value) + ':' + firstValue.value.textContent + ':' + String(firstEntry.value.index) + ':' + firstEntry.value.value.textContent + ':' + out;</script>",
     )?;
@@ -286,8 +285,8 @@ fn script_root_and_empty_pseudo_classes_work_end_to_end() -> browser_tester::Res
 }
 
 #[test]
-fn script_only_child_and_only_of_type_pseudo_classes_work_end_to_end()
--> browser_tester::Result<()> {
+fn script_only_child_and_only_of_type_pseudo_classes_work_end_to_end() -> browser_tester::Result<()>
+{
     let harness = Harness::from_html(
         "<main id='root'>lead<!-- gap --><div id='single-child-parent'>text<!-- marker --><section id='only-child'>child</section><!-- marker --></div><div id='type-parent'><span id='first-span'>one</span><em id='only-of-type'>type</em><span id='second-span'>two</span></div><div id='out'>seed</div><script>const onlyChild = document.querySelector('#only-child:only-child'); const onlyOfType = document.querySelector('#only-of-type:only-of-type'); const onlyChildMatches = document.querySelectorAll('#single-child-parent > :only-child'); const onlyOfTypeMatches = document.querySelectorAll('#type-parent > :only-of-type'); const firstSpan = document.getElementById('first-span'); const firstSpanNotOnlyChild = firstSpan.matches('#first-span:not(:only-child)'); const firstSpanNotOnlyOfType = firstSpan.matches('#first-span:not(:only-of-type)'); const parent = onlyChild.closest('#single-child-parent'); document.getElementById('out').textContent = onlyChild.textContent + ':' + onlyOfType.textContent + ':' + String(onlyChildMatches.length) + ':' + String(onlyOfTypeMatches.length) + ':' + String(firstSpanNotOnlyChild) + ':' + String(firstSpanNotOnlyOfType) + ':' + String(parent.matches('#single-child-parent'));</script></main>",
     )?;
@@ -297,8 +296,8 @@ fn script_only_child_and_only_of_type_pseudo_classes_work_end_to_end()
 }
 
 #[test]
-fn script_first_last_and_nth_of_type_pseudo_classes_work_end_to_end()
--> browser_tester::Result<()> {
+fn script_first_last_and_nth_of_type_pseudo_classes_work_end_to_end() -> browser_tester::Result<()>
+{
     let harness = Harness::from_html(
         "<main id='root'><div id='type-parent'><span id='first-span' class='skip'>one</span><em id='first-em'>first</em><span id='middle-span' class='match'>two</span><em id='last-em'>last</em><span id='last-span' class='match'>three</span></div><div id='out'>seed</div><script>const firstSpan = document.querySelector('#first-span:first-of-type'); const lastSpan = document.querySelector('#last-span:last-of-type'); const middleSpan = document.querySelector('#middle-span:nth-of-type(2)'); const filteredMiddle = document.querySelector('#middle-span:nth-of-type(1 of .match)'); const filteredLast = document.querySelector('#last-span:nth-last-of-type(1 of .match)'); const middleFromEnd = document.querySelector('#middle-span:nth-last-of-type(2)'); const firstEm = document.querySelector('#first-em:first-of-type'); const lastEm = document.querySelector('#last-em:last-of-type'); document.getElementById('out').textContent = String(firstSpan.matches('#first-span:first-of-type')) + ':' + String(lastSpan.matches('#last-span:last-of-type')) + ':' + String(middleSpan.matches('#middle-span:nth-of-type(2)')) + ':' + String(filteredMiddle.matches('#middle-span:nth-of-type(1 of .match)')) + ':' + String(filteredLast.matches('#last-span:nth-last-of-type(1 of .match)')) + ':' + String(middleFromEnd.matches('#middle-span:nth-last-of-type(2)')) + ':' + String(firstEm.matches('#first-em:first-of-type')) + ':' + String(lastEm.matches('#last-em:last-of-type'));</script></main>",
     )?;
@@ -448,8 +447,7 @@ fn script_blank_pseudo_class_works_end_to_end() -> browser_tester::Result<()> {
 }
 
 #[test]
-fn script_read_only_and_read_write_pseudo_classes_work_end_to_end()
--> browser_tester::Result<()> {
+fn script_read_only_and_read_write_pseudo_classes_work_end_to_end() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><input id='name' value='Ada'><input id='readonly' value='Bee' readonly><textarea id='bio'>Hello</textarea><div id='editable' contenteditable='true'>Edit</div><select id='mode'><option value='a'>A</option></select><button id='button'>Button</button></main><div id='out'></div><script>const readWrite = document.querySelectorAll(':read-write'); const readOnly = document.querySelectorAll(':read-only'); document.getElementById('out').textContent = String(readWrite.length) + ':' + readWrite.item(0).getAttribute('id') + ':' + readWrite.item(1).getAttribute('id') + ':' + readWrite.item(2).getAttribute('id') + ':' + String(readOnly.item(0).matches(':read-only')) + ':' + String(document.getElementById('readonly').matches(':read-only')) + ':' + String(document.getElementById('mode').matches(':read-only')) + ':' + String(document.getElementById('button').matches(':read-only'));</script>",
     )?;
@@ -492,8 +490,7 @@ fn script_valid_and_invalid_pseudo_classes_fail_explicitly() {
 }
 
 #[test]
-fn script_in_range_and_out_of_range_pseudo_classes_work_end_to_end()
--> browser_tester::Result<()> {
+fn script_in_range_and_out_of_range_pseudo_classes_work_end_to_end() -> browser_tester::Result<()> {
     let harness = Harness::from_html(
         "<main id='root'><input id='low' type='number' min='2' max='6' value='1'><input id='high' type='number' min='2' max='6' value='7'><input id='in-range' type='number' min='2' max='6' value='4'><div id='out'></div><script>const inRange = document.querySelectorAll(':in-range'); const outOfRange = document.querySelectorAll(':out-of-range'); document.getElementById('out').textContent = String(inRange.length) + ':' + inRange.item(0).getAttribute('id') + ':' + String(outOfRange.length) + ':' + outOfRange.item(0).getAttribute('id') + ':' + outOfRange.item(1).getAttribute('id') + ':' + String(document.getElementById('in-range').matches(':in-range')) + ':' + String(document.getElementById('low').matches(':out-of-range')) + ':' + String(document.getElementById('high').matches(':out-of-range'));</script></main>",
     )?;

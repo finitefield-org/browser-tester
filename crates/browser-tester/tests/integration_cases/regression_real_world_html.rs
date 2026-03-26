@@ -540,8 +540,7 @@ fn get_attribute_returns_null_for_missing_attribute_in_delegated_click_handler()
 }
 
 #[test]
-fn async_click_handler_observes_updated_let_capture_for_clipboard(
-) -> browser_tester::Result<()> {
+fn async_click_handler_observes_updated_let_capture_for_clipboard() -> browser_tester::Result<()> {
     let html = r#"
     <button id="b">copy</button>
     <script>

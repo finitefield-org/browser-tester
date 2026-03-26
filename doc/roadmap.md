@@ -90,7 +90,8 @@ Delivered in this workspace:
 - open
 - print
 - location mock, including `window.location.href`, `document.location.href`, `window.location.hash`, `document.location.hash`, `window.location.pathname`, `document.location.pathname`, `window.location.search`, `document.location.search`, `window.location.origin`, `document.location.origin`, `window.location.assign()`, `window.location.replace()`, and `window.location.reload()`
-- file input mock
+- payload-aware file input mock and drag-and-drop dispatch
+- FileReader compatibility over seeded file payloads, including `load` / `error` / `loadend` ordering and deterministic read-error injection
 - download capture
 
 Exit criteria:

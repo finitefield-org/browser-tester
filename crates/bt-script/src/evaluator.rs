@@ -119,6 +119,8 @@ fn as_string(value: &Value) -> String {
         Value::MediaQueryList(_) => "[object MediaQueryList]".to_string(),
         Value::StringList(_) => "[object DOMStringList]".to_string(),
         Value::MimeTypeArray(_) => "[object MimeTypeArray]".to_string(),
+        Value::FileList(_) => "[object FileList]".to_string(),
+        Value::File(_) => "[object File]".to_string(),
         Value::Navigator => "[object Navigator]".to_string(),
         Value::Clipboard => "[object Clipboard]".to_string(),
         Value::History => "[object History]".to_string(),
@@ -1319,6 +1321,12 @@ fn eval_assign<H: HostBindings>(
                 (Value::Element(element), "outerHTML") => {
                     host.element_set_outer_html(element, &as_string(&value))
                 }
+                (Value::File(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on file value"
+                ))),
+                (Value::FileList(_), property) => Err(ScriptError::new(format!(
+                    "cannot assign to `{property}` on file list value"
+                ))),
                 (Value::Element(_element), "insertAdjacentHTML") => Err(ScriptError::new(
                     "insertAdjacentHTML() is a method, not an assignment target",
                 )),
@@ -2257,6 +2265,7 @@ fn eval_identifier(name: &str, env: &BTreeMap<String, Value>) -> Result<Value> {
         "sessionStorage" => Ok(Value::Storage(StorageTarget::Session)),
         "Object" => Ok(Value::ObjectNamespace),
         "Array" | "Uint8Array" => Ok(Value::ArrayNamespace),
+        "FileReader" => Ok(native_global_function("FileReader")),
         "String" => Ok(Value::ObjectNamespace),
         "Number" => Ok(Value::ObjectNamespace),
         "Date" => Ok(Value::ObjectNamespace),
@@ -2633,6 +2642,7 @@ fn eval_member<H: HostBindings>(
         Value::Window if env.contains_key(property) => {
             Ok(env.get(property).cloned().unwrap_or(Value::Undefined))
         }
+        Value::Window if property == "FileReader" => Ok(native_global_function("FileReader")),
         Value::Window
             if matches!(
                 property,
@@ -2950,6 +2960,23 @@ fn eval_member<H: HostBindings>(
         }
         Value::Element(element) if property == "value" => {
             Ok(Value::String(host.element_value(element)?))
+        }
+        Value::Element(element) if property == "files" => {
+            if host.element_tag_name(element)? != "input" {
+                return Err(unsupported_member_access(property, "element"));
+            }
+
+            match host
+                .element_get_attribute(element, "type")?
+                .as_deref()
+                .map(|value| value.trim().to_ascii_lowercase())
+            {
+                Some(value) if value == "file" => {
+                    let files = host.element_file_input_files(element)?;
+                    Ok(file_list_value(files))
+                }
+                _ => Ok(Value::Null),
+            }
         }
         Value::Element(element) if property == "defaultValue" => {
             match host.element_tag_name(element)?.as_str() {
@@ -3454,6 +3481,20 @@ fn eval_member<H: HostBindings>(
             Ok(Value::Boolean(event.is_composing()))
         }
         Value::Event(event) if property == "isTrusted" => Ok(Value::Boolean(event.is_trusted())),
+        Value::Event(event) if property == "dataTransfer" => match event.data_transfer_files() {
+            Some(files) => {
+                let data_transfer = crate::ObjectHandle::new();
+                object_set_property_value(
+                    &data_transfer,
+                    property_key_from_string("files"),
+                    file_list_value(files),
+                    env,
+                    host,
+                )?;
+                Ok(Value::Object(data_transfer))
+            }
+            None => Ok(Value::Undefined),
+        },
         Value::Event(event) if property == "eventPhase" => {
             Ok(Value::Number(event.event_phase() as u8 as f64))
         }
@@ -3591,6 +3632,31 @@ fn eval_member<H: HostBindings>(
         {
             Ok(Value::String(attribute_current_value(&attr, host)?))
         }
+        Value::File(file) if property == "name" => Ok(Value::String(file.name.clone())),
+        Value::File(file) if property == "type" => {
+            Ok(Value::String(file.mime_type.clone().unwrap_or_default()))
+        }
+        Value::File(file) if property == "size" => Ok(Value::Number(file.size() as f64)),
+        Value::File(file) if property == "text" => {
+            Ok(native_method_function(Value::File(file.clone()), "text"))
+        }
+        Value::FileList(list) if property == "length" => {
+            Ok(Value::Number(list.0.borrow().items.len() as f64))
+        }
+        Value::FileList(list) if property == "item" => Ok(native_method_function(
+            Value::FileList(list.clone()),
+            "item",
+        )),
+        Value::FileList(list) => match property.parse::<usize>() {
+            Ok(index) => Ok(list
+                .0
+                .borrow()
+                .items
+                .get(index)
+                .cloned()
+                .unwrap_or(Value::Undefined)),
+            Err(_) => Err(unsupported_member_access(property, "file list")),
+        },
         Value::NamedNodeMap(element) if property == "length" => Ok(Value::Number(
             named_node_map_names(element, host)?.len() as f64,
         )),
@@ -3764,6 +3830,7 @@ fn eval_member<H: HostBindings>(
             native_method_function(Value::IntlCollator(value.clone()), property),
         ),
         Value::IntlCollator(_) => Err(unsupported_member_access(property, "intl collator")),
+        Value::File(_) => Err(unsupported_member_access(property, "file")),
         Value::Element(_) => Err(unsupported_member_access(property, "element")),
         Value::ClassList(_) => Err(unsupported_member_access(property, "class list")),
         Value::Attribute(_) => Err(unsupported_member_access(property, "attr")),
@@ -4303,6 +4370,7 @@ fn call_native_global_function<H: HostBindings>(
             let value = args.first().cloned().unwrap_or(Value::Undefined);
             Ok(Value::Boolean(is_truthy(&value)))
         }
+        "FileReader" => Err(ScriptError::new("FileReader() must be called with `new`")),
         "decodeURI" => {
             let [value] = args else {
                 return Err(ScriptError::new("decodeURI() expects exactly one argument"));
@@ -4523,6 +4591,236 @@ fn call_native_function<H: HostBindings>(
         .collect();
 
     eval_method_call(receiver, method, &fake_args, &mut native_env, host)
+}
+
+fn file_reader_constructor<H: HostBindings>(
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(ScriptError::new("FileReader() expects no arguments"));
+    }
+
+    let reader = crate::ObjectHandle::new();
+    let reader_value = Value::Object(reader.clone());
+    object_set_property_value(
+        &reader,
+        property_key_from_string("readyState"),
+        Value::Number(0.0),
+        env,
+        host,
+    )?;
+    object_set_property_value(
+        &reader,
+        property_key_from_string("result"),
+        Value::Null,
+        env,
+        host,
+    )?;
+    object_set_property_value(
+        &reader,
+        property_key_from_string("error"),
+        Value::Null,
+        env,
+        host,
+    )?;
+    object_set_property_value(
+        &reader,
+        property_key_from_string("onload"),
+        Value::Null,
+        env,
+        host,
+    )?;
+    object_set_property_value(
+        &reader,
+        property_key_from_string("onerror"),
+        Value::Null,
+        env,
+        host,
+    )?;
+    object_set_property_value(
+        &reader,
+        property_key_from_string("onloadend"),
+        Value::Null,
+        env,
+        host,
+    )?;
+    object_set_property_value(
+        &reader,
+        property_key_from_string("readAsText"),
+        native_method_function(reader_value.clone(), "readAsText"),
+        env,
+        host,
+    )?;
+    object_set_property_value(
+        &reader,
+        property_key_from_string("readAsArrayBuffer"),
+        native_method_function(reader_value.clone(), "readAsArrayBuffer"),
+        env,
+        host,
+    )?;
+    Ok(reader_value)
+}
+
+fn file_reader_fire_event<H: HostBindings>(
+    reader: &crate::ObjectHandle,
+    event_type: &str,
+    event_error: Option<Value>,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<()> {
+    let event = crate::ObjectHandle::new();
+    let reader_value = Value::Object(reader.clone());
+    object_set_property_value(
+        &event,
+        property_key_from_string("type"),
+        Value::String(event_type.to_string()),
+        env,
+        host,
+    )?;
+    object_set_property_value(
+        &event,
+        property_key_from_string("target"),
+        reader_value.clone(),
+        env,
+        host,
+    )?;
+    object_set_property_value(
+        &event,
+        property_key_from_string("currentTarget"),
+        reader_value.clone(),
+        env,
+        host,
+    )?;
+    if let Some(error) = event_error {
+        object_set_property_value(&event, property_key_from_string("error"), error, env, host)?;
+    }
+
+    let handler_name = format!("on{event_type}");
+    if let Some(Value::Function(function)) = property_value_on_value(
+        &reader_value,
+        &property_key_from_string(handler_name),
+        env,
+        host,
+    )? {
+        call_script_function_value(&function, &[Value::Object(event)], reader_value, env, host)?;
+    }
+
+    Ok(())
+}
+
+fn file_reader_set_state<H: HostBindings>(
+    reader: &crate::ObjectHandle,
+    ready_state: f64,
+    result: Value,
+    error: Value,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<()> {
+    object_set_property_value(
+        reader,
+        property_key_from_string("readyState"),
+        Value::Number(ready_state),
+        env,
+        host,
+    )?;
+    object_set_property_value(
+        reader,
+        property_key_from_string("result"),
+        result,
+        env,
+        host,
+    )?;
+    object_set_property_value(reader, property_key_from_string("error"), error, env, host)?;
+    Ok(())
+}
+
+fn file_reader_finish_success<H: HostBindings>(
+    reader: &crate::ObjectHandle,
+    result: Value,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    file_reader_set_state(reader, 2.0, result, Value::Null, env, host)?;
+    file_reader_fire_event(reader, "load", None, env, host)?;
+    file_reader_fire_event(reader, "loadend", None, env, host)?;
+    Ok(Value::Undefined)
+}
+
+fn file_reader_finish_error<H: HostBindings>(
+    reader: &crate::ObjectHandle,
+    message: &str,
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let error = error_object_from_message(message.to_string(), env, host)?;
+    file_reader_set_state(reader, 2.0, Value::Null, error.clone(), env, host)?;
+    file_reader_fire_event(reader, "error", Some(error), env, host)?;
+    file_reader_fire_event(reader, "loadend", None, env, host)?;
+    Ok(Value::Undefined)
+}
+
+fn file_reader_read_as_text<H: HostBindings>(
+    reader: &crate::ObjectHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let values = eval_call_argument_values(args, env, host)?;
+    if values.is_empty() {
+        return Err(ScriptError::new("readAsText() expects a File argument"));
+    }
+    if values.len() > 2 {
+        return Err(ScriptError::new(
+            "readAsText() expects at most two arguments",
+        ));
+    }
+
+    let Value::File(file) = &values[0] else {
+        return Err(ScriptError::new("readAsText() expects a File argument"));
+    };
+
+    file_reader_set_state(reader, 1.0, Value::Null, Value::Null, env, host)?;
+    if let Some(message) = file.read_error.as_deref() {
+        return file_reader_finish_error(reader, message, env, host);
+    }
+
+    file_reader_finish_success(reader, Value::String(file.text()), env, host)
+}
+
+fn file_reader_read_as_array_buffer<H: HostBindings>(
+    reader: &crate::ObjectHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let values = eval_call_argument_values(args, env, host)?;
+    if values.len() != 1 {
+        return Err(ScriptError::new(
+            "readAsArrayBuffer() expects exactly one File argument",
+        ));
+    }
+
+    let Value::File(file) = &values[0] else {
+        return Err(ScriptError::new(
+            "readAsArrayBuffer() expects exactly one File argument",
+        ));
+    };
+
+    file_reader_set_state(reader, 1.0, Value::Null, Value::Null, env, host)?;
+    if let Some(message) = file.read_error.as_deref() {
+        return file_reader_finish_error(reader, message, env, host);
+    }
+
+    let result = Value::Array(ArrayHandle::new(
+        file.bytes
+            .iter()
+            .copied()
+            .map(|byte| Value::Number(byte as f64))
+            .collect(),
+    ));
+    file_reader_finish_success(reader, result, env, host)
 }
 
 fn timer_callback_from_expr<H: HostBindings>(
@@ -6076,6 +6374,8 @@ fn eval_method_call<H: HostBindings>(
             call_script_function_value(&function, &values, this_value, env, host)
         }
         Value::Object(object) => match method {
+            "readAsText" => file_reader_read_as_text(&object, args, env, host),
+            "readAsArrayBuffer" => file_reader_read_as_array_buffer(&object, args, env, host),
             "hasOwnProperty" => {
                 let [key_expr] = args else {
                     return Err(ScriptError::new(
@@ -6275,6 +6575,23 @@ fn eval_method_call<H: HostBindings>(
             "toString" => collection_to_string("MimeTypeArray", args),
             other => Err(ScriptError::new(format!(
                 "unsupported mime type array method: {other}"
+            ))),
+        },
+        Value::File(file) => match method {
+            "text" => {
+                if !args.is_empty() {
+                    return Err(ScriptError::new("File.text() expects no arguments"));
+                }
+                Ok(Value::String(file.text()))
+            }
+            other => Err(ScriptError::new(format!(
+                "unsupported File method: {other}"
+            ))),
+        },
+        Value::FileList(list) => match method {
+            "item" => file_list_item(&list, args, env, host),
+            other => Err(ScriptError::new(format!(
+                "unsupported FileList method: {other}"
             ))),
         },
         Value::CollectionIterator(iterator) => match method {
@@ -8475,6 +8792,38 @@ fn mime_type_array_entries(list: &MimeTypeArrayState) -> Value {
     collection_entries(list.items().iter().cloned().map(Value::String).collect())
 }
 
+fn file_list_item<H: HostBindings>(
+    list: &crate::ArrayHandle,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    let [index_expr] = args else {
+        return Err(ScriptError::new(
+            "FileList.item() expects exactly one argument",
+        ));
+    };
+
+    let index_value = eval_expr(index_expr, env, host)?;
+    let Some(index) = index_from_value(&index_value) else {
+        return Ok(Value::Null);
+    };
+
+    Ok(list
+        .0
+        .borrow()
+        .items
+        .get(index)
+        .cloned()
+        .unwrap_or(Value::Null))
+}
+
+fn file_list_value(files: Vec<crate::FileData>) -> Value {
+    Value::FileList(crate::ArrayHandle::new(
+        files.into_iter().map(Value::File).collect(),
+    ))
+}
+
 fn node_list_items<H: HostBindings>(
     target: &NodeListTarget,
     host: &mut H,
@@ -8923,6 +9272,8 @@ fn is_truthy(value: &Value) -> bool {
         | Value::MediaQueryList(_)
         | Value::StringList(_)
         | Value::MimeTypeArray(_)
+        | Value::FileList(_)
+        | Value::File(_)
         | Value::TemplateContent(_)
         | Value::Screen
         | Value::CollectionIterator(_)
@@ -9319,6 +9670,7 @@ fn map_key_from_value(value: &Value) -> MapKey {
         Value::Symbol(symbol) => MapKey::Symbol(symbol.id()),
         Value::Object(object) => MapKey::Object(object.identity()),
         Value::Array(array) => MapKey::Array(array.identity()),
+        Value::FileList(list) => MapKey::Array(list.identity()),
         Value::Map(map) => MapKey::Map(map.identity()),
         other => MapKey::String(as_string(other)),
     }
@@ -9476,6 +9828,13 @@ fn object_own_string_values<H: HostBindings>(
                 PropertyKey::Symbol(_) => None,
             })
             .collect()),
+        Value::FileList(array) => Ok(array_own_property_values(array, env, host)?
+            .into_iter()
+            .filter_map(|(key, value)| match key {
+                PropertyKey::String(name) => Some((name, value)),
+                PropertyKey::Symbol(_) => None,
+            })
+            .collect()),
         Value::Map(map) => {
             let state = map.0.borrow();
             Ok(state
@@ -9515,6 +9874,13 @@ fn object_own_symbol_values<H: HostBindings>(
             })
             .collect()),
         Value::Array(array) => Ok(array_own_property_values(array, env, host)?
+            .into_iter()
+            .filter_map(|(key, _)| match key {
+                PropertyKey::Symbol(id) => Some(crate::SymbolValue::from_parts(id, None)),
+                _ => None,
+            })
+            .collect()),
+        Value::FileList(array) => Ok(array_own_property_values(array, env, host)?
             .into_iter()
             .filter_map(|(key, _)| match key {
                 PropertyKey::Symbol(id) => Some(crate::SymbolValue::from_parts(id, None)),
@@ -9563,6 +9929,12 @@ fn object_assign_from_source<H: HostBindings>(
             Ok(())
         }
         Value::Array(array) => {
+            for (key, value) in array_own_property_values(array, env, host)? {
+                object_set_property_value(target, key, value, env, host)?;
+            }
+            Ok(())
+        }
+        Value::FileList(array) => {
             for (key, value) in array_own_property_values(array, env, host)? {
                 object_set_property_value(target, key, value, env, host)?;
             }
@@ -9642,6 +10014,8 @@ fn array_from_value<H: HostBindings>(
             .collect()),
         Value::StringList(list) => Ok(list.items().iter().cloned().map(Value::String).collect()),
         Value::MimeTypeArray(list) => Ok(list.items().iter().cloned().map(Value::String).collect()),
+        Value::FileList(list) => Ok(list.0.borrow().items.clone()),
+        Value::File(_) => Err(ScriptError::new("value is not iterable")),
         Value::StyleSheetList(target) => Ok(style_sheet_list_items(&target, host)?
             .into_iter()
             .map(|handle| Value::StyleSheet(StyleSheetTarget::OwnerNode(handle)))
@@ -10014,8 +10388,13 @@ fn eval_new<H: HostBindings>(
             let value = date_constructor(args, env, host)?;
             Ok(value)
         }
+        Expr::Identifier(name) if name == "FileReader" => file_reader_constructor(args, env, host),
         Expr::Member { object, property } => {
-            if matches!(eval_expr(object, env, host)?, Value::IntlNamespace)
+            let object_value = eval_expr(object, env, host)?;
+            if matches!(object_value, Value::Window) && property == "FileReader" {
+                return file_reader_constructor(args, env, host);
+            }
+            if matches!(object_value, Value::IntlNamespace)
                 && matches!(
                     property.as_str(),
                     "NumberFormat" | "DateTimeFormat" | "Collator"

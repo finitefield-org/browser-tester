@@ -1,5 +1,5 @@
 use browser_tester::{
-    Error, Harness, LocationNavigation, LocationNavigationKind, MockFile, Result,
+    Error, FileInputFile, Harness, LocationNavigation, LocationNavigationKind, Result,
 };
 
 #[test]
@@ -160,6 +160,7 @@ fn stable_test_mock_file_input_contract_is_direct() -> Result<()> {
           document.getElementById('out').textContent = [
             upload.value,
             upload.files.length,
+            upload.files.item(0).name,
             Array.from(upload.files).map((file) => file.name).join(',')
           ].join('|');
         });
@@ -167,15 +168,15 @@ fn stable_test_mock_file_input_contract_is_direct() -> Result<()> {
     "#;
 
     let mut h = Harness::from_html(html)?;
-    h.set_input_files(
+    h.set_files(
         "#upload",
-        &[
-            MockFile::new("first.txt").with_text("alpha"),
-            MockFile::new("second.txt").with_text("beta"),
+        [
+            FileInputFile::from_text("first.txt", "alpha").with_mime_type("text/plain"),
+            FileInputFile::from_text("second.txt", "beta").with_mime_type("text/plain"),
         ],
     )?;
 
-    h.assert_text("#out", "C:\\fakepath\\first.txt|2|first.txt,second.txt")?;
+    h.assert_text("#out", "first.txt, second.txt|2|first.txt|first.txt,second.txt")?;
     Ok(())
 }
 

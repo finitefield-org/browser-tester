@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::fmt;
 
-pub use bt_dom::{DomStore, NodeId};
+pub use bt_dom::{DomStore, FileInputFile, NodeId};
 use bt_runtime::SessionError;
 pub use bt_runtime::{
     ClipboardMocks, CloseCall, CloseMocks, DebugState, DialogMocks, DownloadCapture, DownloadMocks,
@@ -392,6 +392,17 @@ impl Harness {
             .map_err(map_session_error)
     }
 
+    pub fn dispatch_drop<I, K>(&mut self, selector: &str, files: I) -> Result<()>
+    where
+        I: IntoIterator<Item = K>,
+        K: Into<FileInputFile>,
+    {
+        let node_id = self.resolve_action_target(selector)?;
+        self.session
+            .dispatch_drop_node(node_id, files)
+            .map_err(map_session_error)
+    }
+
     pub fn dispatch_keyboard(
         &mut self,
         selector: &str,
@@ -448,7 +459,9 @@ impl Harness {
     }
 
     pub fn write_clipboard(&mut self, text: &str) -> Result<()> {
-        self.session.write_clipboard(text).map_err(map_session_error)?;
+        self.session
+            .write_clipboard(text)
+            .map_err(map_session_error)?;
         Ok(())
     }
 
@@ -533,7 +546,7 @@ impl Harness {
     pub fn set_files<I, K>(&mut self, selector: &str, files: I) -> Result<()>
     where
         I: IntoIterator<Item = K>,
-        K: Into<String>,
+        K: Into<FileInputFile>,
     {
         let node_id = self.resolve_action_target(selector)?;
         self.session

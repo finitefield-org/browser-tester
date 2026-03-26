@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use bt_dom::FileInputFile;
 use bt_runtime::{MatchMediaListenerCall, ScrollMethod, Session, SessionConfig};
 use bt_script::ScriptRuntime;
 
@@ -5055,20 +5056,11 @@ fn session_exposes_window_navigator_metadata() {
     let session = Session::new(SessionConfig::default()).expect("session should build");
 
     assert_eq!(session.window_navigator_user_agent(), "browser_tester");
-    assert_eq!(
-        session.window_navigator_app_code_name(),
-        "browser_tester"
-    );
+    assert_eq!(session.window_navigator_app_code_name(), "browser_tester");
     assert_eq!(session.window_navigator_app_name(), "browser_tester");
-    assert_eq!(
-        session.window_navigator_app_version(),
-        "browser_tester"
-    );
+    assert_eq!(session.window_navigator_app_version(), "browser_tester");
     assert_eq!(session.window_navigator_product(), "browser_tester");
-    assert_eq!(
-        session.window_navigator_product_sub(),
-        "browser_tester"
-    );
+    assert_eq!(session.window_navigator_product_sub(), "browser_tester");
     assert_eq!(session.window_navigator_vendor(), "browser_tester");
     assert_eq!(session.window_navigator_vendor_sub(), "browser_tester");
     assert!(!session.window_navigator_pdf_viewer_enabled());
@@ -5702,7 +5694,7 @@ fn session_sets_file_input_files_and_dispatches_change_events() {
     let mut session = Session::new(SessionConfig {
         url: "https://example.test/app".to_string(),
         html: Some(
-            "<input id='upload' type='file'><div id='out'></div><script>document.getElementById('upload').addEventListener('change', () => { document.getElementById('out').textContent = document.getElementById('upload').value; });</script>"
+            "<input id='upload' type='file'><div id='out'></div><script>document.getElementById('upload').addEventListener('change', () => { const file = document.getElementById('upload').files[0]; document.getElementById('out').textContent = file.name + ':' + file.type + ':' + String(file.size) + ':' + file.text().split('\\n').join('|'); });</script>"
                 .to_string(),
         ),
         local_storage: BTreeMap::new(),
@@ -5713,18 +5705,119 @@ fn session_sets_file_input_files_and_dispatches_change_events() {
     let out_id = session.dom().select("#out").unwrap()[0];
 
     session
-        .set_files_node(upload_id, "#upload", ["report.csv"])
+        .set_files_node(
+            upload_id,
+            "#upload",
+            [
+                FileInputFile::from_text("report.csv", "name,age\nAda,42")
+                    .with_mime_type("text/csv"),
+            ],
+        )
         .expect("file selection should be accepted");
 
     assert_eq!(session.dom().value_for_node(upload_id), "report.csv");
-    assert_eq!(session.dom().text_content_for_node(out_id), "report.csv");
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "report.csv:text/csv:15:name,age|Ada,42"
+    );
     assert_eq!(
         session.mocks().file_input().selections()[0].selector,
         "#upload"
     );
     assert_eq!(
         session.mocks().file_input().selections()[0].files,
-        vec!["report.csv".to_string()]
+        vec![
+            FileInputFile::from_text("report.csv", "name,age\nAda,42").with_mime_type("text/csv",)
+        ]
+    );
+}
+
+#[test]
+fn session_dispatch_drop_exposes_data_transfer_files() {
+    let mut session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<div id='dropzone'></div><div id='out'></div><script>document.getElementById('dropzone').addEventListener('drop', (event) => { const files = event.dataTransfer.files; const file = files[0]; const same = files.item(0); document.getElementById('out').textContent = files.length + ':' + file.name + ':' + same.name + ':' + file.type + ':' + String(file.size) + ':' + file.text().split('\\n').join('|'); });</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should build");
+
+    let dropzone_id = session.dom().select("#dropzone").unwrap()[0];
+    let out_id = session.dom().select("#out").unwrap()[0];
+
+    session
+        .dispatch_drop_node(
+            dropzone_id,
+            [
+                FileInputFile::from_text("report.csv", "name,age\nAda,42")
+                    .with_mime_type("text/csv"),
+            ],
+        )
+        .expect("drop should dispatch payload files");
+
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "1:report.csv:report.csv:text/csv:15:name,age|Ada,42"
+    );
+}
+
+#[test]
+fn session_file_reader_reads_array_buffer_payload_and_fires_callbacks() {
+    let mut session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<input id='upload' type='file'><div id='out'></div><script>document.getElementById('upload').addEventListener('change', () => { const input = document.getElementById('upload'); const file = input.files.item(0); const reader = new FileReader(); const out = document.getElementById('out'); reader.onload = function () { out.textContent = String(this.readyState) + ':' + this.result.join(','); }; reader.onloadend = function () { out.textContent += ':end'; }; reader.readAsArrayBuffer(file); });</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should build");
+
+    let upload_id = session.dom().select("#upload").unwrap()[0];
+    let out_id = session.dom().select("#out").unwrap()[0];
+
+    session
+        .set_files_node(
+            upload_id,
+            "#upload",
+            [FileInputFile::from_bytes("payload.bin", vec![1, 2, 3])
+                .with_mime_type("application/octet-stream")],
+        )
+        .expect("file selection should be accepted");
+
+    assert_eq!(session.dom().text_content_for_node(out_id), "2:1,2,3:end");
+}
+
+#[test]
+fn session_file_reader_reports_injected_read_errors() {
+    let mut session = Session::new(SessionConfig {
+        url: "https://example.test/app".to_string(),
+        html: Some(
+            "<input id='upload' type='file'><div id='out'></div><script>document.getElementById('upload').addEventListener('change', () => { const input = document.getElementById('upload'); const file = input.files.item(0); const reader = new FileReader(); const out = document.getElementById('out'); reader.onerror = function () { out.textContent = String(this.readyState) + ':' + this.error.message; }; reader.onloadend = function () { out.textContent += ':end'; }; reader.readAsText(file); });</script>"
+                .to_string(),
+        ),
+        local_storage: BTreeMap::new(),
+    })
+    .expect("session should build");
+
+    let upload_id = session.dom().select("#upload").unwrap()[0];
+    let out_id = session.dom().select("#out").unwrap()[0];
+
+    session
+        .set_files_node(
+            upload_id,
+            "#upload",
+            [FileInputFile::from_text("broken.txt", "ignored")
+                .with_mime_type("text/plain")
+                .with_read_error("cannot read file")],
+        )
+        .expect("file selection should be accepted");
+
+    assert_eq!(
+        session.dom().text_content_for_node(out_id),
+        "2:cannot read file:end"
     );
 }
 

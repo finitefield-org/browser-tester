@@ -1,4 +1,4 @@
-use browser_tester::{Error, Harness, Result};
+use browser_tester::{Error, FileInputFile, Harness, Result};
 
 #[test]
 fn stable_core_actions_and_assertions_work_together() -> Result<()> {
@@ -135,12 +135,21 @@ fn stable_test_mock_location_contract_is_direct() -> Result<()> {
 #[test]
 fn stable_test_mock_file_input_contract_is_direct() -> Result<()> {
     let mut h = Harness::from_html("<input id='upload' type='file' multiple><p id='out'></p>")?;
-    h.set_files("#upload", ["first.txt", "second.txt"])?;
+    h.set_files(
+        "#upload",
+        [
+            FileInputFile::from_text("first.txt", "one").with_mime_type("text/plain"),
+            FileInputFile::from_text("second.txt", "two").with_mime_type("text/plain"),
+        ],
+    )?;
 
     h.assert_value("#upload", "first.txt, second.txt")?;
     assert_eq!(
         h.mocks_mut().file_input().selections()[0].files,
-        vec!["first.txt".to_string(), "second.txt".to_string()]
+        vec![
+            FileInputFile::from_text("first.txt", "one").with_mime_type("text/plain"),
+            FileInputFile::from_text("second.txt", "two").with_mime_type("text/plain"),
+        ]
     );
     Ok(())
 }
