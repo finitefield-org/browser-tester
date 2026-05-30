@@ -2642,6 +2642,7 @@ fn eval_member<H: HostBindings>(
         Value::Window if env.contains_key(property) => {
             Ok(env.get(property).cloned().unwrap_or(Value::Undefined))
         }
+        Value::Window if matches!(property, "Intl" | "Math" | "CSS") => Ok(Value::IntlNamespace),
         Value::Window if property == "FileReader" => Ok(native_global_function("FileReader")),
         Value::Window
             if matches!(
@@ -10389,6 +10390,10 @@ fn eval_new<H: HostBindings>(
             Ok(value)
         }
         Expr::Identifier(name) if name == "FileReader" => file_reader_constructor(args, env, host),
+        Expr::Identifier(name) => match env.get(name).cloned() {
+            Some(Value::Function(function)) => construct_function_value(&function, args, env, host),
+            _ => Err(ScriptError::new("invalid new target")),
+        },
         Expr::Member { object, property } => {
             let object_value = eval_expr(object, env, host)?;
             if matches!(object_value, Value::Window) && property == "FileReader" {
@@ -10401,6 +10406,19 @@ fn eval_new<H: HostBindings>(
                 )
             {
                 return intl_construct(property, args, env, host);
+            }
+            if matches!(object_value, Value::Window) {
+                if let Some(Value::Function(function)) = env.get(property).cloned() {
+                    return construct_function_value(&function, args, env, host);
+                }
+            }
+            if let Some(Value::Function(function)) = property_value_on_value(
+                &object_value,
+                &property_key_from_string(property),
+                env,
+                host,
+            )? {
+                return construct_function_value(&function, args, env, host);
             }
             Err(ScriptError::new("invalid new target"))
         }
@@ -13916,6 +13934,47 @@ fn intl_construct<H: HostBindings>(
             "unsupported Intl constructor: {other}"
         ))),
     }
+}
+
+fn construct_function_value<H: HostBindings>(
+    function: &crate::ScriptFunction,
+    args: &[Expr],
+    env: &mut BTreeMap<String, Value>,
+    host: &mut H,
+) -> Result<Value> {
+    if let Some(method) = function.body_source.strip_prefix(NATIVE_METHOD_PREFIX) {
+        let receiver_is_intl_namespace = matches!(
+            function
+                .captured_bindings
+                .as_ref()
+                .get(NATIVE_METHOD_RECEIVER_KEY),
+            Some(receiver) if matches!(receiver, Value::IntlNamespace)
+        );
+        if receiver_is_intl_namespace
+            && matches!(method, "NumberFormat" | "DateTimeFormat" | "Collator")
+        {
+            return intl_construct(method, args, env, host);
+        }
+        return Err(ScriptError::new("invalid new target"));
+    }
+
+    if native_global_function_name(function).is_some() || html_constructor_name(function).is_some()
+    {
+        return Err(ScriptError::new("invalid new target"));
+    }
+
+    let values = eval_call_argument_values(args, env, host)?;
+    let this_value = Value::Object(crate::ObjectHandle::new());
+    let result = call_script_function_value(function, &values, this_value.clone(), env, host)?;
+    Ok(match result {
+        Value::Undefined
+        | Value::Null
+        | Value::Boolean(_)
+        | Value::Number(_)
+        | Value::String(_)
+        | Value::Symbol(_) => this_value,
+        other => other,
+    })
 }
 
 fn scroll_coordinate(value: &Value, method: &str) -> Result<i64> {

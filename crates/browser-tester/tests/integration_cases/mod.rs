@@ -31,6 +31,7 @@ mod issue_215_nested_helper_const_leak_regression;
 mod issue_217_return_slot_regression;
 mod issue_218_bulk_callback_const_binding_regression;
 mod issue_219_finitefield_site_regressions;
+mod issue_220_finitefield_site_regressions;
 mod open_issue_regressions;
 mod regression_parser_fixes;
 mod regression_real_world_html;
